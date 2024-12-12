@@ -2265,6 +2265,7 @@ void window_render_text(Renderer* renderer, RenderWindow* window, String string,
     auto* texture_atlas = &renderer->fonts[font_type];
     auto height = texture_atlas->ascent - texture_atlas->descent;
     auto texture_index = texture_atlas->texture.value;
+
     for (u64 i = 0; i < string.length; i += 1)
     {
         auto ch = string.pointer[i];

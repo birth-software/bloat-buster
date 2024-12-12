@@ -85,3 +85,44 @@ u8 string_ends_with(String string, String end)
 
     return result;
 }
+
+u64 string_first_ocurrence(String string, String substring)
+{
+    s32 result = UINT64_MAX;
+
+    if (substring.length < string.length)
+    {
+        for (u64 i = 0; i < string.length; i += 1)
+        {
+            if ((string.length - i) < substring.length)
+            {
+                break;
+            }
+
+            auto s = s_get_slice(u8, string, i, i + substring.length);
+            if (s_equal(s, substring))
+            {
+                result = i;
+                break;
+            }
+        }
+    }
+    else if (unlikely(substring.length == string.length))
+    {
+        if (unlikely(string.pointer == substring.pointer))
+        {
+            result = 0;
+        }
+        else if (memcmp(string.pointer, substring.pointer, substring.length) == 0)
+        {
+            result = 0;
+        }
+    }
+
+    return result;
+}
+
+u64 string_last_ocurrence(String string, String substring)
+{
+    trap();
+}

@@ -314,6 +314,8 @@ fn void glfw_window_refresh_callback(GLFWwindow* w)
 
 OSWindow os_window_create(OSWindowCreate create)
 {
+    glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
+
     GLFWmonitor* monitor = 0;
     GLFWwindow* share = 0;
     GLFWwindow* window = glfwCreateWindow(create.size.width, create.size.height, string_to_c(create.name), monitor, share);

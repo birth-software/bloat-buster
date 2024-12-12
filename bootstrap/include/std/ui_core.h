@@ -5,6 +5,11 @@
 #include <std/os.h>
 #include <std/render.h>
 
+STRUCT(UI_Key)
+{
+    u64 value;
+};
+
 STRUCT(UI_MousePosition)
 {
     f64 x;

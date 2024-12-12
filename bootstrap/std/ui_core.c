@@ -1,5 +1,6 @@
 #include <std/ui_core.h>
 #include <std/format.h>
+#include <std/string.h>
 
 global_variable UI_State* ui_state = 0;
 
@@ -11,6 +12,38 @@ void ui_state_select(UI_State* state)
 UI_State* ui_state_get()
 {
     return ui_state;
+}
+
+fn UI_Key ui_key_null()
+{
+    UI_Key key = {};
+    return key;
+}
+
+auto text_end_delimiter = strlit("##");
+auto hash_start_delimiter = strlit("###");
+
+fn String ui_text_from_key_string(String string)
+{
+    String result = string;
+    auto index = string_first_ocurrence(string, text_end_delimiter);
+    if (index < string.length)
+    {
+        result.length = index;
+    }
+    return result;
+}
+
+fn String ui_hash_from_key_string(String string)
+{
+    String result = string;
+    auto index = string_first_ocurrence(string, hash_start_delimiter);
+    if (index < string.length)
+    {
+        result = s_get_slice(u8, string, index, string.length);
+    }
+
+    return result;
 }
 
 u8 ui_build_begin(OSWindow window, f64 frame_time, OSEventQueue* event_queue)
