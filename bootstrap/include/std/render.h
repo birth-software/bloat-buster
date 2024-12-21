@@ -19,11 +19,16 @@ STRUCT(RenderRect)
     u32 y1;
 };
 
+STRUCT(RectColors)
+{
+    F32Vec4 v[4];
+};
+
 STRUCT(RectDraw)
 {
     RenderRect vertex;
     RenderRect texture;
-    Color color;
+    RectColors colors;
     u32 texture_index;
 };
 
@@ -33,7 +38,7 @@ STRUCT(RectVertex)
     f32 y;
     f32 uv_x;
     f32 uv_y;
-    F32Vec4 color;
+    RectColors colors;
     u32 texture_index;
     u32 reserved[3];
 };
