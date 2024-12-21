@@ -11,7 +11,7 @@ struct Vertex {
     float y;
     float uv_x;
     float uv_y;
-    vec4 color;
+    vec4 colors[4];
     uint texture_index;
     uint r[3];
 }; 
@@ -37,8 +37,8 @@ void main()
     //output data
     gl_Position = vec4(2 * v.x / width - 1, 2 * v.y / height - 1, 0, 1);
     out_uv = vec2(v.uv_x, v.uv_y);
-    out_color = v.color;
+    out_color = v.colors[gl_VertexIndex % 4];
     out_texture_index = v.texture_index;
-    //debugPrintfEXT("Position: (%f, %f)\n", v.x, v.y);
+    //debugPrintfEXT("Vertex index: (%u)\n", gl_VertexIndex);
     //debugPrintfEXT("UV: (%f, %f)\n", v.uv_x, v.uv_y);
 }

@@ -734,7 +734,7 @@ void ui_draw()
         if (widget->flags.draw_background)
         {
             window_render_rect(window, (RectDraw) {
-                .color = widget->background_color,
+                .colors = (RectColors) { .v = { Color4(1, 1, 1, 1), Color4(1, 1, 1, 1), widget->background_color, widget->background_color } },
                 .vertex = render_rect(widget->rect),
             });
         }

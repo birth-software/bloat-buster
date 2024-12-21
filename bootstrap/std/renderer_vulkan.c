@@ -2207,7 +2207,7 @@ void window_render_rect(RenderWindow* window, RectDraw draw)
             .y = draw.vertex.y0,
             .uv_x = draw.texture.x0,
             .uv_y = draw.texture.y0,
-            .color = draw.color,
+            .colors = draw.colors,
             .texture_index = draw.texture_index,
         },
         (RectVertex) {
@@ -2215,7 +2215,7 @@ void window_render_rect(RenderWindow* window, RectDraw draw)
             .y = draw.vertex.y0,
             .uv_x = draw.texture.x1,
             .uv_y = draw.texture.y0,
-            .color = draw.color,
+            .colors = draw.colors,
             .texture_index = draw.texture_index,
         },
         (RectVertex) {
@@ -2223,7 +2223,7 @@ void window_render_rect(RenderWindow* window, RectDraw draw)
             .y = draw.vertex.y1,
             .uv_x = draw.texture.x0,
             .uv_y = draw.texture.y1,
-            .color = draw.color,
+            .colors = draw.colors,
             .texture_index = draw.texture_index,
         },
         (RectVertex) {
@@ -2231,7 +2231,7 @@ void window_render_rect(RenderWindow* window, RectDraw draw)
             .y = draw.vertex.y1,
             .uv_x = draw.texture.x1,
             .uv_y = draw.texture.y1,
-            .color = draw.color,
+            .colors = draw.colors,
             .texture_index = draw.texture_index,
         },
     };
@@ -2256,6 +2256,11 @@ void window_render_text(Renderer* renderer, RenderWindow* window, String string,
     auto height = texture_atlas->ascent - texture_atlas->descent;
     auto texture_index = texture_atlas->texture.value;
 
+    // TODO: support gradient
+    RectColors colors = {
+        .v = { color, color, color, color }
+    };
+
     for (u64 i = 0; i < string.length; i += 1)
     {
         auto ch = string.pointer[i];
@@ -2273,7 +2278,7 @@ void window_render_text(Renderer* renderer, RenderWindow* window, String string,
                 .y = pos_y,
                 .uv_x = (f32)uv_x,
                 .uv_y = (f32)uv_y,
-                .color = color,
+                .colors = colors,
                 .texture_index = texture_index,
             },
             (RectVertex) {
@@ -2281,7 +2286,7 @@ void window_render_text(Renderer* renderer, RenderWindow* window, String string,
                 .y = pos_y,
                 .uv_x = (f32)(uv_x + uv_width),
                 .uv_y = (f32)uv_y,
-                .color = color,
+                .colors = colors,
                 .texture_index = texture_index,
             },
             (RectVertex) {
@@ -2289,7 +2294,7 @@ void window_render_text(Renderer* renderer, RenderWindow* window, String string,
                 .y = pos_y + character->height,
                 .uv_x = (f32)uv_x,
                 .uv_y = (f32)(uv_y + uv_height),
-                .color = color,
+                .colors = colors,
                 .texture_index = texture_index,
             },
             (RectVertex) {
@@ -2297,7 +2302,7 @@ void window_render_text(Renderer* renderer, RenderWindow* window, String string,
                 .y = pos_y + character->height,
                 .uv_x = (f32)(uv_x + uv_width),
                 .uv_y = (f32)(uv_y + uv_height),
-                .color = color,
+                .colors = colors,
                 .texture_index = texture_index,
             },
         };
