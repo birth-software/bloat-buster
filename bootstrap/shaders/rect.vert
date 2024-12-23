@@ -3,7 +3,7 @@
 #extension GL_EXT_debug_printf : require
 #extension GL_GOOGLE_include_directive : require
 
-#include "font.h"
+#include "rect.h"
 
 layout (location = 0) out uint texture_index;
 layout (location = 1) out FragmentShaderInput outputs;
