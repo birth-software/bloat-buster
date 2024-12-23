@@ -252,7 +252,7 @@ fn String vulkan_result_to_string(VkResult result)
         //case_to_name(VK_, INCOMPATIBLE_SHADER_BINARY_EXT);
         //case_to_name(VK_, PIPELINE_BINARY_MISSING_KHR);
         //case_to_name(VK_, ERROR_NOT_ENOUGH_SPACE_KHR);
-        case_to_name(VK_, RESULT_MAX_ENUM);
+        default: unreachable();
     }
 }
 
@@ -1095,8 +1095,8 @@ Renderer* renderer_initialize(Arena* arena)
     }
 
     String shader_source_paths[] = {
-        strlit("bootstrap/shaders/font.vert"),
-        strlit("bootstrap/shaders/font.frag"),
+        strlit("bootstrap/shaders/rect.vert"),
+        strlit("bootstrap/shaders/rect.frag"),
     };
 
     PipelineLayoutCreate pipeline_layouts[] = {
@@ -2265,10 +2265,13 @@ void window_render_text(Renderer* renderer, RenderWindow* window, String string,
     {
         auto ch = string.pointer[i];
         auto* character = &texture_atlas->characters[ch];
+
         auto pos_x = x_offset;
         auto pos_y = y_offset + character->y_offset + height + texture_atlas->descent; // Offset of the height to render the character from the bottom (y + height) up (y)
+                                                                                       //
         auto uv_x = character->x;
         auto uv_y = character->y;
+
         auto uv_width = character->width;
         auto uv_height = character->height;
 
