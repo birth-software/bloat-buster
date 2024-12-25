@@ -3,7 +3,7 @@
 #extension GL_EXT_debug_printf : require
 #extension GL_GOOGLE_include_directive : require
 
-#include "rect.h"
+#include "rect.inc"
 
 layout (location = 0) out uint texture_index;
 layout (location = 1) out FragmentShaderInput outputs;
@@ -15,7 +15,9 @@ struct Vertex {
     float uv_y;
     vec4 colors[4];
     uint texture_index;
-    uint r[3];
+    float corner_radius;
+    float edge_softness;
+    uint reserved[1];
 }; 
 
 layout(buffer_reference, std430) readonly buffer VertexBuffer{ 

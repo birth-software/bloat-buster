@@ -40,7 +40,9 @@ STRUCT(RectVertex)
     f32 uv_y;
     RectColors colors;
     u32 texture_index;
-    u32 reserved[3];
+    f32 corner_radius;
+    f32 edge_softness;
+    u32 reserved[1];
 };
 decl_vb(RectVertex);
 
