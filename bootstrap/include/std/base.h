@@ -56,43 +56,28 @@ typedef enum Corner
     CORNER_COUNT,
 } Corner;
 
-STRUCT(U32Vec2)
-{
-    struct
-    {
-        u32 x;
-        u32 y;
-    };
-    u32 v[2];
-};
+typedef float float2 __attribute__((ext_vector_type(2)));
+typedef float float3 __attribute__((ext_vector_type(3)));
+typedef float float4 __attribute__((ext_vector_type(4)));
+typedef float2 vec2;
+typedef float3 vec3;
+typedef float4 vec4;
 
-STRUCT(F32Vec4)
-{
-    f32 v[4];
-};
-typedef F32Vec4 Color;
-
-UNION(F32Vec2)
-{
-    struct
-    {
-        f32 x;
-        f32 y;
-    };
-    f32 v[2];
-};
+typedef u32 uint2 __attribute__((ext_vector_type(2)));
+typedef u32 uint3 __attribute__((ext_vector_type(3)));
+typedef u32 uint4 __attribute__((ext_vector_type(4)));
 
 UNION(F32Interval2)
 {
     struct
     {
-        F32Vec2 min;
-        F32Vec2 max;
+        float2 min;
+        float2 max;
     };
     struct
     {
-        F32Vec2 p0;
-        F32Vec2 p1;
+        float2 p0;
+        float2 p1;
     };
     struct
     {
@@ -101,8 +86,10 @@ UNION(F32Interval2)
         f32 x1;
         f32 y1;
     };
-    F32Vec2 v[2];
+    float2 v[2];
 };
+
+static_assert(sizeof(F32Interval2) == 4 * sizeof(f32));
 
 typedef enum Axis2
 {

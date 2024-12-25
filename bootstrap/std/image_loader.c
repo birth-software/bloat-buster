@@ -7,7 +7,6 @@
 #include <stb_image.h>
 #pragma clang diagnostic pop
 
-
 EXPORT TextureMemory texture_load_from_file(Arena* arena, String path)
 {
     auto file = file_read(arena, path);

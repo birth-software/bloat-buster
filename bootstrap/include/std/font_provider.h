@@ -37,4 +37,4 @@ STRUCT(TextureAtlasCreate)
 #include <std/render.h>
 
 EXPORT TextureAtlas font_texture_atlas_create(Arena* arena, Renderer* renderer, TextureAtlasCreate create);
-EXPORT U32Vec2 texture_atlas_compute_string_rect(String string, const TextureAtlas* atlas);
+EXPORT uint2 texture_atlas_compute_string_rect(String string, const TextureAtlas* atlas);

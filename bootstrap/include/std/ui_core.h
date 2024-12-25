@@ -87,19 +87,19 @@ STRUCT(UI_Widget)
     UI_WidgetFlags flags;
 
     // Data known after size determination happens
-    F32Vec2 computed_size;
-    F32Vec2 computed_relative_position;
+    float2 computed_size;
+    float2 computed_relative_position;
 
     // Data known after layout computation happens
     F32Interval2 relative_rect;
     F32Interval2 rect;
-    F32Vec2 relative_corner_delta[CORNER_COUNT];
+    float2 relative_corner_delta[CORNER_COUNT];
 
     // Persistent data across frames
     u64 last_build_touched;
-    F32Vec2 view_offset;
-    Color background_color;
-    Color text_color;
+    float2 view_offset;
+    float4 background_color;
+    float4 text_color;
 };
 decl_vbp(UI_Widget);
 
@@ -111,7 +111,7 @@ STRUCT(UI_WidgetSlot)
 declare_slice(UI_WidgetSlot);
 
 decl_vb(Axis2);
-decl_vb(Color);
+decl_vb(float4);
 
 STRUCT(UI_StateStackAutoPops)
 {
@@ -131,8 +131,8 @@ STRUCT(UI_StateStackNulls)
     UI_Size pref_width;
     UI_Size pref_height;
     Axis2 child_layout_axis;
-    Color text_color;
-    Color background_color;
+    float4 text_color;
+    float4 background_color;
     f32 font_size;
 };
 
@@ -142,8 +142,8 @@ STRUCT(UI_StateStacks)
     VirtualBuffer(UI_Size) pref_width;
     VirtualBuffer(UI_Size) pref_height;
     VirtualBuffer(Axis2) child_layout_axis;
-    VirtualBuffer(Color) text_color;
-    VirtualBuffer(Color) background_color;
+    VirtualBuffer(float4) text_color;
+    VirtualBuffer(float4) background_color;
     VirtualBuffer(f32) font_size;
 };
 
