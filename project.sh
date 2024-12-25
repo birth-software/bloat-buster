@@ -105,6 +105,7 @@ cmake . \
     $CXX_COMPILER_OPT_ARG \
     $ASM_COMPILER_OPT_ARG
     
+export VK_LAYER_PRINTF_BUFFER_SIZE=1000000
 cd $BUILD_DIR
 ninja -v
 cd $ORIGINAL_DIR/build

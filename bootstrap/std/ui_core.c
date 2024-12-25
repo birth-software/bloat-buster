@@ -248,8 +248,8 @@ UI_Widget* ui_widget_make_from_key(UI_WidgetFlags flags, UI_Key key)
 
     auto color = count % 3 == 0;
     widget->key = key;
-    widget->background_color = Color4(color, color, color, 1);
-    widget->text_color = Color4(!color, !color, !color, 1);
+    widget->background_color = (float4) { color, color, color, 1 };
+    widget->text_color = (float4) { !color, !color, !color, 1 };
     widget->flags = flags;
     widget->first = 0;
     widget->last = 0;
@@ -462,8 +462,8 @@ u8 ui_build_begin(OSWindow os_window, f64 frame_time, OSEventQueue* event_queue)
         ui_push(parent, root);
 
         ui_push(font_size, 12);
-        ui_push(text_color, Color4(1, 1, 1, 1));
-        ui_push(background_color, Color4(0, 0, 0, 1));
+        ui_push(text_color, ((float4) { 1, 1, 1, 1 }));
+        ui_push(background_color, ((float4) { 0, 0, 0, 1 }));
         ui_push(pref_width, ui_percentage(1.0, 0.0));
         ui_push(pref_height, ui_percentage(1.0, 0.0));
         // ui_push(pref_height, ui_em(1.8, 0.0));
@@ -482,7 +482,7 @@ fn void ui_compute_independent_sizes(UI_Widget* widget)
             default: break; case UI_SIZE_COUNT: unreachable();
             case UI_SIZE_PIXEL_COUNT:
                 {
-                    widget->computed_size.v[axis] = floorf(widget->pref_size[axis].value);
+                    widget->computed_size[axis] = floorf(widget->pref_size[axis].value);
                 } break;
         }
     }
@@ -508,7 +508,7 @@ fn void ui_compute_upward_dependent_sizes(UI_Widget* widget)
                 {
                     if (ancestor->pref_size[axis].kind != UI_SIZE_BY_CHILDREN)
                     {
-                        widget->computed_size.v[axis] = floorf(ancestor->computed_size.v[axis] * widget->pref_size[axis].value);
+                        widget->computed_size[axis] = floorf(ancestor->computed_size[axis] * widget->pref_size[axis].value);
                         break;
                     }
                 }
@@ -547,7 +547,7 @@ fn void ui_resolve_conflicts(UI_Widget* widget)
 {
     for (Axis2 axis = 0; axis < AXIS2_COUNT; axis += 1)
     {
-        auto available_space = widget->computed_size.v[axis];
+        auto available_space = widget->computed_size[axis];
         f32 taken_space = 0;
         f32 total_fixup_budget = 0;
 
@@ -559,13 +559,13 @@ fn void ui_resolve_conflicts(UI_Widget* widget)
                 {
                     if (axis == widget->child_layout_axis)
                     {
-                        taken_space += child_widget->computed_size.v[axis];
+                        taken_space += child_widget->computed_size[axis];
                     }
                     else
                     {
-                        taken_space = MAX(taken_space, child_widget->computed_size.v[axis]);
+                        taken_space = MAX(taken_space, child_widget->computed_size[axis]);
                     }
-                    auto fixup_budget_this_child = child_widget->computed_size.v[axis] * (1 - child_widget->pref_size[axis].strictness);
+                    auto fixup_budget_this_child = child_widget->computed_size[axis] * (1 - child_widget->pref_size[axis].strictness);
                     total_fixup_budget += fixup_budget_this_child;
                 }
             }
@@ -578,7 +578,7 @@ fn void ui_resolve_conflicts(UI_Widget* widget)
                 {
                     if (!(child_widget->flags.v & (UI_WIDGET_FLAG_FLOATING_X << axis)))
                     {
-                        auto fixup_budget_this_child = child_widget->computed_size.v[axis] * (1 - child_widget->pref_size[axis].strictness);
+                        auto fixup_budget_this_child = child_widget->computed_size[axis] * (1 - child_widget->pref_size[axis].strictness);
                         f32 fixup_size_this_child = 0;
 
                         if (axis == widget->child_layout_axis)
@@ -587,11 +587,11 @@ fn void ui_resolve_conflicts(UI_Widget* widget)
                         }
                         else
                         {
-                            fixup_size_this_child = child_widget->computed_size.v[axis] - available_space;
+                            fixup_size_this_child = child_widget->computed_size[axis] - available_space;
                         }
 
                         fixup_size_this_child = CLAMP(0, fixup_size_this_child, fixup_budget_this_child);
-                        child_widget->computed_size.v[axis] = floorf(child_widget->computed_size.v[axis] - fixup_size_this_child);
+                        child_widget->computed_size[axis] = floorf(child_widget->computed_size[axis] - fixup_size_this_child);
                     }
                 }
             }
@@ -605,8 +605,8 @@ fn void ui_resolve_conflicts(UI_Widget* widget)
             {
                 if (!(child_widget->flags.v & (UI_WIDGET_FLAG_FLOATING_X << axis)))
                 {
-                    child_widget->computed_relative_position.v[axis] = p;
-                    p += child_widget->computed_size.v[axis];
+                    child_widget->computed_relative_position[axis] = p;
+                    p += child_widget->computed_size[axis];
                 }
             }
         }
@@ -616,7 +616,7 @@ fn void ui_resolve_conflicts(UI_Widget* widget)
             {
                 if (!(child_widget->flags.v & (UI_WIDGET_FLAG_FLOATING_X << axis)))
                 {
-                    child_widget->computed_relative_position.v[axis] = 0;
+                    child_widget->computed_relative_position[axis] = 0;
                 }
             }
         }
@@ -624,26 +624,26 @@ fn void ui_resolve_conflicts(UI_Widget* widget)
         for (UI_Widget* child_widget = widget->first; child_widget; child_widget = child_widget->next)
         {
             auto last_relative_rect = child_widget->relative_rect;
-            child_widget->relative_rect.p0.v[axis] = child_widget->computed_relative_position.v[axis];
-            child_widget->relative_rect.p1.v[axis] = child_widget->relative_rect.p0.v[axis] + child_widget->computed_size.v[axis];
+            child_widget->relative_rect.p0[axis] = child_widget->computed_relative_position[axis];
+            child_widget->relative_rect.p1[axis] = child_widget->relative_rect.p0[axis] + child_widget->computed_size[axis];
 
-            F32Vec2 last_corner_01 = { .x = last_relative_rect.x0, .y = last_relative_rect.y1 };
-            F32Vec2 last_corner_10 = { .x = last_relative_rect.x1, .y = last_relative_rect.y0 };
-            F32Vec2 this_corner_01 = { .x = child_widget->relative_rect.x0, .y = child_widget->relative_rect.y1 };
-            F32Vec2 this_corner_10 = { .x = child_widget->relative_rect.x1, .y = child_widget->relative_rect.y0 };
+            float2 last_corner_01 = { last_relative_rect.x0, last_relative_rect.y1 };
+            float2 last_corner_10 = { last_relative_rect.x1, last_relative_rect.y0 };
+            float2 this_corner_01 = { child_widget->relative_rect.x0, child_widget->relative_rect.y1 };
+            float2 this_corner_10 = { child_widget->relative_rect.x1, child_widget->relative_rect.y0 };
 
-            child_widget->relative_corner_delta[CORNER_00].v[axis] = child_widget->relative_rect.p0.v[axis] - last_relative_rect.p0.v[axis];
-            child_widget->relative_corner_delta[CORNER_01].v[axis] = this_corner_01.v[axis] - last_corner_01.v[axis];
-            child_widget->relative_corner_delta[CORNER_10].v[axis] = this_corner_10.v[axis] - last_corner_10.v[axis];
-            child_widget->relative_corner_delta[CORNER_11].v[axis] = child_widget->relative_rect.p1.v[axis] - last_relative_rect.p1.v[axis];
+            child_widget->relative_corner_delta[CORNER_00][axis] = child_widget->relative_rect.p0[axis] - last_relative_rect.p0[axis];
+            child_widget->relative_corner_delta[CORNER_01][axis] = this_corner_01[axis] - last_corner_01[axis];
+            child_widget->relative_corner_delta[CORNER_10][axis] = this_corner_10[axis] - last_corner_10[axis];
+            child_widget->relative_corner_delta[CORNER_11][axis] = child_widget->relative_rect.p1[axis] - last_relative_rect.p1[axis];
 
-            child_widget->rect.p0.v[axis] = widget->rect.p0.v[axis] + child_widget->relative_rect.p0.v[axis] - widget->view_offset.v[axis];
-            child_widget->rect.p1.v[axis] = child_widget->rect.p0.v[axis] + child_widget->computed_size.v[axis];
+            child_widget->rect.p0[axis] = widget->rect.p0[axis] + child_widget->relative_rect.p0[axis] - widget->view_offset[axis];
+            child_widget->rect.p1[axis] = child_widget->rect.p0[axis] + child_widget->computed_size[axis];
 
             if (!(child_widget->flags.v & (UI_WIDGET_FLAG_FLOATING_X << axis)))
             {
-                child_widget->rect.p0.v[axis] = floorf(child_widget->rect.p0.v[axis]);
-                child_widget->rect.p1.v[axis] = floorf(child_widget->rect.p1.v[axis]);
+                child_widget->rect.p0[axis] = floorf(child_widget->rect.p0[axis]);
+                child_widget->rect.p1[axis] = floorf(child_widget->rect.p1[axis]);
             }
         }
 
@@ -672,16 +672,6 @@ void ui_build_end()
     ui_compute_upward_dependent_sizes(ui_state->root);
     ui_compute_downward_dependent_sizes(ui_state->root);
     ui_resolve_conflicts(ui_state->root);
-}
-
-fn RenderRect render_rect(F32Interval2 rect)
-{
-    return (RenderRect) {
-        .x0 = rect.x0,
-        .y0 = rect.y0,
-        .x1 = rect.x1,
-        .y1 = rect.y1,
-    };
 }
 
 STRUCT(WidgetIterator)
@@ -734,8 +724,8 @@ void ui_draw()
         if (widget->flags.draw_background)
         {
             window_render_rect(window, (RectDraw) {
-                .colors = (RectColors) { .v = { Color4(1, 1, 1, 1), Color4(1, 1, 1, 1), widget->background_color, widget->background_color } },
-                .vertex = render_rect(widget->rect),
+                .colors = { (float4) {1, 1, 1, 1 }, (float4) {1, 1, 1, 1}, widget->background_color, widget->background_color },
+                .vertex = widget->rect,
             });
         }
 

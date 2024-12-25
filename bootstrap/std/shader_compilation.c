@@ -89,7 +89,6 @@ fn SpirVBinary compileShaderToSPIRV_Vulkan(Arena* arena, glslang_stage_t stage, 
 
 String compile_shader(Arena* arena, String path, ShaderStage shader_stage)
 {
-    print("Compile shader\n");
 #if SHADER_COMPILATION_USE_SOURCE
     auto file = file_read(arena, path);
 

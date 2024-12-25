@@ -1,6 +1,5 @@
 #pragma once
 
-
 #include <std/base.h>
 
 typedef struct Renderer Renderer;
@@ -11,40 +10,17 @@ typedef struct Renderer Renderer;
 typedef struct RenderWindow RenderWindow;
 typedef struct Pipeline Pipeline;
 
-STRUCT(RenderRect)
-{
-    u32 x0;
-    u32 y0;
-    u32 x1;
-    u32 y1;
-};
-
-STRUCT(RectColors)
-{
-    F32Vec4 v[4];
-};
-
 STRUCT(RectDraw)
 {
-    RenderRect vertex;
-    RenderRect texture;
-    RectColors colors;
+    F32Interval2 vertex;
+    F32Interval2 texture;
+    vec4 colors[4];
     u32 texture_index;
 };
 
-STRUCT(RectVertex)
-{
-    f32 x;
-    f32 y;
-    f32 uv_x;
-    f32 uv_y;
-    RectColors colors;
-    u32 texture_index;
-    u32 reserved[3];
-};
+#include "../std/shaders/rect.inc"
+typedef struct RectVertex RectVertex;
 decl_vb(RectVertex);
-
-#define Color4(r, g, b, a) ((F32Vec4){ .v = { r, g, b, a } })
 
 typedef enum BBPipeline
 {
@@ -187,7 +163,7 @@ EXPORT PipelineLayoutIndex renderer_pipeline_get_layout(PipelineIndex pipeline);
 EXPORT void renderer_window_frame_begin(Renderer* renderer, RenderWindow* window);
 EXPORT void renderer_window_frame_end(Renderer* renderer, RenderWindow* window);
 EXPORT TextureIndex renderer_texture_create(Renderer* renderer, TextureMemory texture_memory);
-EXPORT U32Vec2 renderer_font_compute_string_rect(Renderer* renderer, RenderFontType type, String string);
+EXPORT uint2 renderer_font_compute_string_rect(Renderer* renderer, RenderFontType type, String string);
 EXPORT void window_command_begin(RenderWindow* window);
 EXPORT void window_command_end(RenderWindow* window);
 EXPORT void window_render_begin(RenderWindow* window);
@@ -203,4 +179,4 @@ EXPORT void window_rect_texture_update_end(Renderer* renderer, RenderWindow* win
 EXPORT u32 window_pipeline_add_vertices(RenderWindow* window, BBPipeline pipeline_index, String vertex_memory, u32 vertex_count);
 EXPORT void window_pipeline_add_indices(RenderWindow* window, BBPipeline pipeline_index, Slice(u32) indices);
 EXPORT void window_render_rect(RenderWindow* window, RectDraw draw);
-EXPORT void window_render_text(Renderer* renderer, RenderWindow* window, String string, Color color, RenderFontType font_type, u32 x_offset, u32 y_offset);
+EXPORT void window_render_text(Renderer* renderer, RenderWindow* window, String string, float4 color, RenderFontType font_type, u32 x_offset, u32 y_offset);

@@ -313,11 +313,15 @@ void buffer_copy_to_host(VulkanBuffer buffer, Slice(HostBufferCopy) regions)
         auto region = regions.pointer[i];
         auto* destination = buffer_pointer + region.destination_offset;
         assert(destination + region.source.length <= (u8*)buffer.address + buffer.size);
+#define USE_MEMCPY 1
+#if USE_MEMCPY
+        memcpy(destination, region.source.pointer, region.source.length);
+#else
         for (u64 i = 0; i < region.source.length; i += 1)
         {
             destination[i] = region.source.pointer[i];
         }
-        // memcpy(destination, region.source.pointer, region.source.length);
+#endif
     }
 }
 
@@ -1095,8 +1099,8 @@ Renderer* renderer_initialize(Arena* arena)
     }
 
     String shader_source_paths[] = {
-        strlit("bootstrap/shaders/rect.vert"),
-        strlit("bootstrap/shaders/rect.frag"),
+        strlit("bootstrap/std/shaders/rect.vert"),
+        strlit("bootstrap/std/shaders/rect.frag"),
     };
 
     PipelineLayoutCreate pipeline_layouts[] = {
@@ -2201,38 +2205,53 @@ void window_pipeline_add_indices(RenderWindow* window, BBPipeline pipeline_index
 
 void window_render_rect(RenderWindow* window, RectDraw draw)
 {
+    auto p0 = draw.vertex.p0;
+    auto uv0 = draw.texture.p0;
+    if (draw.texture.p1.x != 0)
+    {
+        assert(draw.texture.p1.x - draw.texture.p0.x == draw.vertex.p1.x - draw.vertex.p0.x);
+        assert(draw.texture.p1.y - draw.texture.p0.y == draw.vertex.p1.y - draw.vertex.p0.y);
+    }
+
+    auto corner_radius = 10.0f;
+
+    auto extent = draw.vertex.p1 - p0;
     RectVertex vertices[] = {
         (RectVertex) {
-            .x = draw.vertex.x0,
-            .y = draw.vertex.y0,
-            .uv_x = draw.texture.x0,
-            .uv_y = draw.texture.y0,
-            .colors = draw.colors,
+            .p0 = p0,
+            .uv0 = uv0,
+            .extent = extent,
             .texture_index = draw.texture_index,
+            .colors = { draw.colors[0], draw.colors[1], draw.colors[2], draw.colors[3] },
+            .softness = 1.0,
+            .corner_radius = corner_radius,
         },
         (RectVertex) {
-            .x = draw.vertex.x1,
-            .y = draw.vertex.y0,
-            .uv_x = draw.texture.x1,
-            .uv_y = draw.texture.y0,
-            .colors = draw.colors,
+            .p0 = p0,
+            .uv0 = uv0,
+            .extent = extent,
             .texture_index = draw.texture_index,
+            .colors = { draw.colors[0], draw.colors[1], draw.colors[2], draw.colors[3] },
+            .softness = 1.0,
+            .corner_radius = corner_radius,
         },
         (RectVertex) {
-            .x = draw.vertex.x0,
-            .y = draw.vertex.y1,
-            .uv_x = draw.texture.x0,
-            .uv_y = draw.texture.y1,
-            .colors = draw.colors,
+            .p0 = p0,
+            .uv0 = uv0,
+            .extent = extent,
             .texture_index = draw.texture_index,
+            .colors = { draw.colors[0], draw.colors[1], draw.colors[2], draw.colors[3] },
+            .softness = 1.0,
+            .corner_radius = corner_radius,
         },
         (RectVertex) {
-            .x = draw.vertex.x1,
-            .y = draw.vertex.y1,
-            .uv_x = draw.texture.x1,
-            .uv_y = draw.texture.y1,
-            .colors = draw.colors,
+            .p0 = p0,
+            .uv0 = uv0,
+            .extent = extent,
             .texture_index = draw.texture_index,
+            .colors = { draw.colors[0], draw.colors[1], draw.colors[2], draw.colors[3] },
+            .softness = 1.0,
+            .corner_radius = corner_radius,
         },
     };
 
@@ -2250,63 +2269,63 @@ void window_render_rect(RenderWindow* window, RectDraw draw)
     window_pipeline_add_indices(window, BB_PIPELINE_RECT, (Slice(u32))array_to_slice(indices));
 }
 
-void window_render_text(Renderer* renderer, RenderWindow* window, String string, Color color, RenderFontType font_type, u32 x_offset, u32 y_offset)
+// TODO: support gradient
+void window_render_text(Renderer* renderer, RenderWindow* window, String string, float4 color, RenderFontType font_type, u32 x_offset, u32 y_offset)
 {
     auto* texture_atlas = &renderer->fonts[font_type];
     auto height = texture_atlas->ascent - texture_atlas->descent;
     auto texture_index = texture_atlas->texture.value;
-
-    // TODO: support gradient
-    RectColors colors = {
-        .v = { color, color, color, color }
-    };
 
     for (u64 i = 0; i < string.length; i += 1)
     {
         auto ch = string.pointer[i];
         auto* character = &texture_atlas->characters[ch];
 
-        auto pos_x = x_offset;
-        auto pos_y = y_offset + character->y_offset + height + texture_atlas->descent; // Offset of the height to render the character from the bottom (y + height) up (y)
-                                                                                       //
         auto uv_x = character->x;
         auto uv_y = character->y;
 
-        auto uv_width = character->width;
-        auto uv_height = character->height;
+        auto char_width = character->width;
+        auto char_height = character->height;
+
+        auto pos_x = x_offset;
+        auto pos_y = y_offset + character->y_offset + height + texture_atlas->descent; // Offset of the height to render the character from the bottom (y + height) up (y)
+        vec2 p0 = { pos_x, pos_y };
+        vec2 uv0 = { uv_x, uv_y };
+        vec2 extent = { char_width, char_height };
+        // print("P0: ({u32}, {u32}). P1: ({u32}, {u32})\n", (u32)p0.x, (u32)p0.y, (u32)p1.x, (u32)p1.y);
 
         RectVertex vertices[] = {
             (RectVertex) {
-                .x = pos_x,
-                .y = pos_y,
-                .uv_x = (f32)uv_x,
-                .uv_y = (f32)uv_y,
-                .colors = colors,
+                .p0 = p0,
+                .uv0 = uv0,
+                .extent = extent,
                 .texture_index = texture_index,
+                .colors = { color, color, color, color },
+                .softness = 1.0,
             },
             (RectVertex) {
-                .x = pos_x + character->width,
-                .y = pos_y,
-                .uv_x = (f32)(uv_x + uv_width),
-                .uv_y = (f32)uv_y,
-                .colors = colors,
+                .p0 = p0,
+                .uv0 = uv0,
+                .extent = extent,
                 .texture_index = texture_index,
+                .colors = { color, color, color, color },
+                .softness = 1.0,
             },
             (RectVertex) {
-                .x = pos_x,
-                .y = pos_y + character->height,
-                .uv_x = (f32)uv_x,
-                .uv_y = (f32)(uv_y + uv_height),
-                .colors = colors,
+                .p0 = p0,
+                .uv0 = uv0,
+                .extent = extent,
                 .texture_index = texture_index,
+                .colors = { color, color, color, color },
+                .softness = 1.0,
             },
             (RectVertex) {
-                .x = pos_x + character->width,
-                .y = pos_y + character->height,
-                .uv_x = (f32)(uv_x + uv_width),
-                .uv_y = (f32)(uv_y + uv_height),
-                .colors = colors,
+                .p0 = p0,
+                .uv0 = uv0,
+                .extent = extent,
+                .colors = { color, color, color, color },
                 .texture_index = texture_index,
+                .softness = 1.0,
             },
         };
 
@@ -2328,7 +2347,7 @@ void window_render_text(Renderer* renderer, RenderWindow* window, String string,
     }
 }
 
-U32Vec2 renderer_font_compute_string_rect(Renderer* renderer, RenderFontType type, String string)
+uint2 renderer_font_compute_string_rect(Renderer* renderer, RenderFontType type, String string)
 {
     auto* texture_atlas = &renderer->fonts[type];
     auto result = texture_atlas_compute_string_rect(string, texture_atlas);
