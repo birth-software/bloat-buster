@@ -142,16 +142,45 @@ fn void glfw_window_mouse_button_callback(GLFWwindow* window, int button, int ac
         default: unreachable();
     }
 
+    OSEventMouseButtonKind mouse_button = 0;
+    switch (button)
+    {
+        case GLFW_MOUSE_BUTTON_1:
+            mouse_button = OS_EVENT_MOUSE_BUTTON_1;
+            break;
+        case GLFW_MOUSE_BUTTON_2:
+            mouse_button = OS_EVENT_MOUSE_BUTTON_2;
+            break;
+        case GLFW_MOUSE_BUTTON_3:
+            mouse_button = OS_EVENT_MOUSE_BUTTON_3;
+            break;
+        case GLFW_MOUSE_BUTTON_4:
+            mouse_button = OS_EVENT_MOUSE_BUTTON_4;
+            break;
+        case GLFW_MOUSE_BUTTON_5:
+            mouse_button = OS_EVENT_MOUSE_BUTTON_5;
+            break;
+        case GLFW_MOUSE_BUTTON_6:
+            mouse_button = OS_EVENT_MOUSE_BUTTON_6;
+            break;
+        case GLFW_MOUSE_BUTTON_7:
+            mouse_button = OS_EVENT_MOUSE_BUTTON_7;
+            break;
+        case GLFW_MOUSE_BUTTON_8:
+            mouse_button = OS_EVENT_MOUSE_BUTTON_8;
+            break;
+    }
+
     *vb_add(&event_queue->mouse_buttons, 1) = (OSEventMouseButton) {
-        .button = button,
+        .button = mouse_button,
         .event = (OSEventMouseButtonEvent){
             .action = os_action,
-            .mod_shift = mods & GLFW_MOD_SHIFT,
-            .mod_control = mods & GLFW_MOD_CONTROL,
-            .mod_alt = mods & GLFW_MOD_ALT,
-            .mod_super = mods & GLFW_MOD_SUPER,
-            .mod_caps_lock = mods & GLFW_MOD_CAPS_LOCK,
-            .mod_num_lock = mods & GLFW_MOD_NUM_LOCK,
+            .mod_shift = !!(mods & GLFW_MOD_SHIFT),
+            .mod_control = !!(mods & GLFW_MOD_CONTROL),
+            .mod_alt = !!(mods & GLFW_MOD_ALT),
+            .mod_super = !!(mods & GLFW_MOD_SUPER),
+            .mod_caps_lock = !!(mods & GLFW_MOD_CAPS_LOCK),
+            .mod_num_lock = !!(mods & GLFW_MOD_NUM_LOCK),
         },
     };
 
