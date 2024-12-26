@@ -10,7 +10,7 @@
 #include <std/ui_core.h>
 #include <std/ui_builder.h>
 
-#define default_font_height (64)
+#define default_font_height (24)
 auto proportional_font_height = default_font_height;
 auto monospace_font_height = default_font_height;
 
@@ -80,9 +80,26 @@ fn void ui_top_bar()
             ui_button(strlit("Button 3"));
         }
         ui_pop(parent);
+        ui_pop(child_layout_axis);
     }
     ui_pop(pref_height);
-    ui_button(strlit("Hello!"));
+}
+
+STRUCT(UI_Node)
+{
+    String name;
+    String type;
+    String value;
+    String namespace;
+    String function;
+};
+
+fn void ui_node(UI_Node node)
+{
+    auto* node_widget = ui_widget_make_format((UI_WidgetFlags) {
+        .draw_background = 1,
+        .draw_text = 1,
+    }, "{s} : {s} = {s}##{s}{s}", node.name, node.type, node.value, node.function, node.namespace);
 }
 
 fn void app_update()
@@ -110,6 +127,41 @@ fn void app_update()
             ui_push(font_size, default_font_height);
 
             ui_top_bar();
+            ui_push(child_layout_axis, AXIS2_X);
+            auto* workspace_widget = ui_widget_make_format((UI_WidgetFlags) {}, "workspace{u64}", window->os);
+            ui_push(parent, workspace_widget);
+            {
+                // Node visualizer
+                ui_push(child_layout_axis, AXIS2_Y);
+                auto* node_visualizer_widget = ui_widget_make_format((UI_WidgetFlags) {
+                    .draw_background = 1,
+                }, "node_visualizer{u64}", window->os);
+
+                ui_push(parent, node_visualizer_widget);
+                {
+                    ui_node((UI_Node) {
+                        .name = strlit("a"),
+                        .type = strlit("s32"),
+                        .value = strlit("1"),
+                        .namespace = strlit("foo"),
+                        .function = strlit("main"),
+                    });
+                    ui_node((UI_Node) {
+                        .name = strlit("b"),
+                        .type = strlit("s32"),
+                        .value = strlit("2"),
+                        .namespace = strlit("foo"),
+                        .function = strlit("main"),
+                    });
+                }
+                ui_pop(parent);
+                ui_pop(child_layout_axis);
+
+                // Side-panel stub
+                ui_button(strlit("Options"));
+            }
+            ui_pop(parent);
+            ui_pop(child_layout_axis);
 
             ui_build_end();
 
@@ -166,8 +218,8 @@ void run_app()
     state.first_window->os = os_window_create((OSWindowCreate) {
         .name = strlit("Bloat Buster"),
         .size = {
-            .width = 1024,
-            .height= 768,
+            .width = 1600,
+            .height= 900,
         },
         .refresh_callback = &window_refresh_callback,
     });

@@ -2213,7 +2213,7 @@ void window_render_rect(RenderWindow* window, RectDraw draw)
         assert(draw.texture.p1.y - draw.texture.p0.y == draw.vertex.p1.y - draw.vertex.p0.y);
     }
 
-    auto corner_radius = 10.0f;
+    auto corner_radius = 5.0f;
 
     auto extent = draw.vertex.p1 - p0;
     RectVertex vertices[] = {

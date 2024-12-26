@@ -246,10 +246,13 @@ UI_Widget* ui_widget_make_from_key(UI_WidgetFlags flags, UI_Key key)
         ui_state->root = widget;
     }
 
-    auto color = count % 3 == 0;
     widget->key = key;
-    widget->background_color = (float4) { color, color, color, 1 };
-    widget->text_color = (float4) { !color, !color, !color, 1 };
+
+    for (u64 i = 0; i < array_length(widget->background_colors); i += 1)
+    {
+        widget->background_colors[i] = ui_top(background_color);
+    }
+    widget->text_color = ui_top(text_color);
     widget->flags = flags;
     widget->first = 0;
     widget->last = 0;
@@ -358,6 +361,7 @@ u8 ui_build_begin(OSWindow os_window, f64 frame_time, OSEventQueue* event_queue)
 
     u8 open = 1;
 
+    auto mouse_button_count = 0;
     for (u32 generic_event_index = 0; open & (generic_event_index < event_queue->descriptors.length); generic_event_index += 1)
     {
         auto event_descriptor = event_queue->descriptors.pointer[generic_event_index];
@@ -379,7 +383,8 @@ u8 ui_build_begin(OSWindow os_window, f64 frame_time, OSEventQueue* event_queue)
                         } break;
                     case OS_EVENT_MOUSE_PRESS:
                         {
-                            assert(previous_button_event.action == OS_EVENT_MOUSE_RELAX);
+                            // TODO: handle properly
+                            assert(previous_button_event.action == OS_EVENT_MOUSE_RELAX || mouse_button_count);
                         } break;
                     case OS_EVENT_MOUSE_REPEAT:
                         {
@@ -388,6 +393,7 @@ u8 ui_build_begin(OSWindow os_window, f64 frame_time, OSEventQueue* event_queue)
                 }
 
                 ui_state->mouse_button_events[button.button] = button.event;
+                mouse_button_count += 1;
             } break;
         case OS_EVENT_TYPE_WINDOW_FOCUS:
             {
@@ -418,38 +424,38 @@ u8 ui_build_begin(OSWindow os_window, f64 frame_time, OSEventQueue* event_queue)
 
     if (open)
     {
-        // for (u64 i = 0; i < ui_state->widget_table.length; i += 1)
-        // {
-        //     auto* widget_table_element = &ui_state->widget_table.pointer[i];
-        //     for (UI_Widget* widget = widget_table_element->first, *next = 0; widget; widget = next)
-        //     {
-        //         next = widget->hash_next;
-        //
-        //         if (ui_key_equal(widget->key, ui_key_null()) || widget->last_build_touched + 1 < ui_state->build_count)
-        //         {
-        //             // Remove from the list
-        //             if (widget->hash_previous)
-        //             {
-        //                 widget->hash_previous->hash_next = widget->hash_next;
-        //             }
-        //
-        //             if (widget->hash_next)
-        //             {
-        //                 widget->hash_next->hash_previous = widget->hash_previous;
-        //             }
-        //
-        //             if (widget_table_element->first == widget)
-        //             {
-        //                 widget_table_element->first = widget->hash_next;
-        //             }
-        //
-        //             if (widget_table_element->last == widget)
-        //             {
-        //                 widget_table_element->last = widget->hash_previous;
-        //             }
-        //         }
-        //     }
-        // }
+        for (u64 i = 0; i < ui_state->widget_table.length; i += 1)
+        {
+            auto* widget_table_element = &ui_state->widget_table.pointer[i];
+            for (UI_Widget* widget = widget_table_element->first, *next = 0; widget; widget = next)
+            {
+                next = widget->hash_next;
+
+                if (ui_key_equal(widget->key, ui_key_null()) || widget->last_build_touched + 1 < ui_state->build_count)
+                {
+                    // Remove from the list
+                    if (widget->hash_previous)
+                    {
+                        widget->hash_previous->hash_next = widget->hash_next;
+                    }
+
+                    if (widget->hash_next)
+                    {
+                        widget->hash_next->hash_previous = widget->hash_previous;
+                    }
+
+                    if (widget_table_element->first == widget)
+                    {
+                        widget_table_element->first = widget->hash_next;
+                    }
+
+                    if (widget_table_element->last == widget)
+                    {
+                        widget_table_element->last = widget->hash_previous;
+                    }
+                }
+            }
+        }
 
         auto framebuffer_size = os_window_framebuffer_size_get(os_window);
         ui_push_next_only(pref_width, ui_pixels(framebuffer_size.width, 1.0f));
@@ -462,8 +468,8 @@ u8 ui_build_begin(OSWindow os_window, f64 frame_time, OSEventQueue* event_queue)
         ui_push(parent, root);
 
         ui_push(font_size, 12);
-        ui_push(text_color, ((float4) { 1, 1, 1, 1 }));
-        ui_push(background_color, ((float4) { 0, 0, 0, 1 }));
+        ui_push(text_color, ((float4) { 0.9, 0.9, 0.02, 1 }));
+        ui_push(background_color, ((float4) { 0.1, 0.1, 0.1, 1 }));
         ui_push(pref_width, ui_percentage(1.0, 0.0));
         ui_push(pref_height, ui_percentage(1.0, 0.0));
         // ui_push(pref_height, ui_em(1.8, 0.0));
@@ -724,7 +730,7 @@ void ui_draw()
         if (widget->flags.draw_background)
         {
             window_render_rect(window, (RectDraw) {
-                .colors = { (float4) {1, 1, 1, 1 }, (float4) {1, 1, 1, 1}, widget->background_color, widget->background_color },
+                .colors = { widget->background_colors[0], widget->background_colors[1], widget->background_colors[2], widget->background_colors[3] },
                 .vertex = widget->rect,
             });
         }

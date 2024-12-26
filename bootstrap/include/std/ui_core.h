@@ -98,7 +98,7 @@ STRUCT(UI_Widget)
     // Persistent data across frames
     u64 last_build_touched;
     float2 view_offset;
-    float4 background_color;
+    float4 background_colors[4];
     float4 text_color;
 };
 decl_vbp(UI_Widget);
@@ -226,6 +226,7 @@ EXPORT UI_Signal ui_signal_from_widget(UI_Widget* widget);
 EXPORT UI_State* ui_state_get();
 
 EXPORT UI_Widget* ui_widget_make(UI_WidgetFlags flags, String string);
+EXPORT UI_Widget* ui_widget_make_format(UI_WidgetFlags flags, const char* format, ...);
 EXPORT UI_Size ui_pixels(u32 width, f32 strictness);
 EXPORT UI_Size ui_percentage(f32 percentage, f32 strictness);
 EXPORT UI_Size ui_em(f32 value, f32 strictness);
