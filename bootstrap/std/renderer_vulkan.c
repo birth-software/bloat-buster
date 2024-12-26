@@ -2214,6 +2214,7 @@ void window_render_rect(RenderWindow* window, RectDraw draw)
     }
 
     auto corner_radius = 10.0f;
+    auto border_thickness = 5.0f;
 
     auto extent = draw.vertex.p1 - p0;
     RectVertex vertices[] = {
@@ -2225,6 +2226,7 @@ void window_render_rect(RenderWindow* window, RectDraw draw)
             .colors = { draw.colors[0], draw.colors[1], draw.colors[2], draw.colors[3] },
             .softness = 1.0,
             .corner_radius = corner_radius,
+            .border_thickness = border_thickness,
         },
         (RectVertex) {
             .p0 = p0,
@@ -2234,6 +2236,7 @@ void window_render_rect(RenderWindow* window, RectDraw draw)
             .colors = { draw.colors[0], draw.colors[1], draw.colors[2], draw.colors[3] },
             .softness = 1.0,
             .corner_radius = corner_radius,
+            .border_thickness = border_thickness,
         },
         (RectVertex) {
             .p0 = p0,
@@ -2243,6 +2246,7 @@ void window_render_rect(RenderWindow* window, RectDraw draw)
             .colors = { draw.colors[0], draw.colors[1], draw.colors[2], draw.colors[3] },
             .softness = 1.0,
             .corner_radius = corner_radius,
+            .border_thickness = border_thickness,
         },
         (RectVertex) {
             .p0 = p0,
@@ -2252,6 +2256,7 @@ void window_render_rect(RenderWindow* window, RectDraw draw)
             .colors = { draw.colors[0], draw.colors[1], draw.colors[2], draw.colors[3] },
             .softness = 1.0,
             .corner_radius = corner_radius,
+            .border_thickness = border_thickness,
         },
     };
 
@@ -2275,6 +2280,7 @@ void window_render_text(Renderer* renderer, RenderWindow* window, String string,
     auto* texture_atlas = &renderer->fonts[font_type];
     auto height = texture_atlas->ascent - texture_atlas->descent;
     auto texture_index = texture_atlas->texture.value;
+    auto border_thickness = 1.0f;
 
     for (u64 i = 0; i < string.length; i += 1)
     {
@@ -2302,6 +2308,7 @@ void window_render_text(Renderer* renderer, RenderWindow* window, String string,
                 .texture_index = texture_index,
                 .colors = { color, color, color, color },
                 .softness = 1.0,
+                .border_thickness = border_thickness,
             },
             (RectVertex) {
                 .p0 = p0,
@@ -2310,6 +2317,7 @@ void window_render_text(Renderer* renderer, RenderWindow* window, String string,
                 .texture_index = texture_index,
                 .colors = { color, color, color, color },
                 .softness = 1.0,
+                .border_thickness = border_thickness,
             },
             (RectVertex) {
                 .p0 = p0,
@@ -2318,6 +2326,7 @@ void window_render_text(Renderer* renderer, RenderWindow* window, String string,
                 .texture_index = texture_index,
                 .colors = { color, color, color, color },
                 .softness = 1.0,
+                .border_thickness = border_thickness,
             },
             (RectVertex) {
                 .p0 = p0,
@@ -2326,6 +2335,7 @@ void window_render_text(Renderer* renderer, RenderWindow* window, String string,
                 .colors = { color, color, color, color },
                 .texture_index = texture_index,
                 .softness = 1.0,
+                .border_thickness = border_thickness,
             },
         };
 

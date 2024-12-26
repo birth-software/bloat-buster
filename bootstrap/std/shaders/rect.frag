@@ -22,14 +22,32 @@ float rounded_rect_sdf(vec2 position, vec2 center, vec2 half_size, float radius)
 void main() 
 {
     uint sampler_index = nonuniformEXT(texture_index);
-    vec2 texture_size = textureSize(textures[sampler_index], 0);
-    vec2 uv = vec2(inputs.uv.x / texture_size.x, inputs.uv.y / texture_size.y);
-    vec4 sampled = texture(textures[sampler_index], uv);
+    vec4 in_color = inputs.color;
+    vec2 position = inputs.position;
+    vec2 in_uv = inputs.uv;
+    vec2 center = inputs.center;
+    vec2 half_size = inputs.half_size;
     float softness = inputs.softness;
+    float corner_radius = inputs.corner_radius;
+    float border_thickness = inputs.border_thickness;
+
+    vec2 texture_size = textureSize(textures[sampler_index], 0);
+    vec2 uv = vec2(in_uv.x / texture_size.x, in_uv.y / texture_size.y);
+    vec4 sampled = texture(textures[sampler_index], uv);
+
     float softness_padding_scalar = max(0, softness * 2 - 1);
     vec2 softness_padding = vec2(softness_padding_scalar, softness_padding_scalar);
-    float distance = rounded_rect_sdf(inputs.position, inputs.center, inputs.half_size - softness_padding, inputs.corner_radius);
+    float distance = rounded_rect_sdf(position, center, half_size - softness_padding, corner_radius);
 
     float sdf_factor = 1.0 - smoothstep(0, 2 * softness, distance);
-    color = inputs.color * sampled * sdf_factor;
+
+    vec2 interior_half_size = half_size - vec2(border_thickness);
+    float interior_radius_reduce_f = min(interior_half_size.x / half_size.x, interior_half_size.y / half_size.y);
+    float interior_corner_radius = corner_radius * interior_radius_reduce_f * interior_radius_reduce_f;
+    float inside_distance = rounded_rect_sdf(position, center, interior_half_size - softness_padding, interior_corner_radius);
+    float inside_factor = smoothstep(0, 2 * softness, inside_distance); 
+
+    float border_factor = border_thickness == 0.0 ? 1.0 : inside_factor;
+
+    color = in_color * sampled * sdf_factor * border_factor;
 }

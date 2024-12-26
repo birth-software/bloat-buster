@@ -7,7 +7,8 @@ struct RectVertex
     float softness;
     vec4 colors[4];
     uint texture_index;
-    uint reserved[3];
+    float border_thickness;
+    uint reserved[2];
 }; 
 
 struct RectFragmentShaderInput
@@ -19,4 +20,5 @@ struct RectFragmentShaderInput
     vec2 half_size;
     float corner_radius;
     float softness;
+    float border_thickness;
 };
