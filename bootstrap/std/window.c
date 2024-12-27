@@ -436,8 +436,9 @@ OSCursorPosition os_window_cursor_position_get(OSWindow window)
 
 int window_create_surface(void* instance, OSWindow window, const void* allocator, void** surface)
 {
-#define FORCE_XLIB_INITIALIZATION 1
     auto* surface_pointer = (VkSurfaceKHR*)surface;
+#ifdef __linux__
+#define FORCE_XLIB_INITIALIZATION 1
     if (use_x11 && FORCE_XLIB_INITIALIZATION)
     {
         auto* x11_display = glfwGetX11Display();
@@ -454,7 +455,10 @@ int window_create_surface(void* instance, OSWindow window, const void* allocator
     }
     else
     {
+#endif
         return glfwCreateWindowSurface(instance, window, allocator, surface_pointer);
+#ifdef __linux__
     }
+#endif
 }
 
