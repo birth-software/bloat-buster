@@ -1565,13 +1565,13 @@ fn void swapchain_recreate(Renderer* renderer, RenderWindow* window)
     });
 }
 
-typedef void GLFWwindow;
-extern VkResult glfwCreateWindowSurface(VkInstance instance, GLFWwindow* window, const VkAllocationCallbacks* allocator, VkSurfaceKHR* surface);
+// typedef void GLFWwindow;
+// extern VkResult glfwCreateWindowSurface(VkInstance instance, GLFWwindow* window, const VkAllocationCallbacks* allocator, VkSurfaceKHR* surface);
 
 RenderWindow* renderer_window_initialize(Renderer* renderer, OSWindow window)
 {
     RenderWindow* result = &renderer_window_memory;
-    vkok(glfwCreateWindowSurface(renderer->instance, window, renderer->allocator, &result->surface));
+    vkok((VkResult)window_create_surface(renderer->instance, window, renderer->allocator, (void**)&result->surface));
 
     swapchain_recreate(renderer, result);
 

@@ -209,8 +209,12 @@ void run_app()
 {
     state.arena = arena_init(MB(512), MB(2), MB(2));
 
-    os_graphics_init((OSGraphicsInitializationOptions) {
+    os_windowing_init((OSWindowingInitializationOptions) {
+#ifdef __linux__
         .should_use_x11 = 1,
+#else
+        .should_use_x11 = 0,
+#endif
     });
     state.renderer = renderer_initialize(state.arena);
 
