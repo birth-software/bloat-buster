@@ -21,10 +21,11 @@ float rounded_rect_sdf(vec2 position, vec2 center, vec2 half_size, float radius)
 
 void main() 
 {
-    uint sampler_index = nonuniformEXT(texture_index);
-    vec2 texture_size = textureSize(textures[sampler_index], 0);
+    // WARN: do not cache nonuniformEXT indexing
+    vec2 texture_size = textureSize(textures[nonuniformEXT(texture_index)], 0);
     vec2 uv = vec2(inputs.uv.x / texture_size.x, inputs.uv.y / texture_size.y);
-    vec4 sampled = texture(textures[sampler_index], uv);
+    // WARN: do not cache nonuniformEXT indexing
+    vec4 sampled = texture(textures[nonuniformEXT(texture_index)], uv);
     float softness = inputs.softness;
     float softness_padding_scalar = max(0, softness * 2 - 1);
     vec2 softness_padding = vec2(softness_padding_scalar, softness_padding_scalar);
