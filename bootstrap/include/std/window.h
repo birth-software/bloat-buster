@@ -119,7 +119,7 @@ typedef void OSWindowCursorEnter(OSWindow window, void* context, u8 entered);
 typedef void OSWindowScroll(OSWindow window, void* context, f64 x, f64 y);
 typedef void OSWindowDrop(OSWindow window, void* context, CStringSlice paths);
 
-STRUCT(OSGraphicCallbacks)
+STRUCT(OSWindowingCallbacks)
 {
     OSFramebufferResize* framebuffer_resize;
     OSWindowResize* window_resize;
@@ -140,9 +140,9 @@ STRUCT(OSGraphicCallbacks)
     OSWindowDrop* window_drop;
 };
 
-STRUCT(OSGraphicsInitializationOptions)
+STRUCT(OSWindowingInitializationOptions)
 {
-    OSGraphicCallbacks callback;
+    OSWindowingCallbacks callback;
     u8 should_use_x11;
 };
 
@@ -167,7 +167,7 @@ STRUCT(OSCursorPosition)
     f64 y;
 };
 
-EXPORT void os_graphics_init(OSGraphicsInitializationOptions options);
+EXPORT void os_windowing_init(OSWindowingInitializationOptions options);
 EXPORT OSWindow os_window_create(OSWindowCreate create);
 EXPORT u8 os_window_should_close(OSWindow window);
 EXPORT void os_poll_events(OSEventQueue* event_queue);
@@ -188,3 +188,5 @@ EXPORT Window x11_window_get(OSWindow window);
 #ifdef _WIN32
 EXPORT HANDLE win32_window_get(OSWindow window);
 #endif
+
+int window_create_surface(void* instance, OSWindow window, const void* allocator, void** surface);
