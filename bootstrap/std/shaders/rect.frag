@@ -14,8 +14,15 @@ layout(set = 0, binding = 0) uniform sampler2D textures[];
 
 float rounded_rect_sdf(vec2 position, vec2 center, vec2 half_size, float radius)
 {
-    vec2 d2 = abs(center - position) - half_size + vec2(radius, radius);
-    float result = min(max(d2.x, d2.y), 0.0) + length(max(d2, 0.0)) - radius;
+    vec2 r2 = vec2(radius, radius);
+    // This is 0 when the point is at the border
+    vec2 d2_no_r2 = abs(center - position) - half_size;
+    vec2 d2 = d2_no_r2 + r2;
+    // 0 when outside the rectangle
+    float negative_euclidean_distance = min(max(d2.x, d2.y), 0.0);
+    // 0 when inside the rectangle
+    float positive_euclidean_distance = length(max(d2, 0.0));
+    float result = negative_euclidean_distance + positive_euclidean_distance - radius;
     return result;
 }
 
