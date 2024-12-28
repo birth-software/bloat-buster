@@ -114,7 +114,7 @@ declare_slice(PipelineLayoutCreate);
 
 STRUCT(GraphicsPipelinesCreate)
 {
-    Slice(String) shader_sources;
+    Slice(String) shader_binaries;
     Slice(PipelineLayoutCreate) layouts;
     Slice(PipelineCreate) pipelines;
 };
