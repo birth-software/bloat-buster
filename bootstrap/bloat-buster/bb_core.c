@@ -132,7 +132,6 @@ fn void app_update()
                 // Node visualizer
                 ui_push(child_layout_axis, AXIS2_Y);
                 auto* node_visualizer_widget = ui_widget_make_format((UI_WidgetFlags) {
-                    .draw_background = 1,
                 }, "node_visualizer{u64}", window->os);
 
                 ui_push(parent, node_visualizer_widget);

@@ -58,4 +58,5 @@ void main()
     outputs.half_size = half_size;
     outputs.corner_radius = v.corner_radius;
     outputs.softness = v.softness;
+    outputs.border_thickness = v.border_thickness;
 }

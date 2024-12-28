@@ -2211,6 +2211,7 @@ void window_render_rect(RenderWindow* window, RectDraw draw)
     }
 
     auto corner_radius = 5.0f;
+    auto border_thickness = 5.0f;
 
     auto extent = draw.vertex.p1 - p0;
     RectVertex vertices[] = {
@@ -2222,6 +2223,7 @@ void window_render_rect(RenderWindow* window, RectDraw draw)
             .colors = { draw.colors[0], draw.colors[1], draw.colors[2], draw.colors[3] },
             .softness = 1.0,
             .corner_radius = corner_radius,
+            .border_thickness = border_thickness,
         },
         (RectVertex) {
             .p0 = p0,
@@ -2231,6 +2233,7 @@ void window_render_rect(RenderWindow* window, RectDraw draw)
             .colors = { draw.colors[0], draw.colors[1], draw.colors[2], draw.colors[3] },
             .softness = 1.0,
             .corner_radius = corner_radius,
+            .border_thickness = border_thickness,
         },
         (RectVertex) {
             .p0 = p0,
@@ -2240,6 +2243,7 @@ void window_render_rect(RenderWindow* window, RectDraw draw)
             .colors = { draw.colors[0], draw.colors[1], draw.colors[2], draw.colors[3] },
             .softness = 1.0,
             .corner_radius = corner_radius,
+            .border_thickness = border_thickness,
         },
         (RectVertex) {
             .p0 = p0,
@@ -2249,6 +2253,7 @@ void window_render_rect(RenderWindow* window, RectDraw draw)
             .colors = { draw.colors[0], draw.colors[1], draw.colors[2], draw.colors[3] },
             .softness = 1.0,
             .corner_radius = corner_radius,
+            .border_thickness = border_thickness,
         },
     };
 
