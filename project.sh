@@ -111,6 +111,10 @@ ninja -v
 cd $ORIGINAL_DIR/build
 ln -s $BUILD_DIR/compile_commands.json . || true
 cd $ORIGINAL_DIR
+if [[ "$BB_IS_CI" == "OFF" ]]; then
+    glslangValidator -V bootstrap/std/shaders/rect.vert -o $BUILD_DIR/rect.vert.spv
+    glslangValidator -V bootstrap/std/shaders/rect.frag -o $BUILD_DIR/rect.frag.spv
+fi
 
 if [ "$#" -ne 0 ]; then
     $BUILD_DIR/runner $@

@@ -11,8 +11,6 @@ global_variable OSWindowingCallbacks callbacks;
 
 // TODO: thread local
 global_variable OSEventQueue* event_queue = 0;
-global_variable u8 use_x11 = 0;
-
 fn void monitor_callback(GLFWmonitor* monitor, int event)
 {
     unused(monitor);
@@ -45,13 +43,8 @@ fn void bitset_list_add(VirtualBuffer(OSEventBitset)* list, u32* counter, u64 va
 void os_windowing_init(OSWindowingInitializationOptions options)
 {
 #ifdef __linux__
-    use_x11 = options.should_use_x11;
     int platform_hint = options.should_use_x11 ? GLFW_PLATFORM_X11 : GLFW_PLATFORM_WAYLAND;
     glfwInitHint(GLFW_PLATFORM, platform_hint);
-    if (platform_hint == GLFW_PLATFORM_X11)
-    {
-        glfwInitHint(GLFW_X11_XCB_VULKAN_SURFACE, GLFW_FALSE);
-    }
 #endif
 
     if (glfwInit() != GLFW_TRUE)
@@ -436,29 +429,6 @@ OSCursorPosition os_window_cursor_position_get(OSWindow window)
 
 int window_create_surface(void* instance, OSWindow window, const void* allocator, void** surface)
 {
-    auto* surface_pointer = (VkSurfaceKHR*)surface;
-#ifdef __linux__
-#define FORCE_XLIB_INITIALIZATION 1
-    if (use_x11 && FORCE_XLIB_INITIALIZATION)
-    {
-        auto* x11_display = glfwGetX11Display();
-        auto x11_window = glfwGetX11Window(window);
-        VkXlibSurfaceCreateInfoKHR create_info = {
-            .sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR,
-            .pNext = 0,
-            .flags = 0,
-            .dpy = x11_display,
-            .window = x11_window,
-        };
-
-        return vkCreateXlibSurfaceKHR(instance, &create_info, allocator, surface_pointer);
-    }
-    else
-    {
-#endif
-        return glfwCreateWindowSurface(instance, window, allocator, surface_pointer);
-#ifdef __linux__
-    }
-#endif
+    return glfwCreateWindowSurface(instance, window, allocator, (VkSurfaceKHR*)surface);
 }
 

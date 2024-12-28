@@ -4,7 +4,6 @@
 #include <std/virtual_buffer.h>
 #include <std/window.h>
 #include <std/render.h>
-#include <std/shader_compilation.h>
 #include <std/image_loader.h>
 #include <std/font_provider.h>
 #include <std/ui_core.h>

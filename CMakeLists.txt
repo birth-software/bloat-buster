@@ -211,7 +211,7 @@ if (NOT BB_IS_CI)
         set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_WIN32_KHR)
         target_compile_definitions(${COMPILER_NAME} PRIVATE GLFW_EXPOSE_NATIVE_WIN32)
     elseif(CMAKE_SYSTEM_NAME STREQUAL Linux)
-        set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_XLIB_KHR)
+        set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_XCB_KHR)
         target_compile_definitions(${COMPILER_NAME} PRIVATE GLFW_EXPOSE_NATIVE_X11)
     elseif(CMAKE_SYSTEM_NAME STREQUAL Darwin)
         set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_METAL_EXT)
@@ -237,7 +237,6 @@ if (NOT BB_IS_CI)
 
     target_sources(${COMPILER_NAME} PRIVATE
         "bootstrap/std/image_loader.c"
-        "bootstrap/std/shader_compilation.c"
         "bootstrap/std/font_cache.c"
         "bootstrap/std/font_provider.c"
         "bootstrap/std/window.c"

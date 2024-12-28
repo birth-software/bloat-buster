@@ -1,5 +1,4 @@
 #include <std/render.h>
-#include <std/shader_compilation.h>
 #include <std/string.h>
 #include <std/image_loader.h>
 #include <std/virtual_buffer.h>
@@ -325,14 +324,14 @@ void buffer_copy_to_host(VulkanBuffer buffer, Slice(HostBufferCopy) regions)
     }
 }
 
-fn VkShaderStageFlags vulkan_shader_stage_from_path(String shader_source_path)
+fn VkShaderStageFlags vulkan_shader_stage_from_path(String shader_binary_path)
 {
     VkShaderStageFlags shader_stage;
-    if (string_ends_with(shader_source_path, strlit(".vert")))
+    if (string_ends_with(shader_binary_path, strlit(".vert.spv")))
     {
         shader_stage = VK_SHADER_STAGE_VERTEX_BIT;
     }
-    else if (string_ends_with(shader_source_path, strlit(".frag")))
+    else if (string_ends_with(shader_binary_path, strlit(".frag.spv")))
     {
         shader_stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
@@ -1098,9 +1097,9 @@ Renderer* renderer_initialize(Arena* arena)
         vkok(vkCreateSampler(renderer->device, &create_info, renderer->allocator, &renderer->sampler));
     }
 
-    String shader_source_paths[] = {
-        strlit("bootstrap/std/shaders/rect.vert"),
-        strlit("bootstrap/std/shaders/rect.frag"),
+    String shader_binaries[] = {
+        strlit(BUILD_DIR "/rect.vert.spv"),
+        strlit(BUILD_DIR "/rect.frag.spv"),
     };
 
     PipelineLayoutCreate pipeline_layouts[] = {
@@ -1135,14 +1134,14 @@ Renderer* renderer_initialize(Arena* arena)
     auto create_data = (GraphicsPipelinesCreate) {
         .layouts = array_to_slice(pipeline_layouts),
         .pipelines = array_to_slice(pipeline_create),
-        .shader_sources = array_to_slice(shader_source_paths),
+        .shader_binaries = array_to_slice(shader_binaries),
     };
     auto graphics_pipeline_count = create_data.pipelines.length;
     assert(graphics_pipeline_count);
     auto pipeline_layout_count = create_data.layouts.length;
     assert(pipeline_layout_count);
     assert(pipeline_layout_count <= graphics_pipeline_count);
-    auto shader_count = create_data.shader_sources.length;
+    auto shader_count = create_data.shader_binaries.length;
 
     VkPipeline pipeline_handles[BB_PIPELINE_COUNT];
     VkPipelineShaderStageCreateInfo shader_create_infos[MAX_SHADER_MODULE_COUNT_PER_PIPELINE];
@@ -1270,11 +1269,9 @@ Renderer* renderer_initialize(Arena* arena)
 
     for (u64 i = 0; i < shader_count; i += 1)
     {
-        String shader_source_path = create_data.shader_sources.pointer[i];
+        String shader_binary_path = create_data.shader_binaries.pointer[i];
 
-        ShaderStage shader_stage = shader_stage_from_path(shader_source_path);
-
-        auto binary = compile_shader(arena, shader_source_path, shader_stage);
+        auto binary = file_read(arena, shader_binary_path);
 
         VkShaderModuleCreateInfo create_info = {
             .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -1376,7 +1373,7 @@ Renderer* renderer_initialize(Arena* arena)
         for (u64 i = 0; i < pipeline_shader_count; i += 1)
         {
             auto shader_index = create.shader_source_indices.pointer[i];
-            auto shader_source_path = create_data.shader_sources.pointer[shader_index];
+            auto shader_source_path = create_data.shader_binaries.pointer[shader_index];
 
             shader_create_infos[i] = (VkPipelineShaderStageCreateInfo) {
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
