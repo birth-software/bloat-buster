@@ -70,7 +70,6 @@ fn void ui_top_bar()
     {
         ui_push(child_layout_axis, AXIS2_X);
         auto* top_bar = ui_widget_make((UI_WidgetFlags) {
-                .draw_background = 1,
                 }, strlit("top_bar"));
         ui_push(parent, top_bar);
         {
