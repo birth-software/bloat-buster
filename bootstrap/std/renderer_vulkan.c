@@ -391,25 +391,6 @@ fn DescriptorType descriptor_type_from_vulkan(VkDescriptorType descriptor_type)
     return result;
 }
 
-fn ShaderStage shader_stage_from_path(String shader_source_path)
-{
-    ShaderStage shader_stage;
-    if (string_ends_with(shader_source_path, strlit(".vert")))
-    {
-        shader_stage = SHADER_STAGE_VERTEX;
-    }
-    else if (string_ends_with(shader_source_path, strlit(".frag")))
-    {
-        shader_stage = SHADER_STAGE_FRAGMENT;
-    }
-    else
-    {
-        failed_execution();
-    }
-
-    return shader_stage;
-}
-
 fn GPUMemory vk_allocate_memory(VkDevice device, const VkAllocationCallbacks* allocation_callbacks, VkPhysicalDeviceMemoryProperties memory_properties, VkMemoryRequirements memory_requirements, VkMemoryPropertyFlags flags, u8 use_device_address_bit)
 {
     u32 memory_type_index;
