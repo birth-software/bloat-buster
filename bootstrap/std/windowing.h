@@ -1,8 +1,20 @@
 #pragma once
 
-#include <std/base.h>
-#include <std/os.h>
-#include <std/virtual_buffer.h>
+#if BB_WINDOWING_BACKEND_X11
+#include <std/x11_windowing.h>
+#endif
+
+#if BB_WINDOWING_BACKEND_WAYLAND
+#include <std/wayland_windowing.h>
+#endif
+
+#if BB_WINDOWING_BACKEND_COCOA
+#include <std/cocoa_windowing.h>
+#endif
+
+#if BB_WINDOWING_BACKEND_WIN32
+#include <std/win32_windowing.h>
+#endif
 
 typedef enum OSEventType
 {
@@ -140,12 +152,6 @@ STRUCT(OSWindowingCallbacks)
     OSWindowDrop* window_drop;
 };
 
-STRUCT(OSWindowingInitializationOptions)
-{
-    OSWindowingCallbacks callback;
-    u8 should_use_x11;
-};
-
 STRUCT(OSWindowSize)
 {
     u32 width;
@@ -167,26 +173,41 @@ STRUCT(OSCursorPosition)
     f64 y;
 };
 
-EXPORT void os_windowing_init(OSWindowingInitializationOptions options);
-EXPORT OSWindow os_window_create(OSWindowCreate create);
-EXPORT u8 os_window_should_close(OSWindow window);
-EXPORT void os_poll_events(OSEventQueue* event_queue);
-EXPORT OSCursorPosition os_window_cursor_position_get(OSWindow window);
-EXPORT OSWindowSize os_window_framebuffer_size_get(OSWindow window);
+// NEW API START
+STRUCT(WindowOffset)
+{
+    u32 x;
+    u32 y;
+};
 
-EXPORT u8 os_event_queue_get_window_focus(OSEventQueue* queue, u32 index);
+STRUCT(WindowSize)
+{
+    u32 width;
+    u32 height;
+};
 
-#ifdef __linux__
-typedef unsigned long XID;
-typedef struct _XDisplay Display;
-typedef XID Window;
+STRUCT(WindowCreate)
+{
+    String name;
+    WindowOffset offset;
+    WindowSize size;
+    void* context;
+};
 
-EXPORT Display* x11_display_get();
-EXPORT Window x11_window_get(OSWindow window);
-#endif
+fn u8 windowing_initialize();
+fn WindowingInstance* windowing_instantiate(WindowCreate create);
+fn void windowing_poll_events();
+// NEW API END
 
-#ifdef _WIN32
-EXPORT HANDLE win32_window_get(OSWindow window);
-#endif
 
-int window_create_surface(void* instance, OSWindow window, const void* allocator, void** surface);
+fn OSWindow os_window_create(OSWindowCreate create);
+fn u8 os_window_should_close(OSWindow window);
+fn void os_poll_events(OSEventQueue* event_queue);
+fn OSCursorPosition os_window_cursor_position_get(OSWindow window);
+fn OSWindowSize os_window_framebuffer_size_get(OSWindow window);
+
+fn u8 os_event_queue_get_window_focus(OSEventQueue* queue, u32 index);
+
+global_variable WindowingConnection windowing_connection;
+global_variable WindowingInstance windowing_instances[256];
+

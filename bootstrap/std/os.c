@@ -1,26 +1,10 @@
-#include <std/os.h>
+#pragma once 
+
 #include <std/string.h>
 #include <std/format.h>
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN 1
-#include <Windows.h>
-#else
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/stat.h>
-#include <sys/mman.h>
-#include <sys/wait.h>
-#include <sys/time.h>
-#include <sys/ptrace.h>
-#endif
-
-#if LINK_LIBC
-#include <errno.h>
-#include <string.h>
-#include <stdlib.h>
-#include <time.h>
-#endif
+#include <std/string.c>
+#include <std/format.c>
 
 #if _WIN32
 global_variable u64 cpu_frequency;
@@ -32,7 +16,7 @@ global_variable u64 cpu_frequency;
 #endif
 #endif
 
-Timestamp os_timestamp()
+fn Timestamp os_timestamp()
 {
     Timestamp result;
 
@@ -49,7 +33,7 @@ Timestamp os_timestamp()
     return result;
 }
 
-f64 os_resolve_timestamps(Timestamp start, Timestamp end, TimeUnit time_unit)
+fn f64 os_resolve_timestamps(Timestamp start, Timestamp end, TimeUnit time_unit)
 {
     f64 result;
 #if _WIN32
@@ -104,7 +88,7 @@ f64 os_resolve_timestamps(Timestamp start, Timestamp end, TimeUnit time_unit)
     return result;
 }
 
-FileDescriptor os_stdout_get()
+fn FileDescriptor os_stdout_get()
 {
 #if _WIN32
     auto handle = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -115,11 +99,11 @@ FileDescriptor os_stdout_get()
 #endif
 }
 
-String path_dir(String string)
+fn String path_dir(String string)
 {
     String result = {};
     auto index = string_last_ch(string, '/');
-    if (index != -1)
+    if (index != STRING_NO_MATCH)
     {
         result = s_get_slice(u8, string, 0, index);
     }
@@ -127,34 +111,34 @@ String path_dir(String string)
     return result;
 }
 
-String path_base(String string)
+fn String path_base(String string)
 {
     String result = {};
-    auto maybe_index = string_last_ch(string, '/');
-    if (maybe_index != -1)
+    auto index = string_last_ch(string, '/');
+    if (index != STRING_NO_MATCH)
     {
-        auto index = cast_to(u64, s64, maybe_index);
         result = s_get_slice(u8, string, index + 1, string.length);
     }
 #if _WIN32
     if (!result.pointer)
     {
-        auto maybe_index = string_last_ch(string, '\\');
-        auto index = cast_to(u64, s64, maybe_index);
-        result = s_get_slice(u8, string, index + 1, string.length);
+        auto index = string_last_ch(string, '\\');
+        if (index != STRING_NO_MATCH)
+        {
+            result = s_get_slice(u8, string, index + 1, string.length);
+        }
     }
 #endif
 
     return result;
 }
 
-String path_no_extension(String string)
+fn String path_no_extension(String string)
 {
     String result = {};
-    auto maybe_index = string_last_ch(string, '.');
-    if (maybe_index != -1)
+    auto index = string_last_ch(string, '.');
+    if (index != STRING_NO_MATCH)
     {
-        auto index = cast_to(u64, s64, maybe_index);
         result = s_get_slice(u8, string, 0, index);
     }
 
@@ -603,7 +587,7 @@ may_be_unused fn void* posix_mmap(void* address, size_t length, int protection_f
     return mmap(address, length, protection_flags, map_flags, fd, offset);
 #else 
 #ifdef __linux__
-    return (void*) syscall6(syscall_x86_64_mmap, (s64)address, cast_to(s64, u64, length), protection_flags, map_flags, fd, offset);
+    return (void*) syscall6(syscall_x86_64_mmap, (s64)address, cast_to(s64, length), protection_flags, map_flags, fd, offset);
 #else
 #error "Unsupported operating system for static linking" 
 #endif
@@ -616,7 +600,7 @@ may_be_unused fn int syscall_mprotect(void *address, size_t length, int protecti
     return mprotect(address, length, protection_flags);
 #else 
 #ifdef __linux__
-    return cast_to(s32, s64, syscall3(syscall_x86_64_mprotect, (s64)address, cast_to(s64, u64, length), protection_flags));
+    return cast_to(s32, syscall3(syscall_x86_64_mprotect, (s64)address, cast_to(s64, length), protection_flags));
 #else
     return mprotect(address, length, protection_flags);
 #endif
@@ -629,7 +613,7 @@ may_be_unused fn int syscall_open(const char *file_path, int flags, int mode)
     return open(file_path, flags, mode);
 #else
 #ifdef __linux__
-    return cast_to(s32, s64, syscall3(syscall_x86_64_open, (s64)file_path, flags, mode));
+    return cast_to(s32, syscall3(syscall_x86_64_open, (s64)file_path, flags, mode));
 #else
     return open(file_path, flags, mode);
 #endif
@@ -642,7 +626,7 @@ may_be_unused fn int syscall_close(int fd)
     return close(fd);
 #else
 #ifdef __linux__
-    return cast_to(s32, s64, syscall1(syscall_x86_64_close, fd));
+    return cast_to(s32, syscall1(syscall_x86_64_close, fd));
 #else
     return close(fd);
 #endif
@@ -655,7 +639,7 @@ fn int syscall_fstat(int fd, struct stat *buffer)
     return fstat(fd, buffer);
 #else
 #ifdef __linux__
-    return cast_to(s32, s64, syscall2(syscall_x86_64_fstat, fd, (s64)buffer));
+    return cast_to(s32, syscall2(syscall_x86_64_fstat, fd, (s64)buffer));
 #else
     return fstat(fd, buffer);
 #endif
@@ -694,7 +678,7 @@ may_be_unused fn int syscall_mkdir(String path, u32 mode)
 #if LINK_LIBC
     return mkdir((char*)path.pointer, mode);
 #else
-    return cast_to(s32, s64, syscall2(syscall_x86_64_mkdir, (s64)path.pointer, (s64)mode));
+    return cast_to(s32, syscall2(syscall_x86_64_mkdir, (s64)path.pointer, (s64)mode));
 #endif
 }
 
@@ -704,7 +688,7 @@ may_be_unused fn int syscall_rmdir(String path)
 #if LINK_LIBC
     return rmdir((char*)path.pointer);
 #else
-    return cast_to(s32, s64, syscall1(syscall_x86_64_rmdir, (s64)path.pointer));
+    return cast_to(s32, syscall1(syscall_x86_64_rmdir, (s64)path.pointer));
 #endif
 }
 
@@ -714,7 +698,7 @@ may_be_unused fn int syscall_unlink(String path)
 #if LINK_LIBC
     return unlink((char*)path.pointer);
 #else
-    return cast_to(s32, s64, syscall1(syscall_x86_64_unlink, (s64)path.pointer));
+    return cast_to(s32, syscall1(syscall_x86_64_unlink, (s64)path.pointer));
 #endif
 }
 
@@ -723,7 +707,7 @@ may_be_unused fn pid_t syscall_fork()
 #if LINK_LIBC
     return fork();
 #else
-    return cast_to(s32, s64, syscall0(syscall_x86_64_fork));
+    return cast_to(s32, syscall0(syscall_x86_64_fork));
 #endif
 
 }
@@ -742,7 +726,7 @@ may_be_unused fn pid_t syscall_waitpid(pid_t pid, int* status, int options)
 #if LINK_LIBC
     return waitpid(pid, status, options);
 #else
-    return cast_to(s32, s64, syscall4(syscall_x86_64_wait4, pid, (s64)status, options, 0));
+    return cast_to(s32, syscall4(syscall_x86_64_wait4, pid, (s64)status, options, 0));
 #endif
 }
 
@@ -751,7 +735,7 @@ may_be_unused fn int syscall_gettimeofday(struct timeval* tv, struct timezone* t
 #if LINK_LIBC
     return gettimeofday(tv, tz);
 #else
-    return cast_to(s32, s64, syscall2(syscall_x86_64_gettimeofday, (s64)tv, (s64)tz));
+    return cast_to(s32, syscall2(syscall_x86_64_gettimeofday, (s64)tv, (s64)tz));
 #endif
 }
 
@@ -784,12 +768,12 @@ may_be_unused fn u64 os_timer_get()
 #else
     struct timeval tv;
     syscall_gettimeofday(&tv, 0);
-    auto result = os_timer_freq() * cast_to(u64, s64, tv.tv_sec) + cast_to(u64, s64, tv.tv_usec);
+    auto result = os_timer_freq() * cast_to(u64, tv.tv_sec) + cast_to(u64, tv.tv_usec);
     return result;
 #endif
 }
 
-u8 os_file_descriptor_is_valid(FileDescriptor fd)
+fn u8 os_file_descriptor_is_valid(FileDescriptor fd)
 {
 #if _WIN32
     return fd != INVALID_HANDLE_VALUE;
@@ -798,7 +782,7 @@ u8 os_file_descriptor_is_valid(FileDescriptor fd)
 #endif
 }
 
-FileDescriptor os_file_open(String path, OSFileOpenFlags flags, OSFilePermissions permissions)
+fn FileDescriptor os_file_open(String path, OSFileOpenFlags flags, OSFilePermissions permissions)
 {
     assert(path.pointer[path.length] == 0);
 #if _WIN32
@@ -841,7 +825,7 @@ FileDescriptor os_file_open(String path, OSFileOpenFlags flags, OSFilePermission
 #endif
 }
 
-u64 os_file_get_size(FileDescriptor fd)
+fn u64 os_file_get_size(FileDescriptor fd)
 {
 #if _WIN32
     LARGE_INTEGER file_size;
@@ -852,12 +836,12 @@ u64 os_file_get_size(FileDescriptor fd)
     struct stat stat_buffer;
     int stat_result = syscall_fstat(fd, &stat_buffer);
     assert(stat_result == 0);
-    auto size = cast_to(u64, s64, stat_buffer.st_size);
+    auto size = cast_to(u64, stat_buffer.st_size);
     return size;
 #endif
 }
 
-void os_file_write(FileDescriptor fd, String content)
+fn void os_file_write(FileDescriptor fd, String content)
 {
 #if _WIN32
     DWORD bytes_written = 0;
@@ -865,7 +849,7 @@ void os_file_write(FileDescriptor fd, String content)
     assert(result != 0);
 #else
     auto result = syscall_write(fd, content.pointer, content.length);
-    assert(cast_to(u64, s64, result) == content.length);
+    assert(cast_to(u64, result) == content.length);
 #endif
 }
 
@@ -886,7 +870,7 @@ may_be_unused fn u64 os_file_read(FileDescriptor fd, String buffer, u64 byte_cou
         assert(result > 0);
         if (result > 0)
         {
-            bytes_read = cast_to(u64, s64, result);
+            assign_cast(bytes_read, result);
         }
 #endif
     }
@@ -894,7 +878,7 @@ may_be_unused fn u64 os_file_read(FileDescriptor fd, String buffer, u64 byte_cou
     return bytes_read;
 }
 
-void os_file_close(FileDescriptor fd)
+fn void os_file_close(FileDescriptor fd)
 {
 #if _WIN32
     BOOL result = CloseHandle(fd);
@@ -905,7 +889,7 @@ void os_file_close(FileDescriptor fd)
 #endif
 }
 
-void calibrate_cpu_timer()
+fn void calibrate_cpu_timer()
 {
 #ifndef SILENT
 #if _WIN32
@@ -937,7 +921,7 @@ void calibrate_cpu_timer()
 #endif
 }
 
-u8* os_reserve(u64 base, u64 size, OSReserveProtectionFlags protection, OSReserveMapFlags map)
+fn u8* os_reserve(u64 base, u64 size, OSReserveProtectionFlags protection, OSReserveMapFlags map)
 {
 #if _WIN32
     DWORD map_flags = 0;
@@ -956,7 +940,7 @@ u8* os_reserve(u64 base, u64 size, OSReserveProtectionFlags protection, OSReserv
 #endif
 }
 
-void os_commit(void* address, u64 size)
+fn void os_commit(void* address, u64 size)
 {
 #if _WIN32
     VirtualAlloc(address, size, MEM_COMMIT, PAGE_READWRITE);
@@ -966,7 +950,7 @@ void os_commit(void* address, u64 size)
 #endif
 }
 
-void os_directory_make(String path)
+fn void os_directory_make(String path)
 {
     assert(path.pointer[path.length] == 0);
 #if _WIN32
@@ -976,7 +960,12 @@ void os_directory_make(String path)
 #endif
 }
 
-void print(const char* format, ...)
+[[noreturn]] [[gnu::cold]] fn void os_exit(u32 exit_code)
+{
+    exit(exit_code);
+}
+
+fn void print(const char* format, ...)
 {
 #ifndef SILENT
         u8 stack_buffer[16*1024];
@@ -993,7 +982,7 @@ void print(const char* format, ...)
 static_assert(sizeof(Arena) == 64);
 const global_variable u64 minimum_position = sizeof(Arena);
 
-Arena* arena_init(u64 reserved_size, u64 granularity, u64 initial_size)
+fn Arena* arena_initialize(u64 reserved_size, u64 granularity, u64 initial_size)
 {
     auto protection_flags = (OSReserveProtectionFlags) {
         .read = 1,
@@ -1015,12 +1004,12 @@ Arena* arena_init(u64 reserved_size, u64 granularity, u64 initial_size)
     return arena;
 }
 
-Arena* arena_init_default(u64 initial_size)
+fn Arena* arena_initialize_default(u64 initial_size)
 {
-    return arena_init(default_size, minimum_granularity, initial_size);
+    return arena_initialize(default_size, minimum_granularity, initial_size);
 }
 
-u8* arena_allocate_bytes(Arena* arena, u64 size, u64 alignment)
+fn u8* arena_allocate_bytes(Arena* arena, u64 size, u64 alignment)
 {
     u64 aligned_offset = align_forward(arena->position, alignment);
     u64 aligned_size_after = aligned_offset + size;
@@ -1040,7 +1029,7 @@ u8* arena_allocate_bytes(Arena* arena, u64 size, u64 alignment)
     return result;
 }
 
-String arena_join_string(Arena* arena, Slice(String) pieces)
+fn String arena_join_string(Arena* arena, Slice(String) pieces)
 {
     u64 size = 0;
     for (u64 i = 0; i < pieces.length; i += 1)
@@ -1063,16 +1052,13 @@ String arena_join_string(Arena* arena, Slice(String) pieces)
     return (String) { .pointer = pointer, .length = size };
 }
 
-
-void arena_reset(Arena* arena)
+fn void arena_reset(Arena* arena)
 {
     arena->position = minimum_position;
     memset(arena + 1, 0, arena->position - minimum_position);
 }
 
-#define transmute(D, source) *(D*)&source
-
-String file_read(Arena* arena, String path)
+fn String file_read(Arena* arena, String path)
 {
     String result = {};
     auto file_descriptor = os_file_open(path, (OSFileOpenFlags) {
@@ -1112,7 +1098,7 @@ String file_read(Arena* arena, String path)
     return result;
 }
 
-void file_write(FileWriteOptions options)
+fn void file_write(FileWriteOptions options)
 {
     print("Writing file \"{s}\"...\n", options.path);
     auto fd = os_file_open(options.path, (OSFileOpenFlags) {
@@ -1131,17 +1117,21 @@ void file_write(FileWriteOptions options)
     os_file_close(fd);
 }
 
-void run_command(Arena* arena, CStringSlice arguments, char* envp[])
+fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunCommandOptions run_options)
 {
-    print("Running command:\n");
     assert(arguments.length > 0);
     assert(arguments.pointer[arguments.length - 1] == 0);
-    for (u32 i = 0; i < arguments.length - 1; i += 1)
+
+    if (run_options.debug)
     {
-        char* argument = arguments.pointer[i];
-        print("{cstr} ", argument);
+        print("Running command:\n");
+        for (u32 i = 0; i < arguments.length - 1; i += 1)
+        {
+            char* argument = arguments.pointer[i];
+            print("{cstr} ", argument);
+        }
+        print("\n");
     }
-    print("\n");
 
 #if _WIN32
     auto start_timestamp = os_timestamp();
@@ -1189,11 +1179,19 @@ void run_command(Arena* arena, CStringSlice arguments, char* envp[])
         auto end = os_timestamp();
         auto ms = os_resolve_timestamps(start, end, TIME_UNIT_MILLISECONDS);
 
-        print("Process ran in {f64} ms\n", ms);
+        if (options.debug)
+        {
+            print("Process ran in {f64} ms\n", ms);
+        }
+
         DWORD exit_code;
         if (GetExitCodeProcess(process_information.hProcess, &exit_code))
         {
-            print("Process ran with exit code: 0x{u32:x}\n", exit_code);
+            if (options.debug)
+            {
+                print("Process ran with exit code: 0x{u32:x}\n", exit_code);
+            }
+
             if (exit_code != 0)
             {
                 failed_execution();
@@ -1209,7 +1207,7 @@ void run_command(Arena* arena, CStringSlice arguments, char* envp[])
     }
     else
     {
-        print("Failure\n");
+        print("CreateProcessA call failed\n");
         auto err = GetLastError();
         LPSTR lpMsgBuf;
         DWORD bufSize = FormatMessageA(
@@ -1224,6 +1222,7 @@ void run_command(Arena* arena, CStringSlice arguments, char* envp[])
         unused(bufSize);
         todo();
     }
+
     unused(start_timestamp);
     unused(end_timestamp);
     unused(envp);
@@ -1258,27 +1257,35 @@ void run_command(Arena* arena, CStringSlice arguments, char* envp[])
         int success = 0;
         if (result == pid)
         {
-            print("{cstr} ", arguments.pointer[0]);
-            
+            if (run_options.debug)
+            {
+                print("{cstr} ", arguments.pointer[0]);
+
+                if (WIFEXITED(status))
+                {
+                    auto exit_code = WEXITSTATUS(status);
+                    print("exited with code {u32}\n", exit_code);
+                }
+                else if (WIFSIGNALED(status))
+                {
+                    auto signal_code = WTERMSIG(status);
+                    print("was signaled: {u32}\n", signal_code);
+                }
+                else if (WIFSTOPPED(status))
+                {
+                    auto stopped_code = WSTOPSIG(status);
+                    print("was stopped: {u32}\n", stopped_code);
+                }
+                else
+                {
+                    print("terminated unexpectedly with status {u32}\n", status);
+                }
+            }
+
             if (WIFEXITED(status))
             {
                 auto exit_code = WEXITSTATUS(status);
                 success = exit_code == 0;
-                print("exited with code {u32}\n", exit_code);
-            }
-            else if (WIFSIGNALED(status))
-            {
-                auto signal_code = WTERMSIG(status);
-                print("was signaled: {u32}\n", signal_code);
-            }
-            else if (WIFSTOPPED(status))
-            {
-                auto stopped_code = WSTOPSIG(status);
-                print("was stopped: {u32}\n", stopped_code);
-            }
-            else
-            {
-                print("terminated unexpectedly with status {u32}\n", status);
             }
         }
         else if (result == -1)
@@ -1294,23 +1301,24 @@ void run_command(Arena* arena, CStringSlice arguments, char* envp[])
 
         if (!success)
         {
-            print("Program failed to run!\n");
+            print("Program failed to run successfully!\n");
             failed_execution();
         }
-        auto ms = os_resolve_timestamps(start_timestamp, end_timestamp, TIME_UNIT_MILLISECONDS);
-        auto ticks =
-#if LINK_LIBC
-            0
-#else
-            cpu_frequency != 0
+
+        if (run_options.debug)
+        {
+            auto ms = os_resolve_timestamps(start_timestamp, end_timestamp, TIME_UNIT_MILLISECONDS);
+            u32 ticks = 0;
+#if LINK_LIBC == 0
+            ticks = cpu_frequency != 0;
 #endif
-            ;
-        print("Command run successfully in {f64} {cstr}\n", ms, ticks ? "ticks" : "ms");
+            print("Command run successfully in {f64} {cstr}\n", ms, ticks ? "ticks" : "ms");
+        }
     }
 #endif
 }
 
-u8 os_is_being_debugged()
+fn u8 os_is_being_debugged()
 {
     u8 result = 0;
 #if _WIN32
@@ -1335,7 +1343,7 @@ u8 os_is_being_debugged()
     return result;
 }
 
-void print_string(String message)
+fn void print_string(String message)
 {
 #ifndef SILENT
     // TODO: check writes
@@ -1347,9 +1355,91 @@ void print_string(String message)
 #endif
 }
 
+fn String os_get_environment_variable(const char* name)
+{
+    String result = {};
+    char* env = getenv(name);
+    if (env)
+    {
+        result = cstr(env);
+    }
+
+    return result;
+}
+
+fn u64 os_readlink(String path, String buffer)
+{
+    u64 result = 0;
+    assert(path.pointer[path.length] == 0);
+    auto sys_result = readlink(string_to_c(path), string_to_c(buffer), buffer.length);
+    if (sys_result > 0)
+    {
+        assign_cast(result, sys_result);
+    }
+
+    return result;
+}
+
+fn String os_readlink_allocate(Arena* arena, String path)
+{
+    String result = {};
+    u8 buffer[4096];
+    auto bytes = os_readlink(path, (String)array_to_slice(buffer));
+
+    if (bytes > 0)
+    {
+        result.pointer = arena_allocate(arena, u8, bytes + 1);
+        result.length = bytes;
+        memcpy(result.pointer, buffer, bytes);
+        result.pointer[bytes] = 0;
+    }
+
+    return result;
+}
+
+fn String os_realpath(String path, String buffer)
+{
+    String result = {};
+    assert(path.pointer[path.length] == 0);
+    char* system_result = realpath(string_to_c(path), string_to_c(buffer));
+    if (system_result)
+    {
+        result = cstr(system_result);
+    }
+
+    return result;
+}
+
+fn void os_free(void* pointer)
+{
+    free(pointer);
+}
+
 #if _WIN32
-HANDLE os_windows_get_module_handle()
+fn HANDLE os_windows_get_module_handle()
 {
     return GetModuleHandleW(0);
 }
 #endif
+
+// TODO: structure this better
+#if _WIN32
+#else
+fn OSLibrary os_library_load(const char* library_name)
+{
+    OSLibrary library = {};
+    library.handle = dlopen(library_name, RTLD_NOW | RTLD_LOCAL);
+    return library;
+}
+
+fn OSSymbol os_symbol_load(OSLibrary library, const char* symbol_name)
+{
+    OSSymbol symbol = dlsym(library.handle, symbol_name);
+    return symbol;
+}
+#endif
+
+fn u8 os_library_is_valid(OSLibrary library)
+{
+    return library.handle != 0;
+}

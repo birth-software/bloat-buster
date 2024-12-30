@@ -1,6 +1,6 @@
 #include <std/format.h>
 
-u32 format_hexadecimal(String buffer, u64 hexadecimal)
+fn u32 format_hexadecimal(String buffer, u64 hexadecimal)
 {
     u64 value = hexadecimal;
     if (value)
@@ -35,7 +35,7 @@ u32 format_hexadecimal(String buffer, u64 hexadecimal)
     }
 }
 
-u32 format_decimal(String buffer, u64 decimal)
+fn u32 format_decimal(String buffer, u64 decimal)
 {
     u64 value = decimal;
     if (value)
@@ -526,27 +526,27 @@ fn u8 multiple_of_power_of_2(const u64 value, const u32 p) {
   return (value & ((1ull << p) - 1)) == 0;
 }
 
-static inline uint64_t div5(const uint64_t x) {
+fn inline uint64_t div5(const uint64_t x) {
   return x / 5;
 }
 
-static inline uint64_t div10(const uint64_t x) {
+fn inline uint64_t div10(const uint64_t x) {
   return x / 10;
 }
 
-static inline uint64_t div100(const uint64_t x) {
+fn inline uint64_t div100(const uint64_t x) {
   return x / 100;
 }
 
-static inline uint64_t div1e8(const uint64_t x) {
+fn inline uint64_t div1e8(const uint64_t x) {
   return x / 100000000;
 }
 
-static inline uint64_t div1e9(const uint64_t x) {
+fn inline uint64_t div1e9(const uint64_t x) {
   return x / 1000000000;
 }
 
-static inline uint32_t mod1e9(const uint64_t x) {
+fn inline uint32_t mod1e9(const uint64_t x) {
   return (uint32_t) (x - 1000000000 * div1e9(x));
 }
 
@@ -815,7 +815,7 @@ fn void write_float_decimal(String buffer, u64* value, u64 count)
 
     while (i + 2 < count)
     {
-        auto c = cast_to(u8, u64, *value % 100);
+        auto c = cast_to(u8, *value % 100);
         *value /= 100;
         auto ptr = digits2(c);
         buffer.pointer[count - i - 1] = ptr[1];
@@ -825,7 +825,7 @@ fn void write_float_decimal(String buffer, u64* value, u64 count)
 
     while (i < count)
     {
-        auto c = cast_to(u8, u64, *value % 10);
+        auto c = cast_to(u8, *value % 10);
         *value /= 10;
         buffer.pointer[count - i - 1] = '0' + c;
 
@@ -833,9 +833,7 @@ fn void write_float_decimal(String buffer, u64* value, u64 count)
     }
 }
 
-
-
-u64 format_float(String buffer, f64 value_double)
+fn u64 format_float(String buffer, f64 value_double)
 {
     auto value_int = *(u64*)&value_double;
     u64 buffer_i = 0;
@@ -1022,7 +1020,7 @@ u64 format_float(String buffer, f64 value_double)
                 } break;
             case FLOAT_FORMAT_DECIMAL:
                 {
-                    auto dp_offset = result.exponent + cast_to(s32, u32, olength);
+                    auto dp_offset = result.exponent + cast_to(s32, olength);
 
                     if (dp_offset <= 0)
                     {
@@ -1066,7 +1064,7 @@ u64 format_float(String buffer, f64 value_double)
     return buffer_i;
 }
 
-String format_string_va(String buffer, const char* format, va_list args)
+fn String format_string_va(String buffer, const char* format, va_list args)
 {
     u8* it = (u8*)format;
     u64 buffer_i = 0;
@@ -1119,7 +1117,7 @@ String format_string_va(String buffer, const char* format, va_list args)
                             }
                             else
                             {
-                                auto character = cast_to(u8, u32, va_arg(args, u32));
+                                auto character = cast_to(u8, va_arg(args, u32));
                                 buffer.pointer[buffer_i] = character;
                                 buffer_i += 1;
                                 done = 1;
@@ -1372,7 +1370,7 @@ String format_string_va(String buffer, const char* format, va_list args)
     return (String) { .pointer = buffer.pointer, .length = buffer_i };
 }
 
-String format_string(String buffer, const char* format, ...)
+fn String format_string(String buffer, const char* format, ...)
 {
     va_list args;
     va_start(args, format);

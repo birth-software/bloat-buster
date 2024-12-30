@@ -1,7 +1,85 @@
-#include <std/render.h>
-#include <std/string.h>
-#include <std/image_loader.h>
-#include <std/virtual_buffer.h>
+#pragma once
+
+#define vulkan_function_pointer(n) PFN_ ## n n
+#define vulkan_global_function_pointer(n) global_variable vulkan_function_pointer(n)
+#define vulkan_load_function_generic(fn, load_fn, context) fn = (PFN_ ## fn) load_fn(context, #fn)
+#define vulkan_load_instance_function(instance, fn) vulkan_load_function_generic(fn, vkGetInstanceProcAddr, instance)
+#define vulkan_load_device_function(device, fn) vulkan_load_function_generic(fn, vkGetDeviceProcAddr, device)
+
+global_variable OSLibrary vulkan_library;
+
+// INSTANCE FUNCTIONS START
+// These functions require no instance
+vulkan_global_function_pointer(vkGetInstanceProcAddr);
+vulkan_global_function_pointer(vkEnumerateInstanceVersion);
+vulkan_global_function_pointer(vkEnumerateInstanceLayerProperties);
+vulkan_global_function_pointer(vkCreateInstance);
+
+// These functions require an instance as a parameter
+vulkan_global_function_pointer(vkGetDeviceProcAddr);
+vulkan_global_function_pointer(vkCreateDebugUtilsMessengerEXT);
+vulkan_global_function_pointer(vkEnumeratePhysicalDevices);
+vulkan_global_function_pointer(vkGetPhysicalDeviceMemoryProperties);
+vulkan_global_function_pointer(vkGetPhysicalDeviceProperties);
+vulkan_global_function_pointer(vkGetPhysicalDeviceQueueFamilyProperties);
+vulkan_global_function_pointer(vkCreateDevice);
+// INSTANCE FUNCTIONS END
+
+vulkan_global_function_pointer(vkCmdCopyBuffer2);
+vulkan_global_function_pointer(vkAllocateMemory);
+vulkan_global_function_pointer(vkCreateBuffer);
+vulkan_global_function_pointer(vkGetBufferMemoryRequirements);
+vulkan_global_function_pointer(vkBindBufferMemory);
+vulkan_global_function_pointer(vkMapMemory);
+vulkan_global_function_pointer(vkGetBufferDeviceAddress);
+vulkan_global_function_pointer(vkResetFences);
+vulkan_global_function_pointer(vkResetCommandBuffer);
+vulkan_global_function_pointer(vkBeginCommandBuffer);
+vulkan_global_function_pointer(vkEndCommandBuffer);
+vulkan_global_function_pointer(vkQueueSubmit2);
+vulkan_global_function_pointer(vkWaitForFences);
+vulkan_global_function_pointer(vkCreateImage);
+vulkan_global_function_pointer(vkGetImageMemoryRequirements);
+vulkan_global_function_pointer(vkBindImageMemory);
+vulkan_global_function_pointer(vkCreateImageView);
+vulkan_global_function_pointer(vkCmdPipelineBarrier2);
+vulkan_global_function_pointer(vkCmdBlitImage2);
+vulkan_global_function_pointer(vkGetDeviceQueue);
+vulkan_global_function_pointer(vkCreateCommandPool);
+vulkan_global_function_pointer(vkAllocateCommandBuffers);
+vulkan_global_function_pointer(vkCreateFence);
+vulkan_global_function_pointer(vkCreateSampler);
+vulkan_global_function_pointer(vkCreateShaderModule);
+vulkan_global_function_pointer(vkCreateDescriptorSetLayout);
+vulkan_global_function_pointer(vkCreatePipelineLayout);
+vulkan_global_function_pointer(vkCreateGraphicsPipelines);
+vulkan_global_function_pointer(vkDestroyImageView);
+vulkan_global_function_pointer(vkDestroyImage);
+vulkan_global_function_pointer(vkFreeMemory);
+vulkan_global_function_pointer(vkGetPhysicalDeviceSurfaceCapabilitiesKHR);
+vulkan_global_function_pointer(vkDeviceWaitIdle);
+vulkan_global_function_pointer(vkGetPhysicalDeviceSurfacePresentModesKHR);
+vulkan_global_function_pointer(vkCreateSwapchainKHR);
+vulkan_global_function_pointer(vkDestroySwapchainKHR);
+vulkan_global_function_pointer(vkGetSwapchainImagesKHR);
+vulkan_global_function_pointer(vkCreateDescriptorPool);
+vulkan_global_function_pointer(vkAllocateDescriptorSets);
+vulkan_global_function_pointer(vkCreateSemaphore);
+vulkan_global_function_pointer(vkAcquireNextImageKHR);
+vulkan_global_function_pointer(vkDestroyBuffer);
+vulkan_global_function_pointer(vkUnmapMemory);
+vulkan_global_function_pointer(vkCmdSetViewport);
+vulkan_global_function_pointer(vkCmdSetScissor);
+vulkan_global_function_pointer(vkCmdBeginRendering);
+vulkan_global_function_pointer(vkCmdBindPipeline);
+vulkan_global_function_pointer(vkCmdBindDescriptorSets);
+vulkan_global_function_pointer(vkCmdBindIndexBuffer);
+vulkan_global_function_pointer(vkCmdPushConstants);
+vulkan_global_function_pointer(vkCmdDrawIndexed);
+vulkan_global_function_pointer(vkCmdEndRendering);
+vulkan_global_function_pointer(vkQueuePresentKHR);
+vulkan_global_function_pointer(vkCmdCopyBufferToImage);
+vulkan_global_function_pointer(vkUpdateDescriptorSets);
 
 #define MAX_SWAPCHAIN_IMAGE_COUNT (16)
 #define MAX_FRAME_COUNT (2)
@@ -113,7 +191,6 @@ STRUCT(IndexBuffer)
 
 STRUCT(Renderer)
 {
-    VkInstance instance;
     VkAllocationCallbacks* allocator;
     VkPhysicalDevice physical_device;
     VkDevice device;
@@ -772,17 +849,56 @@ fn void vk_image_copy(VkCommandBuffer command_buffer, VulkanCopyImageArgs args)
     vkCmdBlitImage2(command_buffer, &blit_info);
 }
 
-fn Renderer* renderer_initialize(Arena* arena)
+fn Renderer* rendering_initialize(Arena* arena)
 {
     Renderer* renderer = &renderer_memory;
-    vkok(volkInitialize());
 
-    auto api_version = volkGetInstanceVersion();
+#ifdef __linux__
+    vulkan_library = os_library_load("libvulkan.so.1");
+#endif
+
+    if (!os_library_is_valid(vulkan_library))
+    {
+        failed_execution();
+    }
+
+    vkGetInstanceProcAddr = os_symbol_load(vulkan_library, "vkGetInstanceProcAddr");
+    if (!vkGetInstanceProcAddr)
+    {
+        failed_execution();
+    }
+
+    vulkan_load_instance_function(0, vkEnumerateInstanceVersion);
+    vulkan_load_instance_function(0, vkCreateInstance);
+
+    u32 api_version = 0;
+    if (vkEnumerateInstanceVersion)
+    {
+        vkok(vkEnumerateInstanceVersion(&api_version));
+    }
+
+    if (!api_version)
+    {
+        if (vkCreateInstance)
+        {
+            api_version = VK_API_VERSION_1_0;
+        }
+    }
+
+    if (!api_version)
+    {
+        failed_execution();
+    }
+    
     if (api_version < VK_API_VERSION_1_3)
     {
         failed_execution();
     }
 
+    // Proceed to load Vulkan instance-level functions
+    vulkan_load_instance_function(0, vkEnumerateInstanceLayerProperties);
+
+    VkInstance instance;
     {
 #if BB_DEBUG
         auto debug_layer = strlit("VK_LAYER_KHRONOS_validation");
@@ -873,19 +989,26 @@ fn Renderer* renderer_initialize(Arena* arena)
             .enabledExtensionCount = array_length(extensions),
         };
 
-        vkok(vkCreateInstance(&ci, renderer->allocator, &renderer->instance));
-        volkLoadInstance(renderer->instance);
+        vkok(vkCreateInstance(&ci, renderer->allocator, &instance));
 
 #if BB_DEBUG
+        vulkan_load_instance_function(instance, vkCreateDebugUtilsMessengerEXT);
         VkDebugUtilsMessengerEXT messenger;
-        vkok(vkCreateDebugUtilsMessengerEXT(renderer->instance, &msg_ci, renderer->allocator, &messenger));
+        vkok(vkCreateDebugUtilsMessengerEXT(instance, &msg_ci, renderer->allocator, &messenger));
 #endif
     }
+    
+    vulkan_load_instance_function(instance, vkGetDeviceProcAddr);
+    vulkan_load_instance_function(instance, vkEnumeratePhysicalDevices);
+    vulkan_load_instance_function(instance, vkGetPhysicalDeviceMemoryProperties);
+    vulkan_load_instance_function(instance, vkGetPhysicalDeviceProperties);
+    vulkan_load_instance_function(instance, vkGetPhysicalDeviceQueueFamilyProperties);
+    vulkan_load_instance_function(instance, vkCreateDevice);
 
     {
         u32 physical_device_count;
         VkPhysicalDevice physical_devices[256];
-        vkok(vkEnumeratePhysicalDevices(renderer->instance, &physical_device_count, 0));
+        vkok(vkEnumeratePhysicalDevices(instance, &physical_device_count, 0));
 
         if (physical_device_count == 0)
         {
@@ -897,7 +1020,7 @@ fn Renderer* renderer_initialize(Arena* arena)
             failed_execution();
         }
 
-        vkok(vkEnumeratePhysicalDevices(renderer->instance, &physical_device_count, physical_devices));
+        vkok(vkEnumeratePhysicalDevices(instance, &physical_device_count, physical_devices));
 
         renderer->physical_device = physical_devices[0];
     }
@@ -1021,6 +1144,17 @@ fn Renderer* renderer_initialize(Arena* arena)
 
         vkok(vkCreateDevice(renderer->physical_device, &ci, renderer->allocator, &renderer->device));
     }
+
+    // Load device table
+    vulkan_load_device_function(renderer->device, vkGetDeviceQueue);
+    vulkan_load_device_function(renderer->device, vkCreateCommandPool);
+    vulkan_load_device_function(renderer->device, vkAllocateCommandBuffers);
+    vulkan_load_device_function(renderer->device, vkCreateFence);
+    vulkan_load_device_function(renderer->device, vkCreateSampler);
+    vulkan_load_device_function(renderer->device, vkCreateShaderModule);
+    vulkan_load_device_function(renderer->device, vkCreateDescriptorSetLayout);
+    vulkan_load_device_function(renderer->device, vkCreatePipelineLayout);
+    vulkan_load_device_function(renderer->device, vkCreateGraphicsPipelines);
 
     vkGetDeviceQueue(renderer->device, graphics_queue_family_index, 0, &renderer->graphics_queue);
 
@@ -1542,7 +1676,10 @@ fn void swapchain_recreate(Renderer* renderer, RenderWindow* window)
 fn RenderWindow* renderer_window_initialize(Renderer* renderer, OSWindow window)
 {
     RenderWindow* result = &renderer_window_memory;
-    vkok((VkResult)window_create_surface(renderer->instance, window, renderer->allocator, (void**)&result->surface));
+
+#if WINDOWING_BACKEND_X11
+#endif
+    // vkok((VkResult)window_create_surface(renderer->instance, window, renderer->allocator, (void**)&result->surface));
 
     swapchain_recreate(renderer, result);
 

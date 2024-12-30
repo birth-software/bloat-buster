@@ -7,7 +7,7 @@
 #include <stb_truetype.h>
 #pragma clang diagnostic pop
 
-TextureAtlas font_texture_atlas_create(Arena* arena, Renderer* renderer, TextureAtlasCreate create)
+fn TextureAtlas font_texture_atlas_create(Arena* arena, Renderer* renderer, TextureAtlasCreate create)
 {
     auto font_file = file_read(arena, create.font_path);
     stbtt_fontinfo font_info;
@@ -108,7 +108,7 @@ TextureAtlas font_texture_atlas_create(Arena* arena, Renderer* renderer, Texture
     return result;
 }
 
-uint2 texture_atlas_compute_string_rect(String string, const TextureAtlas* atlas)
+fn uint2 texture_atlas_compute_string_rect(String string, const TextureAtlas* atlas)
 {
     auto height = atlas->ascent - atlas->descent;
     u32 x_offset = 0;
