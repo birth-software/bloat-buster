@@ -6,3 +6,4 @@ project
 /project.dSYM/
 /.cache/
 imgui.ini
+/cache/

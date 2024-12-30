@@ -6,37 +6,47 @@
 #define BB_DEBUG 1
 #endif
 
-#ifdef STATIC
-#define LINK_LIBC 0
-#else 
-#define LINK_LIBC 1
-#endif
-
 #include <stdint.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdlib.h>
+
+#define INCLUDE_INTRINSIC 0
+#if BB_DEBUG == 0
+#undef INCLUDE_INTRINSIC
+#define INCLUDE_INTRINSIC 1
+#endif
+#if INCLUDE_INTRINSIC
 #if defined(__x86_64__)
 #include <immintrin.h>
 #endif
+#endif
 #include <math.h>
+
+#define pointer_cast(PointerChildType, var_name, value) PointerChildType* var_name = (PointerChildType*)(value)
 
 typedef uint8_t  u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
+#ifndef __TINYC__
 typedef __uint128_t u128;
+#endif
 typedef unsigned int uint;
 
 typedef int8_t  s8;
 typedef int16_t s16;
 typedef int32_t s32;
 typedef int64_t s64;
+#ifndef __TINYC__
 typedef __int128_t s128;
+#endif
 
 typedef size_t usize;
 
+#ifndef __TINYC__
 typedef _Float16 f16;
+#endif
 typedef float f32;
 typedef double f64;
 
@@ -57,40 +67,16 @@ typedef enum Corner
     CORNER_COUNT,
 } Corner;
 
-typedef float float2 __attribute__((ext_vector_type(2)));
-typedef float float3 __attribute__((ext_vector_type(3)));
-typedef float float4 __attribute__((ext_vector_type(4)));
-typedef float2 vec2;
-typedef float3 vec3;
-typedef float4 vec4;
-
-typedef u32 uint2 __attribute__((ext_vector_type(2)));
-typedef u32 uint3 __attribute__((ext_vector_type(3)));
-typedef u32 uint4 __attribute__((ext_vector_type(4)));
-
-UNION(F32Interval2)
-{
-    struct
-    {
-        float2 min;
-        float2 max;
-    };
-    struct
-    {
-        float2 p0;
-        float2 p1;
-    };
-    struct
-    {
-        f32 x0;
-        f32 y0;
-        f32 x1;
-        f32 y1;
-    };
-    float2 v[2];
-};
-
-static_assert(sizeof(F32Interval2) == 4 * sizeof(f32));
+// typedef float float2 __attribute__((ext_vector_type(2)));
+// typedef float float3 __attribute__((ext_vector_type(3)));
+// typedef float float4 __attribute__((ext_vector_type(4)));
+// typedef float2 vec2;
+// typedef float3 vec3;
+// typedef float4 vec4;
+//
+// typedef u32 uint2 __attribute__((ext_vector_type(2)));
+// typedef u32 uint3 __attribute__((ext_vector_type(3)));
+// typedef u32 uint4 __attribute__((ext_vector_type(4)));
 
 typedef enum Axis2
 {
@@ -341,3 +327,28 @@ fn u64 safe_flag(u64 value, u64 flag)
         exit(1);\
     }\
 } while (0)
+
+// UNION(F32Interval2)
+// {
+//     struct
+//     {
+//         float2 min;
+//         float2 max;
+//     };
+//     struct
+//     {
+//         float2 p0;
+//         float2 p1;
+//     };
+//     struct
+//     {
+//         f32 x0;
+//         f32 y0;
+//         f32 x1;
+//         f32 y1;
+//     };
+//     float2 v[2];
+// };
+//
+// static_assert(sizeof(F32Interval2) == 4 * sizeof(f32));
+
