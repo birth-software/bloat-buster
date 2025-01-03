@@ -300,7 +300,7 @@ fn UI_Signal ui_signal_from_widget(UI_Widget* widget)
     auto mouse_position = ui_state->mouse_position;
     UI_Signal signal = {
         .clicked_left = 
-            (widget->flags.mouse_clickable & (ui_state->mouse_button_events[OS_EVENT_MOUSE_LEFT].action == OS_EVENT_MOUSE_RELEASE)) &
+            (widget->flags.mouse_clickable & (ui_state->mouse_button_events[WINDOWING_EVENT_MOUSE_LEFT].action == WINDOWING_EVENT_MOUSE_RELEASE)) &
             ((mouse_position.x >= rect.x0) & (mouse_position.x <= rect.x1)) &
             ((mouse_position.y >= rect.y0) & (mouse_position.y <= rect.y1)),
     };
@@ -347,13 +347,13 @@ fn UI_Size ui_em(f32 value, f32 strictness)
     };
 }
 
-fn u8 ui_build_begin(OSWindow os_window, f64 frame_time, OSEventQueue* event_queue)
+fn u8 ui_build_begin(WindowingInstance* window, f64 frame_time, WindowingEventQueue* event_queue)
 {
     ui_state->build_count += 1;
     auto* build_arena = ui_build_arena();
     arena_reset(build_arena);
     ui_state->frame_time = frame_time;
-    ui_state->os_window = os_window;
+    ui_state->window = window;
 
     ui_stack_reset(ui_state);
 
@@ -367,24 +367,24 @@ fn u8 ui_build_begin(OSWindow os_window, f64 frame_time, OSEventQueue* event_que
 
         switch (event_descriptor.type)
         {
-        case OS_EVENT_TYPE_MOUSE_BUTTON:
+        case WINDOWING_EVENT_TYPE_MOUSE_BUTTON:
             {
                 auto button = event_queue->mouse_buttons.pointer[event_index];
                 auto previous_button_event = ui_state->mouse_button_events[button.button];
                 switch (button.event.action)
                 {
-                    case OS_EVENT_MOUSE_RELAX:
+                    case WINDOWING_EVENT_MOUSE_RELAX:
                         unreachable();
-                    case OS_EVENT_MOUSE_RELEASE:
+                    case WINDOWING_EVENT_MOUSE_RELEASE:
                         {
-                            assert(previous_button_event.action == OS_EVENT_MOUSE_PRESS);
+                            assert(previous_button_event.action == WINDOWING_EVENT_MOUSE_PRESS);
                         } break;
-                    case OS_EVENT_MOUSE_PRESS:
+                    case WINDOWING_EVENT_MOUSE_PRESS:
                         {
                             // TODO: handle properly
-                            assert(previous_button_event.action == OS_EVENT_MOUSE_RELAX || mouse_button_count);
+                            assert(previous_button_event.action == WINDOWING_EVENT_MOUSE_RELAX || mouse_button_count);
                         } break;
-                    case OS_EVENT_MOUSE_REPEAT:
+                    case WINDOWING_EVENT_MOUSE_REPEAT:
                         {
                             unreachable();
                         } break;
@@ -393,10 +393,10 @@ fn u8 ui_build_begin(OSWindow os_window, f64 frame_time, OSEventQueue* event_que
                 ui_state->mouse_button_events[button.button] = button.event;
                 mouse_button_count += 1;
             } break;
-        case OS_EVENT_TYPE_WINDOW_FOCUS:
+        case WINDOWING_EVENT_TYPE_WINDOW_FOCUS:
             {
             } break;
-        case OS_EVENT_TYPE_CURSOR_POSITION:
+        case WINDOWING_EVENT_TYPE_CURSOR_POSITION:
             {
                 auto mouse_position = event_queue->cursor_positions.pointer[event_index];
                 ui_state->mouse_position = (UI_MousePosition) {
@@ -404,16 +404,16 @@ fn u8 ui_build_begin(OSWindow os_window, f64 frame_time, OSEventQueue* event_que
                     .y = mouse_position.y,
                 };
             } break;
-        case OS_EVENT_TYPE_CURSOR_ENTER:
+        case WINDOWING_EVENT_TYPE_CURSOR_ENTER:
             {
                 todo();
             } break;
-        case OS_EVENT_TYPE_WINDOW_POSITION:
+        case WINDOWING_EVENT_TYPE_WINDOW_POSITION:
             {
                 // event_queue->window_positions.pointer[event_index];
                 // todo();
             } break;
-        case OS_EVENT_TYPE_WINDOW_CLOSE:
+        case WINDOWING_EVENT_TYPE_WINDOW_CLOSE:
             {
                 open = 0;
             } break;
@@ -455,12 +455,12 @@ fn u8 ui_build_begin(OSWindow os_window, f64 frame_time, OSEventQueue* event_que
             }
         }
 
-        auto framebuffer_size = windowing_get_instance_framebuffer_size(os_window);
+        auto framebuffer_size = windowing_get_instance_framebuffer_size(window);
         ui_push_next_only(pref_width, ui_pixels(framebuffer_size.width, 1.0f));
         ui_push_next_only(pref_height, ui_pixels(framebuffer_size.height, 1.0f));
         ui_push_next_only(child_layout_axis, AXIS2_Y);
 
-        auto* root = ui_widget_make_format((UI_WidgetFlags) {}, "window_root_{u64}", os_window);
+        auto* root = ui_widget_make_format((UI_WidgetFlags) {}, "window_root_{u64}", window);
         assert(!ui_state->stack_autopops.child_layout_axis);
 
         ui_push(parent, root);
@@ -664,9 +664,9 @@ fn void ui_build_end()
     for (u32 i = 0; i < array_length(ui_state->mouse_button_events); i += 1)
     {
         auto* event = &ui_state->mouse_button_events[i];
-        if (event->action == OS_EVENT_MOUSE_RELEASE)
+        if (event->action == WINDOWING_EVENT_MOUSE_RELEASE)
         {
-            event->action = OS_EVENT_MOUSE_RELAX;
+            event->action = WINDOWING_EVENT_MOUSE_RELAX;
         }
     }
 

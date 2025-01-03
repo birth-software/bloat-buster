@@ -78,7 +78,7 @@ fn u8 windowing_initialize()
     return result;
 }
 
-fn WindowingInstance* windowing_instantiate(WindowCreate create)
+fn WindowingInstance* windowing_instantiate(WindowingInstantiate create)
 {
     xcb_connection_t* connection = windowing_connection.handle;
     xcb_screen_iterator_t iter = xcb_setup_roots_iterator(windowing_connection.setup);
@@ -101,8 +101,8 @@ fn WindowingInstance* windowing_instantiate(WindowCreate create)
     WindowingInstance* window = &windowing_instances[i];
     window->handle = window_handle;
 
-    uint32_t value_mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
-    uint32_t value_list[] = {
+    u32 value_mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
+    u32 value_list[] = {
         screen->black_pixel,
         XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_KEY_PRESS | XCB_EVENT_MASK_STRUCTURE_NOTIFY
     };
@@ -181,4 +181,17 @@ fn void windowing_poll_events()
         }
         os_free(event);
     }
+}
+
+fn WindowingSize windowing_get_instance_framebuffer_size(WindowingInstance* instance)
+{
+    WindowingSize result = {};
+    xcb_connection_t* connection = windowing_connection.handle;
+    xcb_window_t window = instance->handle;
+    xcb_get_geometry_cookie_t cookie = xcb_get_geometry(connection, window);
+    xcb_get_geometry_reply_t* reply = xcb_get_geometry_reply(connection, cookie, 0);
+    result.width = reply->width;
+    result.height = reply->height;
+    os_free(reply);
+    return result;
 }

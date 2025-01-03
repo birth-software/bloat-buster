@@ -148,7 +148,7 @@ STRUCT(UI_State)
     Arena* build_arenas[2];
     Renderer* renderer;
     RenderWindow* render_window;
-    OSWindow os_window;
+    WindowingInstance* window;
     u64 build_count;
     f64 frame_time;
     UI_Widget* root;
@@ -156,7 +156,7 @@ STRUCT(UI_State)
     Slice(UI_WidgetSlot) widget_table;
     UI_Widget* free_widget_list;
     u64 free_widget_count;
-    OSEventMouseButtonEvent mouse_button_events[OS_EVENT_MOUSE_BUTTON_COUNT];
+    WindowingEventMouseButtonEvent mouse_button_events[WINDOWING_EVENT_MOUSE_BUTTON_COUNT];
     u8 focused:1;
 
     UI_StateStacks stacks;
@@ -212,7 +212,7 @@ fn u8* ui_pop_generic(VirtualBuffer(u8)* stack, u32 element_size)
 
 fn UI_State* ui_state_allocate(Renderer* renderer, RenderWindow* window);
 fn void ui_state_select(UI_State* state);
-fn u8 ui_build_begin(OSWindow window, f64 frame_time, OSEventQueue* event_queue);
+fn u8 ui_build_begin(WindowingInstance* window, f64 frame_time, WindowingEventQueue* event_queue);
 fn void ui_build_end();
 fn void ui_draw();
 fn UI_Signal ui_signal_from_widget(UI_Widget* widget);
