@@ -16,12 +16,12 @@ fn void vb_generic_ensure_capacity(VirtualBuffer(u8)* vb, u32 item_size, u32 ite
         let_cast(u32, old_page_capacity, align_forward(old_capacity * item_size, minimum_granularity));
         let_cast(u32, new_page_capacity, align_forward(wanted_capacity * item_size, minimum_granularity));
 
-        auto commit_size = new_page_capacity - old_page_capacity;
+        let(commit_size, new_page_capacity - old_page_capacity);
         void* commit_pointer = vb->pointer + old_page_capacity;
 
         os_commit(commit_pointer, commit_size);
 
-        auto new_capacity = new_page_capacity / item_size;
+        let(new_capacity, new_page_capacity / item_size);
         vb->capacity = new_capacity;
     }
 }

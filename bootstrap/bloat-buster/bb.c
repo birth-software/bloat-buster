@@ -16,8 +16,8 @@
 #include <std/ui_builder.c>
 
 #define default_font_height (24)
-auto proportional_font_height = default_font_height;
-auto monospace_font_height = default_font_height;
+global_variable u32 proportional_font_height = default_font_height;
+global_variable u32 monospace_font_height = default_font_height;
 
 fn TextureIndex white_texture_create(Arena* arena, Renderer* renderer)
 {
@@ -239,7 +239,7 @@ int main()
 
     window_rect_texture_update_begin(state.first_window->render);
 
-    auto white_texture = white_texture_create(state.arena, state.renderer);
+    let(white_texture, white_texture_create(state.arena, state.renderer));
     TextureAtlasCreate monospace_font_create = {
 #ifdef _WIN32
         .font_path = strlit("C:/Users/David/Downloads/Fira_Sans/FiraSans-Regular.ttf"),
@@ -252,8 +252,8 @@ int main()
 #endif
         .text_height = monospace_font_height,
     };
-    auto monospace_font = font_texture_atlas_create(state.arena, state.renderer, monospace_font_create);
-    auto proportional_font = monospace_font;
+    let(monospace_font, font_texture_atlas_create(state.arena, state.renderer, monospace_font_create));
+    let(proportional_font, monospace_font);
 
     window_queue_rect_texture_update(state.first_window->render, RECT_TEXTURE_SLOT_WHITE, white_texture);
     renderer_queue_font_update(state.renderer, state.first_window->render, RENDER_FONT_TYPE_MONOSPACE, monospace_font);

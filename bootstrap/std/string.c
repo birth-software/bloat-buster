@@ -47,8 +47,8 @@ u8 string_starts_with(String string, String start)
             u64 i;
             for (i = 0; i < start.length; i += 1)
             {
-                auto start_ch = start.pointer[i];
-                auto string_ch = string.pointer[i];
+                let(start_ch, start.pointer[i]);
+                let(string_ch, string.pointer[i]);
                 if (unlikely(string_ch != start_ch))
                 {
                     break;
@@ -72,8 +72,8 @@ u8 string_ends_with(String string, String end)
         u64 offset = string.length - end.length;
         for (i = 0; i < end.length; i += 1)
         {
-            auto start_ch = end.pointer[i];
-            auto string_ch = string.pointer[i + offset];
+            let(start_ch, end.pointer[i]);
+            let(string_ch, string.pointer[i + offset]);
             if (unlikely(string_ch != start_ch))
             {
                 break;

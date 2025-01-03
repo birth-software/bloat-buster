@@ -73,7 +73,7 @@ typedef u64 Hash64;
 #if BB_DEBUG
 #define assert(x) if (unlikely(!(x))) { my_panic("Assert failed: \"" # x "\" at {cstr}:{u32}\n", __FILE__, __LINE__); }
 #else
-#define assert(x) unlikely(!(x))
+#define assert(x) unused(likely(x))
 #endif
 
 #ifndef __cplusplus
@@ -92,11 +92,11 @@ typedef u64 Hash64;
 #else
 #define restrict __restrict
 #endif
-#ifndef INFINITY
-#define INFINITY __builtin_inff()
+#ifndef BB_INFINITY
+#define BB_INFINITY __builtin_inff()
 #endif
-#ifndef NAN
-#define NAN __builtin_nanf("")
+#ifndef BB_NAN
+#define BB_NAN __builtin_nanf("")
 #endif
 #define fn static
 #define method __attribute__((visibility("internal")))
@@ -118,10 +118,12 @@ fn void os_exit(u32 exit_code);
     if (os_is_being_debugged())\
     {\
         trap();\
+        __builtin_unreachable();\
     }\
     else\
     {\
         os_exit(1);\
+        __builtin_unreachable();\
     }\
 } while (0)
 
@@ -135,7 +137,11 @@ fn void trap()
 #endif
 
 #define let_pointer_cast(PointerChildType, var_name, value) PointerChildType* var_name = (PointerChildType*)(value)
+#ifdef __TINYC__
 #define let(name, value) typeof(value) name = (value)
+#else
+#define let(name, value) __auto_type name = (value)
+#endif
 #define let_cast_unchecked(name, T, value) T name = (T)(value)
 #define let_cast(T, name, value) T name = cast_to(T, value)
 #define let_va_arg(T, name, args) T name = va_arg(args, T)

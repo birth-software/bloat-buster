@@ -5,7 +5,7 @@ mkdir -p $BUILD_DIR
 glslangValidator -V bootstrap/std/shaders/rect.vert -o $BUILD_DIR/rect.vert.spv --quiet
 glslangValidator -V bootstrap/std/shaders/rect.frag -o $BUILD_DIR/rect.frag.spv --quiet
 BUILD_OUT=$BUILD_DIR/build
-C_COMPILER=tcc
+C_COMPILER=gcc
 TIME_TRACE=1
 BB_TIMETRACE=0
 GCC_ARGS=

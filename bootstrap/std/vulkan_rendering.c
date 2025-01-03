@@ -549,7 +549,7 @@ fn String message_severity_to_string(VkDebugUtilsMessageSeverityFlagBitsEXT mess
         return strlit("WARNING");
     case VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT:
         return strlit("ERROR");
-    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_FLAG_BITS_MAX_ENUM_EXT:
+    default:
         unreachable();
     }
 }
@@ -566,9 +566,10 @@ fn String message_type_to_string(VkDebugUtilsMessageTypeFlagBitsEXT message_type
         return strlit("PERFORMANCE");
     case VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT:
         return strlit("DEVICE_ADDRESS_BINDING");
-    case VK_DEBUG_UTILS_MESSAGE_TYPE_FLAG_BITS_MAX_ENUM_EXT:
+    default:
         unreachable();
     }
+
 }
 
 fn VkBool32 VKAPI_CALL debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT message_severity, VkDebugUtilsMessageTypeFlagsEXT message_type, const VkDebugUtilsMessengerCallbackDataEXT* callback_data, void* user_data)
@@ -2142,6 +2143,8 @@ fn u32 format_channel_count(TextureFormat format)
     case TEXTURE_FORMAT_R8G8B8A8_SRGB:
         return 4;
     }
+
+    unreachable();
 }
 
 fn TextureIndex renderer_texture_create(Renderer* renderer, TextureMemory texture_memory)

@@ -14,7 +14,7 @@ typedef enum C_Compiler
     C_COMPILER_COUNT,
 } C_Compiler;
 
-global_variable C_Compiler preferred_c_compiler = C_COMPILER_GCC;
+global_variable C_Compiler preferred_c_compiler = C_COMPILER_COUNT;
 global_variable char** environment_pointer;
 
 STRUCT(CompileFlags)
@@ -162,10 +162,9 @@ fn u8 c_compiler_is_supported_by_os(C_Compiler compiler)
     {
         case C_COMPILER_MSVC: case C_COMPILER_TCC: case C_COMPILER_CLANG: return 1;
         case C_COMPILER_GCC: return 0;
-        case C_COMPILER_COUNT: unreachable();
     }
 #endif
-    return 0;
+    unreachable();
 }
 
 fn String c_compiler_to_string(C_Compiler c_compiler)
@@ -176,7 +175,7 @@ fn String c_compiler_to_string(C_Compiler c_compiler)
         case C_COMPILER_MSVC: return strlit("MSVC");
         case C_COMPILER_CLANG: return strlit("clang");
         case C_COMPILER_TCC: return strlit("tcc");
-        case C_COMPILER_COUNT: unreachable();
+        default: unreachable();
     }
 }
 
@@ -250,19 +249,19 @@ fn u8 c_compiler_supports_colored_output(C_Compiler compiler)
     {
         case C_COMPILER_GCC: case C_COMPILER_CLANG: return 1;
         case C_COMPILER_TCC: case C_COMPILER_MSVC: return 0;
-        case C_COMPILER_COUNT: unreachable();
+        default: unreachable();
     }
 }
 
-fn const char* c_compiler_get_error_limit_switch(C_Compiler compiler)
+fn char* c_compiler_get_error_limit_switch(C_Compiler compiler)
 {
     // TODO: fix
     switch (compiler)
     {
         case C_COMPILER_CLANG: return "-ferror-limit=1";
         case C_COMPILER_GCC: return "-fmax-errors=1";
-        default: return 0;
-        case C_COMPILER_COUNT: unreachable();
+        case C_COMPILER_MSVC: case C_COMPILER_TCC: return 0;
+        default: unreachable();
     }
 }
 
@@ -273,7 +272,7 @@ fn char* c_compiler_get_highest_c_standard_flag(C_Compiler compiler)
         case C_COMPILER_CLANG: case C_COMPILER_GCC: return "-std=gnu2x";
         case C_COMPILER_MSVC: unreachable(); // TODO: fix
         case C_COMPILER_TCC: return "-std=gnu2x"; // TODO: does it do anything in TCC?
-        case C_COMPILER_COUNT: unreachable();
+        default: unreachable();
     }
 }
 
@@ -393,7 +392,7 @@ fn void compile_program(Arena* arena, CompileOptions options)
 
     if (options.flags.error_limit)
     {
-        const char* error_limit = c_compiler_get_error_limit_switch(c_compiler);
+        char* error_limit = c_compiler_get_error_limit_switch(c_compiler);
         if (error_limit)
         {
             add_arg(error_limit);
