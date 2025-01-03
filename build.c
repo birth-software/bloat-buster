@@ -74,9 +74,9 @@ fn String file_find_in_path(Arena* arena, String file, String path_env)
 
     while (path_it.length)
     {
-        auto index = string_first_ch(path_it, ':');
+        let(index, string_first_ch(path_it, ':'));
         index = unlikely(index == STRING_NO_MATCH) ? path_it.length : index;
-        auto path_chunk = s_get_slice(u8, path_it, 0, index);
+        let(path_chunk, s_get_slice(u8, path_it, 0, index));
 
         u64 i = 0;
 
@@ -92,7 +92,7 @@ fn String file_find_in_path(Arena* arena, String file, String path_env)
         buffer[i] = 0;
         i += 1;
 
-        auto total_length = i - 1;
+        let(total_length, i - 1);
         OSFileOpenFlags flags = {
             .read = 1,
         };
@@ -116,18 +116,18 @@ fn String file_find_in_path(Arena* arena, String file, String path_env)
     return result;
 }
 
-global_variable u8 prefer_clang = 1;
+global_variable C_Compiler preferred_c_compiler = C_COMPILER_TCC;
 
 fn C_Compiler c_compiler_from_path(String path)
 {
     C_Compiler result = C_COMPILER_COUNT;
-    auto start = string_last_ch(path, '/');
+    let(start, string_last_ch(path, '/'));
 #if _WIN32
-    auto last_ch_backslash = string_last_ch(path, '\\');
+    let(last_ch_backslash, string_last_ch(path, '\\'));
     start = MAX(start, last_ch_backslash == STRING_NO_MATCH ? 0 : last_ch_backslash);
 #endif
     assert(start != STRING_NO_MATCH);
-    auto compiler_name = s_get_slice(u8, path, start + 1, path.length);
+    let(compiler_name, s_get_slice(u8, path, start + 1, path.length));
 
     for (C_Compiler i = 0; i < C_COMPILER_COUNT; i += 1)
     {
@@ -139,6 +139,45 @@ fn C_Compiler c_compiler_from_path(String path)
     }
 
     return result;
+}
+
+fn u8 c_compiler_is_supported_by_os(C_Compiler compiler)
+{
+#ifdef __linux__
+    switch (compiler)
+    {
+        case C_COMPILER_TCC: case C_COMPILER_GCC: case C_COMPILER_CLANG: return 1;
+        case C_COMPILER_MSVC: return 0;
+        case C_COMPILER_COUNT: unreachable();
+    }
+#elif __APPLE__
+    switch (compiler)
+    {
+        case C_COMPILER_TCC: case C_COMPILER_CLANG: return 1;
+        case C_COMPILER_MSVC: case C_COMPILER_GCC: return 0;
+        case C_COMPILER_COUNT: unreachable();
+    }
+#elif _WIN32
+    switch (compiler)
+    {
+        case C_COMPILER_MSVC: case C_COMPILER_TCC: case C_COMPILER_CLANG: return 1;
+        case C_COMPILER_GCC: return 0;
+        case C_COMPILER_COUNT: unreachable();
+    }
+#endif
+    return 0;
+}
+
+fn String c_compiler_to_string(C_Compiler c_compiler)
+{
+    switch (c_compiler)
+    {
+        case C_COMPILER_GCC: return strlit("gcc");
+        case C_COMPILER_MSVC: return strlit("MSVC");
+        case C_COMPILER_CLANG: return strlit("clang");
+        case C_COMPILER_TCC: return strlit("tcc");
+        case C_COMPILER_COUNT: unreachable();
+    }
 }
 
 // Returns the absolute path of a C compiler
@@ -171,7 +210,7 @@ fn String get_c_compiler_path(Arena* arena)
 #endif
     }
 
-    auto no_path_sep = string_first_ch(cc_path, '/') == STRING_NO_MATCH;
+    let(no_path_sep, string_first_ch(cc_path, '/') == STRING_NO_MATCH);
 #ifdef _WIN32
     no_path_sep = no_path_sep && string_first_ch(cc_path, '\\') == STRING_NO_MATCH;
 #endif
@@ -182,7 +221,7 @@ fn String get_c_compiler_path(Arena* arena)
 
 #ifndef _WIN32
     u8 buffer[4096];
-    auto realpath = os_realpath(cc_path, (String)array_to_slice(buffer));
+    let(realpath, os_realpath(cc_path, (String)array_to_slice(buffer)));
     if (!s_equal(realpath, cc_path))
     {
         cc_path.pointer = arena_allocate(arena, u8, realpath.length + 1);
@@ -191,29 +230,17 @@ fn String get_c_compiler_path(Arena* arena)
         cc_path.pointer[cc_path.length] = 0;
     }
 
-    if (prefer_clang)
+    if (preferred_c_compiler != C_COMPILER_COUNT && c_compiler_is_supported_by_os(preferred_c_compiler))
     {
-        if (c_compiler_from_path(cc_path) != C_COMPILER_CLANG)
+        String find_result = file_find_in_path(arena, c_compiler_to_string(preferred_c_compiler), path_env);
+        if (find_result.pointer)
         {
-            cc_path = strlit("/usr/bin/clang");
+            cc_path = find_result;
         }
     }
 #endif
 
     return cc_path;
-}
-
-
-fn String c_compiler_to_string(C_Compiler c_compiler)
-{
-    switch (c_compiler)
-    {
-        case C_COMPILER_GCC: return strlit("gcc");
-        case C_COMPILER_MSVC: return strlit("MSVC");
-        case C_COMPILER_CLANG: return strlit("clang");
-        case C_COMPILER_TCC: return strlit("tcc");
-        case C_COMPILER_COUNT: unreachable();
-    }
 }
 
 fn u8 c_compiler_supports_colored_output(C_Compiler compiler)

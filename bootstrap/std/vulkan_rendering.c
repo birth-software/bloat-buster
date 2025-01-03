@@ -255,7 +255,7 @@ fn String vulkan_result_to_string(VkResult result)
     }
 }
 
-[[noreturn]] [[gnu::cold]] fn void wrong_vulkan_result(VkResult result, String call_string, String file, int line)
+BB_NORETURN BB_COLD fn void wrong_vulkan_result(VkResult result, String call_string, String file, int line)
 {
     unused(result);
     unused(call_string);

@@ -10,13 +10,148 @@ fn u8 log2_alignment(u64 alignment)
     return result;
 }
 
+fn u128 u128_from_u64(u64 n)
+{
+#ifdef __TINYC__
+    u128 result = { .low = n };
+    return result;
+#else
+    return n;
+#endif
+}
+
+fn u64 u64_from_u128(u128 n)
+{
+#ifdef __TINYC__
+    return n.low;
+#else
+    return (u64)n;
+#endif
+}
+
+fn u128 u128_shift_right(u128 value, u16 n)
+{
+#ifdef __TINYC__
+    u128 result = {0, 0};
+
+    if (n < 128)
+    {
+        if (n >= 64)
+        {
+            // If n >= 64, only the high part contributes to the low part
+            result.low = value.high >> (n - 64);
+            result.high = 0;
+        }
+        else
+        {
+            // Standard case: n < 64
+            result.low = (value.low >> n) | (value.high << (64 - n));
+            result.high = value.high >> n;
+        }
+    } 
+
+    return result;
+#else
+    return value >> n;
+#endif
+}
+
+fn u128 u128_shift_left(u128 value, u16 n)
+{
+#ifdef __TINYC__
+    u128 result = {0, 0};
+
+    if (n < 128)
+    {
+        if (n >= 64)
+        {
+            // If n >= 64, only the low part contributes to the high part
+            result.high = value.low << (n - 64);
+            result.low = 0;
+        }
+        else
+        {
+            // Standard case: n < 64
+            result.high = (value.high << n) | (value.low >> (64 - n));
+            result.low = value.low << n;
+        }
+    }
+
+    return result;
+#else
+    return value << n;
+#endif
+}
+
+fn u128 u128_u64_or(u128 a, u64 b)
+{
+#ifdef __TINYC__
+    a.low |= b;
+    return a;
+#else
+    return a | b;
+#endif
+}
+
+fn u128 u128_u64_add(u128 a, u64 b)
+{
+#ifdef __TINYC__
+    u128 result;
+    
+    // Add the lower 64 bits and check for overflow
+    result.low = a.low + b;
+    u64 carry = (result.low < a.low) ? 1 : 0;
+
+    // Add the carry to the upper 64 bits
+    result.high = a.high + carry;
+
+    return result;
+#else
+    return a + b;
+#endif
+}
+
+// Multiply two u128 values
+fn u128 u128_u64_mul(u128 a, u64 b)
+{
+#ifdef __TINYC__
+    u128 result = {0, 0};
+
+    // Compute low and high parts of the product
+    u64 low_low = (a.low & 0xFFFFFFFF) * (b & 0xFFFFFFFF);
+    u64 low_high = (a.low >> 32) * (b & 0xFFFFFFFF);
+    u64 high_low = (a.low & 0xFFFFFFFF) * (b >> 32);
+    u64 high_high = (a.low >> 32) * (b >> 32);
+
+    // Combine partial products for the lower 64 bits
+    u64 carry = (low_low >> 32) + (low_high & 0xFFFFFFFF) + (high_low & 0xFFFFFFFF);
+    result.low = (low_low & 0xFFFFFFFF) | (carry << 32);
+
+    // Add carry from lower to the high product
+    result.high = a.high * b + (low_high >> 32) + (high_low >> 32) + (carry >> 32) + high_high;
+
+    return result;
+#else
+    return a * b;
+#endif
+}
+
+fn u64 u128_shift_right_by_64(u128 n)
+{
+#ifdef __TINYC__
+    return n.high;
+#else
+    return n >> 64;
+#endif
+}
+
 // Lehmer's generator
 // https://lemire.me/blog/2019/03/19/the-fastest-conventional-random-number-generator-that-can-pass-big-crush/
 may_be_unused global_variable u128 rn_state;
 may_be_unused fn u64 generate_random_number()
 {
-    rn_state *= 0xda942042e4dd58b5;
-    return rn_state >> 64;
+    rn_state = u128_u64_mul(rn_state, 0xda942042e4dd58b5);
+    return u128_shift_right_by_64(rn_state);
 }
 
 fn u64 round_up_to_next_power_of_2(u64 n)

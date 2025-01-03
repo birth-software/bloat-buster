@@ -99,7 +99,7 @@ u64 string_first_ocurrence(String string, String substring)
                 break;
             }
 
-            auto s = s_get_slice(u8, string, i, i + substring.length);
+            String s = s_get_slice(u8, string, i, i + substring.length);
             if (s_equal(s, substring))
             {
                 result = i;

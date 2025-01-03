@@ -89,7 +89,6 @@ typedef u64 Hash64;
 
 #define static_assert(x) _Static_assert((x), "Static assert failed!")
 #define alignof(x) _Alignof(x)
-#define auto __auto_type
 #else
 #define restrict __restrict
 #endif
@@ -218,6 +217,7 @@ fn SafeInteger safe_integer_cast(SafeInteger value, u64 to_size, u64 to_signedne
 #define let(name, value) typeof(value) name = (value)
 #define let_cast_unchecked(name, T, value) T name = (T)(value)
 #define let_cast(T, name, value) T name = cast_to(T, value)
+#define let_va_arg(T, name, args) T name = va_arg(args, T)
 #define assign_cast(to, from) to = cast_to(typeof(to), from)
 #define transmute(D, source) *(D*)&source
 
@@ -306,7 +306,18 @@ FOR_N(_i, 0, ((set)->arr.capacity + 63) / 64) FOR_BIT(it, _i*64, (set)->arr.poin
 #define GB(n) ((u64)(n) * 1024 * 1024 * 1024)
 #define TB(n) ((u64)(n) * 1024 * 1024 * 1024 * 1024)
 #define unused(x) (void)(x)
+#ifdef __clang__
 #define may_be_unused __attribute__((unused))
+#else
+#define may_be_unused
+#endif
+#ifdef __TINYC__
+#define BB_NORETURN __attribute__((noreturn))
+#define BB_COLD __attribute__((cold))
+#else
+#define BB_NORETURN [[noreturn]]
+#define BB_COLD [[gnu::cold]]
+#endif
 #define TRUNCATE(Destination, source) (Destination)(source)
 #define size_until_end(T, field_name) (sizeof(T) - offsetof(T, field_name))
 #define SWAP(a, b) \

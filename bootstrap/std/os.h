@@ -129,7 +129,7 @@ fn u64 os_file_get_size(FileDescriptor fd);
 fn void os_file_write(FileDescriptor fd, String content);
 fn FileDescriptor os_stdout_get();
 fn void os_directory_make(String path);
-[[noreturn]] [[gnu::cold]] fn void os_exit(u32 exit_code);
+BB_NORETURN BB_COLD fn void os_exit(u32 exit_code);
 
 fn void calibrate_cpu_timer();
 

@@ -27,7 +27,7 @@ fn Timestamp os_timestamp()
 #else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    result.value = ((u128)ts.tv_sec << 64) | ts.tv_nsec;
+    result.value = u128_u64_or(u128_shift_left(u128_from_u64(ts.tv_sec), 64), ts.tv_nsec);
 #endif
 
     return result;
@@ -37,10 +37,10 @@ fn f64 os_resolve_timestamps(Timestamp start, Timestamp end, TimeUnit time_unit)
 {
     f64 result;
 #if _WIN32
-    auto start_tick = (s64)start.value;
-    auto end_tick = (s64)end.value;
+    let(start_tick, (s64)start.value);
+    let(end_tick, (s64)end.value);
 
-    auto seconds = (f64)(end_tick - start_tick) / cpu_frequency;
+    let(seconds, (f64)(end_tick - start_tick) / cpu_frequency);
 
     switch (time_unit)
     {
@@ -58,15 +58,16 @@ fn f64 os_resolve_timestamps(Timestamp start, Timestamp end, TimeUnit time_unit)
             break;
     }
 #else
-    auto segmented_nanoseconds = (s64)end.value - (s64)start.value;
-    auto segmented_seconds = (s64)(end.value >> 64) - (s64)(start.value >> 64);
+    let(segmented_nanoseconds, (s64)u64_from_u128(end.value) - (s64)u64_from_u128(start.value));
+    let(segmented_seconds, (s64)u128_shift_right_by_64(end.value) - (s64)u128_shift_right_by_64(start.value));
+
     if (segmented_nanoseconds < 0)
     {
         segmented_seconds -= 1;
         segmented_nanoseconds += 1000000000;
     }
 
-    auto total_ns = segmented_seconds * 1000000000 + segmented_nanoseconds;
+    let(total_ns, segmented_seconds * 1000000000 + segmented_nanoseconds);
 
     switch (time_unit)
     {
@@ -91,7 +92,7 @@ fn f64 os_resolve_timestamps(Timestamp start, Timestamp end, TimeUnit time_unit)
 fn FileDescriptor os_stdout_get()
 {
 #if _WIN32
-    auto handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    let(handle, GetStdHandle(STD_OUTPUT_HANDLE));
     assert(handle != INVALID_HANDLE_VALUE);
     return handle;
 #else
@@ -102,7 +103,7 @@ fn FileDescriptor os_stdout_get()
 fn String path_dir(String string)
 {
     String result = {};
-    auto index = string_last_ch(string, '/');
+    let(index, string_last_ch(string, '/'));
     if (index != STRING_NO_MATCH)
     {
         result = s_get_slice(u8, string, 0, index);
@@ -114,7 +115,7 @@ fn String path_dir(String string)
 fn String path_base(String string)
 {
     String result = {};
-    auto index = string_last_ch(string, '/');
+    let(index, string_last_ch(string, '/'));
     if (index != STRING_NO_MATCH)
     {
         result = s_get_slice(u8, string, index + 1, string.length);
@@ -122,7 +123,7 @@ fn String path_base(String string)
 #if _WIN32
     if (!result.pointer)
     {
-        auto index = string_last_ch(string, '\\');
+        let(index, string_last_ch(string, '\\'));
         if (index != STRING_NO_MATCH)
         {
             result = s_get_slice(u8, string, index + 1, string.length);
@@ -136,7 +137,7 @@ fn String path_base(String string)
 fn String path_no_extension(String string)
 {
     String result = {};
-    auto index = string_last_ch(string, '.');
+    let(index, string_last_ch(string, '.'));
     if (index != STRING_NO_MATCH)
     {
         result = s_get_slice(u8, string, 0, index);
@@ -739,7 +740,7 @@ may_be_unused fn int syscall_gettimeofday(struct timeval* tv, struct timezone* t
 #endif
 }
 
-may_be_unused [[noreturn]] [[gnu::cold]] fn void syscall_exit(int status)
+may_be_unused BB_NORETURN BB_COLD fn void syscall_exit(int status)
 {
 #if LINK_LIBC
     _exit(status);
@@ -768,7 +769,7 @@ may_be_unused fn u64 os_timer_get()
 #else
     struct timeval tv;
     syscall_gettimeofday(&tv, 0);
-    auto result = os_timer_freq() * cast_to(u64, tv.tv_sec) + cast_to(u64, tv.tv_usec);
+    let(result, os_timer_freq() * cast_to(u64, tv.tv_sec) + cast_to(u64, tv.tv_usec));
     return result;
 #endif
 }
@@ -800,7 +801,7 @@ fn FileDescriptor os_file_open(String path, OSFileOpenFlags flags, OSFilePermiss
     dwFlagsAndAttributes |= flags.directory * FILE_FLAG_BACKUP_SEMANTICS;
     HANDLE hTemplateFile = 0;
 
-    auto handle = CreateFileA(string_to_c(path), dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
+    let(handle, CreateFileA(string_to_c(path), dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile));
     return handle;
 #else
     int posix_flags = 0;
@@ -820,7 +821,7 @@ fn FileDescriptor os_file_open(String path, OSFileOpenFlags flags, OSFilePermiss
     {
         posix_permissions = 0644;
     }
-    auto result = syscall_open((char*)path.pointer, posix_flags, posix_permissions);
+    let(result, syscall_open((char*)path.pointer, posix_flags, posix_permissions));
     return result;
 #endif
 }
@@ -836,7 +837,7 @@ fn u64 os_file_get_size(FileDescriptor fd)
     struct stat stat_buffer;
     int stat_result = syscall_fstat(fd, &stat_buffer);
     assert(stat_result == 0);
-    auto size = cast_to(u64, stat_buffer.st_size);
+    let_cast(u64, size, stat_buffer.st_size);
     return size;
 #endif
 }
@@ -848,7 +849,7 @@ fn void os_file_write(FileDescriptor fd, String content)
     BOOL result = WriteFile(fd, content.pointer, cast_to(u32, u64, content.length), &bytes_written, 0);
     assert(result != 0);
 #else
-    auto result = syscall_write(fd, content.pointer, content.length);
+    let(result, syscall_write(fd, content.pointer, content.length));
     assert(cast_to(u64, result) == content.length);
 #endif
 }
@@ -866,7 +867,7 @@ may_be_unused fn u64 os_file_read(FileDescriptor fd, String buffer, u64 byte_cou
         assert(result != 0);
         bytes_read = read;
 #else
-        auto result = syscall_read(fd, buffer.pointer, byte_count);
+        let(result, syscall_read(fd, buffer.pointer, byte_count));
         assert(result > 0);
         if (result > 0)
         {
@@ -884,7 +885,7 @@ fn void os_file_close(FileDescriptor fd)
     BOOL result = CloseHandle(fd);
     assert(result != 0);
 #else
-    auto result = syscall_close(fd);
+    let(result, syscall_close(fd));
     assert(result == 0);
 #endif
 }
@@ -909,7 +910,7 @@ fn void calibrate_cpu_timer()
 
     while (os_elapsed < os_wait_time)
     {
-        auto os_end = os_timer_get();
+        let(os_end, os_timer_get());
         os_elapsed = os_end - os_start;
     }
 
@@ -960,7 +961,7 @@ fn void os_directory_make(String path)
 #endif
 }
 
-[[noreturn]] [[gnu::cold]] fn void os_exit(u32 exit_code)
+BB_NORETURN BB_COLD fn void os_exit(u32 exit_code)
 {
     exit(exit_code);
 }
@@ -984,11 +985,11 @@ const global_variable u64 minimum_position = sizeof(Arena);
 
 fn Arena* arena_initialize(u64 reserved_size, u64 granularity, u64 initial_size)
 {
-    auto protection_flags = (OSReserveProtectionFlags) {
+    OSReserveProtectionFlags protection_flags = {
         .read = 1,
         .write = 1,
     };
-    auto map_flags = (OSReserveMapFlags) {
+    OSReserveMapFlags map_flags = {
         .priv = 1,
         .anon = 1,
         .noreserve = 1,
@@ -1023,7 +1024,7 @@ fn u8* arena_allocate_bytes(Arena* arena, u64 size, u64 alignment)
         arena->os_position = committed_size;
     }
 
-    auto* result = (u8*)arena + aligned_offset;
+    let(result, (u8*)arena + aligned_offset);
     arena->position = aligned_size_after;
     assert(arena->position <= arena->os_position);
     return result;
@@ -1039,7 +1040,7 @@ fn String arena_join_string(Arena* arena, Slice(String) pieces)
     }
 
     u8* pointer = arena_allocate_bytes(arena, size + 1, 1);
-    auto* it = pointer;
+    let(it,  pointer);
     for (u64 i = 0; i < pieces.length; i += 1)
     {
         String piece = pieces.pointer[i];
@@ -1061,7 +1062,7 @@ fn void arena_reset(Arena* arena)
 fn String file_read(Arena* arena, String path)
 {
     String result = {};
-    auto file_descriptor = os_file_open(path, (OSFileOpenFlags) {
+    let(file_descriptor, os_file_open(path, (OSFileOpenFlags) {
         .truncate = 0,
         .executable = 0,
         .write = 0,
@@ -1069,11 +1070,11 @@ fn String file_read(Arena* arena, String path)
         .create = 0,
     }, (OSFilePermissions) {
         .readable = 1,
-    });
+    }));
 
     if (os_file_descriptor_is_valid(file_descriptor))
     {
-        auto file_size = os_file_get_size(file_descriptor);
+        let(file_size, os_file_get_size(file_descriptor));
         if (file_size > 0)
         {
             result = (String){
@@ -1101,7 +1102,7 @@ fn String file_read(Arena* arena, String path)
 fn void file_write(FileWriteOptions options)
 {
     print("Writing file \"{s}\"...\n", options.path);
-    auto fd = os_file_open(options.path, (OSFileOpenFlags) {
+    let(fd, os_file_open(options.path, (OSFileOpenFlags) {
         .write = 1,
         .truncate = 1,
         .create = 1,
@@ -1110,7 +1111,7 @@ fn void file_write(FileWriteOptions options)
         .readable = 1,
         .writable = 1,
         .executable = options.executable,
-    });
+    }));
     assert(os_file_descriptor_is_valid(fd));
 
     os_file_write(fd, options.content);
@@ -1134,15 +1135,15 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
     }
 
 #if _WIN32
-    auto start_timestamp = os_timestamp();
+    let(start_timestamp, os_timestamp());
 
     u32 length = 0;
     for (u32 i = 0; i < arguments.length; i += 1)
     {
-        auto argument = arguments.pointer[i];
+        let(argument, arguments.pointer[i]);
         if (argument)
         {
-            auto string_len = strlen(argument);
+            let(string_len, strlen(argument));
             length += cast_to(u32, u64, string_len + 1);
         }
     }
@@ -1151,10 +1152,10 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
     u32 byte_i = 0;
     for (u32 i = 0; i < arguments.length; i += 1)
     {
-        auto argument = arguments.pointer[i];
+        let(argument, arguments.pointer[i]);
         if (argument)
         {
-            auto len = strlen(argument);
+            let(len, strlen(argument));
             memcpy(&bytes[byte_i], argument, len);
             byte_i += len;
             bytes[byte_i] = ' ';
@@ -1162,7 +1163,7 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
         }
     }
     bytes[byte_i - 1] = 0;
-    auto end_timestamp = os_timestamp();
+    let(end_timestamp, os_timestamp());
 
     PROCESS_INFORMATION process_information = {};
     STARTUPINFOA startup_info = {};
@@ -1171,13 +1172,13 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
     startup_info.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
     startup_info.hStdError = GetStdHandle(STD_ERROR_HANDLE);
 
-    auto handle_inheritance = 1;
-    auto start = os_timestamp();
+    let(handle_inheritance, 1);
+    let(start, os_timestamp());
     if (CreateProcessA(0, bytes, 0, 0, handle_inheritance, 0, 0, 0, &startup_info, &process_information))
     {
         WaitForSingleObject(process_information.hProcess, INFINITE);
-        auto end = os_timestamp();
-        auto ms = os_resolve_timestamps(start, end, TIME_UNIT_MILLISECONDS);
+        let(end, os_timestamp());
+        let(ms, os_resolve_timestamps(start, end, TIME_UNIT_MILLISECONDS));
 
         if (options.debug)
         {
@@ -1208,7 +1209,7 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
     else
     {
         print("CreateProcessA call failed\n");
-        auto err = GetLastError();
+        let(err, GetLastError());
         LPSTR lpMsgBuf;
         DWORD bufSize = FormatMessageA(
                 FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
@@ -1235,13 +1236,13 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
         todo();
     }
 
-    auto start_timestamp = os_timestamp();
+    let(start_timestamp, os_timestamp());
 
     if (pid == 0)
     {
         // close(pipes[0]);
         // fcntl(pipes[1], F_SETFD, FD_CLOEXEC);
-        auto result = syscall_execve(arguments.pointer[0], arguments.pointer, envp);
+        let(result, syscall_execve(arguments.pointer[0], arguments.pointer, envp));
 #if LINK_LIBC
         my_panic("Execve failed! Error: {cstr}\n", strerror(errno));
 #else
@@ -1253,7 +1254,7 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
         int status = 0;
         int options = 0;
         pid_t result = syscall_waitpid(pid, &status, options);
-        auto end_timestamp = os_timestamp();
+        let(end_timestamp, os_timestamp());
         int success = 0;
         if (result == pid)
         {
@@ -1263,17 +1264,17 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
 
                 if (WIFEXITED(status))
                 {
-                    auto exit_code = WEXITSTATUS(status);
+                    let(exit_code, WEXITSTATUS(status));
                     print("exited with code {u32}\n", exit_code);
                 }
                 else if (WIFSIGNALED(status))
                 {
-                    auto signal_code = WTERMSIG(status);
+                    let(signal_code, WTERMSIG(status));
                     print("was signaled: {u32}\n", signal_code);
                 }
                 else if (WIFSTOPPED(status))
                 {
-                    auto stopped_code = WSTOPSIG(status);
+                    let(stopped_code, WSTOPSIG(status));
                     print("was stopped: {u32}\n", stopped_code);
                 }
                 else
@@ -1284,13 +1285,13 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
 
             if (WIFEXITED(status))
             {
-                auto exit_code = WEXITSTATUS(status);
+                let(exit_code, WEXITSTATUS(status));
                 success = exit_code == 0;
             }
         }
         else if (result == -1)
         {
-            auto waitpid_error = errno;
+            let(waitpid_error, errno);
             print("Error waiting for process termination: {u32}\n", waitpid_error);
             trap();
         }
@@ -1307,7 +1308,7 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
 
         if (run_options.debug)
         {
-            auto ms = os_resolve_timestamps(start_timestamp, end_timestamp, TIME_UNIT_MILLISECONDS);
+            let(ms, os_resolve_timestamps(start_timestamp, end_timestamp, TIME_UNIT_MILLISECONDS));
             u32 ticks = 0;
 #if LINK_LIBC == 0
             ticks = cpu_frequency != 0;
@@ -1324,15 +1325,14 @@ fn u8 os_is_being_debugged()
 #if _WIN32
     result = IsDebuggerPresent();
 #else
-    auto request = 
 #ifdef __APPLE__
-    PT_TRACE_ME;
+    let(request, PT_TRACE_ME);
 #else
-    PTRACE_TRACEME;
+    let(request, PTRACE_TRACEME);
 #endif
     if (ptrace(request, 0, 0, 0) == -1)
     {
-        auto error = errno;
+        let(error, errno);
         if (error == EPERM)
         {
             result = 1;
@@ -1371,7 +1371,7 @@ fn u64 os_readlink(String path, String buffer)
 {
     u64 result = 0;
     assert(path.pointer[path.length] == 0);
-    auto sys_result = readlink(string_to_c(path), string_to_c(buffer), buffer.length);
+    let(sys_result, readlink(string_to_c(path), string_to_c(buffer), buffer.length));
     if (sys_result > 0)
     {
         assign_cast(result, sys_result);
@@ -1384,7 +1384,7 @@ fn String os_readlink_allocate(Arena* arena, String path)
 {
     String result = {};
     u8 buffer[4096];
-    auto bytes = os_readlink(path, (String)array_to_slice(buffer));
+    let(bytes, os_readlink(path, (String)array_to_slice(buffer)));
 
     if (bytes > 0)
     {
