@@ -3,6 +3,8 @@
 set -eu
 BUILD_DIR=cache
 mkdir -p $BUILD_DIR
+glslangValidator -V bootstrap/std/shaders/rect.vert -o $BUILD_DIR/rect.vert.spv --quiet
+glslangValidator -V bootstrap/std/shaders/rect.frag -o $BUILD_DIR/rect.frag.spv --quiet
 BUILD_OUT=$BUILD_DIR/build
 TIME_TRACE=1
 if [[ "$TIME_TRACE" == "1" ]]; then
