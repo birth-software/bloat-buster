@@ -23,16 +23,16 @@ fn TextureIndex white_texture_create(Arena* arena, Renderer* renderer)
 {
     u32 white_texture_width = 1024;
     u32 white_texture_height = white_texture_width;
-    auto* white_texture_buffer = arena_allocate(arena, u32, white_texture_width * white_texture_height);
+    let(white_texture_buffer, arena_allocate(arena, u32, white_texture_width * white_texture_height));
     memset(white_texture_buffer, 0xff, white_texture_width * white_texture_height * sizeof(u32));
 
-    auto white_texture = renderer_texture_create(renderer, (TextureMemory) {
+    let(white_texture, renderer_texture_create(renderer, (TextureMemory) {
         .pointer = white_texture_buffer,
         .width = white_texture_width,
         .height = white_texture_height,
         .depth = 1,
         .format = TEXTURE_FORMAT_R8G8B8A8_SRGB,
-    });
+    }));
 
     return white_texture;
 }
@@ -75,8 +75,8 @@ fn void ui_top_bar()
     ui_push(pref_height, ui_em(1, 1));
     {
         ui_push(child_layout_axis, AXIS2_X);
-        auto* top_bar = ui_widget_make((UI_WidgetFlags) {
-                }, strlit("top_bar"));
+        let(top_bar, ui_widget_make((UI_WidgetFlags) {
+                }, strlit("top_bar")));
         ui_push(parent, top_bar);
         {
             ui_button(strlit("Button 1"));
@@ -100,17 +100,17 @@ STRUCT(UI_Node)
 
 fn void ui_node(UI_Node node)
 {
-    auto* node_widget = ui_widget_make_format((UI_WidgetFlags) {
+    let(node_widget, ui_widget_make_format((UI_WidgetFlags) {
         .draw_background = 1,
         .draw_text = 1,
-    }, "{s} : {s} = {s}##{s}{s}", node.name, node.type, node.value, node.function, node.namespace);
+    }, "{s} : {s} = {s}##{s}{s}", node.name, node.type, node.value, node.function, node.namespace));
 }
 
 fn void app_update()
 {
-    auto frame_end = os_timestamp();
+    let(frame_end, os_timestamp());
     windowing_poll_events(/* &state.event_queue */);
-    auto frame_ms = os_resolve_timestamps(state.last_frame_timestamp, frame_end, TIME_UNIT_MILLISECONDS);
+    let(frame_ms, os_resolve_timestamps(state.last_frame_timestamp, frame_end, TIME_UNIT_MILLISECONDS));
     state.last_frame_timestamp = frame_end;
 
     Renderer* renderer = state.renderer;
@@ -118,10 +118,10 @@ fn void app_update()
     BBWindow* window = state.first_window;
     while (likely(window))
     {
-        auto* previous = window->previous;
-        auto* next = window->next;
+        let(previous, window->previous);
+        let(next, window->next);
 
-        auto* render_window = window->render;
+        let(render_window, window->render);
         renderer_window_frame_begin(renderer, render_window);
 
         ui_state_select(window->ui);
@@ -132,14 +132,14 @@ fn void app_update()
 
             ui_top_bar();
             ui_push(child_layout_axis, AXIS2_X);
-            auto* workspace_widget = ui_widget_make_format((UI_WidgetFlags) {}, "workspace{u64}", window->handle);
+            let(workspace_widget, ui_widget_make_format((UI_WidgetFlags) {}, "workspace{u64}", window->handle));
             ui_push(parent, workspace_widget);
             {
                 // Node visualizer
                 ui_push(child_layout_axis, AXIS2_Y);
-                auto* node_visualizer_widget = ui_widget_make_format((UI_WidgetFlags) {
+                let(node_visualizer_widget, ui_widget_make_format((UI_WidgetFlags) {
                     .draw_background = 1,
-                }, "node_visualizer{u64}", window->handle);
+                }, "node_visualizer{u64}", window->handle));
 
                 ui_push(parent, node_visualizer_widget);
                 {

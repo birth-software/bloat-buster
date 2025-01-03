@@ -270,15 +270,15 @@ fn void buffer_copy_to_local_command(VkCommandBuffer command_buffer, Slice(Local
 {
     for (u64 i = 0; i < copies.length; i += 1)
     {
-        auto copy = copies.pointer[i];
-        auto* source_buffer = &copy.source;
-        auto* destination_buffer = &copy.destination;
+        let(copy, copies.pointer[i]);
+        let(source_buffer, &copy.source);
+        let(destination_buffer, &copy.destination);
 
         VkBufferCopy2 buffer_copies[MAX_LOCAL_BUFFER_COPY_COUNT];
 
         for (u64 i = 0; i < copy.regions.length; i += 1)
         {
-            auto copy_region = copy.regions.pointer[i];
+            let(copy_region, copy.regions.pointer[i]);
             buffer_copies[i] = (VkBufferCopy2) {
                 .sType = VK_STRUCTURE_TYPE_BUFFER_COPY_2,
                 .pNext = 0,
@@ -305,12 +305,12 @@ fn void buffer_copy_to_host(VulkanBuffer buffer, Slice(HostBufferCopy) regions)
 {
     assert(buffer.type == BUFFER_TYPE_STAGING);
 
-    auto* buffer_pointer = (u8*)buffer.address;
+    let(buffer_pointer, (u8*)buffer.address);
 
     for (u64 i = 0; i < regions.length; i += 1)
     {
-        auto region = regions.pointer[i];
-        auto* destination = buffer_pointer + region.destination_offset;
+        let(region, regions.pointer[i]);
+        let(destination, buffer_pointer + region.destination_offset);
         assert(destination + region.source.length <= (u8*)buffer.address + buffer.size);
 #define USE_MEMCPY 1
 #if USE_MEMCPY
@@ -396,7 +396,7 @@ fn GPUMemory vk_allocate_memory(VkDevice device, const VkAllocationCallbacks* al
     u32 memory_type_index;
     for (memory_type_index = 0; memory_type_index < memory_properties.memoryTypeCount; memory_type_index += 1)
     {
-        auto memory_type = memory_properties.memoryTypes[memory_type_index];
+        let(memory_type, memory_properties.memoryTypes[memory_type_index]);
 
         if ((memory_requirements.memoryTypeBits & (1 << memory_type_index)) != 0 && (memory_type.propertyFlags & flags) == flags)
         {
@@ -498,7 +498,7 @@ fn VulkanBuffer buffer_create(Renderer* renderer, u64 size, BufferType type)
     VkMemoryPropertyFlags memory_flags =
         (VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT * is_dst) |
         ((VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) * is_src);
-    auto result = vk_buffer_create(renderer->device, renderer->allocator, renderer->memory_properties, size, usage, memory_flags);
+    let(result, vk_buffer_create(renderer->device, renderer->allocator, renderer->memory_properties, size, usage, memory_flags));
     result.type = type;
     return result;
 }
@@ -524,7 +524,7 @@ fn u8 vk_layer_is_supported(String layer_name)
     {
         VkLayerProperties* properties = &layers[i];
 
-        auto candidate_layer_name = cstr(properties->layerName);
+        let(candidate_layer_name, cstr(properties->layerName));
         if (s_equal(candidate_layer_name, layer_name))
         {
             supported = 1;
@@ -638,7 +638,7 @@ fn void immediate_end(ImmediateContext context)
 
     vkok(vkQueueSubmit2(context.queue, array_length(submit_info), submit_info, context.fence));
     VkBool32 wait_all = 1;
-    auto timeout = ~(u64)0;
+    let(timeout, ~(u64)0);
     vkok(vkWaitForFences(context.device, array_length(fences), fences, wait_all, timeout));
 }
 
@@ -826,7 +826,7 @@ fn Renderer* rendering_initialize(Arena* arena)
 
     {
 #if BB_DEBUG
-        auto debug_layer = strlit("VK_LAYER_KHRONOS_validation");
+        let(debug_layer, strlit("VK_LAYER_KHRONOS_validation"));
         if (!vk_layer_is_supported(debug_layer))
         {
             failed_execution();
@@ -835,7 +835,7 @@ fn Renderer* rendering_initialize(Arena* arena)
         {
             string_to_c(debug_layer),
         };
-        auto layer_count = array_length(layers);
+        let(layer_count, array_length(layers));
 #else
         const char** layers = 0;
         u32 layer_count = 0;
@@ -889,11 +889,10 @@ fn Renderer* rendering_initialize(Arena* arena)
         };
 
 #endif
-        auto* pNext =
 #if BB_DEBUG
-        enable_shader_debug_printf ? (void*)&validation_features : (void*)&msg_ci;
+        let(pNext, enable_shader_debug_printf ? (void*)&validation_features : (void*)&msg_ci);
 #else
-        (void*)0;
+        void* pNext = 0;
 #endif
         VkApplicationInfo app_info = {
             .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -1216,17 +1215,17 @@ fn Renderer* rendering_initialize(Arena* arena)
             .layout_index = 0,
         },
     };
-    auto create_data = (GraphicsPipelinesCreate) {
+    GraphicsPipelinesCreate create_data = {
         .layouts = array_to_slice(pipeline_layouts),
         .pipelines = array_to_slice(pipeline_create),
         .shader_binaries = array_to_slice(shader_binaries),
     };
-    auto graphics_pipeline_count = create_data.pipelines.length;
+    let(graphics_pipeline_count, create_data.pipelines.length);
     assert(graphics_pipeline_count);
-    auto pipeline_layout_count = create_data.layouts.length;
+    let(pipeline_layout_count, create_data.layouts.length);
     assert(pipeline_layout_count);
     assert(pipeline_layout_count <= graphics_pipeline_count);
-    auto shader_count = create_data.shader_binaries.length;
+    let(shader_count, create_data.shader_binaries.length);
 
     VkPipeline pipeline_handles[BB_PIPELINE_COUNT];
     VkPipelineShaderStageCreateInfo shader_create_infos[MAX_SHADER_MODULE_COUNT_PER_PIPELINE];
@@ -1350,13 +1349,13 @@ fn Renderer* rendering_initialize(Arena* arena)
         .stencilAttachmentFormat = 0,
     };
 
-    auto* shader_modules = arena_allocate(arena, VkShaderModule, shader_count);
+    let(shader_modules, arena_allocate(arena, VkShaderModule, shader_count));
 
     for (u64 i = 0; i < shader_count; i += 1)
     {
         String shader_binary_path = create_data.shader_binaries.pointer[i];
 
-        auto binary = file_read(arena, shader_binary_path);
+        let(binary, file_read(arena, shader_binary_path));
 
         VkShaderModuleCreateInfo create_info = {
             .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -1369,10 +1368,10 @@ fn Renderer* rendering_initialize(Arena* arena)
 
     for (u64 pipeline_index = 0; pipeline_index < pipeline_layout_count; pipeline_index += 1)
     {
-        auto create = create_data.layouts.pointer[pipeline_index];
-        auto descriptor_set_layout_count = create.descriptor_set_layouts.length;
-        auto push_constant_range_count = create.push_constant_ranges.length;
-        auto* pipeline = &renderer->pipelines[pipeline_index];
+        let(create, create_data.layouts.pointer[pipeline_index]);
+        let(descriptor_set_layout_count, create.descriptor_set_layouts.length);
+        let(push_constant_range_count, create.push_constant_ranges.length);
+        let(pipeline, &renderer->pipelines[pipeline_index]);
         pipeline->descriptor_set_count = descriptor_set_layout_count;
         pipeline->push_constant_range_count = push_constant_range_count;
 
@@ -1385,14 +1384,14 @@ fn Renderer* rendering_initialize(Arena* arena)
 
         for (u64 descriptor_set_layout_index = 0; descriptor_set_layout_index < descriptor_set_layout_count; descriptor_set_layout_index += 1)
         {
-            auto set_layout_create = create.descriptor_set_layouts.pointer[descriptor_set_layout_index];
-            auto binding_count = set_layout_create.bindings.length;
-            auto* descriptor_set_layout_bindings = &pipeline->descriptor_set_layout_bindings[descriptor_set_layout_index];
+            let(set_layout_create, create.descriptor_set_layouts.pointer[descriptor_set_layout_index]);
+            let(binding_count, set_layout_create.bindings.length);
+            let(descriptor_set_layout_bindings, &pipeline->descriptor_set_layout_bindings[descriptor_set_layout_index]);
             descriptor_set_layout_bindings->count = binding_count;
 
             for (u64 binding_index = 0; binding_index < binding_count; binding_index += 1)
             {
-                auto binding_descriptor = set_layout_create.bindings.pointer[binding_index];
+                let(binding_descriptor, set_layout_create.bindings.pointer[binding_index]);
 
                 VkDescriptorType descriptor_type = vulkan_descriptor_type(binding_descriptor.type);
 
@@ -1425,7 +1424,7 @@ fn Renderer* rendering_initialize(Arena* arena)
 
         for (u64 push_constant_index = 0; push_constant_index < push_constant_range_count; push_constant_index += 1)
         {
-            auto push_constant_descriptor = create.push_constant_ranges.pointer[push_constant_index];
+            let(push_constant_descriptor, create.push_constant_ranges.pointer[push_constant_index]);
             pipeline->push_constant_ranges[push_constant_index] = (VkPushConstantRange) {
                 .stageFlags = vulkan_shader_stage(push_constant_descriptor.stage),
                 .offset = push_constant_descriptor.offset,
@@ -1448,8 +1447,8 @@ fn Renderer* rendering_initialize(Arena* arena)
 
     for (u64 i = 0; i < graphics_pipeline_count; i += 1)
     {
-        auto create = create_data.pipelines.pointer[i];
-        auto pipeline_shader_count = create.shader_source_indices.length;
+        let(create, create_data.pipelines.pointer[i]);
+        let(pipeline_shader_count, create.shader_source_indices.length);
         if (pipeline_shader_count > MAX_SHADER_MODULE_COUNT_PER_PIPELINE)
         {
             failed_execution();
@@ -1457,8 +1456,8 @@ fn Renderer* rendering_initialize(Arena* arena)
 
         for (u64 i = 0; i < pipeline_shader_count; i += 1)
         {
-            auto shader_index = create.shader_source_indices.pointer[i];
-            auto shader_source_path = create_data.shader_binaries.pointer[shader_index];
+            let(shader_index, create.shader_source_indices.pointer[i]);
+            let(shader_source_path, create_data.shader_binaries.pointer[shader_index]);
 
             shader_create_infos[i] = (VkPipelineShaderStageCreateInfo) {
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -1677,21 +1676,21 @@ fn RenderWindow* rendering_initialize_window(Renderer* renderer, WindowingInstan
 
     for (u64 pipeline_index = 0; pipeline_index < BB_PIPELINE_COUNT; pipeline_index += 1)
     {
-        auto* pipeline_descriptor = &renderer->pipelines[pipeline_index];
-        auto* pipeline_instantiation = &render_window->pipeline_instantiations[pipeline_index];
+        let(pipeline_descriptor, &renderer->pipelines[pipeline_index]);
+        let(pipeline_instantiation, &render_window->pipeline_instantiations[pipeline_index]);
 
         u16 descriptor_type_counter[DESCRIPTOR_TYPE_COUNT] = {};
 
         for (u64 descriptor_index = 0; descriptor_index < pipeline_descriptor->descriptor_set_count; descriptor_index += 1)
         {
-            auto* descriptor_set_layout_bindings = &pipeline_descriptor->descriptor_set_layout_bindings[descriptor_index];
+            let(descriptor_set_layout_bindings, &pipeline_descriptor->descriptor_set_layout_bindings[descriptor_index]);
 
             for (u64 binding_index = 0; binding_index < descriptor_set_layout_bindings->count; binding_index += 1)
             {
-                auto* binding_descriptor = &descriptor_set_layout_bindings->buffer[binding_index];
-                auto descriptor_type = descriptor_type_from_vulkan(binding_descriptor->descriptorType);
-                auto* counter_ptr = &descriptor_type_counter[descriptor_type];
-                auto old_counter = *counter_ptr;
+                let(binding_descriptor, &descriptor_set_layout_bindings->buffer[binding_index]);
+                let(descriptor_type, descriptor_type_from_vulkan(binding_descriptor->descriptorType));
+                let(counter_ptr, &descriptor_type_counter[descriptor_type]);
+                let(old_counter, *counter_ptr);
                 *counter_ptr = old_counter + binding_descriptor->descriptorCount;
             }
         }
@@ -1701,10 +1700,10 @@ fn RenderWindow* rendering_initialize_window(Renderer* renderer, WindowingInstan
 
         for (DescriptorType i = 0; i < DESCRIPTOR_TYPE_COUNT; i += 1)
         {
-            auto count = descriptor_type_counter[i];
+            let(count, descriptor_type_counter[i]);
             if (count)
             {
-                auto* pool_size = &pool_sizes[pool_size_count];
+                let(pool_size, &pool_sizes[pool_size_count]);
                 pool_size_count += 1;
 
                 *pool_size = (VkDescriptorPoolSize) {
@@ -1782,8 +1781,8 @@ fn WindowFrame* window_frame(RenderWindow* window)
 
 fn void renderer_window_frame_begin(Renderer* renderer, RenderWindow* window)
 {
-    auto* frame = window_frame(window);
-    auto timeout = ~(u64)0;
+    let(frame, window_frame(window));
+    let(timeout, ~(u64)0);
 
     u32 fence_count = 1;
     VkBool32 wait_all = 1;
@@ -1807,7 +1806,7 @@ fn void renderer_window_frame_begin(Renderer* renderer, RenderWindow* window)
     // Reset frame data
     for (u32 i = 0; i < array_length(window->pipeline_instantiations); i += 1)
     {
-        auto* pipeline_instantiation = &frame->pipeline_instantiations[i];
+        let(pipeline_instantiation, &frame->pipeline_instantiations[i]);
         pipeline_instantiation->vertex_buffer.cpu.length = 0;
         pipeline_instantiation->vertex_buffer.count = 0;
         pipeline_instantiation->index_buffer.cpu.length = 0;
@@ -1843,7 +1842,7 @@ fn void buffer_ensure_capacity(Renderer* renderer, VulkanBuffer* buffer, u64 nee
 
 fn void renderer_window_frame_end(Renderer* renderer, RenderWindow* window)
 {
-    auto* frame = window_frame(window);
+    let(frame, window_frame(window));
 
     VkCommandBufferBeginInfo command_buffer_begin_info = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -1853,13 +1852,13 @@ fn void renderer_window_frame_end(Renderer* renderer, RenderWindow* window)
 
     for (u32 i = 0; i < BB_PIPELINE_COUNT; i += 1)
     {
-        auto* frame_pipeline_instantiation = &frame->pipeline_instantiations[i];
+        let(frame_pipeline_instantiation, &frame->pipeline_instantiations[i]);
 
         if (likely(frame_pipeline_instantiation->vertex_buffer.cpu.length))
         {
-            auto new_vertex_buffer_size = frame_pipeline_instantiation->vertex_buffer.cpu.length * sizeof(*frame_pipeline_instantiation->vertex_buffer.cpu.pointer);
-            auto new_index_buffer_size = frame_pipeline_instantiation->index_buffer.cpu.length * sizeof(*frame_pipeline_instantiation->index_buffer.cpu.pointer);
-            auto new_transient_buffer_size = new_vertex_buffer_size + new_index_buffer_size;
+            let(new_vertex_buffer_size, frame_pipeline_instantiation->vertex_buffer.cpu.length * sizeof(*frame_pipeline_instantiation->vertex_buffer.cpu.pointer));
+            let(new_index_buffer_size, frame_pipeline_instantiation->index_buffer.cpu.length * sizeof(*frame_pipeline_instantiation->index_buffer.cpu.pointer));
+            let(new_transient_buffer_size, new_vertex_buffer_size + new_index_buffer_size);
 
             buffer_ensure_capacity(renderer, &frame_pipeline_instantiation->transient_buffer, new_transient_buffer_size);
             buffer_ensure_capacity(renderer, &frame_pipeline_instantiation->vertex_buffer.gpu, new_vertex_buffer_size);
@@ -1969,9 +1968,9 @@ fn void renderer_window_frame_end(Renderer* renderer, RenderWindow* window)
 
     for (u32 i = 0; i < BB_PIPELINE_COUNT; i += 1)
     {
-        auto* pipeline = &renderer->pipelines[i];
-        auto* pipeline_instantiation = &window->pipeline_instantiations[i];
-        auto* frame_pipeline_instantiation = &frame->pipeline_instantiations[i];
+        let(pipeline, &renderer->pipelines[i]);
+        let(pipeline_instantiation, &window->pipeline_instantiations[i]);
+        let(frame_pipeline_instantiation, &frame->pipeline_instantiations[i]);
 
         if (likely(frame_pipeline_instantiation->vertex_buffer.cpu.length))
         {
@@ -1995,15 +1994,14 @@ fn void renderer_window_frame_end(Renderer* renderer, RenderWindow* window)
             }
 
             // Send vertex buffer and screen dimensions to the shader
-            auto push_constants = (GPUDrawPushConstants)
-            {
+            GPUDrawPushConstants push_constants = {
                 .vertex_buffer = frame_pipeline_instantiation->vertex_buffer.gpu.address,
                 .width = window->width,
                 .height = window->height,
             };
 
             {
-                auto push_constant_range = pipeline->push_constant_ranges[0];
+                let(push_constant_range, pipeline->push_constant_ranges[0]);
                 vkCmdPushConstants(frame->command_buffer, pipeline->layout, push_constant_range.stageFlags, push_constant_range.offset, push_constant_range.size, &push_constants);
                 frame->push_constants = push_constants;
             }
@@ -2150,9 +2148,9 @@ fn TextureIndex renderer_texture_create(Renderer* renderer, TextureMemory textur
 {
     assert(texture_memory.depth == 1);
 
-    auto texture_index = texture_count;
+    let(texture_index, texture_count);
     texture_count += 1;
-    auto* texture = &textures[texture_index];
+    let(texture, &textures[texture_index]);
     texture->image = vk_image_create(renderer->device, renderer->allocator, renderer->memory_properties, (VulkanImageCreate) {
         .width = texture_memory.width,
         .height = texture_memory.height,
@@ -2162,10 +2160,10 @@ fn TextureIndex renderer_texture_create(Renderer* renderer, TextureMemory textur
     });
     texture->sampler = renderer->sampler;
 
-    auto image_size = (u64)texture_memory.depth * texture_memory.width * texture_memory.height * format_channel_count(texture_memory.format);
+    let(image_size, (u64)texture_memory.depth * texture_memory.width * texture_memory.height * format_channel_count(texture_memory.format));
     VkBufferUsageFlags buffer_usage_flags = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     VkMemoryPropertyFlags buffer_memory_flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    auto transfer_buffer = vk_buffer_create(renderer->device, renderer->allocator, renderer->memory_properties, image_size, buffer_usage_flags, buffer_memory_flags);
+    let(transfer_buffer, vk_buffer_create(renderer->device, renderer->allocator, renderer->memory_properties, image_size, buffer_usage_flags, buffer_memory_flags));
     memcpy((void*)transfer_buffer.address, texture_memory.pointer, image_size);
 
     immediate_start(renderer->immediate);
@@ -2207,13 +2205,13 @@ fn TextureIndex renderer_texture_create(Renderer* renderer, TextureMemory textur
 
 fn void window_draw_indexed(RenderWindow* window, u32 index_count, u32 instance_count, u32 first_index, s32 vertex_offset, u32 first_instance)
 {
-    auto* frame = window_frame(window);
+    let(frame, window_frame(window));
     vkCmdDrawIndexed(frame->command_buffer, index_count, instance_count, first_index, vertex_offset, first_instance);
 }
 
 fn void window_texture_update_begin(RenderWindow* window, BBPipeline pipeline_index, u32 descriptor_count)
 {
-    auto* pipeline_instantiation = &window->pipeline_instantiations[pipeline_index];
+    let(pipeline_instantiation, &window->pipeline_instantiations[pipeline_index]);
     assert(descriptor_count <= array_length(pipeline_instantiation->texture_descriptors));
 
     pipeline_instantiation->descriptor_set_update = (VkWriteDescriptorSet) {
@@ -2237,7 +2235,7 @@ fn void window_rect_texture_update_begin(RenderWindow* window)
 
 fn void window_queue_pipeline_texture_update(RenderWindow* window, BBPipeline pipeline_index, u32 resource_slot, TextureIndex texture_index)
 {
-    auto* pipeline_instantiation = &window->pipeline_instantiations[pipeline_index];
+    let(pipeline_instantiation, &window->pipeline_instantiations[pipeline_index]);
     VkDescriptorImageInfo* descriptor_image = &pipeline_instantiation->texture_descriptors[resource_slot];
     VulkanTexture* texture = &textures[texture_index.value];
     *descriptor_image = (VkDescriptorImageInfo) {
@@ -2255,14 +2253,14 @@ fn void window_queue_rect_texture_update(RenderWindow* window, RectTextureSlot s
 fn void renderer_queue_font_update(Renderer* renderer, RenderWindow* window, RenderFontType type, TextureAtlas atlas)
 {
     static_assert(RECT_TEXTURE_SLOT_MONOSPACE_FONT < RECT_TEXTURE_SLOT_PROPORTIONAL_FONT);
-    auto slot = RECT_TEXTURE_SLOT_MONOSPACE_FONT + type;
+    let(slot, RECT_TEXTURE_SLOT_MONOSPACE_FONT + type);
     window_queue_rect_texture_update(window, slot, atlas.texture);
     renderer->fonts[type] = atlas;
 }
 
 fn void window_texture_update_end(Renderer* renderer, RenderWindow* window, BBPipeline pipeline_index)
 {
-    auto* pipeline_instantiation = &window->pipeline_instantiations[pipeline_index];
+    let(pipeline_instantiation, &window->pipeline_instantiations[pipeline_index]);
     u32 descriptor_copy_count = 0;
     VkCopyDescriptorSet* descriptor_copies = 0;
     VkWriteDescriptorSet descriptor_set_writes[] = {
@@ -2278,34 +2276,34 @@ fn void window_rect_texture_update_end(Renderer* renderer, RenderWindow* window)
 
 fn u32 window_pipeline_add_vertices(RenderWindow* window, BBPipeline pipeline_index, String vertex_memory, u32 vertex_count)
 {
-    auto* frame = window_frame(window);
-    auto* vertex_buffer = &frame->pipeline_instantiations[pipeline_index].vertex_buffer;
+    let(frame, window_frame(window));
+    let(vertex_buffer, &frame->pipeline_instantiations[pipeline_index].vertex_buffer);
     vb_copy_string(&vertex_buffer->cpu, vertex_memory);
-    auto vertex_offset = vertex_buffer->count;
+    let(vertex_offset, vertex_buffer->count);
     vertex_buffer->count = vertex_offset + vertex_count;
     return vertex_offset;
 }
 
 fn void window_pipeline_add_indices(RenderWindow* window, BBPipeline pipeline_index, Slice(u32) indices)
 {
-    auto* frame = window_frame(window);
-    auto* index_pointer = vb_add(&frame->pipeline_instantiations[pipeline_index].index_buffer.cpu, indices.length);
+    let(frame, window_frame(window));
+    let(index_pointer, vb_add(&frame->pipeline_instantiations[pipeline_index].index_buffer.cpu, indices.length));
     memcpy(index_pointer, indices.pointer, indices.length * sizeof(*indices.pointer));
 }
 
 fn void window_render_rect(RenderWindow* window, RectDraw draw)
 {
-    auto p0 = draw.vertex.p0;
-    auto uv0 = draw.texture.p0;
+    let(p0, draw.vertex.p0);
+    let(uv0, draw.texture.p0);
     if (draw.texture.p1.x != 0)
     {
         assert(draw.texture.p1.x - draw.texture.p0.x == draw.vertex.p1.x - draw.vertex.p0.x);
         assert(draw.texture.p1.y - draw.texture.p0.y == draw.vertex.p1.y - draw.vertex.p0.y);
     }
 
-    auto corner_radius = 5.0f;
+    let(corner_radius, 5.0f);
 
-    auto extent = draw.vertex.p1 - p0;
+    let(extent, float2_sub(draw.vertex.p1, p0));
     RectVertex vertices[] = {
         (RectVertex) {
             .p0 = p0,
@@ -2345,7 +2343,7 @@ fn void window_render_rect(RenderWindow* window, RectDraw draw)
         },
     };
 
-    auto vertex_offset = window_pipeline_add_vertices(window, BB_PIPELINE_RECT, (String)array_to_bytes(vertices), array_length(vertices));
+    let(vertex_offset, window_pipeline_add_vertices(window, BB_PIPELINE_RECT, (String)array_to_bytes(vertices), array_length(vertices)));
 
     u32 indices[] = {
         vertex_offset + 0,
@@ -2362,23 +2360,23 @@ fn void window_render_rect(RenderWindow* window, RectDraw draw)
 // TODO: support gradient
 fn void window_render_text(Renderer* renderer, RenderWindow* window, String string, float4 color, RenderFontType font_type, u32 x_offset, u32 y_offset)
 {
-    auto* texture_atlas = &renderer->fonts[font_type];
-    auto height = texture_atlas->ascent - texture_atlas->descent;
-    auto texture_index = texture_atlas->texture.value;
+    let(texture_atlas, &renderer->fonts[font_type]);
+    let(height, texture_atlas->ascent - texture_atlas->descent);
+    let(texture_index, texture_atlas->texture.value);
 
     for (u64 i = 0; i < string.length; i += 1)
     {
-        auto ch = string.pointer[i];
-        auto* character = &texture_atlas->characters[ch];
+        let(ch, string.pointer[i]);
+        let(character, &texture_atlas->characters[ch]);
 
-        auto uv_x = character->x;
-        auto uv_y = character->y;
+        let(uv_x, character->x);
+        let(uv_y, character->y);
 
-        auto char_width = character->width;
-        auto char_height = character->height;
+        let(char_width, character->width);
+        let(char_height, character->height);
 
-        auto pos_x = x_offset;
-        auto pos_y = y_offset + character->y_offset + height + texture_atlas->descent; // Offset of the height to render the character from the bottom (y + height) up (y)
+        let(pos_x, x_offset);
+        let(pos_y, y_offset + character->y_offset + height + texture_atlas->descent); // Offset of the height to render the character from the bottom (y + height) up (y)
         vec2 p0 = { pos_x, pos_y };
         vec2 uv0 = { uv_x, uv_y };
         vec2 extent = { char_width, char_height };
@@ -2419,7 +2417,7 @@ fn void window_render_text(Renderer* renderer, RenderWindow* window, String stri
             },
         };
 
-        auto vertex_offset = window_pipeline_add_vertices(window, BB_PIPELINE_RECT, (String)array_to_bytes(vertices), array_length(vertices));
+        let(vertex_offset, window_pipeline_add_vertices(window, BB_PIPELINE_RECT, (String)array_to_bytes(vertices), array_length(vertices)));
 
         u32 indices[] = {
             vertex_offset + 0,
@@ -2432,14 +2430,14 @@ fn void window_render_text(Renderer* renderer, RenderWindow* window, String stri
 
         window_pipeline_add_indices(window, BB_PIPELINE_RECT, (Slice(u32))array_to_slice(indices));
 
-        auto kerning = (texture_atlas->kerning_tables + ch * 256)[string.pointer[i + 1]];
+        u32 kerning = (texture_atlas->kerning_tables + ch * 256)[string.pointer[i + 1]];
         x_offset += character->advance + kerning;
     }
 }
 
 fn uint2 renderer_font_compute_string_rect(Renderer* renderer, RenderFontType type, String string)
 {
-    auto* texture_atlas = &renderer->fonts[type];
-    auto result = texture_atlas_compute_string_rect(string, texture_atlas);
+    let(texture_atlas, &renderer->fonts[type]);
+    let(result, texture_atlas_compute_string_rect(string, texture_atlas));
     return result;
 }

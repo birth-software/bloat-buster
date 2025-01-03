@@ -12,16 +12,145 @@
 #include <std/directx12_rendering.h>
 #endif
 
-typedef float float2 __attribute__((ext_vector_type(2)));
-typedef float float3 __attribute__((ext_vector_type(3)));
-typedef float float4 __attribute__((ext_vector_type(4)));
+#ifdef __clang__
+#define BB_HAS_NATIVE_FLOAT2 1
+#define BB_HAS_NATIVE_FLOAT3 1
+#define BB_HAS_NATIVE_FLOAT4 1
+#define BB_HAS_NATIVE_UINT2 1
+#define BB_HAS_NATIVE_UINT3 1
+#define BB_HAS_NATIVE_UINT4 1
+#else
+#define BB_HAS_NATIVE_FLOAT2 0
+#define BB_HAS_NATIVE_FLOAT3 0
+#define BB_HAS_NATIVE_FLOAT4 0
+#define BB_HAS_NATIVE_UINT2 0
+#define BB_HAS_NATIVE_UINT3 0
+#define BB_HAS_NATIVE_UINT4 0
+#endif
+
+#if BB_HAS_NATIVE_FLOAT2
+declare_vector_type(float, 2, float2);
+#else
+UNION(float2)
+{
+    struct
+    {
+        float x, y;
+    };
+    float v[2];
+};
+#endif
+
+#if BB_HAS_NATIVE_FLOAT3
+declare_vector_type(float, 3, float3);
+#else
+UNION(float3)
+{
+    struct
+    {
+        float x, y, z;
+    };
+    float v[3];
+};
+#endif
+
+#if BB_HAS_NATIVE_FLOAT4
+declare_vector_type(float, 4, float4);
+#else
+UNION(float4)
+{
+    struct
+    {
+        float x, y, z, w;
+    };
+    float v[4];
+};
+#endif
+
+#if BB_HAS_NATIVE_UINT2
+declare_vector_type(uint, 2, uint2);
+#else
+UNION(uint2)
+{
+    struct
+    {
+        uint x, y;
+    };
+    uint v[2];
+};
+#endif
+
+#if BB_HAS_NATIVE_UINT3
+declare_vector_type(uint, 3, uint3);
+#else
+UNION(uint3)
+{
+    struct
+    {
+        uint x, y, z;
+    };
+    uint v[3];
+};
+#endif
+
+#if BB_HAS_NATIVE_UINT4
+declare_vector_type(uint, 4, uint4);
+#else
+UNION(uint4)
+{
+    struct
+    {
+        uint x, y, z, w;
+    };
+    uint v[4];
+};
+#endif
+
 typedef float2 vec2;
 typedef float3 vec3;
 typedef float4 vec4;
 
-typedef u32 uint2 __attribute__((ext_vector_type(2)));
-typedef u32 uint3 __attribute__((ext_vector_type(3)));
-typedef u32 uint4 __attribute__((ext_vector_type(4)));
+#if BB_HAS_NATIVE_FLOAT2
+#define VEC2(_x, y) ((vec2){_x, _y})
+#else
+#define VEC2(_x, _y) ((vec2){ .x = _x, .y = _y})
+#endif
+
+#if BB_HAS_NATIVE_FLOAT3
+#define VEC3(_x, _y, _z) ((vec3){_x, _y, _z})
+#else
+#define VEC3(_x, _y, _z) ((vec3){ .x = _x, .y = _y, .z = _z})
+#endif
+
+#if BB_HAS_NATIVE_FLOAT4
+#define VEC4(_x, _y, _z, _w) ((vec4){_x, _y, _z, _w})
+#else
+#define VEC4(_x, _y, _z, _w) ((vec4){ .x = _x, .y = _y, .z = _z, .w = _w})
+#endif
+
+fn float2 float2_add(float2 a, float2 b)
+{
+#if BB_HAS_NATIVE_FLOAT2
+    return a + b;
+#else
+    float2 result;
+    result.x = a.x + b.x;
+    result.y = a.y + b.y;
+    return result;
+#endif
+}
+
+fn float2 float2_sub(float2 a, float2 b)
+{
+#if BB_HAS_NATIVE_FLOAT2
+    return a - b;
+#else
+    float2 result;
+    result.x = a.x - b.x;
+    result.y = a.y - b.y;
+    return result;
+#endif
+}
 
 UNION(F32Interval2)
 {

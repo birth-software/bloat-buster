@@ -7,9 +7,10 @@ glslangValidator -V bootstrap/std/shaders/rect.frag -o $BUILD_DIR/rect.frag.spv 
 BUILD_OUT=$BUILD_DIR/build
 C_COMPILER=tcc
 TIME_TRACE=1
+BB_TIMETRACE=0
+GCC_ARGS=
 CLANG_ARGS=
 TIME_TRACE_ARG=
-BB_TIMETRACE=0
 
 if [[ $C_COMPILER == "clang"* ]]; then
     CLANG_ARGS=-ferror-limit=1
@@ -19,8 +20,10 @@ if [[ $C_COMPILER == "clang"* ]]; then
     else
         CLANG_ARGS="$CLANG_ARGS -ftime-trace"
     fi
+elif [[ $C_COMPILER == "gcc"* ]]; then
+    GCC_ARGS=-fmax-errors=1
 fi
 
-$C_COMPILER build.c -g -o $BUILD_OUT -Ibootstrap -std=gnu2x $CLANG_ARGS -DBB_TIMETRACE=$BB_TIMETRACE
+$C_COMPILER build.c -g -o $BUILD_OUT -Ibootstrap -std=gnu2x $CLANG_ARGS $GCC_ARGS -DBB_TIMETRACE=$BB_TIMETRACE
 $BUILD_OUT $@
 exit 0

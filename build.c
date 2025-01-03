@@ -5,6 +5,16 @@
 #include <std/base.c>
 #include <std/os.c>
 
+typedef enum C_Compiler
+{
+    C_COMPILER_GCC,
+    C_COMPILER_CLANG,
+    C_COMPILER_MSVC,
+    C_COMPILER_TCC,
+    C_COMPILER_COUNT,
+} C_Compiler;
+
+global_variable C_Compiler preferred_c_compiler = C_COMPILER_GCC;
 global_variable char** environment_pointer;
 
 STRUCT(CompileFlags)
@@ -47,15 +57,6 @@ global_variable char* compiler_switches[COMPILER_ARGUMENT_STYLE_COUNT][COMPILER_
         [COMPILER_SWITCH_DEBUG_INFO] = "/Zi",
     },
 };
-
-typedef enum C_Compiler
-{
-    C_COMPILER_GCC,
-    C_COMPILER_CLANG,
-    C_COMPILER_MSVC,
-    C_COMPILER_TCC,
-    C_COMPILER_COUNT,
-} C_Compiler;
 
 global_variable String c_compiler_names[C_COMPILER_COUNT] = {
     strlit("gcc"),
@@ -116,7 +117,6 @@ fn String file_find_in_path(Arena* arena, String file, String path_env)
     return result;
 }
 
-global_variable C_Compiler preferred_c_compiler = C_COMPILER_TCC;
 
 fn C_Compiler c_compiler_from_path(String path)
 {
@@ -254,12 +254,13 @@ fn u8 c_compiler_supports_colored_output(C_Compiler compiler)
     }
 }
 
-fn u8 c_compiler_supports_error_limit(C_Compiler compiler)
+fn const char* c_compiler_get_error_limit_switch(C_Compiler compiler)
 {
     // TODO: fix
     switch (compiler)
     {
-        case C_COMPILER_CLANG: return 1;
+        case C_COMPILER_CLANG: return "-ferror-limit=1";
+        case C_COMPILER_GCC: return "-fmax-errors=1";
         default: return 0;
         case C_COMPILER_COUNT: unreachable();
     }
@@ -390,15 +391,21 @@ fn void compile_program(Arena* arena, CompileOptions options)
         add_arg("-fdiagnostics-color=auto");
     }
 
-    if (options.flags.error_limit && c_compiler_supports_error_limit(c_compiler))
+    if (options.flags.error_limit)
     {
-        add_arg("-ferror-limit=1");
+        const char* error_limit = c_compiler_get_error_limit_switch(c_compiler);
+        if (error_limit)
+        {
+            add_arg(error_limit);
+        }
     }
 
     if (options.flags.time_trace && c_compiler_supports_time_trace(c_compiler))
     {
         add_arg("-ftime-trace");
     }
+
+    add_arg("-fdiagnostics-show-option");
 
     add_arg(c_compiler_get_highest_c_standard_flag(c_compiler));
 

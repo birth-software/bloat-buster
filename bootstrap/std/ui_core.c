@@ -19,19 +19,19 @@ global_variable UI_State* ui_state = 0;
 
 fn void ui_autopop(UI_State* state)
 {
-    auto* restrict stack_end = (u32*)((u8*)&state->stacks + sizeof(state->stacks));
+    let(stack_end, (u32*)((u8*)&state->stacks + sizeof(state->stacks)));
     
-    auto* restrict bitset_pointer = (u64*)&state->stack_autopops;
+    let(bitset_pointer, (u64*)&state->stack_autopops);
     u64 bitset_index = 0;
-    for (auto* restrict stack_pointer = (u32*)&state->stacks; stack_pointer != stack_end; stack_pointer += sizeof(VirtualBuffer(u8)) / sizeof(u32))
+    for (let(stack_pointer, (u32*)&state->stacks); stack_pointer != stack_end; stack_pointer += sizeof(VirtualBuffer(u8)) / sizeof(u32))
     {
-        auto bitset = *bitset_pointer;
-        auto shift_value = 1 << bitset_index;
-        auto autopop = (bitset & shift_value) != 0;
-        auto mask = ~shift_value;
+        let(bitset, *bitset_pointer);
+        let(shift_value, 1 << bitset_index);
+        let(autopop, (bitset & shift_value) != 0);
+        let(mask, ~shift_value);
         *bitset_pointer = bitset & mask;
-        auto* restrict length_pointer = stack_pointer + (offsetof(VirtualBuffer(u8), length) / sizeof(u32));
-        auto current_length = *length_pointer;
+        let(length_pointer, stack_pointer + (offsetof(VirtualBuffer(u8), length) / sizeof(u32)));
+        let(current_length, *length_pointer);
         assert(!autopop | current_length);
         *length_pointer -= autopop;
 
@@ -53,7 +53,7 @@ fn UI_State* ui_state_get()
 
 fn Arena* ui_build_arena()
 {
-    auto* arena = ui_state->build_arenas[ui_state->build_count % array_length(ui_state->build_arenas)];
+    let(arena, ui_state->build_arenas[ui_state->build_count % array_length(ui_state->build_arenas)]);
     return arena;
 }
 
@@ -85,11 +85,11 @@ fn UI_State* ui_state_allocate(Renderer* renderer, RenderWindow* window)
         .pref_height = {},
     };
 
-    auto* stack_end = (u32*)((u8*)&state->stacks + sizeof(state->stacks));
+    let(stack_end, (u32*)((u8*)&state->stacks + sizeof(state->stacks)));
     
-    for (auto* stack_pointer = (u32*)&state->stacks; stack_pointer != stack_end; stack_pointer += sizeof(VirtualBuffer(u8)) / sizeof(u32))
+    for (let(stack_pointer, (u32*)&state->stacks); stack_pointer != stack_end; stack_pointer += sizeof(VirtualBuffer(u8)) / sizeof(u32))
     {
-        auto* length_pointer = stack_pointer + (offsetof(VirtualBuffer(u8), length) / sizeof(u32));
+        let(length_pointer, stack_pointer + (offsetof(VirtualBuffer(u8), length) / sizeof(u32)));
         assert(*length_pointer == 0);
     }
 
@@ -98,18 +98,18 @@ fn UI_State* ui_state_allocate(Renderer* renderer, RenderWindow* window)
 
 fn u64 ui_widget_index_from_key(UI_Key key)
 {
-    auto length = ui_state->widget_table.length;
+    let(length, ui_state->widget_table.length);
     assert(is_power_of_two(length));
     return key.value & (length - 1);
 }
 
-global_variable auto text_end_delimiter = strlit("##");
-global_variable auto hash_start_delimiter = strlit("###");
+global_variable String text_end_delimiter = strlit("##");
+global_variable String hash_start_delimiter = strlit("###");
 
 fn String ui_text_from_key_string(String string)
 {
     String result = string;
-    auto index = string_first_ocurrence(string, text_end_delimiter);
+    let(index, string_first_ocurrence(string, text_end_delimiter));
     if (index < string.length)
     {
         result.length = index;
@@ -120,7 +120,7 @@ fn String ui_text_from_key_string(String string)
 fn String ui_hash_from_key_string(String string)
 {
     String result = string;
-    auto index = string_first_ocurrence(string, hash_start_delimiter);
+    let(index, string_first_ocurrence(string, hash_start_delimiter));
     if (index < string.length)
     {
         result = s_get_slice(u8, string, index, string.length);
@@ -151,9 +151,9 @@ fn UI_Key ui_key_from_string_format(UI_Key seed, char* format, ...)
     u8 buffer[256];
     va_list args;
     va_start(args, format);
-    auto string = format_string_va((String)array_to_slice(buffer), format, args);
+    let(string, format_string_va((String)array_to_slice(buffer), format, args));
     va_end(args);
-    auto result = ui_key_from_string(seed, string);
+    let(result, ui_key_from_string(seed, string));
     return result;
 }
 
@@ -168,7 +168,7 @@ fn UI_Widget* ui_widget_from_key(UI_Key key)
 
     if (!ui_key_equal(key, ui_key_null()))
     {
-        auto index = ui_widget_index_from_key(key);
+        let(index, ui_widget_index_from_key(key));
         for (UI_Widget* widget = ui_state->widget_table.pointer[index].first; widget; widget = widget->hash_next)
         {
             if (ui_key_equal(widget->key, key))
@@ -184,8 +184,8 @@ fn UI_Widget* ui_widget_from_key(UI_Key key)
 
 fn UI_Widget* ui_widget_make_from_key(UI_WidgetFlags flags, UI_Key key)
 {
-    auto* widget = ui_widget_from_key(key);
-    static auto count = 0;
+    let(widget, ui_widget_from_key(key));
+    static let(count, 0);
     count += 1;
 
     if (widget)
@@ -200,12 +200,12 @@ fn UI_Widget* ui_widget_make_from_key(UI_WidgetFlags flags, UI_Key key)
     u8 first_frame = 0;
     if (!widget)
     {
-        auto index = ui_widget_index_from_key(key);
+        let(index, ui_widget_index_from_key(key));
         first_frame = 1;
 
         widget = arena_allocate(ui_state->arena, UI_Widget, 1);
 
-        auto* table_widget_slot = &ui_state->widget_table.pointer[index];
+        let(table_widget_slot, &ui_state->widget_table.pointer[index]);
         if (!table_widget_slot->last)
         {
             table_widget_slot->first = widget;
@@ -219,7 +219,7 @@ fn UI_Widget* ui_widget_make_from_key(UI_WidgetFlags flags, UI_Key key)
         }
     }
 
-    auto* parent = ui_top(parent);
+    let(parent, ui_top(parent));
 
     if (parent)
     {
@@ -230,7 +230,7 @@ fn UI_Widget* ui_widget_make_from_key(UI_WidgetFlags flags, UI_Key key)
         }
         else
         {
-            auto* previous_last = parent->last;
+            let(previous_last, parent->last);
             previous_last->next = widget;
             widget->previous = previous_last;
             parent->last = widget;
@@ -267,12 +267,12 @@ fn UI_Widget* ui_widget_make_from_key(UI_WidgetFlags flags, UI_Key key)
 fn UI_Widget* ui_widget_make(UI_WidgetFlags flags, String string)
 {
     // TODO:
-    auto seed = ui_key_null();
+    let(seed, ui_key_null());
 
-    auto hash_string = ui_hash_from_key_string(string);
-    auto key = ui_key_from_string(seed, hash_string);
+    let(hash_string, ui_hash_from_key_string(string));
+    let(key, ui_key_from_string(seed, hash_string));
 
-    auto* widget = ui_widget_make_from_key(flags, key);
+    let(widget, ui_widget_make_from_key(flags, key));
 
     if (flags.draw_text)
     {
@@ -287,17 +287,17 @@ fn UI_Widget* ui_widget_make_format(UI_WidgetFlags flags, const char* format, ..
     va_list args;
     u8 buffer[4096];
     va_start(args, format);
-    auto string = format_string_va((String)array_to_slice(buffer), format, args);
+    let(string, format_string_va((String)array_to_slice(buffer), format, args));
     va_end(args);
 
-    auto* result = ui_widget_make(flags, string);
+    let(result, ui_widget_make(flags, string));
     return result;
 }
 
 fn UI_Signal ui_signal_from_widget(UI_Widget* widget)
 {
-    auto rect = widget->rect;
-    auto mouse_position = ui_state->mouse_position;
+    let(rect, widget->rect);
+    let(mouse_position, ui_state->mouse_position);
     UI_Signal signal = {
         .clicked_left = 
             (widget->flags.mouse_clickable & (ui_state->mouse_button_events[WINDOWING_EVENT_MOUSE_LEFT].action == WINDOWING_EVENT_MOUSE_RELEASE)) &
@@ -309,11 +309,11 @@ fn UI_Signal ui_signal_from_widget(UI_Widget* widget)
 
 fn void ui_stack_reset(UI_State* state)
 {
-    auto* stack_end = (u32*)((u8*)&state->stacks + sizeof(state->stacks));
+    let(stack_end, (u32*)((u8*)&state->stacks + sizeof(state->stacks)));
     
-    for (auto* stack_pointer = (u32*)&state->stacks; stack_pointer != stack_end; stack_pointer += sizeof(VirtualBuffer(u8)) / sizeof(u32))
+    for (let(stack_pointer, (u32*)&state->stacks); stack_pointer != stack_end; stack_pointer += sizeof(VirtualBuffer(u8)) / sizeof(u32))
     {
-        auto* length_pointer = stack_pointer + (offsetof(VirtualBuffer(u8), length) / sizeof(u32));
+        let(length_pointer, stack_pointer + (offsetof(VirtualBuffer(u8), length) / sizeof(u32)));
         *length_pointer = 0;
     }
 }
@@ -338,7 +338,7 @@ fn UI_Size ui_percentage(f32 percentage, f32 strictness)
 
 fn UI_Size ui_em(f32 value, f32 strictness)
 {
-    auto font_size = ui_top(font_size);
+    let(font_size, ui_top(font_size));
     assert(font_size);
     return (UI_Size) {
         .kind = UI_SIZE_PIXEL_COUNT,
@@ -350,7 +350,7 @@ fn UI_Size ui_em(f32 value, f32 strictness)
 fn u8 ui_build_begin(WindowingInstance* window, f64 frame_time, WindowingEventQueue* event_queue)
 {
     ui_state->build_count += 1;
-    auto* build_arena = ui_build_arena();
+    let(build_arena, ui_build_arena());
     arena_reset(build_arena);
     ui_state->frame_time = frame_time;
     ui_state->window = window;
@@ -359,18 +359,18 @@ fn u8 ui_build_begin(WindowingInstance* window, f64 frame_time, WindowingEventQu
 
     u8 open = 1;
 
-    auto mouse_button_count = 0;
+    let(mouse_button_count, 0);
     for (u32 generic_event_index = 0; open & (generic_event_index < event_queue->descriptors.length); generic_event_index += 1)
     {
-        auto event_descriptor = event_queue->descriptors.pointer[generic_event_index];
+        let(event_descriptor, event_queue->descriptors.pointer[generic_event_index]);
         u32 event_index = event_descriptor.index;
 
         switch (event_descriptor.type)
         {
         case WINDOWING_EVENT_TYPE_MOUSE_BUTTON:
             {
-                auto button = event_queue->mouse_buttons.pointer[event_index];
-                auto previous_button_event = ui_state->mouse_button_events[button.button];
+                let(button, event_queue->mouse_buttons.pointer[event_index]);
+                let(previous_button_event, ui_state->mouse_button_events[button.button]);
                 switch (button.event.action)
                 {
                     case WINDOWING_EVENT_MOUSE_RELAX:
@@ -398,7 +398,7 @@ fn u8 ui_build_begin(WindowingInstance* window, f64 frame_time, WindowingEventQu
             } break;
         case WINDOWING_EVENT_TYPE_CURSOR_POSITION:
             {
-                auto mouse_position = event_queue->cursor_positions.pointer[event_index];
+                let(mouse_position, event_queue->cursor_positions.pointer[event_index]);
                 ui_state->mouse_position = (UI_MousePosition) {
                     .x = mouse_position.x,
                     .y = mouse_position.y,
@@ -424,7 +424,7 @@ fn u8 ui_build_begin(WindowingInstance* window, f64 frame_time, WindowingEventQu
     {
         for (u64 i = 0; i < ui_state->widget_table.length; i += 1)
         {
-            auto* widget_table_element = &ui_state->widget_table.pointer[i];
+            let(widget_table_element, &ui_state->widget_table.pointer[i]);
             for (UI_Widget* widget = widget_table_element->first, *next = 0; widget; widget = next)
             {
                 next = widget->hash_next;
@@ -455,19 +455,20 @@ fn u8 ui_build_begin(WindowingInstance* window, f64 frame_time, WindowingEventQu
             }
         }
 
-        auto framebuffer_size = windowing_get_instance_framebuffer_size(window);
+        let(framebuffer_size, windowing_get_instance_framebuffer_size(window));
         ui_push_next_only(pref_width, ui_pixels(framebuffer_size.width, 1.0f));
         ui_push_next_only(pref_height, ui_pixels(framebuffer_size.height, 1.0f));
         ui_push_next_only(child_layout_axis, AXIS2_Y);
 
-        auto* root = ui_widget_make_format((UI_WidgetFlags) {}, "window_root_{u64}", window);
+        let(root, ui_widget_make_format((UI_WidgetFlags) {}, "window_root_{u64}", window));
         assert(!ui_state->stack_autopops.child_layout_axis);
 
         ui_push(parent, root);
 
         ui_push(font_size, 12);
-        ui_push(text_color, ((float4) { 0.9, 0.9, 0.02, 1 }));
-        ui_push(background_color, ((float4) { 0.1, 0.1, 0.1, 1 }));
+
+        ui_push(text_color, VEC4(0.9, 0.9, 0.02, 1));
+        ui_push(background_color, VEC4(0.1, 0.1, 0.1, 1));
         ui_push(pref_width, ui_percentage(1.0, 0.0));
         ui_push(pref_height, ui_percentage(1.0, 0.0));
         // ui_push(pref_height, ui_em(1.8, 0.0));
@@ -480,13 +481,17 @@ fn void ui_compute_independent_sizes(UI_Widget* widget)
 {
     for (Axis2 axis = 0; axis < AXIS2_COUNT; axis += 1)
     {
-        auto pref_size = widget->pref_size[axis];
+        let(pref_size, widget->pref_size[axis]);
         switch (pref_size.kind)
         {
             default: break; case UI_SIZE_COUNT: unreachable();
             case UI_SIZE_PIXEL_COUNT:
                 {
+#if BB_HAS_NATIVE_FLOAT2
                     widget->computed_size[axis] = floorf(widget->pref_size[axis].value);
+#else
+                    widget->computed_size.v[axis] = floorf(widget->pref_size[axis].value);
+#endif
                 } break;
         }
     }
@@ -502,7 +507,7 @@ fn void ui_compute_upward_dependent_sizes(UI_Widget* widget)
     // TODO: optimize loop out if possible
     for (Axis2 axis = 0; axis < AXIS2_COUNT; axis += 1)
     {
-        auto pref_size = widget->pref_size[axis];
+        let(pref_size, widget->pref_size[axis]);
         switch (pref_size.kind)
         {
             default: break; case UI_SIZE_COUNT: unreachable();
@@ -512,7 +517,11 @@ fn void ui_compute_upward_dependent_sizes(UI_Widget* widget)
                 {
                     if (ancestor->pref_size[axis].kind != UI_SIZE_BY_CHILDREN)
                     {
+#if BB_HAS_NATIVE_FLOAT2
                         widget->computed_size[axis] = floorf(ancestor->computed_size[axis] * widget->pref_size[axis].value);
+#else
+                        widget->computed_size.v[axis] = floorf(ancestor->computed_size.v[axis] * widget->pref_size[axis].value);
+#endif
                         break;
                     }
                 }
@@ -535,7 +544,7 @@ fn void ui_compute_downward_dependent_sizes(UI_Widget* widget)
 
     for (Axis2 axis = 0; axis < AXIS2_COUNT; axis += 1)
     {
-        auto pref_size = widget->pref_size[axis];
+        let(pref_size, widget->pref_size[axis]);
         switch (pref_size.kind)
         {
             default: break; case UI_SIZE_COUNT: unreachable();
@@ -551,7 +560,11 @@ fn void ui_resolve_conflicts(UI_Widget* widget)
 {
     for (Axis2 axis = 0; axis < AXIS2_COUNT; axis += 1)
     {
-        auto available_space = widget->computed_size[axis];
+#if BB_HAS_NATIVE_FLOAT2
+        let(available_space, widget->computed_size[axis]);
+#else
+        let(available_space, widget->computed_size.v[axis]);
+#endif
         f32 taken_space = 0;
         f32 total_fixup_budget = 0;
 
@@ -563,18 +576,30 @@ fn void ui_resolve_conflicts(UI_Widget* widget)
                 {
                     if (axis == widget->child_layout_axis)
                     {
+#if BB_HAS_NATIVE_FLOAT2
                         taken_space += child_widget->computed_size[axis];
+#else
+                        taken_space += child_widget->computed_size.v[axis];
+#endif
                     }
                     else
                     {
+#if BB_HAS_NATIVE_FLOAT2
                         taken_space = MAX(taken_space, child_widget->computed_size[axis]);
+#else
+                        taken_space = MAX(taken_space, child_widget->computed_size.v[axis]);
+#endif
                     }
-                    auto fixup_budget_this_child = child_widget->computed_size[axis] * (1 - child_widget->pref_size[axis].strictness);
+#if BB_HAS_NATIVE_FLOAT2
+                    let(fixup_budget_this_child, child_widget->computed_size[axis] * (1 - child_widget->pref_size[axis].strictness));
+#else
+                    let(fixup_budget_this_child, child_widget->computed_size.v[axis] * (1 - child_widget->pref_size[axis].strictness));
+#endif
                     total_fixup_budget += fixup_budget_this_child;
                 }
             }
 
-            auto conflict = taken_space - available_space;
+            let(conflict, taken_space - available_space);
 
             if (conflict > 0 && total_fixup_budget > 0)
             {
@@ -582,7 +607,11 @@ fn void ui_resolve_conflicts(UI_Widget* widget)
                 {
                     if (!(child_widget->flags.v & (UI_WIDGET_FLAG_FLOATING_X << axis)))
                     {
-                        auto fixup_budget_this_child = child_widget->computed_size[axis] * (1 - child_widget->pref_size[axis].strictness);
+#if BB_HAS_NATIVE_FLOAT2
+                        let(fixup_budget_this_child, child_widget->computed_size[axis] * (1 - child_widget->pref_size[axis].strictness));
+#else
+                        let(fixup_budget_this_child, child_widget->computed_size.v[axis] * (1 - child_widget->pref_size[axis].strictness));
+#endif
                         f32 fixup_size_this_child = 0;
 
                         if (axis == widget->child_layout_axis)
@@ -591,11 +620,19 @@ fn void ui_resolve_conflicts(UI_Widget* widget)
                         }
                         else
                         {
+#if BB_HAS_NATIVE_FLOAT2
                             fixup_size_this_child = child_widget->computed_size[axis] - available_space;
+#else
+                            fixup_size_this_child = child_widget->computed_size.v[axis] - available_space;
+#endif
                         }
 
                         fixup_size_this_child = CLAMP(0, fixup_size_this_child, fixup_budget_this_child);
+#if BB_HAS_NATIVE_FLOAT2
                         child_widget->computed_size[axis] = floorf(child_widget->computed_size[axis] - fixup_size_this_child);
+#else
+                        child_widget->computed_size.v[axis] = floorf(child_widget->computed_size.v[axis] - fixup_size_this_child);
+#endif
                     }
                 }
             }
@@ -609,8 +646,13 @@ fn void ui_resolve_conflicts(UI_Widget* widget)
             {
                 if (!(child_widget->flags.v & (UI_WIDGET_FLAG_FLOATING_X << axis)))
                 {
+#if BB_HAS_NATIVE_FLOAT2
                     child_widget->computed_relative_position[axis] = p;
                     p += child_widget->computed_size[axis];
+#else
+                    child_widget->computed_relative_position.v[axis] = p;
+                    p += child_widget->computed_size.v[axis];
+#endif
                 }
             }
         }
@@ -620,22 +662,32 @@ fn void ui_resolve_conflicts(UI_Widget* widget)
             {
                 if (!(child_widget->flags.v & (UI_WIDGET_FLAG_FLOATING_X << axis)))
                 {
+#if BB_HAS_NATIVE_FLOAT2
                     child_widget->computed_relative_position[axis] = 0;
+#else
+                    child_widget->computed_relative_position.v[axis] = 0;
+#endif
                 }
             }
         }
 
         for (UI_Widget* child_widget = widget->first; child_widget; child_widget = child_widget->next)
         {
-            auto last_relative_rect = child_widget->relative_rect;
+            let(last_relative_rect, child_widget->relative_rect);
+#if BB_HAS_NATIVE_FLOAT2
             child_widget->relative_rect.p0[axis] = child_widget->computed_relative_position[axis];
             child_widget->relative_rect.p1[axis] = child_widget->relative_rect.p0[axis] + child_widget->computed_size[axis];
+#else
+            child_widget->relative_rect.p0.v[axis] = child_widget->computed_relative_position.v[axis];
+            child_widget->relative_rect.p1.v[axis] = child_widget->relative_rect.p0.v[axis] + child_widget->computed_size.v[axis];
+#endif
 
             float2 last_corner_01 = { last_relative_rect.x0, last_relative_rect.y1 };
             float2 last_corner_10 = { last_relative_rect.x1, last_relative_rect.y0 };
             float2 this_corner_01 = { child_widget->relative_rect.x0, child_widget->relative_rect.y1 };
             float2 this_corner_10 = { child_widget->relative_rect.x1, child_widget->relative_rect.y0 };
 
+#if BB_HAS_NATIVE_FLOAT2
             child_widget->relative_corner_delta[CORNER_00][axis] = child_widget->relative_rect.p0[axis] - last_relative_rect.p0[axis];
             child_widget->relative_corner_delta[CORNER_01][axis] = this_corner_01[axis] - last_corner_01[axis];
             child_widget->relative_corner_delta[CORNER_10][axis] = this_corner_10[axis] - last_corner_10[axis];
@@ -649,6 +701,21 @@ fn void ui_resolve_conflicts(UI_Widget* widget)
                 child_widget->rect.p0[axis] = floorf(child_widget->rect.p0[axis]);
                 child_widget->rect.p1[axis] = floorf(child_widget->rect.p1[axis]);
             }
+#else
+            child_widget->relative_corner_delta[CORNER_00].v[axis] = child_widget->relative_rect.p0.v[axis] - last_relative_rect.p0.v[axis];
+            child_widget->relative_corner_delta[CORNER_01].v[axis] = this_corner_01.v[axis] - last_corner_01.v[axis];
+            child_widget->relative_corner_delta[CORNER_10].v[axis] = this_corner_10.v[axis] - last_corner_10.v[axis];
+            child_widget->relative_corner_delta[CORNER_11].v[axis] = child_widget->relative_rect.p1.v[axis] - last_relative_rect.p1.v[axis];
+
+            child_widget->rect.p0.v[axis] = widget->rect.p0.v[axis] + child_widget->relative_rect.p0.v[axis] - widget->view_offset.v[axis];
+            child_widget->rect.p1.v[axis] = child_widget->rect.p0.v[axis] + child_widget->computed_size.v[axis];
+
+            if (!(child_widget->flags.v & (UI_WIDGET_FLAG_FLOATING_X << axis)))
+            {
+                child_widget->rect.p0.v[axis] = floorf(child_widget->rect.p0.v[axis]);
+                child_widget->rect.p1.v[axis] = floorf(child_widget->rect.p1.v[axis]);
+            }
+#endif
         }
 
         for (UI_Widget* child_widget = widget->first; child_widget; child_widget = child_widget->next)
@@ -663,7 +730,7 @@ fn void ui_build_end()
     // Clear release button presses
     for (u32 i = 0; i < array_length(ui_state->mouse_button_events); i += 1)
     {
-        auto* event = &ui_state->mouse_button_events[i];
+        let(event, &ui_state->mouse_button_events[i]);
         if (event->action == WINDOWING_EVENT_MOUSE_RELEASE)
         {
             event->action = WINDOWING_EVENT_MOUSE_RELAX;
@@ -691,7 +758,7 @@ STRUCT(WidgetIterator)
 fn WidgetIterator ui_widget_recurse_depth_first(UI_Widget* widget, u64 sibling_offset, u64 child_offset)
 {
     WidgetIterator it = {};
-    auto* child = member_from_offset(widget, UI_Widget*, child_offset);
+    let(child, member_from_offset(widget, UI_Widget*, child_offset));
     if (child)
     {
         it.next = child;
@@ -701,7 +768,7 @@ fn WidgetIterator ui_widget_recurse_depth_first(UI_Widget* widget, u64 sibling_o
     {
         for (UI_Widget* w = widget; w; w = w->parent)
         {
-            auto* sibling = member_from_offset(w, UI_Widget*, sibling_offset);
+            let(sibling, member_from_offset(w, UI_Widget*, sibling_offset));
             if (sibling)
             {
                 it.next = sibling;

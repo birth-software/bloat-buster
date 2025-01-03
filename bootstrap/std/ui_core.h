@@ -199,12 +199,12 @@ STRUCT(UI_Signal)
 
 fn u8* ui_pop_generic(VirtualBuffer(u8)* stack, u32 element_size)
 {
-    auto length = stack->length;
+    let(length, stack->length);
 
     assert(length > 0);
-    auto next_length = length - 1;
-    auto index = next_length;
-    auto* result = &stack->pointer[index * element_size];
+    let(next_length, length - 1);
+    let(index, next_length);
+    let(result, &stack->pointer[index * element_size]);
     stack->length = next_length;
 
     return result;

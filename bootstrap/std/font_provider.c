@@ -9,7 +9,7 @@
 
 fn TextureAtlas font_texture_atlas_create(Arena* arena, Renderer* renderer, TextureAtlasCreate create)
 {
-    auto font_file = file_read(arena, create.font_path);
+    let(font_file, file_read(arena, create.font_path));
     stbtt_fontinfo font_info;
     if (!stbtt_InitFont(&font_info, font_file.pointer, stbtt_GetFontOffsetForIndex(font_file.pointer, 0)))
     {
@@ -23,7 +23,7 @@ fn TextureAtlas font_texture_atlas_create(Arena* arena, Renderer* renderer, Text
     result.height = (u32)sqrtf((f32)(create.text_height * create.text_height * character_count));
     result.width = result.height;
     result.pointer = arena_allocate(arena, u32, result.width * result.height);
-    auto scale_factor = stbtt_ScaleForPixelHeight(&font_info, create.text_height);
+    let(scale_factor, stbtt_ScaleForPixelHeight(&font_info, create.text_height));
 
     int ascent;
     int descent;
@@ -40,25 +40,25 @@ fn TextureAtlas font_texture_atlas_create(Arena* arena, Renderer* renderer, Text
     u32 first_character = ' ';
     u32 last_character = '~';
 
-    for (auto i = first_character; i <= last_character; ++i)
+    for (let(i, first_character); i <= last_character; ++i)
     {
         u32 width;
         u32 height;
         int advance;
         int left_bearing;
 
-        auto ch = (u8)i;
-        auto* character = &result.characters[i];
+        let(ch, (u8)i);
+        let(character, &result.characters[i]);
         stbtt_GetCodepointHMetrics(&font_info, ch, &advance, &left_bearing);
 
         character->advance = (u32)roundf(advance * scale_factor);
         character->left_bearing = (u32)roundf(left_bearing * scale_factor);
 
         u8* bitmap = stbtt_GetCodepointBitmap(&font_info, 0.0f, scale_factor, ch, (int*)&width, (int*)&height, &character->x_offset, &character->y_offset);
-        auto* kerning_table = result.kerning_tables + i * character_count; 
+        let(kerning_table, result.kerning_tables + i * character_count); 
         for (u32 j = first_character; j <= last_character; j += 1)
         {
-            auto kerning_advance = stbtt_GetCodepointKernAdvance(&font_info, i, j);
+            let(kerning_advance, stbtt_GetCodepointKernAdvance(&font_info, i, j));
             kerning_table[j] = (s32)roundf(kerning_advance * scale_factor);
         }
 
@@ -78,16 +78,16 @@ fn TextureAtlas font_texture_atlas_create(Arena* arena, Renderer* renderer, Text
         character->width = width;
         character->height = height;
 
-        auto* source = bitmap;
-        auto* destination = result.pointer;
+        let(source, bitmap);
+        let(destination, result.pointer);
 
         for (u32 bitmap_y = 0; bitmap_y < height; bitmap_y += 1)
         {
             for (u32 bitmap_x = 0; bitmap_x < width; bitmap_x += 1)
             {
-                auto source_index = bitmap_y * width + bitmap_x;
-                auto destination_index = (bitmap_y + y) * result.width + (bitmap_x + x);
-                auto value = source[source_index];
+                let(source_index, bitmap_y * width + bitmap_x);
+                let(destination_index, (bitmap_y + y) * result.width + (bitmap_x + x));
+                let(value, source[source_index]);
                 destination[destination_index] = ((u32)value << 24) | 0xffffff;
             }
         }
@@ -110,15 +110,15 @@ fn TextureAtlas font_texture_atlas_create(Arena* arena, Renderer* renderer, Text
 
 fn uint2 texture_atlas_compute_string_rect(String string, const TextureAtlas* atlas)
 {
-    auto height = atlas->ascent - atlas->descent;
+    let(height, atlas->ascent - atlas->descent);
     u32 x_offset = 0;
     u32 y_offset = height;
 
     for (u64 i = 0; i < string.length; i += 1)
     {
-        auto ch = string.pointer[i];
-        auto* character = &atlas->characters[ch];
-        auto kerning = (atlas->kerning_tables + ch * 256)[string.pointer[i + 1]];
+        let(ch, string.pointer[i]);
+        let(character, &atlas->characters[ch]);
+        let(kerning, (atlas->kerning_tables + ch * 256)[string.pointer[i + 1]]);
         x_offset += character->advance + kerning;
     }
 

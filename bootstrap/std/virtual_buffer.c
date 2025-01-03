@@ -44,7 +44,7 @@ fn u8* vb_append_bytes(VirtualBuffer(u8*) vb, Slice(u8) bytes)
 {
     let_cast(u32, len, bytes.length);
     vb_generic_ensure_capacity(vb, sizeof(u8), len);
-    auto* pointer = vb_generic_add_assume_capacity(vb, sizeof(u8), len);
+    let(pointer, vb_generic_add_assume_capacity(vb, sizeof(u8), len));
     memcpy(pointer, bytes.pointer, len);
     return pointer;
 }
@@ -52,7 +52,7 @@ fn u8* vb_append_bytes(VirtualBuffer(u8*) vb, Slice(u8) bytes)
 fn void vb_copy_string(VirtualBuffer(u8)* buffer, String string)
 {
     let_cast(u32, length, string.length);
-    auto* pointer = vb_add(buffer, length);
+    let(pointer, vb_add(buffer, length));
     memcpy(pointer, string.pointer, length);
 }
 

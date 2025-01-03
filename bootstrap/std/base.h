@@ -134,6 +134,14 @@ fn void trap()
 }
 #endif
 
+#define let_pointer_cast(PointerChildType, var_name, value) PointerChildType* var_name = (PointerChildType*)(value)
+#define let(name, value) typeof(value) name = (value)
+#define let_cast_unchecked(name, T, value) T name = (T)(value)
+#define let_cast(T, name, value) T name = cast_to(T, value)
+#define let_va_arg(T, name, args) T name = va_arg(args, T)
+#define assign_cast(to, from) to = cast_to(typeof(to), from)
+#define transmute(D, source) *(D*)&source
+
 UNION(SafeInteger)
 {
     s64 signed_value;
@@ -143,11 +151,11 @@ UNION(SafeInteger)
 fn SafeInteger safe_integer_cast(SafeInteger value, u64 to_size, u64 to_signedness, u64 from_size, u64 from_signedness)
 {
     SafeInteger result;
-    auto shifter = to_size * 8 - to_signedness;
-    auto to_max = (u64)(1 << shifter) - 1;
+    let(shifter, to_size * 8 - to_signedness);
+    let(to_max, (u64)(1 << shifter) - 1);
     // A fix for 64-bit wrapping
     to_max = to_max == 0 ? UINT64_MAX : to_max;
-    auto to_signed_min = -((s64)1 << shifter);
+    let(to_signed_min, -((s64)1 << shifter));
     if (from_signedness == to_signedness)
     {
         if (to_size < from_size)
@@ -213,13 +221,6 @@ fn SafeInteger safe_integer_cast(SafeInteger value, u64 to_size, u64 to_signedne
 #define cast_to(T, value) (T)(value)
 #endif
 
-#define let_pointer_cast(PointerChildType, var_name, value) PointerChildType* var_name = (PointerChildType*)(value)
-#define let(name, value) typeof(value) name = (value)
-#define let_cast_unchecked(name, T, value) T name = (T)(value)
-#define let_cast(T, name, value) T name = cast_to(T, value)
-#define let_va_arg(T, name, args) T name = va_arg(args, T)
-#define assign_cast(to, from) to = cast_to(typeof(to), from)
-#define transmute(D, source) *(D*)&source
 
 typedef enum Corner
 {
@@ -300,6 +301,15 @@ for (typeof(bits) _bits_ = (bits), it = (start); _bits_; _bits_ >>= 1, ++it) if 
 FOR_N(_i, 0, ((set)->arr.capacity + 63) / 64) FOR_BIT(it, _i*64, (set)->arr.pointer[_i])
 
 
+#ifdef __TINYC__
+#define declare_vector_type #error
+#else
+#ifdef __clang__
+#define declare_vector_type(T, count, name) typedef T name __attribute__((ext_vector_type(count)))
+#else
+#define declare_vector_type(T, count, name) typedef T name __attribute__((vector_size(count)))
+#endif
+#endif
 #define array_length(arr) sizeof(arr) / sizeof((arr)[0])
 #define KB(n) ((n) * 1024)
 #define MB(n) ((n) * 1024 * 1024)
@@ -322,7 +332,8 @@ FOR_N(_i, 0, ((set)->arr.capacity + 63) / 64) FOR_BIT(it, _i*64, (set)->arr.poin
 #define size_until_end(T, field_name) (sizeof(T) - offsetof(T, field_name))
 #define SWAP(a, b) \
     do {\
-        auto temp = a;\
+        static_assert(typeof(a) == typeof(b));\
+        let(temp, a);\
         a = b;\
         b = temp;\
     } while (0)

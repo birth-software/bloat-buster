@@ -293,26 +293,26 @@ fn u8 is_power_of_two(u64 value)
 
 fn u8 first_bit_set_32(u32 value)
 {
-    auto result = (u8)__builtin_ffs((s32)value);
+    let(result, (u8)__builtin_ffs((s32)value));
     result -= result != 0;
     return result;
 }
 
 fn u64 first_bit_set_64(u64 value)
 {
-    auto result = (u8) __builtin_ffs((s64)value);
+    let(result, (u8) __builtin_ffs((s64)value));
     result -= result != 0;
     return result;
 }
 
 fn Hash32 hash32_fib_end(Hash32 hash)
 {
-    auto result = TRUNCATE(Hash32, ((hash + 1) * 11400714819323198485ull) >> 32);
+    let(result, TRUNCATE(Hash32, ((hash + 1) * 11400714819323198485ull) >> 32));
     return result;
 }
 
 fn Hash32 hash64_fib_end(Hash64 hash)
 {
-    auto result = TRUNCATE(Hash32, ((hash + 1) * 11400714819323198485ull) >> 32);
+    let(result, TRUNCATE(Hash32, ((hash + 1) * 11400714819323198485ull) >> 32));
     return result;
 }
