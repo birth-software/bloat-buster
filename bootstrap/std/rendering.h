@@ -199,7 +199,7 @@ declare_slice(LocalBufferCopyRegion);
 #include <std/font_provider.h>
 
 fn Renderer* rendering_initialize(Arena* arena);
-fn RenderWindow* renderer_window_initialize(Renderer* renderer, OSWindow window);
+fn RenderWindow* rendering_initialize_window(Renderer* renderer, WindowingInstance* window);
 fn PipelineIndex renderer_graphics_pipelines_create(Renderer* renderer, Arena* arena, GraphicsPipelinesCreate create_data);
 fn PipelineLayoutIndex renderer_pipeline_get_layout(PipelineIndex pipeline);
 fn void renderer_window_frame_begin(Renderer* renderer, RenderWindow* window);

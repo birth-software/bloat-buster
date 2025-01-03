@@ -22,9 +22,16 @@ vulkan_global_function_pointer(vkEnumeratePhysicalDevices);
 vulkan_global_function_pointer(vkGetPhysicalDeviceMemoryProperties);
 vulkan_global_function_pointer(vkGetPhysicalDeviceProperties);
 vulkan_global_function_pointer(vkGetPhysicalDeviceQueueFamilyProperties);
+vulkan_global_function_pointer(vkGetPhysicalDeviceSurfaceCapabilitiesKHR);
+vulkan_global_function_pointer(vkGetPhysicalDeviceSurfacePresentModesKHR);
 vulkan_global_function_pointer(vkCreateDevice);
+
+#if defined(VK_KHR_xcb_surface)
+vulkan_global_function_pointer(vkCreateXcbSurfaceKHR);
+#endif
 // INSTANCE FUNCTIONS END
 
+vulkan_global_function_pointer(vkCreateSwapchainKHR);
 vulkan_global_function_pointer(vkCmdCopyBuffer2);
 vulkan_global_function_pointer(vkAllocateMemory);
 vulkan_global_function_pointer(vkCreateBuffer);
@@ -56,10 +63,7 @@ vulkan_global_function_pointer(vkCreateGraphicsPipelines);
 vulkan_global_function_pointer(vkDestroyImageView);
 vulkan_global_function_pointer(vkDestroyImage);
 vulkan_global_function_pointer(vkFreeMemory);
-vulkan_global_function_pointer(vkGetPhysicalDeviceSurfaceCapabilitiesKHR);
 vulkan_global_function_pointer(vkDeviceWaitIdle);
-vulkan_global_function_pointer(vkGetPhysicalDeviceSurfacePresentModesKHR);
-vulkan_global_function_pointer(vkCreateSwapchainKHR);
 vulkan_global_function_pointer(vkDestroySwapchainKHR);
 vulkan_global_function_pointer(vkGetSwapchainImagesKHR);
 vulkan_global_function_pointer(vkCreateDescriptorPool);
@@ -271,6 +275,7 @@ global_variable Renderer renderer_memory;
 global_variable RenderWindow renderer_window_memory;
 global_variable VulkanTexture textures[MAX_TEXTURE_COUNT];
 global_variable u32 texture_count;
+global_variable VkInstance instance;
 
 fn String vulkan_result_to_string(VkResult result)
 {
@@ -898,7 +903,6 @@ fn Renderer* rendering_initialize(Arena* arena)
     // Proceed to load Vulkan instance-level functions
     vulkan_load_instance_function(0, vkEnumerateInstanceLayerProperties);
 
-    VkInstance instance;
     {
 #if BB_DEBUG
         auto debug_layer = strlit("VK_LAYER_KHRONOS_validation");
@@ -1004,6 +1008,11 @@ fn Renderer* rendering_initialize(Arena* arena)
     vulkan_load_instance_function(instance, vkGetPhysicalDeviceProperties);
     vulkan_load_instance_function(instance, vkGetPhysicalDeviceQueueFamilyProperties);
     vulkan_load_instance_function(instance, vkCreateDevice);
+    vulkan_load_instance_function(instance, vkGetPhysicalDeviceSurfaceCapabilitiesKHR);
+    vulkan_load_instance_function(instance, vkGetPhysicalDeviceSurfacePresentModesKHR);
+#ifdef VK_USE_PLATFORM_XCB_KHR
+    vulkan_load_instance_function(instance, vkCreateXcbSurfaceKHR);
+#endif
 
     {
         u32 physical_device_count;
@@ -1146,15 +1155,28 @@ fn Renderer* rendering_initialize(Arena* arena)
     }
 
     // Load device table
+    vulkan_load_device_function(renderer->device, vkCreateSwapchainKHR);
+    vulkan_load_device_function(renderer->device, vkDestroySwapchainKHR);
+    vulkan_load_device_function(renderer->device, vkGetSwapchainImagesKHR);
+    vulkan_load_device_function(renderer->device, vkGetImageMemoryRequirements);
+    vulkan_load_device_function(renderer->device, vkAllocateMemory);
+    vulkan_load_device_function(renderer->device, vkBindImageMemory);
+    vulkan_load_device_function(renderer->device, vkBindBufferMemory);
+    vulkan_load_device_function(renderer->device, vkBindBufferMemory);
     vulkan_load_device_function(renderer->device, vkGetDeviceQueue);
     vulkan_load_device_function(renderer->device, vkCreateCommandPool);
     vulkan_load_device_function(renderer->device, vkAllocateCommandBuffers);
     vulkan_load_device_function(renderer->device, vkCreateFence);
+    vulkan_load_device_function(renderer->device, vkCreateSemaphore);
     vulkan_load_device_function(renderer->device, vkCreateSampler);
     vulkan_load_device_function(renderer->device, vkCreateShaderModule);
     vulkan_load_device_function(renderer->device, vkCreateDescriptorSetLayout);
     vulkan_load_device_function(renderer->device, vkCreatePipelineLayout);
     vulkan_load_device_function(renderer->device, vkCreateGraphicsPipelines);
+    vulkan_load_device_function(renderer->device, vkCreateImage);
+    vulkan_load_device_function(renderer->device, vkCreateImageView);
+    vulkan_load_device_function(renderer->device, vkCreateDescriptorPool);
+    vulkan_load_device_function(renderer->device, vkAllocateDescriptorSets);
 
     vkGetDeviceQueue(renderer->device, graphics_queue_family_index, 0, &renderer->graphics_queue);
 
@@ -1673,30 +1695,38 @@ fn void swapchain_recreate(Renderer* renderer, RenderWindow* window)
     });
 }
 
-fn RenderWindow* renderer_window_initialize(Renderer* renderer, OSWindow window)
+fn RenderWindow* rendering_initialize_window(Renderer* renderer, WindowingInstance* window)
 {
-    RenderWindow* result = &renderer_window_memory;
+    // TODO: truly allocate
+    RenderWindow* render_window = &renderer_window_memory;
 
-#if WINDOWING_BACKEND_X11
+#if BB_WINDOWING_BACKEND_X11
+    VkXcbSurfaceCreateInfoKHR create_info = {
+        .sType = VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR,
+        .pNext = 0,
+        .flags = 0,
+        .connection = xcb_connection_get(),
+        .window = xcb_window_from_windowing_instance(window),
+    };
+    vkok(vkCreateXcbSurfaceKHR(instance, &create_info, renderer->allocator, &render_window->surface));
 #endif
-    // vkok((VkResult)window_create_surface(renderer->instance, window, renderer->allocator, (void**)&result->surface));
 
-    swapchain_recreate(renderer, result);
+    swapchain_recreate(renderer, render_window);
 
     for (u64 frame_index = 0; frame_index < MAX_FRAME_COUNT; frame_index += 1)
     {
         for (u64 pipeline_index = 0; pipeline_index < BB_PIPELINE_COUNT; pipeline_index += 1)
         {
-            result->frames[frame_index].pipeline_instantiations[pipeline_index].vertex_buffer.gpu.type = BUFFER_TYPE_VERTEX;
-            result->frames[frame_index].pipeline_instantiations[pipeline_index].index_buffer.gpu.type = BUFFER_TYPE_INDEX;
-            result->frames[frame_index].pipeline_instantiations[pipeline_index].transient_buffer.type = BUFFER_TYPE_STAGING;
+            render_window->frames[frame_index].pipeline_instantiations[pipeline_index].vertex_buffer.gpu.type = BUFFER_TYPE_VERTEX;
+            render_window->frames[frame_index].pipeline_instantiations[pipeline_index].index_buffer.gpu.type = BUFFER_TYPE_INDEX;
+            render_window->frames[frame_index].pipeline_instantiations[pipeline_index].transient_buffer.type = BUFFER_TYPE_STAGING;
         }
     }
 
     for (u64 pipeline_index = 0; pipeline_index < BB_PIPELINE_COUNT; pipeline_index += 1)
     {
         auto* pipeline_descriptor = &renderer->pipelines[pipeline_index];
-        auto* pipeline_instantiation = &result->pipeline_instantiations[pipeline_index];
+        auto* pipeline_instantiation = &render_window->pipeline_instantiations[pipeline_index];
 
         u16 descriptor_type_counter[DESCRIPTOR_TYPE_COUNT] = {};
 
@@ -1773,7 +1803,7 @@ fn RenderWindow* renderer_window_initialize(Renderer* renderer, OSWindow window)
             .flags = 0,
         };
 
-        WindowFrame* frame = &result->frames[i];
+        WindowFrame* frame = &render_window->frames[i];
         vkok(vkCreateCommandPool(renderer->device, &command_pool_create_info, renderer->allocator, &frame->command_pool));
 
         VkCommandBufferAllocateInfo command_buffer_allocate_info = {
@@ -1790,7 +1820,7 @@ fn RenderWindow* renderer_window_initialize(Renderer* renderer, OSWindow window)
         frame->bound_pipeline = BB_PIPELINE_COUNT;
     }
 
-    return result;
+    return render_window;
 }
 
 fn WindowFrame* window_frame(RenderWindow* window)

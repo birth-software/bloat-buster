@@ -1,5 +1,17 @@
 #pragma once
 
+#if BB_WINDOWING_BACKEND_X11
+#define VK_USE_PLATFORM_XCB_KHR
+#endif
+
+#if BB_WINDOWING_BACKEND_COCOA
+#define VK_USE_PLATFORM_METAL_EXT
+#endif
+
+#if BB_WINDOWING_BACKEND_WIN32
+#define VK_USE_PLATFORM_WIN32_KHR
+#endif
+
 // Code from Volk
 #ifndef VK_NO_PROTOTYPES
 #define VK_NO_PROTOTYPES

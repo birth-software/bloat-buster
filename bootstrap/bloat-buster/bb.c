@@ -19,7 +19,8 @@ int main()
         return 1;
     }
 
-    if (!rendering_initialize(arena))
+    Renderer* renderer = rendering_initialize(arena);
+    if (!renderer)
     {
         return 1;
     }
@@ -28,7 +29,9 @@ int main()
         .name = strlit("Bloat Buster"),
         .size = { .width = 1600, .height = 900 },
     };
-    windowing_instantiate(window_create_options);
+    WindowingInstance* window = windowing_instantiate(window_create_options);
+
+    RenderWindow* render_window = rendering_initialize_window(renderer, window);
 
     while (1)
     {

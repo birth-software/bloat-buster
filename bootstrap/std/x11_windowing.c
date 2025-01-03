@@ -8,6 +8,16 @@ typedef enum WindowingEvent : u32
     WINDOWING_EVENT_COUNT,
 } WindowingEvent;
 
+fn xcb_connection_t* xcb_connection_get()
+{
+    return windowing_connection.handle;
+}
+
+fn xcb_window_t xcb_window_from_windowing_instance(WindowingInstance* instance)
+{
+    return instance->handle;
+}
+
 fn void x11_intern_atoms(u32 atom_count, String* names, xcb_intern_atom_cookie_t* cookies, xcb_intern_atom_reply_t** replies)
 {
     xcb_connection_t* connection = windowing_connection.handle;
