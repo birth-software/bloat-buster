@@ -441,6 +441,8 @@ fn void compile_program(Arena* arena, CompileOptions options)
         case RENDERING_BACKEND_COUNT: unreachable();
     }
 
+    add_arg("-lm");
+
     add_arg(0);
     CStringSlice arguments = { .pointer = args, .length = arg_i };
     RunCommandOptions run_options = {

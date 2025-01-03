@@ -438,3 +438,7 @@
 // {
 //     return glfwCreateWindowSurface(instance, window, allocator, (VkSurfaceKHR*)surface);
 // }
+fn OSWindowSize windowing_get_instance_framebuffer_size(OSWindow window)
+{
+    todo();
+}

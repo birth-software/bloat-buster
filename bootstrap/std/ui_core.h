@@ -1,10 +1,5 @@
 #pragma once
 
-#include <std/base.h>
-#include <std/window.h>
-#include <std/os.h>
-#include <std/render.h>
-
 typedef enum UI_SizeKind : u8
 {
     UI_SIZE_PIXEL_COUNT,
@@ -190,14 +185,17 @@ STRUCT(UI_Signal)
     };
 };
 
-extern UI_State* ui_state;
-
 #define ui_stack_autopop_set(field_name, value) ui_state->stack_autopops.field_name = (value)
 #define ui_stack_push_impl(field_name, value, auto_pop_value) do \
 {\
     *vb_add(&ui_state->stacks.field_name, 1) = (value);\
     ui_stack_autopop_set(field_name, auto_pop_value);\
 } while (0)
+
+#define ui_push(field_name, value) ui_stack_push_impl(field_name, value, 0)
+#define ui_push_next_only(field_name, value) ui_stack_push_impl(field_name, value, 1)
+#define ui_pop(field_name) (typeof(ui_state->stacks.field_name.pointer)) ui_pop_generic((VirtualBuffer(u8)*)&ui_state->stacks.field_name, sizeof(*ui_state->stacks.field_name.pointer))
+#define ui_top(field_name) (ui_state->stacks.field_name.length ? ui_state->stacks.field_name.pointer[ui_state->stacks.field_name.length - 1] : ui_state->stack_nulls.field_name)
 
 fn u8* ui_pop_generic(VirtualBuffer(u8)* stack, u32 element_size)
 {
@@ -212,21 +210,16 @@ fn u8* ui_pop_generic(VirtualBuffer(u8)* stack, u32 element_size)
     return result;
 }
 
-#define ui_push(field_name, value) ui_stack_push_impl(field_name, value, 0)
-#define ui_push_next_only(field_name, value) ui_stack_push_impl(field_name, value, 1)
-#define ui_pop(field_name) (typeof(ui_state->stacks.field_name.pointer)) ui_pop_generic((VirtualBuffer(u8)*)&ui_state->stacks.field_name, sizeof(*ui_state->stacks.field_name.pointer))
-#define ui_top(field_name) (ui_state->stacks.field_name.length ? ui_state->stacks.field_name.pointer[ui_state->stacks.field_name.length - 1] : ui_state->stack_nulls.field_name)
+fn UI_State* ui_state_allocate(Renderer* renderer, RenderWindow* window);
+fn void ui_state_select(UI_State* state);
+fn u8 ui_build_begin(OSWindow window, f64 frame_time, OSEventQueue* event_queue);
+fn void ui_build_end();
+fn void ui_draw();
+fn UI_Signal ui_signal_from_widget(UI_Widget* widget);
+fn UI_State* ui_state_get();
 
-EXPORT UI_State* ui_state_allocate(Renderer* renderer, RenderWindow* window);
-EXPORT void ui_state_select(UI_State* state);
-EXPORT u8 ui_build_begin(OSWindow window, f64 frame_time, OSEventQueue* event_queue);
-EXPORT void ui_build_end();
-EXPORT void ui_draw();
-EXPORT UI_Signal ui_signal_from_widget(UI_Widget* widget);
-EXPORT UI_State* ui_state_get();
-
-EXPORT UI_Widget* ui_widget_make(UI_WidgetFlags flags, String string);
-EXPORT UI_Widget* ui_widget_make_format(UI_WidgetFlags flags, const char* format, ...);
-EXPORT UI_Size ui_pixels(u32 width, f32 strictness);
-EXPORT UI_Size ui_percentage(f32 percentage, f32 strictness);
-EXPORT UI_Size ui_em(f32 value, f32 strictness);
+fn UI_Widget* ui_widget_make(UI_WidgetFlags flags, String string);
+fn UI_Widget* ui_widget_make_format(UI_WidgetFlags flags, const char* format, ...);
+fn UI_Size ui_pixels(u32 width, f32 strictness);
+fn UI_Size ui_percentage(f32 percentage, f32 strictness);
+fn UI_Size ui_em(f32 value, f32 strictness);

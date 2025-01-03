@@ -1159,6 +1159,9 @@ fn Renderer* rendering_initialize(Arena* arena)
     vulkan_load_device_function(renderer->device, vkDestroySwapchainKHR);
     vulkan_load_device_function(renderer->device, vkGetSwapchainImagesKHR);
     vulkan_load_device_function(renderer->device, vkGetImageMemoryRequirements);
+    vulkan_load_device_function(renderer->device, vkGetBufferMemoryRequirements);
+    vulkan_load_device_function(renderer->device, vkMapMemory);
+    vulkan_load_device_function(renderer->device, vkUnmapMemory);
     vulkan_load_device_function(renderer->device, vkAllocateMemory);
     vulkan_load_device_function(renderer->device, vkBindImageMemory);
     vulkan_load_device_function(renderer->device, vkBindBufferMemory);
@@ -1175,8 +1178,18 @@ fn Renderer* rendering_initialize(Arena* arena)
     vulkan_load_device_function(renderer->device, vkCreateGraphicsPipelines);
     vulkan_load_device_function(renderer->device, vkCreateImage);
     vulkan_load_device_function(renderer->device, vkCreateImageView);
+    vulkan_load_device_function(renderer->device, vkCreateBuffer);
     vulkan_load_device_function(renderer->device, vkCreateDescriptorPool);
     vulkan_load_device_function(renderer->device, vkAllocateDescriptorSets);
+    vulkan_load_device_function(renderer->device, vkResetFences);
+    vulkan_load_device_function(renderer->device, vkResetCommandBuffer);
+    vulkan_load_device_function(renderer->device, vkBeginCommandBuffer);
+    vulkan_load_device_function(renderer->device, vkCmdPipelineBarrier2);
+    vulkan_load_device_function(renderer->device, vkCmdCopyBufferToImage);
+    vulkan_load_device_function(renderer->device, vkEndCommandBuffer);
+    vulkan_load_device_function(renderer->device, vkQueueSubmit2);
+    vulkan_load_device_function(renderer->device, vkWaitForFences);
+    vulkan_load_device_function(renderer->device, vkUpdateDescriptorSets);
 
     vkGetDeviceQueue(renderer->device, graphics_queue_family_index, 0, &renderer->graphics_queue);
 

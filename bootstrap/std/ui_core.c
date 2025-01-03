@@ -13,11 +13,9 @@
 // https://www.rfleury.com/p/ui-bonus-1-simple-single-line-text
 // https://www.rfleury.com/p/codebase-walkthrough-multi-window
 
-#include <std/ui_core.h>
-#include <std/format.h>
-#include <std/string.h>
+#pragma once
 
-UI_State* ui_state = 0;
+global_variable UI_State* ui_state = 0;
 
 fn void ui_autopop(UI_State* state)
 {
@@ -43,12 +41,12 @@ fn void ui_autopop(UI_State* state)
     }
 }
 
-void ui_state_select(UI_State* state)
+fn void ui_state_select(UI_State* state)
 {
     ui_state = state;
 }
 
-UI_State* ui_state_get()
+fn UI_State* ui_state_get()
 {
     return ui_state;
 }
@@ -65,9 +63,9 @@ fn UI_Key ui_key_null()
     return key;
 }
 
-UI_State* ui_state_allocate(Renderer* renderer, RenderWindow* window)
+fn UI_State* ui_state_allocate(Renderer* renderer, RenderWindow* window)
 {
-    Arena* arena = arena_init(GB(8), MB(2), MB(2));
+    Arena* arena = arena_initialize(GB(8), MB(2), MB(2));
     UI_State* state = arena_allocate(arena, UI_State, 1);
     state->renderer = renderer;
     state->render_window = window;
@@ -77,7 +75,7 @@ UI_State* ui_state_allocate(Renderer* renderer, RenderWindow* window)
     
     for (u64 i = 0; i < array_length(state->build_arenas); i += 1)
     {
-        state->build_arenas[i] = arena_init(GB(8), MB(2), MB(2));
+        state->build_arenas[i] = arena_initialize(GB(8), MB(2), MB(2));
     }
 
     state->stack_nulls = (UI_StateStackNulls){
@@ -105,8 +103,8 @@ fn u64 ui_widget_index_from_key(UI_Key key)
     return key.value & (length - 1);
 }
 
-auto text_end_delimiter = strlit("##");
-auto hash_start_delimiter = strlit("###");
+global_variable auto text_end_delimiter = strlit("##");
+global_variable auto hash_start_delimiter = strlit("###");
 
 fn String ui_text_from_key_string(String string)
 {
@@ -164,7 +162,7 @@ fn u8 ui_key_equal(UI_Key a, UI_Key b)
     return a.value == b.value;
 }
 
-UI_Widget* ui_widget_from_key(UI_Key key)
+fn UI_Widget* ui_widget_from_key(UI_Key key)
 {
     UI_Widget* result = 0;
 
@@ -184,7 +182,7 @@ UI_Widget* ui_widget_from_key(UI_Key key)
     return result;
 }
 
-UI_Widget* ui_widget_make_from_key(UI_WidgetFlags flags, UI_Key key)
+fn UI_Widget* ui_widget_make_from_key(UI_WidgetFlags flags, UI_Key key)
 {
     auto* widget = ui_widget_from_key(key);
     static auto count = 0;
@@ -266,7 +264,7 @@ UI_Widget* ui_widget_make_from_key(UI_WidgetFlags flags, UI_Key key)
     return widget;
 }
 
-UI_Widget* ui_widget_make(UI_WidgetFlags flags, String string)
+fn UI_Widget* ui_widget_make(UI_WidgetFlags flags, String string)
 {
     // TODO:
     auto seed = ui_key_null();
@@ -284,7 +282,7 @@ UI_Widget* ui_widget_make(UI_WidgetFlags flags, String string)
     return widget;
 }
 
-UI_Widget* ui_widget_make_format(UI_WidgetFlags flags, const char* format, ...)
+fn UI_Widget* ui_widget_make_format(UI_WidgetFlags flags, const char* format, ...)
 {
     va_list args;
     u8 buffer[4096];
@@ -296,7 +294,7 @@ UI_Widget* ui_widget_make_format(UI_WidgetFlags flags, const char* format, ...)
     return result;
 }
 
-UI_Signal ui_signal_from_widget(UI_Widget* widget)
+fn UI_Signal ui_signal_from_widget(UI_Widget* widget)
 {
     auto rect = widget->rect;
     auto mouse_position = ui_state->mouse_position;
@@ -320,7 +318,7 @@ fn void ui_stack_reset(UI_State* state)
     }
 }
 
-UI_Size ui_pixels(u32 width, f32 strictness)
+fn UI_Size ui_pixels(u32 width, f32 strictness)
 {
     return (UI_Size) {
         .kind = UI_SIZE_PIXEL_COUNT,
@@ -329,7 +327,7 @@ UI_Size ui_pixels(u32 width, f32 strictness)
     };
 }
 
-UI_Size ui_percentage(f32 percentage, f32 strictness)
+fn UI_Size ui_percentage(f32 percentage, f32 strictness)
 {
     return (UI_Size) {
         .kind = UI_SIZE_PERCENTAGE,
@@ -338,7 +336,7 @@ UI_Size ui_percentage(f32 percentage, f32 strictness)
     };
 }
 
-UI_Size ui_em(f32 value, f32 strictness)
+fn UI_Size ui_em(f32 value, f32 strictness)
 {
     auto font_size = ui_top(font_size);
     assert(font_size);
@@ -349,7 +347,7 @@ UI_Size ui_em(f32 value, f32 strictness)
     };
 }
 
-u8 ui_build_begin(OSWindow os_window, f64 frame_time, OSEventQueue* event_queue)
+fn u8 ui_build_begin(OSWindow os_window, f64 frame_time, OSEventQueue* event_queue)
 {
     ui_state->build_count += 1;
     auto* build_arena = ui_build_arena();
@@ -457,7 +455,7 @@ u8 ui_build_begin(OSWindow os_window, f64 frame_time, OSEventQueue* event_queue)
             }
         }
 
-        auto framebuffer_size = os_window_framebuffer_size_get(os_window);
+        auto framebuffer_size = windowing_get_instance_framebuffer_size(os_window);
         ui_push_next_only(pref_width, ui_pixels(framebuffer_size.width, 1.0f));
         ui_push_next_only(pref_height, ui_pixels(framebuffer_size.height, 1.0f));
         ui_push_next_only(child_layout_axis, AXIS2_Y);
@@ -660,7 +658,7 @@ fn void ui_resolve_conflicts(UI_Widget* widget)
     }
 }
 
-void ui_build_end()
+fn void ui_build_end()
 {
     // Clear release button presses
     for (u32 i = 0; i < array_length(ui_state->mouse_button_events); i += 1)
@@ -690,7 +688,7 @@ STRUCT(WidgetIterator)
 #define ui_widget_recurse_depth_first_preorder(widget) ui_widget_recurse_depth_first((widget), offset_of(UI_Widget, next), offset_of(UI_Widget, first))
 #define ui_widget_recurse_depth_first_postorder(widget) ui_widget_recurse_depth_first((widget), offset_of(UI_Widget, previous), offset_of(UI_Widget, last))
 
-WidgetIterator ui_widget_recurse_depth_first(UI_Widget* widget, u64 sibling_offset, u64 child_offset)
+fn WidgetIterator ui_widget_recurse_depth_first(UI_Widget* widget, u64 sibling_offset, u64 child_offset)
 {
     WidgetIterator it = {};
     auto* child = member_from_offset(widget, UI_Widget*, child_offset);
@@ -717,7 +715,7 @@ WidgetIterator ui_widget_recurse_depth_first(UI_Widget* widget, u64 sibling_offs
     return it;
 }
 
-void ui_draw()
+fn void ui_draw()
 {
     UI_Widget* root = ui_state->root;
 
@@ -743,4 +741,3 @@ void ui_draw()
         widget = ui_widget_recurse_depth_first_postorder(widget).next;
     }
 }
-

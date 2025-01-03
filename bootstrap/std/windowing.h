@@ -204,7 +204,7 @@ fn OSWindow os_window_create(OSWindowCreate create);
 fn u8 os_window_should_close(OSWindow window);
 fn void os_poll_events(OSEventQueue* event_queue);
 fn OSCursorPosition os_window_cursor_position_get(OSWindow window);
-fn OSWindowSize os_window_framebuffer_size_get(OSWindow window);
+fn OSWindowSize windowing_get_instance_framebuffer_size(OSWindow window);
 
 fn u8 os_event_queue_get_window_focus(OSEventQueue* queue, u32 index);
 
