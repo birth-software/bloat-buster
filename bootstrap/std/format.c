@@ -73,7 +73,7 @@ STRUCT(SmallIntResult)
 {
     u64 mantissa;
     s32 exponent;
-    u8 is_small_int;
+    u32 is_small_int:1;
 };
 
 #define double_mantissa_bits 52
@@ -301,7 +301,7 @@ fn u64 mul_shift_64(const u64 m, const u64* const mul, const s32 j)
 {
     const u128 b0 = u128_u64_mul(u128_from_u64(m), mul[0]);
     const u128 b2 = u128_u64_mul(u128_from_u64(m), mul[1]);
-    return u64_from_u128(u128_shift_right(u128_u64_add(b2, u128_shift_right_by_64(b0)),  j - 64));
+    return u64_from_u128(u128_shift_right(u128_u64_add(b2, u128_shift_right_by_64(b0)), cast_to(u16, j - 64)));
     // return (u64) (((b0 >> 64) + b2) >> (j - 64));
 }
 
@@ -555,9 +555,10 @@ STRUCT(Double)
 {
     u64 mantissa;
     s32 exponent;
+    u32 reserved;
 };
 
-may_be_unused fn Double double_transform(u64 ieee_mantissa, u32 ieee_exponent)
+fn Double double_transform(u64 ieee_mantissa, u32 ieee_exponent)
 {
     u64 m2;
     s32 e2;
@@ -651,7 +652,7 @@ may_be_unused fn Double double_transform(u64 ieee_mantissa, u32 ieee_exponent)
             }
 
             u32 vm_mod10 = ((u32)vm) - 10 * ((u32)vm_div10);
-            u32 vr_div10 = div10(vr);
+            u64 vr_div10 = div10(vr);
             u32 vr_mod10 = ((u32)vr) - 10 * ((u32)vr_div10);
             vm_is_trailing_zeroes &= vm_mod10 == 0;
             vr_is_trailing_zeroes &= last_removed_digit == 0;
@@ -740,7 +741,7 @@ may_be_unused fn Double double_transform(u64 ieee_mantissa, u32 ieee_exponent)
     };
 }
 
-may_be_unused fn SmallIntResult small_int(u64 ieee_mantissa, u32 ieee_exponent)
+fn SmallIntResult small_int(u64 ieee_mantissa, u32 ieee_exponent)
 {
     SmallIntResult result = {};
     let(m2, ((u64)1 << double_mantissa_bits) | ieee_mantissa);
@@ -798,10 +799,11 @@ fn u32 decimalLength17(const u64 v) {
 // A floating decimal representing m * 10^e.
 STRUCT(floating_decimal_64)
 {
-  uint64_t mantissa;
+  u64 mantissa;
   // Decimal exponent's range is -324 to 308
   // inclusive, and can fit in a short if needed.
-  int32_t exponent;
+  s32 exponent;
+  u32 reserved;
 };
 
 fn u8* digits2(u64 value)
@@ -1065,6 +1067,14 @@ fn u64 format_float(String buffer, f64 value_double)
     return buffer_i;
 }
 
+typedef enum IntegerFormat
+{
+    INTEGER_FORMAT_HEXADECIMAL,
+    INTEGER_FORMAT_DECIMAL,
+    INTEGER_FORMAT_OCTAL,
+    INTEGER_FORMAT_BINARY,
+} IntegerFormat;
+
 fn String format_string_va(String buffer, const char* format, va_list args)
 {
     u8* it = (u8*)format;
@@ -1171,15 +1181,7 @@ fn String format_string_va(String buffer, const char* format, va_list args)
                                 u8* bit_count_end = it;
                                 u64 bit_count = parse_decimal(slice_from_pointer_range(u8, (u8*)bit_count_start, (u8*)bit_count_end));
 
-                                typedef enum IntegerFormat
-                                {
-                                    INTEGER_FORMAT_HEXADECIMAL,
-                                    INTEGER_FORMAT_DECIMAL,
-                                    INTEGER_FORMAT_OCTAL,
-                                    INTEGER_FORMAT_BINARY,
-                                } IntegerFormat;
-
-                                IntegerFormat format = INTEGER_FORMAT_DECIMAL;
+                                IntegerFormat integer_format = INTEGER_FORMAT_DECIMAL;
 
                                 if (*it == ':')
                                 {
@@ -1187,16 +1189,16 @@ fn String format_string_va(String buffer, const char* format, va_list args)
                                     switch (*it)
                                     {
                                         case 'x':
-                                            format = INTEGER_FORMAT_HEXADECIMAL;
+                                            integer_format = INTEGER_FORMAT_HEXADECIMAL;
                                             break;
                                         case 'd':
-                                            format = INTEGER_FORMAT_DECIMAL;
+                                            integer_format = INTEGER_FORMAT_DECIMAL;
                                             break;
                                         case 'o':
-                                            format = INTEGER_FORMAT_OCTAL;
+                                            integer_format = INTEGER_FORMAT_OCTAL;
                                             break;
                                         case 'b':
-                                            format = INTEGER_FORMAT_BINARY;
+                                            integer_format = INTEGER_FORMAT_BINARY;
                                             break;
                                         default:
                                             unreachable();
@@ -1222,7 +1224,7 @@ fn String format_string_va(String buffer, const char* format, va_list args)
 
                                 String buffer_slice = s_get_slice(u8, buffer, buffer_i, buffer.length);
 
-                                switch (format)
+                                switch (integer_format)
                                 {
                                     case INTEGER_FORMAT_HEXADECIMAL:
                                         {
@@ -1287,7 +1289,7 @@ fn String format_string_va(String buffer, const char* format, va_list args)
                                 INTEGER_FORMAT_BINARY,
                             } IntegerFormat;
 
-                            IntegerFormat format = INTEGER_FORMAT_DECIMAL;
+                            IntegerFormat integer_format = INTEGER_FORMAT_DECIMAL;
 
                             if (*it == ':')
                             {
@@ -1295,16 +1297,16 @@ fn String format_string_va(String buffer, const char* format, va_list args)
                                 switch (*it)
                                 {
                                     case 'x':
-                                        format = INTEGER_FORMAT_HEXADECIMAL;
+                                        integer_format = INTEGER_FORMAT_HEXADECIMAL;
                                         break;
                                     case 'd':
-                                        format = INTEGER_FORMAT_DECIMAL;
+                                        integer_format = INTEGER_FORMAT_DECIMAL;
                                         break;
                                     case 'o':
-                                        format = INTEGER_FORMAT_OCTAL;
+                                        integer_format = INTEGER_FORMAT_OCTAL;
                                         break;
                                     case 'b':
-                                        format = INTEGER_FORMAT_BINARY;
+                                        integer_format = INTEGER_FORMAT_BINARY;
                                         break;
                                     default:
                                         unreachable();
@@ -1330,7 +1332,7 @@ fn String format_string_va(String buffer, const char* format, va_list args)
 
                             let(buffer_slice, s_get_slice(u8, buffer, buffer_i, buffer.length));
 
-                            switch (format)
+                            switch (integer_format)
                             {
                                 case INTEGER_FORMAT_HEXADECIMAL:
                                     {

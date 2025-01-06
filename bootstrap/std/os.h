@@ -1,7 +1,5 @@
 #pragma once
 
-#include <stdarg.h>
-#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -85,20 +83,21 @@ STRUCT(FileWriteOptions)
 {
     String path;
     String content;
-    u8 executable;
+    u64 executable:1;
 };
 
-#if __APPLE__
-#define MY_PAGE_SIZE KB(16)
-#else
+#ifndef __APPLE__
 #define MY_PAGE_SIZE KB(4)
+#else
+#define MY_PAGE_SIZE KB(16)
 #endif
-const global_variable u64 page_size = MY_PAGE_SIZE;
+global_variable const u64 page_size = MY_PAGE_SIZE;
 
 global_variable u64 minimum_granularity = MY_PAGE_SIZE;
 // global_variable u64 middle_granularity = MB(2);
 global_variable u64 default_size = GB(4);
 
+fn void vprint(const char* format, va_list args);
 fn void print(const char* format, ...);
 fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunCommandOptions options);
 fn String file_read(Arena* arena, String path);

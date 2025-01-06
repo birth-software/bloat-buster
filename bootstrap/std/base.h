@@ -1,5 +1,9 @@
 #pragma once 
 
+#if _WIN32
+#define _CRT_SECURE_NO_WARNINGS
+#endif
+
 #define LINK_LIBC 1
 
 #ifdef NDEBUG
@@ -20,6 +24,7 @@
 #endif
 #include <stdint.h>
 #include <stddef.h>
+#include <stdarg.h>
 
 #define BB_SAFETY BB_DEBUG
 
@@ -31,6 +36,33 @@
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 #define CLAMP(a, x, b) (((a)>(x))?(a):((b)<(x))?(b):(x))
+
+#ifdef __TINYC__
+#define declare_vector_type #error
+#else
+#ifdef __clang__
+#define declare_vector_type(T, count, name) typedef T name __attribute__((ext_vector_type(count)))
+#else
+#define declare_vector_type(T, count, name) typedef T name __attribute__((vector_size(count)))
+#endif
+#endif
+#define array_length(arr) sizeof(arr) / sizeof((arr)[0])
+#define KB(n) ((n) * 1024)
+#define MB(n) ((n) * 1024 * 1024)
+#define GB(n) ((u64)(n) * 1024 * 1024 * 1024)
+#define TB(n) ((u64)(n) * 1024 * 1024 * 1024 * 1024)
+#define unused(x) (void)(x)
+#if _MSC_VER
+#define BB_NORETURN __declspec(noreturn)
+#define BB_COLD __declspec(noinline)
+#elif defined(__TINYC__)
+#define BB_NORETURN __attribute__((noreturn))
+#define BB_COLD __attribute__((cold))
+#else
+#define BB_NORETURN [[noreturn]]
+#define BB_COLD [[gnu::cold]]
+#endif
+#define TRUNCATE(Destination, source) (Destination)(source)
 
 #if _MSC_VER
 #define ENUM_START(EnumName, T) typedef T EnumName; typedef enum EnumName ## Flags
@@ -76,7 +108,10 @@ typedef __int128_t s128;
 typedef size_t usize;
 
 #if !defined(__TINYC__) && !defined(_MSC_VER)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
 typedef _Float16 f16;
+#pragma GCC diagnostic pop
 #endif
 typedef float f32;
 typedef double f64;
@@ -84,8 +119,34 @@ typedef double f64;
 typedef u32 Hash32;
 typedef u64 Hash64;
 
+#define Slice(T) Slice_ ## T
+#define SliceP(T) SliceP_ ## T
+#define declare_slice_ex(T, StructName) STRUCT(StructName) \
+{\
+    T* pointer;\
+    u64 length;\
+}
+
+#define declare_slice(T) declare_slice_ex(T, Slice(T))
+#define declare_slice_p(T) declare_slice_ex(T*, SliceP(T))
+
+declare_slice(u8);
+declare_slice(u16);
+declare_slice(u32);
+declare_slice(u64);
+declare_slice(s8);
+declare_slice(s16);
+declare_slice(s32);
+declare_slice(s64);
+
+declare_slice_p(char);
+declare_slice_p(void);
+
+typedef Slice(u8) String;
+declare_slice(String);
+
 #if BB_DEBUG
-#define assert(x) if (unlikely(!(x))) { my_panic("Assert failed: \"" # x "\" at {cstr}:{u32}\n", __FILE__, __LINE__); }
+#define assert(x) (unlikely(!(x)) ? panic("Assert failed: \"" # x "\" at {cstr}:{u32}\n", __FILE__, __LINE__) : unused(0))
 #else
 #define assert(x) unused(likely(x))
 #endif
@@ -101,18 +162,15 @@ typedef u64 Hash64;
 #undef unreachable
 #endif
 #if BB_DEBUG
-#define unreachable() my_panic("Unreachable triggered\n", __FILE__, __LINE__)
+#define unreachable() panic("Unreachable triggered\n", __FILE__, __LINE__)
 #else
 #define unreachable() unreachable_raw()
 #endif
-#ifdef __TINYC__
 #define fix_unreachable() unreachable_raw()
-#else
-#define fix_unreachable()
-#endif
 
-
+#ifndef static_assert
 #define static_assert(x) _Static_assert((x), "Static assert failed!")
+#endif
 #define alignof(x) _Alignof(x)
 #else
 #define restrict __restrict
@@ -135,38 +193,30 @@ typedef u64 Hash64;
 #define likely(x) expect(x, 1)
 #define unlikely(x) expect(x, 0)
 #define breakpoint() __builtin_debugtrap()
-#define failed_execution() my_panic("Failed execution at {cstr}:{u32}\n", __FILE__, __LINE__)
-#define todo() my_panic("TODO at {cstr}:{u32}\n", __FILE__, __LINE__)
+#define failed_execution() panic("Failed execution at {cstr}:{u32}\n", __FILE__, __LINE__)
+#define todo() panic("TODO at {cstr}:{u32}\n", __FILE__, __LINE__); fix_unreachable()
 
 fn void print(const char* format, ...);
-fn u8 os_is_being_debugged();
-fn void os_exit(u32 exit_code);
-
-#define my_panic(...) do \
-{\
-    print(__VA_ARGS__);\
-    if (os_is_being_debugged())\
-    {\
-        trap();\
-        fix_unreachable();\
-    }\
-    else\
-    {\
-        os_exit(1);\
-        fix_unreachable();\
-    }\
-} while (0)
+BB_NORETURN BB_COLD fn void os_exit(u32 exit_code);
 
 #if _MSC_VER
 #define trap() __fastfail(1)
 #elif __has_builtin(__builtin_trap)
 #define trap() __builtin_trap()
 #else
-fn void trap()
+extern BB_NORETURN BB_COLD void abort(void);
+fn BB_NORETURN BB_COLD void trap_ext()
 {
+#ifdef __x86_64__
     asm volatile("ud2");
-}
+#else
+    abort();
 #endif
+}
+#define trap() (trap_ext(), __builtin_unreachable())
+#endif
+
+#define panic(format, ...) (print(format, __VA_ARGS__), os_exit(1))
 
 #define let_pointer_cast(PointerChildType, var_name, value) PointerChildType* var_name = (PointerChildType*)(value)
 #if defined(__TINYC__) || defined(_MSC_VER)
@@ -174,91 +224,16 @@ fn void trap()
 #else
 #define let(name, value) __auto_type name = (value)
 #endif
-#define let_cast_unchecked(name, T, value) T name = (T)(value)
 #define let_cast(T, name, value) T name = cast_to(T, value)
-#define let_va_arg(T, name, args) T name = va_arg(args, T)
 #define assign_cast(to, from) to = cast_to(typeof(to), from)
+#define let_va_arg(T, name, args) T name = va_arg(args, T)
 #define transmute(D, source) *(D*)&source
 
-UNION(SafeInteger)
-{
-    s64 signed_value;
-    u64 unsigned_value;
-};
-
-fn SafeInteger safe_integer_cast(SafeInteger value, u64 to_size, u64 to_signedness, u64 from_size, u64 from_signedness)
-{
-    SafeInteger result;
-    let(shifter, to_size * 8 - to_signedness);
-    let(to_max, (u64)(1 << shifter) - 1);
-    // A fix for 64-bit wrapping
-    to_max = to_max == 0 ? UINT64_MAX : to_max;
-    let(to_signed_min, -((s64)1 << shifter));
-    if (from_signedness == to_signedness)
-    {
-        if (to_size < from_size)
-        {
-            switch (to_signedness)
-            {
-                case 0:
-                    {
-                        if (value.unsigned_value > to_max)
-                        {
-                            todo();
-                        }
-                    } break;
-                case 1:
-                    {
-                        if (value.signed_value < to_signed_min)
-                        {
-                            todo();
-                        }
-                        if (value.signed_value > (s64)to_max)
-                        {
-                            todo();
-                        }
-                    }
-            }
-        }
-    }
-    else
-    {
-        if (from_signedness)
-        {
-            if (value.signed_value < 0)
-            {
-                todo();
-            }
-            else if (value.unsigned_value > to_max)
-            {
-                todo();
-            }
-        }
-        else
-        {
-            if (value.unsigned_value > to_max)
-            {
-                todo();
-            }
-        }
-    }
-
-    result = value;
-
-    return result;
-}
-
-#define type_is_signed(T) ((T)(-1) < 0)
 #if BB_SAFETY
-#define safe_integer_cast_function(To, value) (To) ((value) < 0 ? (safe_integer_cast((SafeInteger) { .signed_value = (value) }, sizeof(To), type_is_signed(To), sizeof(typeof(value)), type_is_signed(typeof(value)))).signed_value : (safe_integer_cast((SafeInteger) { .signed_value = (value) }, sizeof(To), type_is_signed(To), sizeof(typeof(value)), type_is_signed(typeof(value)))).unsigned_value)
-#endif
-
-#if BB_SAFETY
-#define cast_to(T, value) safe_integer_cast_function(T, value)
+#define cast_to(T, value) (assert((typeof(value)) (T) (value) == (value) && ((value) > 0) == ((T) (value) > 0)), (T) (value))
 #else
 #define cast_to(T, value) (T)(value)
 #endif
-
 
 typedef enum Corner
 {
@@ -288,33 +263,6 @@ typedef enum Axis2
 #define NO_EXCEPT
 #endif
 
-
-#define Slice(T) Slice_ ## T
-#define SliceP(T) SliceP_ ## T
-#define declare_slice_ex(T, StructName) STRUCT(StructName) \
-{\
-    T* pointer;\
-    u64 length;\
-}
-
-#define declare_slice(T) declare_slice_ex(T, Slice(T))
-#define declare_slice_p(T) declare_slice_ex(T*, SliceP(T))
-
-declare_slice(u8);
-declare_slice(u16);
-declare_slice(u32);
-declare_slice(u64);
-declare_slice(s8);
-declare_slice(s16);
-declare_slice(s32);
-declare_slice(s64);
-
-declare_slice_p(char);
-declare_slice_p(void);
-
-typedef Slice(u8) String;
-declare_slice(String);
-
 #define NamedEnumMemberEnum(e, enum_member) e ## _ ## enum_member
 #define NamedEnumMemberString(e, enum_member) strlit(#enum_member)
 
@@ -338,38 +286,6 @@ for (typeof(bits) _bits_ = (bits), it = (start); _bits_; _bits_ >>= 1, ++it) if 
 #define FOREACH_SET(it, set) \
 FOR_N(_i, 0, ((set)->arr.capacity + 63) / 64) FOR_BIT(it, _i*64, (set)->arr.pointer[_i])
 
-
-#ifdef __TINYC__
-#define declare_vector_type #error
-#else
-#ifdef __clang__
-#define declare_vector_type(T, count, name) typedef T name __attribute__((ext_vector_type(count)))
-#else
-#define declare_vector_type(T, count, name) typedef T name __attribute__((vector_size(count)))
-#endif
-#endif
-#define array_length(arr) sizeof(arr) / sizeof((arr)[0])
-#define KB(n) ((n) * 1024)
-#define MB(n) ((n) * 1024 * 1024)
-#define GB(n) ((u64)(n) * 1024 * 1024 * 1024)
-#define TB(n) ((u64)(n) * 1024 * 1024 * 1024 * 1024)
-#define unused(x) (void)(x)
-#ifdef __clang__
-#define may_be_unused __attribute__((unused))
-#else
-#define may_be_unused
-#endif
-#if _MSC_VER
-#define BB_NORETURN __declspec(noreturn)
-#define BB_COLD __declspec(noinline)
-#elif defined(__TINYC__)
-#define BB_NORETURN __attribute__((noreturn))
-#define BB_COLD __attribute__((cold))
-#else
-#define BB_NORETURN [[noreturn]]
-#define BB_COLD [[gnu::cold]]
-#endif
-#define TRUNCATE(Destination, source) (Destination)(source)
 #define size_until_end(T, field_name) (sizeof(T) - offsetof(T, field_name))
 #define SWAP(a, b) \
     do {\
@@ -393,20 +309,19 @@ FOR_N(_i, 0, ((set)->arr.capacity + 63) / 64) FOR_BIT(it, _i*64, (set)->arr.poin
 
 #define case_to_name(prefix, e) case prefix ## e: return strlit(#e)
 
-const may_be_unused global_variable u8 brace_open = '{';
-const may_be_unused global_variable u8 brace_close = '}';
+global_variable const u8 brace_open = '{';
+global_variable const u8 brace_close = '}';
 
-const may_be_unused global_variable u8 parenthesis_open = '(';
-const may_be_unused global_variable u8 parenthesis_close = ')';
+global_variable const u8 parenthesis_open = '(';
+global_variable const u8 parenthesis_close = ')';
 
-const may_be_unused global_variable u8 bracket_open = '[';
-const may_be_unused global_variable u8 bracket_close = ']';
+global_variable const u8 bracket_open = '[';
+global_variable const u8 bracket_close = ']';
 
 #define s_get(s, i) (s).pointer[i]
 #define s_get_pointer(s, i) &((s).pointer[i])
 #define s_get_slice(T, s, start, end) (Slice(T)){ .pointer = ((s).pointer) + (start), .length = (end) - (start) }
 #define s_equal(a, b) ((a).length == (b).length && memcmp((a).pointer, (b).pointer, sizeof(*((a).pointer)) * (a).length) == 0)
-
 
 fn u64 align_forward(u64 value, u64 alignment);
 fn u64 align_backward(u64 value, u64 alignment);
@@ -414,25 +329,6 @@ fn u8 log2_alignment(u64 alignment);
 fn u8 is_power_of_two(u64 value);
 fn u8 first_bit_set_32(u32 value);
 fn u64 first_bit_set_64(u64 value);
-
-fn u8 cast_u32_to_u8(u32 source, const char* name, int line);
-fn u16 cast_u32_to_u16(u32 source, const char* name, int line);
-fn s16 cast_u32_to_s16(u32 source, const char* name, int line);
-fn s32 cast_u32_to_s32(u32 source, const char* name, int line);
-fn u8 cast_u64_to_u8(u64 source, const char* name, int line);
-fn u16 cast_u64_to_u16(u64 source, const char* name, int line);
-fn u32 cast_u64_to_u32(u64 source, const char* name, int line);
-fn s32 cast_u64_to_s32(u64 source, const char* name, int line);
-fn s64 cast_u64_to_s64(u64 source, const char* name, int line);
-fn u8 cast_s32_to_u8(s32 source, const char* name, int line);
-fn u16 cast_s32_to_u16(s32 source, const char* name, int line);
-fn u32 cast_s32_to_u32(s32 source, const char* name, int line);
-fn u64 cast_s32_to_u64(s32 source, const char* name, int line);
-fn s16 cast_s32_to_s16(s32 source, const char* name, int line);
-fn u16 cast_s64_to_u16(s64 source, const char* name, int line);
-fn u32 cast_s64_to_u32(s64 source, const char* name, int line);
-fn u64 cast_s64_to_u64(s64 source, const char* name, int line);
-fn s32 cast_s64_to_s32(s64 source, const char* name, int line);
 
 fn u32 format_decimal(String buffer, u64 decimal);
 fn u32 format_hexadecimal(String buffer, u64 hexadecimal);

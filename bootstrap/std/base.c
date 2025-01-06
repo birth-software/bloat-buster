@@ -1,11 +1,20 @@
 #pragma once
 
+#if _MSC_VER
+extern u64 _lzcnt_u64(u64);
+extern u64 _tzcnt_u64(u64);
+#endif
+
 fn u8 log2_alignment(u64 alignment)
 {
     assert(alignment != 0);
     assert((alignment & (alignment - 1)) == 0);
     u64 left = (sizeof(alignment) * 8) - 1;
+#if _MSC_VER
+    let_cast(u64, right, _lzcnt_u64(alignment));
+#else
     let_cast(u64, right, __builtin_clzll(alignment));
+#endif
     let_cast(u8, result, left - right);
     return result;
 }
@@ -32,7 +41,7 @@ fn u64 u64_from_u128(u128 n)
 fn u128 u128_shift_right(u128 value, u16 n)
 {
 #if defined (__TINYC__) || defined(_MSC_VER)
-    u128 result = {0, 0};
+    u128 result = {};
 
     if (n < 128)
     {
@@ -59,7 +68,7 @@ fn u128 u128_shift_right(u128 value, u16 n)
 fn u128 u128_shift_left(u128 value, u16 n)
 {
 #if defined(__TINYC__) || defined(_MSC_VER)
-    u128 result = {0, 0};
+    u128 result = {};
 
     if (n < 128)
     {
@@ -115,7 +124,7 @@ fn u128 u128_u64_add(u128 a, u64 b)
 fn u128 u128_u64_mul(u128 a, u64 b)
 {
 #if defined(__TINYC__) || defined(_MSC_VER)
-    u128 result = {0, 0};
+    u128 result = {};
 
     // Compute low and high parts of the product
     u64 low_low = (a.low & 0xFFFFFFFF) * (b & 0xFFFFFFFF);
@@ -147,8 +156,8 @@ fn u64 u128_shift_right_by_64(u128 n)
 
 // Lehmer's generator
 // https://lemire.me/blog/2019/03/19/the-fastest-conventional-random-number-generator-that-can-pass-big-crush/
-may_be_unused global_variable u128 rn_state;
-may_be_unused fn u64 generate_random_number()
+global_variable u128 rn_state;
+fn u64 generate_random_number()
 {
     rn_state = u128_u64_mul(rn_state, 0xda942042e4dd58b5);
     return u128_shift_right_by_64(rn_state);
@@ -167,7 +176,7 @@ fn u64 round_up_to_next_power_of_2(u64 n)
     return n;
 }
 
-may_be_unused fn u64 absolute_int(s64 n)
+fn u64 absolute_int(s64 n)
 {
     return n < 0 ? cast_to(u64, -n) : cast_to(u64, n);
 }
@@ -230,7 +239,7 @@ fn u64 is_decimal_digit(u8 ch)
 
 fn u64 is_hex_digit(u8 ch)
 {
-    return (is_decimal_digit(ch) | ((ch == 'a' | ch == 'A') | (ch == 'b' | ch == 'B'))) | (((ch == 'c' | ch == 'C') | (ch == 'd' | ch == 'D')) | ((ch == 'e' | ch == 'E') | (ch == 'f' | ch == 'F')));
+    return (is_decimal_digit(ch) | (((ch == 'a') | (ch == 'A')) | ((ch == 'b') | (ch == 'B')))) | ((((ch == 'c') | (ch == 'C')) | ((ch == 'd') | (ch == 'D'))) | (((ch == 'e') | (ch == 'E')) | ((ch == 'f') | (ch == 'F'))));
 }
 
 fn u64 is_identifier_start(u8 ch)
@@ -293,14 +302,28 @@ fn u8 is_power_of_two(u64 value)
 
 fn u8 first_bit_set_32(u32 value)
 {
+#if _MSC_VER
+    DWORD result_dword;
+    u8 result_u8 = _BitScanForward(&result_dword, value);
+    unused(result_u8);
+    let_cast(u8, result, result_dword);
+#else
     let(result, (u8)__builtin_ffs((s32)value));
+#endif
     result -= result != 0;
     return result;
 }
 
 fn u64 first_bit_set_64(u64 value)
 {
+#if _MSC_VER
+    DWORD result_dword;
+    u8 result_u8 = _BitScanForward64(&result_dword, value);
+    unused(result_u8);
+    let_cast(u8, result, result_dword);
+#else
     let(result, (u8) __builtin_ffs((s64)value));
+#endif
     result -= result != 0;
     return result;
 }
