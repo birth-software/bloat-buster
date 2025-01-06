@@ -22,8 +22,8 @@ jobs:
       BIRTH_BUILD_TYPES: ${{ steps.generate-config.outputs.BIRTH_BUILD_TYPES }}
       BIRTH_CMAKE_BUILD_TYPES: ${{ steps.generate-config.outputs.BIRTH_CMAKE_BUILD_TYPES }}
       BIRTH_COMPILERS: ${{ steps.generate-config.outputs.BIRTH_COMPILERS }}
-      BIRTH_MACOS_IMAGE: ${{ steps.generate-config.outputs.BIRTH_LINUX_IMAGE }}
       BIRTH_LINUX_IMAGE: ${{ steps.generate-config.outputs.BIRTH_LINUX_IMAGE }}
+      BIRTH_MACOS_IMAGE: ${{ steps.generate-config.outputs.BIRTH_MACOS_IMAGE }}
       BIRTH_WINDOWS_IMAGE: ${{ steps.generate-config.outputs.BIRTH_WINDOWS_IMAGE }}
       RELEASE_TAG_NAME: ${{ steps.generate-tag.outputs.RELEASE_TAG_NAME }}  # Define job output here
     steps:
@@ -51,24 +51,24 @@ jobs:
           git tag $TAG
           git push origin $TAG
           echo "RELEASE_TAG_NAME=$TAG" >> $GITHUB_OUTPUT
-  build_and_test:
+  ci:
     needs: generate-config
     permissions: write-all
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-latest, macos-latest, windows-latest ]
+        os: ${{ fromJSON(needs.generate-config.outputs.BIRTH_GITHUB_TARGETS) }}
         C_COMPILER: ${{ fromJSON(needs.generate-config.outputs.BIRTH_COMPILERS) }}
         BIRTH_BUILD_TYPE: ${{ fromJSON(needs.generate-config.outputs.BIRTH_BUILD_TYPES) }}
         exclude:
           - C_COMPILER: gcc
-            os: macos-latest
+            os: ${{ needs.generate-config.outputs.BIRTH_MACOS_IMAGE }}
           - C_COMPILER: gcc
-            os: windows-latest
+            os: ${{ needs.generate-config.outputs.BIRTH_WINDOWS_IMAGE }}
           - C_COMPILER: cl
-            os: macos-latest
+            os: ${{ needs.generate-config.outputs.BIRTH_MACOS_IMAGE }}
           - C_COMPILER: cl
-            os: ubuntu-latest
+            os: ${{ needs.generate-config.outputs.BIRTH_LINUX_IMAGE }}
           - C_COMPILER: tcc
             BIRTH_BUILD_TYPE: release_safe
           - C_COMPILER: tcc
@@ -84,7 +84,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Fetch dependencies
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == env.BIRTH_LINUX_IMAGE
         run: |
           if [[ "${{matrix.C_COMPILER}}" == "tcc" ]]; then
               wget https://github.com/birth-software/tinycc/releases/download/dev/tcc-x86_64-linux.7z
@@ -92,7 +92,7 @@ jobs:
               echo $PWD/tinycc/bin >> $GITHUB_PATH
           fi
       - name: Fetch dependencies
-        if: matrix.os == 'macos-latest'
+        if: matrix.os == env.BIRTH_MACOS_IMAGE
         run: |
           if [[ "${{matrix.C_COMPILER}}" == "tcc" ]]; then
               wget https://github.com/birth-software/tinycc/releases/download/dev/tcc-aarch64-macos.7z
@@ -100,7 +100,7 @@ jobs:
               echo $PWD/tinycc/bin >> $GITHUB_PATH
           fi
       - name: Fetch dependencies
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == env.BIRTH_WINDOWS_IMAGE
         shell: bash
         run: |
           set -eux
@@ -111,13 +111,13 @@ jobs:
               echo $TCC_PATH >> $GITHUB_PATH
           fi
       - name: Build
-        if: matrix.os != 'windows-latest'
+        if: matrix.os != env.BIRTH_WINDOWS_IMAGE
         env:
           CC: ${{matrix.C_COMPILER}}
           BB_BUILD_TYPE: ${{matrix.BIRTH_BUILD_TYPE}}
         run: ./build.sh
       - name: Build
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == env.BIRTH_WINDOWS_IMAGE
         shell: cmd
         env:
           CC: ${{matrix.C_COMPILER}}
