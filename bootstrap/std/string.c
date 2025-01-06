@@ -124,6 +124,9 @@ u64 string_first_occurrence(String string, String substring)
 
 fn u64 string_last_occurrence(String string, String substring)
 {
+    unused(string);
+    unused(substring);
+
     todo();
 }
 

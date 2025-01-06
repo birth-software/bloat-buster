@@ -54,7 +54,7 @@ global_variable u8 md5_padding[] = {0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x
                             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
 
-may_be_unused fn MD5Context md5_init()
+fn MD5Context md5_init()
 {
     return (MD5Context) {
         .buffer = { MD5_A, MD5_B, MD5_C, MD5_D },
@@ -66,7 +66,7 @@ fn u32 rotate_left_u32(u32 x, u32 n)
     return (x << n) | (x >> (32 - n));
 }
 
-may_be_unused fn void md5_step(u32* buffer, u32* input)
+fn void md5_step(u32* buffer, u32* input)
 {
     u32 aa = buffer[0];
     u32 bb = buffer[1];
@@ -114,7 +114,7 @@ may_be_unused fn void md5_step(u32* buffer, u32* input)
     buffer[3] += dd;
 }
 
-may_be_unused fn void md5_update(MD5Context* context, String input_argument)
+fn void md5_update(MD5Context* context, String input_argument)
 {
     u32 input_local[16];
     auto offset = context->size % 64;
@@ -139,7 +139,7 @@ may_be_unused fn void md5_update(MD5Context* context, String input_argument)
     }
 }
 
-may_be_unused fn MD5Result md5_end(MD5Context* context)
+fn MD5Result md5_end(MD5Context* context)
 {
     u32 input[16];
     auto offset = context->size % 64;

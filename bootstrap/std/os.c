@@ -123,7 +123,7 @@ fn String path_base(String string)
 #if _WIN32
     if (!result.pointer)
     {
-        let(index, string_last_ch(string, '\\'));
+        index = string_last_ch(string, '\\');
         if (index != STRING_NO_MATCH)
         {
             result = s_get_slice(u8, string, index + 1, string.length);
@@ -148,21 +148,21 @@ fn String path_no_extension(String string)
 
 #if LINK_LIBC == 0
 #ifdef __linux__
-may_be_unused fn forceinline long syscall0(long n)
+fn forceinline long syscall0(long n)
 {
     long ret;
     __asm__ __volatile__ ("syscall" : "=a"(ret) : "a"(n) : "rcx", "r11", "memory");
     return ret;
 }
 
-may_be_unused fn forceinline long syscall1(long n, long a1)
+fn forceinline long syscall1(long n, long a1)
 {
     long ret;
     __asm__ __volatile__ ("syscall" : "=a"(ret) : "a"(n), "D"(a1) : "rcx", "r11", "memory");
     return ret;
 }
 
-may_be_unused fn forceinline long syscall2(long n, long a1, long a2)
+fn forceinline long syscall2(long n, long a1, long a2)
 {
     long ret;
     __asm__ __volatile__ ("syscall" : "=a"(ret) : "a"(n), "D"(a1), "S"(a2)
@@ -170,7 +170,7 @@ may_be_unused fn forceinline long syscall2(long n, long a1, long a2)
     return ret;
 }
 
-may_be_unused fn forceinline long syscall3(long n, long a1, long a2, long a3)
+fn forceinline long syscall3(long n, long a1, long a2, long a3)
 {
     long ret;
     __asm__ __volatile__ ("syscall" : "=a"(ret) : "a"(n), "D"(a1), "S"(a2),
@@ -178,7 +178,7 @@ may_be_unused fn forceinline long syscall3(long n, long a1, long a2, long a3)
     return ret;
 }
 
-may_be_unused fn forceinline long syscall4(long n, long a1, long a2, long a3, long a4)
+fn forceinline long syscall4(long n, long a1, long a2, long a3, long a4)
 {
     long ret;
     register long r10 __asm__("r10") = a4;
@@ -187,7 +187,7 @@ may_be_unused fn forceinline long syscall4(long n, long a1, long a2, long a3, lo
     return ret;
 }
 
-may_be_unused fn forceinline long syscall5(long n, long a1, long a2, long a3, long a4, long a5)
+fn forceinline long syscall5(long n, long a1, long a2, long a3, long a4, long a5)
 {
     long ret;
     register long r10 __asm__("r10") = a4;
@@ -197,7 +197,7 @@ may_be_unused fn forceinline long syscall5(long n, long a1, long a2, long a3, lo
     return ret;
 }
 
-may_be_unused fn forceinline long syscall6(long n, long a1, long a2, long a3, long a4, long a5, long a6)
+fn forceinline long syscall6(long n, long a1, long a2, long a3, long a4, long a5, long a6)
 {
     long ret;
     register long r10 __asm__("r10") = a4;
@@ -582,7 +582,7 @@ enum SyscallX86_64 : u64 {
 #endif
 
 #ifndef _WIN32
-may_be_unused fn void* posix_mmap(void* address, size_t length, int protection_flags, int map_flags, int fd, signed long offset)
+fn void* posix_mmap(void* address, size_t length, int protection_flags, int map_flags, int fd, signed long offset)
 {
 #if LINK_LIBC
     return mmap(address, length, protection_flags, map_flags, fd, offset);
@@ -595,7 +595,7 @@ may_be_unused fn void* posix_mmap(void* address, size_t length, int protection_f
 #endif
 }
 
-may_be_unused fn int syscall_mprotect(void *address, size_t length, int protection_flags)
+fn int syscall_mprotect(void *address, size_t length, int protection_flags)
 {
 #if LINK_LIBC
     return mprotect(address, length, protection_flags);
@@ -608,7 +608,7 @@ may_be_unused fn int syscall_mprotect(void *address, size_t length, int protecti
 #endif
 }
 
-may_be_unused fn int syscall_open(const char *file_path, int flags, int mode)
+fn int syscall_open(const char *file_path, int flags, int mode)
 {
 #if LINK_LIBC
     return open(file_path, flags, mode);
@@ -621,7 +621,7 @@ may_be_unused fn int syscall_open(const char *file_path, int flags, int mode)
 #endif
 }
 
-may_be_unused fn int syscall_close(int fd)
+fn int syscall_close(int fd)
 {
 #if LINK_LIBC
     return close(fd);
@@ -647,7 +647,7 @@ fn int syscall_fstat(int fd, struct stat *buffer)
 #endif
 }
 
-may_be_unused fn ssize_t syscall_read(int fd, void* buffer, size_t bytes)
+fn ssize_t syscall_read(int fd, void* buffer, size_t bytes)
 {
 #if LINK_LIBC
     return read(fd, buffer, bytes);
@@ -660,7 +660,7 @@ may_be_unused fn ssize_t syscall_read(int fd, void* buffer, size_t bytes)
 #endif
 }
 
-may_be_unused fn ssize_t syscall_write(int fd, const void *buffer, size_t bytes)
+fn ssize_t syscall_write(int fd, const void *buffer, size_t bytes)
 {
 #if LINK_LIBC
     return write(fd, buffer, bytes);
@@ -673,7 +673,7 @@ may_be_unused fn ssize_t syscall_write(int fd, const void *buffer, size_t bytes)
 #endif
 }
 
-may_be_unused fn int syscall_mkdir(String path, u32 mode)
+fn int syscall_mkdir(String path, u32 mode)
 {
     assert(path.pointer[path.length] == 0);
 #if LINK_LIBC
@@ -683,7 +683,7 @@ may_be_unused fn int syscall_mkdir(String path, u32 mode)
 #endif
 }
 
-may_be_unused fn int syscall_rmdir(String path)
+fn int syscall_rmdir(String path)
 {
     assert(path.pointer[path.length] == 0);
 #if LINK_LIBC
@@ -693,7 +693,7 @@ may_be_unused fn int syscall_rmdir(String path)
 #endif
 }
 
-may_be_unused fn int syscall_unlink(String path)
+fn int syscall_unlink(String path)
 {
     assert(path.pointer[path.length] == 0);
 #if LINK_LIBC
@@ -703,7 +703,7 @@ may_be_unused fn int syscall_unlink(String path)
 #endif
 }
 
-may_be_unused fn pid_t syscall_fork()
+fn pid_t syscall_fork()
 {
 #if LINK_LIBC
     return fork();
@@ -713,7 +713,7 @@ may_be_unused fn pid_t syscall_fork()
 
 }
 
-may_be_unused fn signed long syscall_execve(const char* path, char *const argv[], char *const envp[])
+fn signed long syscall_execve(const char* path, char *const argv[], char *const envp[])
 {
 #if LINK_LIBC
     return execve(path, argv, envp);
@@ -722,7 +722,7 @@ may_be_unused fn signed long syscall_execve(const char* path, char *const argv[]
 #endif
 }
 
-may_be_unused fn pid_t syscall_waitpid(pid_t pid, int* status, int options)
+fn pid_t syscall_waitpid(pid_t pid, int* status, int options)
 {
 #if LINK_LIBC
     return waitpid(pid, status, options);
@@ -731,7 +731,7 @@ may_be_unused fn pid_t syscall_waitpid(pid_t pid, int* status, int options)
 #endif
 }
 
-may_be_unused fn int syscall_gettimeofday(struct timeval* tv, struct timezone* tz)
+fn int syscall_gettimeofday(struct timeval* tv, struct timezone* tz)
 {
 #if LINK_LIBC
     return gettimeofday(tv, tz);
@@ -740,7 +740,7 @@ may_be_unused fn int syscall_gettimeofday(struct timeval* tv, struct timezone* t
 #endif
 }
 
-may_be_unused BB_NORETURN BB_COLD fn void syscall_exit(int status)
+BB_NORETURN BB_COLD fn void syscall_exit(int status)
 {
 #if LINK_LIBC
     _exit(status);
@@ -755,12 +755,12 @@ may_be_unused BB_NORETURN BB_COLD fn void syscall_exit(int status)
 }
 #endif
 
-may_be_unused fn u64 os_timer_freq()
+fn u64 os_timer_freq()
 {
     return 1000 * 1000;
 }
 
-may_be_unused fn u64 os_timer_get()
+fn u64 os_timer_get()
 {
 #if _WIN32
     LARGE_INTEGER large_integer;
@@ -787,6 +787,8 @@ fn FileDescriptor os_file_open(String path, OSFileOpenFlags flags, OSFilePermiss
 {
     assert(path.pointer[path.length] == 0);
 #if _WIN32
+    unused(permissions);
+
     DWORD dwDesiredAccess = 0;
     dwDesiredAccess |= flags.read * GENERIC_READ;
     dwDesiredAccess |= flags.write * GENERIC_WRITE;
@@ -854,7 +856,7 @@ fn void os_file_write(FileDescriptor fd, String content)
 #endif
 }
 
-may_be_unused fn u64 os_file_read(FileDescriptor fd, String buffer, u64 byte_count)
+fn u64 os_file_read(FileDescriptor fd, String buffer, u64 byte_count)
 {
     assert(byte_count);
     assert(byte_count <= buffer.length);
@@ -966,22 +968,24 @@ BB_NORETURN BB_COLD fn void os_exit(u32 exit_code)
     exit(exit_code);
 }
 
+fn void vprint(const char* format, va_list args)
+{
+    u8 stack_buffer[16*1024];
+    String buffer = { .pointer = stack_buffer, .length = array_length(stack_buffer) };
+    String final_string = format_string_va(buffer, format, args);
+    os_file_write(os_stdout_get(), final_string);
+}
+
 fn void print(const char* format, ...)
 {
-#ifndef SILENT
-        u8 stack_buffer[16*1024];
-        String buffer = { .pointer = stack_buffer, .length = array_length(stack_buffer) };
-        va_list args;
-        va_start(args, format);
-        String final_string = format_string_va(buffer, format, args);
-        va_end(args);
-
-        os_file_write(os_stdout_get(), final_string);
-#endif
+    va_list args;
+    va_start(args, format);
+    vprint(format, args);
+    va_end(args);
 }
 
 static_assert(sizeof(Arena) == 64);
-const global_variable u64 minimum_position = sizeof(Arena);
+global_variable const u64 minimum_position = sizeof(Arena);
 
 fn Arena* arena_initialize(u64 reserved_size, u64 granularity, u64 initial_size)
 {
@@ -1157,7 +1161,7 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
         {
             let(len, strlen(argument));
             memcpy(&bytes[byte_i], argument, len);
-            byte_i += len;
+            byte_i += cast_to(u32, len);
             bytes[byte_i] = ' ';
             byte_i += 1;
         }
@@ -1219,6 +1223,7 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
                 0,
                 NULL
                 );
+        unused(bufSize);
         print("CreateProcessA call failed: {cstr}\n", lpMsgBuf);
         todo();
     }
@@ -1242,8 +1247,9 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
         // close(pipes[0]);
         // fcntl(pipes[1], F_SETFD, FD_CLOEXEC);
         let(result, syscall_execve(arguments.pointer[0], arguments.pointer, envp));
+        unused(result);
 #if LINK_LIBC
-        my_panic("Execve failed! Error: {cstr}\n", strerror(errno));
+        panic("Execve failed! Error: {cstr}\n", strerror(errno));
 #else
         todo();
 #endif
@@ -1322,7 +1328,7 @@ fn u8 os_is_being_debugged()
 {
     u8 result = 0;
 #if _WIN32
-    result = IsDebuggerPresent();
+    result = IsDebuggerPresent() != 0;
 #else
 #ifdef __APPLE__
     let(request, PT_TRACE_ME);
@@ -1366,6 +1372,7 @@ fn String os_get_environment_variable(const char* name)
     return result;
 }
 
+#ifndef _WIN32
 fn u64 os_readlink(String path, String buffer)
 {
     u64 result = 0;
@@ -1396,7 +1403,6 @@ fn String os_readlink_allocate(Arena* arena, String path)
     return result;
 }
 
-#ifndef _WIN32
 fn String os_realpath(String path, String buffer)
 {
     String result = {};
@@ -1434,7 +1440,7 @@ fn OSLibrary os_library_load(const char* library_name)
 
 fn OSSymbol os_symbol_load(OSLibrary library, const char* symbol_name)
 {
-    OSSymbol symbol = GetProcAddress(library.handle, symbol_name);
+    OSSymbol symbol = (OSSymbol)GetProcAddress(library.handle, symbol_name);
     return symbol;
 }
 #else

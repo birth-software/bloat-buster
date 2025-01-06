@@ -9,6 +9,14 @@ if [[ -z "${BB_BUILD_TYPE-}" ]]; then
     BB_BUILD_TYPE=debug
 fi
 
+if [[ -z "${BB_ERROR_ON_WARNINGS-}" ]]; then
+    BB_ERROR_ON_WARNINGS=$BB_CI
+fi
+
+if [[ -z "${BB_ERROR_LIMIT-}" ]]; then
+    BB_ERROR_LIMIT=$((1 - BB_CI))
+fi
+
 BUILD_DIR=cache
 mkdir -p $BUILD_DIR
 
@@ -37,6 +45,6 @@ elif [[ $C_COMPILER == "gcc"* ]]; then
     GCC_ARGS=-fmax-errors=1
 fi
 
-$C_COMPILER build.c -g -o $BUILD_OUT -Ibootstrap -std=gnu2x $CLANG_ARGS $GCC_ARGS -DBB_TIMETRACE=$BB_TIMETRACE -DBB_CI=$BB_CI -DBB_BUILD_TYPE=\"$BB_BUILD_TYPE\"
+$C_COMPILER build.c -g -o $BUILD_OUT -Ibootstrap -std=gnu2x $CLANG_ARGS $GCC_ARGS -DBB_TIMETRACE=$BB_TIMETRACE -DBB_CI=$BB_CI -DBB_BUILD_TYPE=\"$BB_BUILD_TYPE\" -DBB_ERROR_ON_WARNINGS=$BB_ERROR_ON_WARNINGS -DBB_ERROR_LIMIT=$BB_ERROR_LIMIT
 $BUILD_OUT $@
 exit 0

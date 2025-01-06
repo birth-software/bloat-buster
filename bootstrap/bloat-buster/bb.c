@@ -1,14 +1,17 @@
-#if 0
 #include <std/base.h>
-#include <std/project.h>
 #include <std/os.h>
+
+#include <std/base.c>
+#include <std/os.c>
+
+#if 0
+#include <std/project.h>
 #include <std/virtual_buffer.h>
 #include <std/windowing.h>
 #include <std/rendering.h>
 #include <std/ui_core.h>
 #include <std/ui_builder.h>
 
-#include <std/base.c>
 #include <std/os.c>
 #include <std/virtual_buffer.c>
 #include <std/windowing.c>
@@ -274,8 +277,11 @@ int main()
     return 0;
 }
 #else
-int main()
+int main(int argc, char** argv, char** envp)
 {
+    unused(argc);
+    unused(argv);
+    unused(envp);
     return 0;
 }
 #endif

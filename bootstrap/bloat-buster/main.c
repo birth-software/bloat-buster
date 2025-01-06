@@ -2361,7 +2361,7 @@ fn Node* thread_node_get(Thread* thread, NodeIndex node_index)
     return node;
 }
 
-may_be_unused fn String node_id_to_string(NodeId node_id)
+fn String node_id_to_string(NodeId node_id)
 {
     switch (node_id)
     {
@@ -3568,7 +3568,7 @@ global_variable const auto ip_interface_register_mask = (InternPoolInterface) {
 fn Hash32 lower ## _hash_index(Thread* thread, T ## Index item_index); \
 fn Hash32 lower ## _hash(Thread* thread, const T * const restrict item); \
 \
-may_be_unused fn T ## GetOrPut ip_ ## T ## _get_or_put(InternPool(T)* pool, Thread* thread, T ## Index item_index) \
+fn T ## GetOrPut ip_ ## T ## _get_or_put(InternPool(T)* pool, Thread* thread, T ## Index item_index) \
 { \
     auto hash = lower ## _hash_index(thread, item_index); \
     auto* item = thread_ ## lower ## _get(thread, item_index); \
@@ -3581,7 +3581,7 @@ may_be_unused fn T ## GetOrPut ip_ ## T ## _get_or_put(InternPool(T)* pool, Thre
         .existing = result.existing,\
     };\
 }\
-may_be_unused fn T ## GetOrPut ip_ ## T ## _get_or_put_new(InternPool(T)* pool, Thread* thread, const T* item) \
+fn T ## GetOrPut ip_ ## T ## _get_or_put_new(InternPool(T)* pool, Thread* thread, const T* item) \
 { \
     auto hash = lower ## _hash(thread, item); \
     auto result = ip_generic_get_or_put((GenericInternPool*)pool, thread, 0, (void*)item, sizeof(T), hash, &ip_interface_ ## lower); \
@@ -3591,7 +3591,7 @@ may_be_unused fn T ## GetOrPut ip_ ## T ## _get_or_put_new(InternPool(T)* pool, 
         .existing = result.existing,\
     };\
 }\
-may_be_unused fn T ## Index ip_ ## T ## _remove(InternPool(T)* pool, Thread* thread, T ## Index item_index)\
+fn T ## Index ip_ ## T ## _remove(InternPool(T)* pool, Thread* thread, T ## Index item_index)\
 {\
     auto existing_capacity = pool->capacity;\
     auto* item = thread_ ## lower ## _get(thread, item_index);\
@@ -4778,7 +4778,7 @@ global_variable const NodeVirtualTable node_functions[NODE_COUNT] = {
     // },
 };
 
-may_be_unused fn String type_id_to_string(Type* type)
+fn String type_id_to_string(Type* type)
 {
     switch (type->id)
     {
@@ -6791,7 +6791,7 @@ fn void analyze_file(Thread* thread, File* file)
 //     }
 // }
 
-// may_be_unused fn void print_function(Thread* thread, Function* function)
+// fn void print_function(Thread* thread, Function* function)
 // {
 //     print("fn {s}\n====\n", function->name);
 //     VirtualBuffer(NodeIndex) nodes = {};
@@ -7534,7 +7534,7 @@ fn void uleb128_encode(VirtualBuffer(u8)* buffer, u32 value)
     *vb_add(buffer, 1) = out;
 }
 
-may_be_unused fn void dwarf_playground(Thread* thread)
+fn void dwarf_playground(Thread* thread)
 {
     auto file = file_read(thread->arena,
 #ifdef __APPLE__
@@ -7838,7 +7838,7 @@ STRUCT(FileBuffer)
     VirtualBuffer(u8) buffer;
 };
 
-may_be_unused fn String write_elf(Thread* thread, ObjectOptions options)
+fn String write_elf(Thread* thread, ObjectOptions options)
 {
     ELFBuilder builder_stack = {};
     ELFBuilder* restrict builder = &builder_stack;
@@ -20654,7 +20654,7 @@ fn String pdb_build(Thread* thread)
     return (String) { pdb_file.pointer, pdb_file.length };
 }
 
-may_be_unused fn String write_pe(Thread* thread, ObjectOptions options)
+fn String write_pe(Thread* thread, ObjectOptions options)
 {
     VirtualBuffer(u8) file = {};
 
@@ -22056,7 +22056,7 @@ fn u8 can_remat(Thread* thread, NodeIndex node_index)
     }
 }
 
-may_be_unused fn f32 get_spill_cost(Thread* thread, VirtualRegister* virtual_register)
+fn f32 get_spill_cost(Thread* thread, VirtualRegister* virtual_register)
 {
     auto spill_cost = virtual_register->spill_cost;
     if (__builtin_isnan(spill_cost))
@@ -23431,7 +23431,7 @@ STRUCT(MachOSection)
 };
 static_assert(sizeof(MachOSection) == 0x50);
 
-may_be_unused fn String write_macho(Thread* restrict thread, ObjectOptions options)
+fn String write_macho(Thread* restrict thread, ObjectOptions options)
 {
     unused(thread);
     unused(options);

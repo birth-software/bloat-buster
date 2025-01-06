@@ -97,7 +97,7 @@ global_variable char* compiler_switches[COMPILER_ARGUMENT_STYLE_COUNT][COMPILER_
     },
 };
 
-fn String file_find_in_path(Arena* arena, String file, String path_env)
+fn String file_find_in_path(Arena* arena, String file, String path_env, String extension)
 {
     String result = {};
     assert(path_env.pointer);
@@ -130,11 +130,11 @@ fn String file_find_in_path(Arena* arena, String file, String path_env)
         memcpy(&buffer[i], file.pointer, file.length);
         i += file.length;
 
-#if _WIN32
-        String exe_extension = strlit(".exe");
-        memcpy(&buffer[i], exe_extension.pointer, exe_extension.length);
-        i += exe_extension.length;
-#endif
+        if (extension.length)
+        {
+            memcpy(&buffer[i], extension.pointer, extension.length);
+            i += extension.length;
+        }
 
         buffer[i] = 0;
         i += 1;
@@ -239,6 +239,10 @@ fn String get_c_compiler_path(Arena* arena)
     String cc_path = {};
     String cc_env = os_get_environment_variable("CC");
     String path_env = os_get_environment_variable("PATH");
+    String extension = {};
+#if _WIN32
+    extension = strlit(".exe");
+#endif
     if (cc_env.pointer)
     {
         cc_path = cc_env;
@@ -246,14 +250,14 @@ fn String get_c_compiler_path(Arena* arena)
 #ifndef _WIN32
     else
     {
-        cc_path = file_find_in_path(arena, strlit("cc"), path_env);
+        cc_path = file_find_in_path(arena, strlit("cc"), path_env, extension);
     }
 #endif
 
     if (!cc_path.pointer)
     {
 #if _WIN32
-        cc_path = strlit("cl.exe");
+        cc_path = strlit("cl");
 #elif defined(__APPLE__)
         cc_path = strlit("clang");
 #elif defined(__linux__)
@@ -269,7 +273,7 @@ fn String get_c_compiler_path(Arena* arena)
 #endif
     if (no_path_sep)
     {
-        cc_path = file_find_in_path(arena, cc_path, path_env);
+        cc_path = file_find_in_path(arena, cc_path, path_env, extension);
     }
 
 #ifndef _WIN32
@@ -296,7 +300,7 @@ fn String get_c_compiler_path(Arena* arena)
 
     if (preferred_c_compiler != C_COMPILER_COUNT && c_compiler_is_supported_by_os(preferred_c_compiler))
     {
-        String find_result = file_find_in_path(arena, c_compiler_to_string(preferred_c_compiler), path_env);
+        String find_result = file_find_in_path(arena, c_compiler_to_string(preferred_c_compiler), path_env, extension);
         if (find_result.pointer)
         {
             cc_path = find_result;
@@ -448,6 +452,7 @@ fn void compile_program(Arena* arena, CompileOptions options)
             print("Could not find a valid compiler for CC: \"{cstr}\"\n", cc_env ? cc_env : "");
             print("PATH: {cstr}\n", getenv("PATH"));
         }
+
         failed_execution();
     }
 
@@ -474,6 +479,7 @@ fn void compile_program(Arena* arena, CompileOptions options)
     u64 arg_i = 0;
 #define add_arg(arg) args[arg_i++] = (arg)
     add_arg(string_to_c(options.compiler_path));
+
     if (c_compiler == C_COMPILER_MSVC)
     {
         add_arg("/nologo");
@@ -539,6 +545,41 @@ fn void compile_program(Arena* arena, CompileOptions options)
     if (c_compiler != C_COMPILER_TCC)
     {
         add_arg(optimization_switches[c_compiler == C_COMPILER_MSVC][options.build_type]);
+    }
+
+    // Inmutable options
+    switch (c_compiler)
+    {
+        case C_COMPILER_MSVC:
+            {
+                add_arg("/Wall");
+#if BB_ERROR_ON_WARNINGS
+                add_arg("/WX");
+#endif
+                add_arg("/wd4255");
+            } break;
+        default:
+            {
+                add_arg("-pedantic");
+                add_arg("-Wall");
+                add_arg("-Wextra");
+                add_arg("-Wpedantic");
+                add_arg("-Wno-unused-function");
+                add_arg("-Wno-nested-anon-types");
+                add_arg("-Wno-keyword-macro");
+                add_arg("-Wno-gnu-auto-type");
+#ifndef __APPLE__
+                add_arg("-Wno-auto-decl-extensions");
+#endif
+                add_arg("-Wno-gnu-empty-initializer");
+                add_arg("-Wno-fixed-enum-extension");
+#if BB_ERROR_ON_WARNINGS
+                add_arg("-Werror");
+#endif
+
+                add_arg("-fno-strict-aliasing");
+                add_arg("-fwrapv");
+            } break;
     }
 
     if (options.flags.colored_output && c_compiler_supports_colored_output(c_compiler))
@@ -715,7 +756,7 @@ int main(int argc, char* argv[], char** envp)
         .build_type = build_type_pick(),
         .flags = {
             .colored_output = 1,
-            .error_limit = 1,
+            .error_limit = BB_ERROR_LIMIT,
             .debug = 1,
             .time_trace = BB_TIMETRACE,
         },

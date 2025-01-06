@@ -263,7 +263,7 @@ BB_NORETURN BB_COLD fn void wrong_vulkan_result(VkResult result, String call_str
     unused(line);
 
     String result_name = vulkan_result_to_string(result);
-    my_panic("Wrong Vulkan result {s} at \"{s}\" {s}:{u32}\n", result_name, call_string, file, line);
+    panic("Wrong Vulkan result {s} at \"{s}\" {s}:{u32}\n", result_name, call_string, file, line);
 }
 
 fn void buffer_copy_to_local_command(VkCommandBuffer command_buffer, Slice(LocalBufferCopy) copies)
