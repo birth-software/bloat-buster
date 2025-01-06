@@ -1,6 +1,6 @@
 #include <std/format.h>
 
-u32 format_hexadecimal(String buffer, u64 hexadecimal)
+fn u32 format_hexadecimal(String buffer, u64 hexadecimal)
 {
     u64 value = hexadecimal;
     if (value)
@@ -35,7 +35,7 @@ u32 format_hexadecimal(String buffer, u64 hexadecimal)
     }
 }
 
-u32 format_decimal(String buffer, u64 decimal)
+fn u32 format_decimal(String buffer, u64 decimal)
 {
     u64 value = decimal;
     if (value)
@@ -299,9 +299,10 @@ global_variable const u64 DOUBLE_POW5_INV_SPLIT[DOUBLE_POW5_INV_TABLE_SIZE][2] =
 // Best case: use 128-bit type.
 fn u64 mul_shift_64(const u64 m, const u64* const mul, const s32 j)
 {
-    const u128 b0 = ((u128) m) * mul[0];
-    const u128 b2 = ((u128) m) * mul[1];
-    return (u64) (((b0 >> 64) + b2) >> (j - 64));
+    const u128 b0 = u128_u64_mul(u128_from_u64(m), mul[0]);
+    const u128 b2 = u128_u64_mul(u128_from_u64(m), mul[1]);
+    return u64_from_u128(u128_shift_right(u128_u64_add(b2, u128_shift_right_by_64(b0)),  j - 64));
+    // return (u64) (((b0 >> 64) + b2) >> (j - 64));
 }
 
 fn u64 mul_shift_all_64(const u64 m, const u64* const mul, const s32 j, u64* const vp, u64* const vm, const u32 mmShift)
@@ -526,27 +527,27 @@ fn u8 multiple_of_power_of_2(const u64 value, const u32 p) {
   return (value & ((1ull << p) - 1)) == 0;
 }
 
-static inline uint64_t div5(const uint64_t x) {
+fn inline uint64_t div5(const uint64_t x) {
   return x / 5;
 }
 
-static inline uint64_t div10(const uint64_t x) {
+fn inline uint64_t div10(const uint64_t x) {
   return x / 10;
 }
 
-static inline uint64_t div100(const uint64_t x) {
+fn inline uint64_t div100(const uint64_t x) {
   return x / 100;
 }
 
-static inline uint64_t div1e8(const uint64_t x) {
+fn inline uint64_t div1e8(const uint64_t x) {
   return x / 100000000;
 }
 
-static inline uint64_t div1e9(const uint64_t x) {
+fn inline uint64_t div1e9(const uint64_t x) {
   return x / 1000000000;
 }
 
-static inline uint32_t mod1e9(const uint64_t x) {
+fn inline uint32_t mod1e9(const uint64_t x) {
   return (uint32_t) (x - 1000000000 * div1e9(x));
 }
 
@@ -572,7 +573,7 @@ may_be_unused fn Double double_transform(u64 ieee_mantissa, u32 ieee_exponent)
     }
 
     u8 is_even = (m2 & 1) == 0;
-    auto accept_bounds = is_even;
+    let(accept_bounds, is_even);
 
     u64 mv = 4 * m2;
     u32 mm_shift = (ieee_mantissa != 0) | (ieee_exponent <= 1);
@@ -742,8 +743,8 @@ may_be_unused fn Double double_transform(u64 ieee_mantissa, u32 ieee_exponent)
 may_be_unused fn SmallIntResult small_int(u64 ieee_mantissa, u32 ieee_exponent)
 {
     SmallIntResult result = {};
-    auto m2 = ((u64)1 << double_mantissa_bits) | ieee_mantissa;
-    auto e2 = (s32)ieee_exponent - double_bias - double_mantissa_bits;
+    let(m2, ((u64)1 << double_mantissa_bits) | ieee_mantissa);
+    let(e2, (s32)ieee_exponent - double_bias - double_mantissa_bits);
 
     if (e2 > 0)
     {
@@ -805,7 +806,7 @@ STRUCT(floating_decimal_64)
 
 fn u8* digits2(u64 value)
 {
-    auto str = strlit("00010203040506070809101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899");
+    String str = strlit("00010203040506070809101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899");
     return str.pointer + (value * 2);
 }
 
@@ -815,9 +816,9 @@ fn void write_float_decimal(String buffer, u64* value, u64 count)
 
     while (i + 2 < count)
     {
-        auto c = cast_to(u8, u64, *value % 100);
+        let_cast(u8, c, *value % 100);
         *value /= 100;
-        auto ptr = digits2(c);
+        let(ptr, digits2(c));
         buffer.pointer[count - i - 1] = ptr[1];
         buffer.pointer[count - i - 2] = ptr[0];
         i += 2;
@@ -825,7 +826,7 @@ fn void write_float_decimal(String buffer, u64* value, u64 count)
 
     while (i < count)
     {
-        auto c = cast_to(u8, u64, *value % 10);
+        let(c, cast_to(u8, *value % 10));
         *value /= 10;
         buffer.pointer[count - i - 1] = '0' + c;
 
@@ -833,22 +834,20 @@ fn void write_float_decimal(String buffer, u64* value, u64 count)
     }
 }
 
-
-
-u64 format_float(String buffer, f64 value_double)
+fn u64 format_float(String buffer, f64 value_double)
 {
-    auto value_int = *(u64*)&value_double;
+    let(value_int, *(u64*)&value_double);
     u64 buffer_i = 0;
 
     const u8 ieee_sign = ((value_int >> (double_mantissa_bits + double_exponent_bits)) & 1) != 0;
-    const auto ieee_mantissa = value_int & (((u64)1 << double_mantissa_bits) - 1);
-    const auto ieee_exponent = (u32)((value_int >> double_mantissa_bits) & (((u32)1 << double_exponent_bits) - 1));
+    let(ieee_mantissa, value_int & (((u64)1 << double_mantissa_bits) - 1));
+    let(ieee_exponent, (u32)((value_int >> double_mantissa_bits) & (((u32)1 << double_exponent_bits) - 1)));
 
     if (ieee_exponent == (((u32)1 << double_exponent_bits) - 1) || (ieee_exponent == 0 && ieee_mantissa == 0))
     {
         if (ieee_mantissa)
         {
-            auto nan = strlit("NaN");
+            String nan = strlit("NaN");
             memcpy(&buffer.pointer[buffer_i], nan.pointer, nan.length);
             buffer_i += nan.length;
         }
@@ -862,13 +861,13 @@ u64 format_float(String buffer, f64 value_double)
 
             if (ieee_exponent)
             {
-                auto inf = strlit("Infinity");
+                String inf = strlit("Infinity");
                 memcpy(&buffer.pointer[buffer_i], inf.pointer, inf.length);
                 buffer_i += inf.length;
             }
             else
             {
-                auto e0 = strlit("0E0");
+                String e0 = strlit("0E0");
                 memcpy(&buffer.pointer[buffer_i], e0.pointer, e0.length);
                 buffer_i += e0.length;
             }
@@ -876,7 +875,7 @@ u64 format_float(String buffer, f64 value_double)
     }
     else
     {
-        auto small_int_result = small_int(ieee_mantissa, ieee_exponent);
+        let(small_int_result, small_int(ieee_mantissa, ieee_exponent));
         Double result;
         if (small_int_result.is_small_int)
         {
@@ -934,8 +933,8 @@ u64 format_float(String buffer, f64 value_double)
                         const uint32_t d0 = (d % 100) << 1;
                         const uint32_t d1 = (d / 100) << 1;
 
-                        auto base_index = buffer_i + olength;
-                        auto base = buffer.pointer + base_index;
+                        let(base_index, buffer_i + olength);
+                        let(base, buffer.pointer + base_index);
                         memcpy(base - 1, DIGIT_TABLE + c0, 2);
                         memcpy(base - 3, DIGIT_TABLE + c1, 2);
                         memcpy(base - 5, DIGIT_TABLE + d0, 2);
@@ -944,7 +943,7 @@ u64 format_float(String buffer, f64 value_double)
                         i += 8;
                     }
 
-                    auto output2 = (u32) output;
+                    let(output2, (u32)output);
 
                     while (output2 >= 10000)
                     {
@@ -956,7 +955,7 @@ u64 format_float(String buffer, f64 value_double)
                         output2 /= 10000;
                         const u32 c0 = (c % 100) << 1;
                         const u32 c1 = (c / 100) << 1;
-                        auto base_index = buffer_i + olength - i;
+                        let(base_index, buffer_i + olength - i);
                         memcpy(buffer.pointer + base_index - 1, DIGIT_TABLE + c0, 2);
                         memcpy(buffer.pointer + base_index - 3, DIGIT_TABLE + c1, 2);
 
@@ -1022,7 +1021,7 @@ u64 format_float(String buffer, f64 value_double)
                 } break;
             case FLOAT_FORMAT_DECIMAL:
                 {
-                    auto dp_offset = result.exponent + cast_to(s32, u32, olength);
+                    let(dp_offset, result.exponent + cast_to(s32, olength));
 
                     if (dp_offset <= 0)
                     {
@@ -1030,9 +1029,9 @@ u64 format_float(String buffer, f64 value_double)
                         buffer.pointer[buffer_i + 1] = '.';
                         buffer_i += 2;
 
-                        // auto dp_index = buffer_i;
+                        // let(dp_index, buffer_i);
 
-                        auto dp_poffset = (u32)(-dp_offset);
+                        let(dp_poffset, (u32)(-dp_offset));
                         memset(buffer.pointer + buffer_i, '0', dp_poffset);
                         buffer_i += dp_poffset;
                         write_float_decimal(s_get_slice(u8, buffer, buffer_i, buffer.length), &output, olength);
@@ -1040,13 +1039,13 @@ u64 format_float(String buffer, f64 value_double)
                     }
                     else
                     {
-                        auto dp_uoffset = (u64)dp_offset;
+                        let(dp_uoffset, (u64)dp_offset);
                         if (dp_uoffset >= olength)
                         {
                             write_float_decimal(s_get_slice(u8, buffer, buffer_i, buffer.length), &output, olength);
                             buffer_i += olength;
-                            auto length = dp_uoffset - olength;
-                            auto memset_slice = s_get_slice(u8, buffer, buffer_i, buffer_i + length);
+                            let(length, dp_uoffset - olength);
+                            String memset_slice = s_get_slice(u8, buffer, buffer_i, buffer_i + length);
                             memset(memset_slice.pointer, 0, length);
                             buffer_i += length;
                         }
@@ -1054,7 +1053,7 @@ u64 format_float(String buffer, f64 value_double)
                         {
                             write_float_decimal(s_get_slice(u8, buffer, buffer_i + dp_uoffset + 1, buffer.length), &output, olength - dp_uoffset);
                             buffer.pointer[buffer_i + dp_uoffset] = '.';
-                            // auto dp_index = buffer_i + dp_uoffset + 1;
+                            // let(dp_index, buffer_i + dp_uoffset + 1);
                             write_float_decimal(s_get_slice(u8, buffer, buffer_i, buffer.length), &output, dp_uoffset);
                             buffer_i += olength + 1;
                         }
@@ -1066,7 +1065,7 @@ u64 format_float(String buffer, f64 value_double)
     return buffer_i;
 }
 
-String format_string_va(String buffer, const char* format, va_list args)
+fn String format_string_va(String buffer, const char* format, va_list args)
 {
     u8* it = (u8*)format;
     u64 buffer_i = 0;
@@ -1083,7 +1082,7 @@ String format_string_va(String buffer, const char* format, va_list args)
         if (*it == brace_open)
         {
             it += 1;
-            auto next_ch = *it;
+            let(next_ch, *it);
 
             if (next_ch == brace_open)
             {
@@ -1107,7 +1106,7 @@ String format_string_va(String buffer, const char* format, va_list args)
                                     {
                                         it += 1;
                                         done = 1;
-                                        auto* cstring = va_arg(args, const u8*);
+                                        let_va_arg(const u8*, cstring, args);
                                         while (*cstring)
                                         {
                                             buffer.pointer[buffer_i] = *cstring;
@@ -1119,7 +1118,7 @@ String format_string_va(String buffer, const char* format, va_list args)
                             }
                             else
                             {
-                                auto character = cast_to(u8, u32, va_arg(args, u32));
+                                let_cast(u8, character, cast_to(u8, va_arg(args, u32)));
                                 buffer.pointer[buffer_i] = character;
                                 buffer_i += 1;
                                 done = 1;
@@ -1172,7 +1171,7 @@ String format_string_va(String buffer, const char* format, va_list args)
                                 u8* bit_count_end = it;
                                 u64 bit_count = parse_decimal(slice_from_pointer_range(u8, (u8*)bit_count_start, (u8*)bit_count_end));
 
-                                typedef enum IntegerFormat : u8
+                                typedef enum IntegerFormat
                                 {
                                     INTEGER_FORMAT_HEXADECIMAL,
                                     INTEGER_FORMAT_DECIMAL,
@@ -1221,13 +1220,13 @@ String format_string_va(String buffer, const char* format, va_list args)
                                         unreachable();
                                 }
 
-                                auto buffer_slice = s_get_slice(u8, buffer, buffer_i, buffer.length);
+                                String buffer_slice = s_get_slice(u8, buffer, buffer_i, buffer.length);
 
                                 switch (format)
                                 {
                                     case INTEGER_FORMAT_HEXADECIMAL:
                                         {
-                                            auto written_characters = format_hexadecimal(buffer_slice, original_value);
+                                            let(written_characters, format_hexadecimal(buffer_slice, original_value));
                                             buffer_i += written_characters;
                                         } break;
                                     case INTEGER_FORMAT_DECIMAL:
@@ -1246,7 +1245,7 @@ String format_string_va(String buffer, const char* format, va_list args)
                                                 value = (u64)original_value;
                                             }
 
-                                            auto written_characters = format_decimal(buffer_slice, value);
+                                            let(written_characters, format_decimal(buffer_slice, value));
                                             buffer_i += written_characters;
                                         } break;
                                     case INTEGER_FORMAT_OCTAL:
@@ -1280,7 +1279,7 @@ String format_string_va(String buffer, const char* format, va_list args)
                             u8* bit_count_end = it;
                             u64 bit_count = parse_decimal(slice_from_pointer_range(u8, (u8*)bit_count_start, (u8*)bit_count_end));
 
-                            typedef enum IntegerFormat : u8
+                            typedef enum IntegerFormat
                             {
                                 INTEGER_FORMAT_HEXADECIMAL,
                                 INTEGER_FORMAT_DECIMAL,
@@ -1329,18 +1328,18 @@ String format_string_va(String buffer, const char* format, va_list args)
                                     unreachable();
                             }
 
-                            auto buffer_slice = s_get_slice(u8, buffer, buffer_i, buffer.length);
+                            let(buffer_slice, s_get_slice(u8, buffer, buffer_i, buffer.length));
 
                             switch (format)
                             {
                                 case INTEGER_FORMAT_HEXADECIMAL:
                                     {
-                                        auto written_characters = format_hexadecimal(buffer_slice, original_value);
+                                        let(written_characters, format_hexadecimal(buffer_slice, original_value));
                                         buffer_i += written_characters;
                                     } break;
                                 case INTEGER_FORMAT_DECIMAL:
                                     {
-                                        auto written_characters = format_decimal(buffer_slice, original_value);
+                                        let(written_characters, format_decimal(buffer_slice, original_value));
                                         buffer_i += written_characters;
                                     } break;
                                 case INTEGER_FORMAT_OCTAL:
@@ -1372,11 +1371,11 @@ String format_string_va(String buffer, const char* format, va_list args)
     return (String) { .pointer = buffer.pointer, .length = buffer_i };
 }
 
-String format_string(String buffer, const char* format, ...)
+fn String format_string(String buffer, const char* format, ...)
 {
     va_list args;
     va_start(args, format);
-    auto result = format_string_va(buffer, format, args);
+    let(result, format_string_va(buffer, format, args));
     va_end(args);
     return result;
 }
