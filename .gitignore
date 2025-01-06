@@ -6,3 +6,5 @@ project
 /project.dSYM/
 /.cache/
 imgui.ini
+/cache/
+.DS_Store

@@ -10,13 +10,18 @@ on:
   schedule:
     - cron: "0 0 * * *"
 
+env:
+  BB_CI: 1
+
 jobs:
   generate-config:
     runs-on: ubuntu-24.04
     permissions: write-all
     outputs:
       BIRTH_GITHUB_TARGETS: ${{ steps.generate-config.outputs.BIRTH_GITHUB_TARGETS }}
+      BIRTH_BUILD_TYPES: ${{ steps.generate-config.outputs.BIRTH_BUILD_TYPES }}
       BIRTH_CMAKE_BUILD_TYPES: ${{ steps.generate-config.outputs.BIRTH_CMAKE_BUILD_TYPES }}
+      BIRTH_COMPILERS: ${{ steps.generate-config.outputs.BIRTH_COMPILERS }}
       BIRTH_MACOS_IMAGE: ${{ steps.generate-config.outputs.BIRTH_LINUX_IMAGE }}
       BIRTH_LINUX_IMAGE: ${{ steps.generate-config.outputs.BIRTH_LINUX_IMAGE }}
       BIRTH_WINDOWS_IMAGE: ${{ steps.generate-config.outputs.BIRTH_WINDOWS_IMAGE }}
@@ -26,7 +31,7 @@ jobs:
         uses: actions/checkout@v4
       - name: Generate config
         id: generate-config
-        uses: birth-software/github-config@v3
+        uses: birth-software/github-config@v4
       - name: Create tag
         if: github.ref == 'refs/heads/main'
         shell: bash
@@ -52,8 +57,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(needs.generate-config.outputs.BIRTH_GITHUB_TARGETS) }}
-        CMAKE_BUILD_TYPE: ${{ fromJSON(needs.generate-config.outputs.BIRTH_CMAKE_BUILD_TYPES) }}
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+        C_COMPILER: ${{ fromJSON(needs.generate-config.outputs.BIRTH_COMPILERS) }}
+        BIRTH_BUILD_TYPE: ${{ fromJSON(needs.generate-config.outputs.BIRTH_BUILD_TYPES) }}
+        exclude:
+          - C_COMPILER: gcc
+            os: macos-latest
+          - C_COMPILER: gcc
+            os: windows-latest
+          - C_COMPILER: cl
+            os: macos-latest
+          - C_COMPILER: cl
+            os: ubuntu-latest
+          - C_COMPILER: tcc
+            BIRTH_BUILD_TYPE: release_safe
+          - C_COMPILER: tcc
+            BIRTH_BUILD_TYPE: release_fast
+          - C_COMPILER: tcc
+            BIRTH_BUILD_TYPE: release_small
     runs-on: ${{ matrix.os }}
     env:
       BIRTH_LINUX_IMAGE: ${{ needs.generate-config.outputs.BIRTH_LINUX_IMAGE }}
@@ -61,96 +82,48 @@ jobs:
       BIRTH_WINDOWS_IMAGE: ${{ needs.generate-config.outputs.BIRTH_WINDOWS_IMAGE }}
       RELEASE_TAG_NAME: ${{ needs.generate-config.outputs.RELEASE_TAG_NAME }}
     steps:
-      - name: Maximize build space
-        if: matrix.os == env.BIRTH_LINUX_IMAGE
-        uses: AdityaGarg8/remove-unwanted-software@v4.1
-        with:
-          remove-android: 'true'
-          remove-dotnet: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
-          remove-docker-images: 'true'
-          remove-large-packages: 'true'
-          remove-cached-tools: 'true'
-          remove-swapfile: 'true'
       - uses: actions/checkout@v4
-      - uses: birth-software/github-setup@v3
-      - name: Fetch LLVM
-        id: fetch_llvm
-        run: ./fetch-llvm.sh
+      - name: Fetch dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          if [[ "${{matrix.C_COMPILER}}" == "tcc" ]]; then
+              wget https://github.com/birth-software/tinycc/releases/download/dev/tcc-x86_64-linux.7z
+              7z x tcc-x86_64-linux.7z
+              echo $PWD/tinycc/bin >> $GITHUB_PATH
+          fi
+      - name: Fetch dependencies
+        if: matrix.os == 'macos-latest'
+        run: |
+          if [[ "${{matrix.C_COMPILER}}" == "tcc" ]]; then
+              wget https://github.com/birth-software/tinycc/releases/download/dev/tcc-aarch64-macos.7z
+              7z x tcc-aarch64-macos.7z
+              echo $PWD/tinycc/bin >> $GITHUB_PATH
+          fi
+      - name: Fetch dependencies
+        if: matrix.os == 'windows-latest'
         shell: bash
-        env:
-          CMAKE_BUILD_TYPE: ${{matrix.CMAKE_BUILD_TYPE}}
+        run: |
+          set -eux
+          if [[ "${{matrix.C_COMPILER}}" == "tcc" ]]; then
+              curl -L https://github.com/birth-software/tinycc/releases/download/dev/tcc-x86_64-windows.7z --output tcc-x86_64-windows.7z
+              7z x tcc-x86_64-windows.7z
+              TCC_PATH=$(cygpath -w "$PWD/tinycc")
+              echo $TCC_PATH >> $GITHUB_PATH
+          fi
       - name: Build
-        id: build
-        run: ./project.sh
-        shell: bash
+        if: matrix.os != 'windows-latest'
         env:
-          CMAKE_BUILD_TYPE: ${{matrix.CMAKE_BUILD_TYPE}}
-          CMAKE_PREFIX_PATH: ${{steps.fetch_llvm.outputs.CMAKE_PREFIX_PATH}}
-          BB_IS_CI: true
-      - name: Test
-        run: ./project.sh test all
-        shell: bash
+          CC: ${{matrix.C_COMPILER}}
+          BB_BUILD_TYPE: ${{matrix.BIRTH_BUILD_TYPE}}
+        run: ./build.sh
+      - name: Build
+        if: matrix.os == 'windows-latest'
+        shell: cmd
         env:
-          CMAKE_BUILD_TYPE: ${{matrix.CMAKE_BUILD_TYPE}}
-          CMAKE_PREFIX_PATH: ${{steps.fetch_llvm.outputs.CMAKE_PREFIX_PATH}}
-          BB_IS_CI: true
-      - name: Package
-        id: package
-        if: ${{ always() && steps.build.outcome == 'success' }}
-        run: ./package.sh
-        shell: bash
-        env:
-          CMAKE_BUILD_TYPE: ${{matrix.CMAKE_BUILD_TYPE}}
-          BB_IS_CI: true
-      - name: Upload artifact
-        if: ${{ always() && steps.package.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{env.BLOAT_BUSTER_RELEASE_NAME_BASE}}
-          if-no-files-found: 'error'
-          path: ${{env.BLOAT_BUSTER_RELEASE_PATH_BASE}}.7z*
-      - name: Release - Attempt 1
-        id: release_attempt_1
-        uses: softprops/action-gh-release@v2
-        if: github.ref == 'refs/heads/main'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          name: "Development build"
-          tag_name: ${{ env.RELEASE_TAG_NAME }}
-          fail_on_unmatched_files: true
-          make_latest: true
-          files: |
-            ${{ env.BLOAT_BUSTER_RELEASE_PATH_BASE }}.7z
-            ${{ env.BLOAT_BUSTER_RELEASE_PATH_BASE }}.7z.b2sum
-        continue-on-error: true
-      - name: Release - Attempt 2
-        id: release_attempt_2
-        if: ${{ steps.release_attempt_1.outcome == 'failure' && github.ref == 'refs/heads/main' }}
-        uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          name: "Development build"
-          tag_name: ${{ env.RELEASE_TAG_NAME }}
-          fail_on_unmatched_files: true
-          make_latest: true
-          files: |
-            ${{ env.BLOAT_BUSTER_RELEASE_PATH_BASE }}.7z
-            ${{ env.BLOAT_BUSTER_RELEASE_PATH_BASE }}.7z.b2sum
-        continue-on-error: true
-      - name: Release - Attempt 3
-        if: ${{ steps.release_attempt_2.outcome == 'failure' && github.ref == 'refs/heads/main' }}
-        uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          name: "Development build"
-          tag_name: ${{ env.RELEASE_TAG_NAME }}
-          fail_on_unmatched_files: true
-          make_latest: true
-          files: |
-            ${{ env.BLOAT_BUSTER_RELEASE_PATH_BASE }}.7z
-            ${{ env.BLOAT_BUSTER_RELEASE_PATH_BASE }}.7z.b2sum
+          CC: ${{matrix.C_COMPILER}}
+          BB_BUILD_TYPE: ${{matrix.BIRTH_BUILD_TYPE}}
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64 || exit /b 1
+          call build.bat || exit /b 1
+      - name: Run
+        run: ./cache/bb

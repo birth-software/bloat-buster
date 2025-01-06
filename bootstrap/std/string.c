@@ -1,8 +1,8 @@
 #include <std/string.h>
 
-s32 string_first_ch(String string, u8 ch)
+u64 string_first_ch(String string, u8 ch)
 {
-    s32 result = -1;
+    u64 result = STRING_NO_MATCH;
     for (u64 i = 0; i < string.length; i += 1)
     {
         if (string.pointer[i] == ch)
@@ -15,16 +15,16 @@ s32 string_first_ch(String string, u8 ch)
     return result;
 }
 
-s64 string_last_ch(String string, u8 ch)
+u64 string_last_ch(String string, u8 ch)
 {
-    s64 result = -1;
+    u64 result = STRING_NO_MATCH;
     u64 i = string.length;
     while (i > 0)
     {
         i -= 1;
         if (string.pointer[i] == ch)
         {
-            result = cast_to(s64, u64, i);
+            result = i;
             break;
         }
     }
@@ -47,8 +47,8 @@ u8 string_starts_with(String string, String start)
             u64 i;
             for (i = 0; i < start.length; i += 1)
             {
-                auto start_ch = start.pointer[i];
-                auto string_ch = string.pointer[i];
+                let(start_ch, start.pointer[i]);
+                let(string_ch, string.pointer[i]);
                 if (unlikely(string_ch != start_ch))
                 {
                     break;
@@ -72,8 +72,8 @@ u8 string_ends_with(String string, String end)
         u64 offset = string.length - end.length;
         for (i = 0; i < end.length; i += 1)
         {
-            auto start_ch = end.pointer[i];
-            auto string_ch = string.pointer[i + offset];
+            let(start_ch, end.pointer[i]);
+            let(string_ch, string.pointer[i + offset]);
             if (unlikely(string_ch != start_ch))
             {
                 break;
@@ -86,9 +86,9 @@ u8 string_ends_with(String string, String end)
     return result;
 }
 
-u64 string_first_ocurrence(String string, String substring)
+u64 string_first_occurrence(String string, String substring)
 {
-    s32 result = UINT64_MAX;
+    u64 result = STRING_NO_MATCH;
 
     if (substring.length < string.length)
     {
@@ -99,7 +99,7 @@ u64 string_first_ocurrence(String string, String substring)
                 break;
             }
 
-            auto s = s_get_slice(u8, string, i, i + substring.length);
+            String s = s_get_slice(u8, string, i, i + substring.length);
             if (s_equal(s, substring))
             {
                 result = i;
@@ -122,7 +122,12 @@ u64 string_first_ocurrence(String string, String substring)
     return result;
 }
 
-u64 string_last_ocurrence(String string, String substring)
+fn u64 string_last_occurrence(String string, String substring)
 {
     todo();
+}
+
+fn u8 string_contains(String string, String substring)
+{
+    return string_first_occurrence(string, substring) != STRING_NO_MATCH;
 }
