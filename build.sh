@@ -17,16 +17,18 @@ if [[ -z "${BB_ERROR_LIMIT-}" ]]; then
     BB_ERROR_LIMIT=$((1 - BB_CI))
 fi
 
+BB_COMPILE_SHADERS=0
+
 BUILD_DIR=cache
 mkdir -p $BUILD_DIR
 
-if [[ "${BB_CI}" == "0" ]]; then
+if [[ "${BB_COMPILE_SHADERS}" == "1" ]]; then
     glslangValidator -V bootstrap/std/shaders/rect.vert -o $BUILD_DIR/rect.vert.spv --quiet
     glslangValidator -V bootstrap/std/shaders/rect.frag -o $BUILD_DIR/rect.frag.spv --quiet
 fi
 
 BUILD_OUT=$BUILD_DIR/build
-C_COMPILER=cc
+C_COMPILER=clang
 TIME_TRACE=1
 BB_TIMETRACE=0
 GCC_ARGS=

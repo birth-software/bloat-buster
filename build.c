@@ -247,12 +247,6 @@ fn String get_c_compiler_path(Arena* arena)
     {
         cc_path = cc_env;
     }
-#ifndef _WIN32
-    else
-    {
-        cc_path = file_find_in_path(arena, strlit("cc"), path_env, extension);
-    }
-#endif
 
     if (!cc_path.pointer)
     {
@@ -492,19 +486,33 @@ fn void compile_program(Arena* arena, CompileOptions options)
 
     add_arg(string_to_c(options.source_path));
 
-    if (c_compiler == C_COMPILER_MSVC)
+    switch (c_compiler)
     {
-        String strings[] = {
-            strlit("/Fe"),
-            options.output_path,
-        };
-        String arg = arena_join_string(arena, (Slice(String))array_to_slice(strings));
-        add_arg(string_to_c(arg));
+        case C_COMPILER_MSVC:
+            {
+                String strings[] = {
+                    strlit("/Fe"),
+                    options.output_path,
+                };
+                String arg = arena_join_string(arena, (Slice(String))array_to_slice(strings));
+                add_arg(string_to_c(arg));
 
-        add_arg("/Fo" BUILD_DIR "\\");
-        add_arg("/Fd" BUILD_DIR "\\");
+                add_arg("/Fo" BUILD_DIR "\\");
+                add_arg("/Fd" BUILD_DIR "\\");
+            } break;
+        case C_COMPILER_GCC:
+            {
+            } break;
+        case C_COMPILER_CLANG:
+            {
+                // add_arg("-working-directory");
+                // add_arg(BUILD_DIR);
+                // add_arg("-save-temps");
+            } break;
+        default: break;
     }
-    else
+
+    if (c_compiler != C_COMPILER_MSVC)
     {
         add_arg("-o");
         add_arg(string_to_c(options.output_path));
@@ -577,6 +585,7 @@ fn void compile_program(Arena* arena, CompileOptions options)
                 add_arg("-Wno-nested-anon-types");
                 add_arg("-Wno-keyword-macro");
                 add_arg("-Wno-gnu-auto-type");
+                add_arg("-Wno-gnu-binary-literal");
 #ifndef __APPLE__
                 add_arg("-Wno-auto-decl-extensions");
 #endif
