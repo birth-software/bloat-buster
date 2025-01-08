@@ -564,6 +564,11 @@ fn void compile_program(Arena* arena, CompileOptions options)
         case BUILD_TYPE_RELEASE_SMALL: add_arg("-DBB_DEBUG=0"); add_arg("-DNDEBUG=1"); break;
     }
 
+    if (!BB_CI)
+    {
+        add_arg("-march=native");
+    }
+
     // Inmutable options
     switch (c_compiler)
     {

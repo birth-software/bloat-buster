@@ -1,285 +1,10 @@
 #include <std/base.h>
 #include <std/os.h>
+#include <std/virtual_buffer.h>
 
 #include <std/base.c>
 #include <std/os.c>
-
-#if 0
-#include <std/project.h>
-#include <std/virtual_buffer.h>
-#include <std/windowing.h>
-#include <std/rendering.h>
-#include <std/ui_core.h>
-#include <std/ui_builder.h>
-
-#include <std/os.c>
 #include <std/virtual_buffer.c>
-#include <std/windowing.c>
-#include <std/rendering.c>
-#include <std/ui_core.c>
-#include <std/ui_builder.c>
-
-#define default_font_height (24)
-global_variable u32 proportional_font_height = default_font_height;
-global_variable u32 monospace_font_height = default_font_height;
-
-fn TextureIndex white_texture_create(Arena* arena, Renderer* renderer)
-{
-    u32 white_texture_width = 1024;
-    u32 white_texture_height = white_texture_width;
-    let(white_texture_buffer, arena_allocate(arena, u32, white_texture_width * white_texture_height));
-    memset(white_texture_buffer, 0xff, white_texture_width * white_texture_height * sizeof(u32));
-
-    let(white_texture, renderer_texture_create(renderer, (TextureMemory) {
-        .pointer = white_texture_buffer,
-        .width = white_texture_width,
-        .height = white_texture_height,
-        .depth = 1,
-        .format = TEXTURE_FORMAT_R8G8B8A8_SRGB,
-    }));
-
-    return white_texture;
-}
-
-STRUCT(BBPanel)
-{
-    BBPanel* first;
-    BBPanel* last;
-    BBPanel* next;
-    BBPanel* previous;
-    BBPanel* parent;
-    f32 parent_percentage;
-    Axis2 split_axis;
-};
-
-STRUCT(BBWindow)
-{
-    WindowingInstance* handle;
-    RenderWindow* render;
-    BBWindow* previous;
-    BBWindow* next;
-    BBPanel* root_panel;
-    UI_State* ui;
-};
-
-STRUCT(BBGUIState)
-{
-    Arena* arena;
-    Timestamp last_frame_timestamp;
-    BBWindow* first_window;
-    BBWindow* last_window;
-    Renderer* renderer;
-    // TODO: should this not be thread local?
-    WindowingEventQueue event_queue;
-};
-global_variable BBGUIState state;
-
-fn void ui_top_bar()
-{
-    ui_push(pref_height, ui_em(1, 1));
-    {
-        ui_push(child_layout_axis, AXIS2_X);
-        let(top_bar, ui_widget_make((UI_WidgetFlags) {
-                }, strlit("top_bar")));
-        ui_push(parent, top_bar);
-        {
-            ui_button(strlit("Button 1"));
-            ui_button(strlit("Button 2"));
-            ui_button(strlit("Button 3"));
-        }
-        ui_pop(parent);
-        ui_pop(child_layout_axis);
-    }
-    ui_pop(pref_height);
-}
-
-STRUCT(UI_Node)
-{
-    String name;
-    String type;
-    String value;
-    String namespace;
-    String function;
-};
-
-fn void ui_node(UI_Node node)
-{
-    let(node_widget, ui_widget_make_format((UI_WidgetFlags) {
-        .draw_background = 1,
-        .draw_text = 1,
-    }, "{s} : {s} = {s}##{s}{s}", node.name, node.type, node.value, node.function, node.namespace));
-}
-
-fn void app_update()
-{
-    let(frame_end, os_timestamp());
-    windowing_poll_events(/* &state.event_queue */);
-    let(frame_ms, os_resolve_timestamps(state.last_frame_timestamp, frame_end, TIME_UNIT_MILLISECONDS));
-    state.last_frame_timestamp = frame_end;
-
-    Renderer* renderer = state.renderer;
-
-    BBWindow* window = state.first_window;
-    while (likely(window))
-    {
-        let(previous, window->previous);
-        let(next, window->next);
-
-        let(render_window, window->render);
-        renderer_window_frame_begin(renderer, render_window);
-
-        ui_state_select(window->ui);
-
-        if (likely(ui_build_begin(window->handle, frame_ms, &state.event_queue)))
-        {
-            ui_push(font_size, default_font_height);
-
-            ui_top_bar();
-            ui_push(child_layout_axis, AXIS2_X);
-            let(workspace_widget, ui_widget_make_format((UI_WidgetFlags) {}, "workspace{u64}", window->handle));
-            ui_push(parent, workspace_widget);
-            {
-                // Node visualizer
-                ui_push(child_layout_axis, AXIS2_Y);
-                let(node_visualizer_widget, ui_widget_make_format((UI_WidgetFlags) {
-                    .draw_background = 1,
-                }, "node_visualizer{u64}", window->handle));
-
-                ui_push(parent, node_visualizer_widget);
-                {
-                    ui_node((UI_Node) {
-                        .name = strlit("a"),
-                        .type = strlit("s32"),
-                        .value = strlit("1"),
-                        .namespace = strlit("foo"),
-                        .function = strlit("main"),
-                    });
-                    ui_node((UI_Node) {
-                        .name = strlit("b"),
-                        .type = strlit("s32"),
-                        .value = strlit("2"),
-                        .namespace = strlit("foo"),
-                        .function = strlit("main"),
-                    });
-                }
-                ui_pop(parent);
-                ui_pop(child_layout_axis);
-
-                // Side-panel stub
-                ui_button(strlit("Options"));
-            }
-            ui_pop(parent);
-            ui_pop(child_layout_axis);
-
-            ui_build_end();
-
-            ui_draw();
-
-            ui_pop(font_size);
-
-            renderer_window_frame_end(renderer, render_window);
-        }
-        else
-        {
-            if (previous)
-            {
-                previous->next = next;
-            }
-
-            if (next)
-            {
-                next->previous = previous;
-            }
-
-            if (state.first_window == window)
-            {
-                state.first_window = next;
-            }
-
-            if (state.last_window == window)
-            {
-                state.last_window = previous;
-            }
-        }
-
-        window = next;
-    }
-}
-
-fn void window_refresh_callback(WindowingInstance* window, void* context)
-{
-    unused(window);
-    unused(context);
-    app_update();
-}
-
-int main()
-{
-    state.arena = arena_initialize_default(MB(2));
-    if (!windowing_initialize())
-    {
-        return 1;
-    }
-
-    state.renderer = rendering_initialize(state.arena);
-    if (!state.renderer)
-    {
-        return 1;
-    }
-
-    WindowingInstantiate window_create_options = {
-        .name = strlit("Bloat Buster"),
-        .size = { .width = 1600, .height = 900 },
-    };
-    state.first_window = state.last_window = arena_allocate(state.arena, BBWindow, 1);
-    state.first_window->handle = windowing_instantiate(window_create_options);
-
-    state.first_window->render = rendering_initialize_window(state.renderer, state.first_window->handle);
-
-    state.first_window->ui = ui_state_allocate(state.renderer, state.first_window->render);
-    state.first_window->root_panel = arena_allocate(state.arena, BBPanel, 1);
-    state.first_window->root_panel->parent_percentage = 1.0f;
-    state.first_window->root_panel->split_axis = AXIS2_X;
-
-#ifndef __APPLE__
-    window_rect_texture_update_begin(state.first_window->render);
-
-    let(white_texture, white_texture_create(state.arena, state.renderer));
-    TextureAtlasCreate monospace_font_create = {
-#ifdef _WIN32
-        .font_path = strlit("C:/Users/David/Downloads/Fira_Sans/FiraSans-Regular.ttf"),
-#elif defined(__linux__)
-        .font_path = strlit("/usr/share/fonts/TTF/FiraSans-Regular.ttf"),
-#elif defined(__APPLE__)
-        .font_path = strlit("/Users/david/Library/Fonts/FiraSans-Regular.ttf"),
-#else
-        .font_path = strlit("WRONG_PATH"),
-#endif
-        .text_height = monospace_font_height,
-    };
-    let(monospace_font, font_texture_atlas_create(state.arena, state.renderer, monospace_font_create));
-    let(proportional_font, monospace_font);
-
-    window_queue_rect_texture_update(state.first_window->render, RECT_TEXTURE_SLOT_WHITE, white_texture);
-    renderer_queue_font_update(state.renderer, state.first_window->render, RENDER_FONT_TYPE_MONOSPACE, monospace_font);
-    renderer_queue_font_update(state.renderer, state.first_window->render, RENDER_FONT_TYPE_PROPORTIONAL, proportional_font);
-
-    window_rect_texture_update_end(state.renderer, state.first_window->render);
-#endif
-
-    state.last_frame_timestamp = os_timestamp();
-
-    while (state.first_window)
-    {
-        app_update();
-    }
-
-    return 0;
-}
-#else
-
-global_variable const u8 operand_size_override_prefix = 0x66;
-// global_variable const u8 address_size_override_prefix = 0x67;
 
 typedef enum GPR_x86_64
 {
@@ -396,13 +121,22 @@ STRUCT(InstructionEncoding)
     u8 sib_base;
 };
 
-fn u64 encode_instructions(u8* restrict output, InstructionEncoding* restrict encodings, u64 encoding_count)
+#define batch_element_count (16)
+#define max_instruction_byte_count (16)
+
+u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* const restrict encodings, u64 encoding_count)
 {
-    u8* restrict it = output;
-    for (u64 i = 0; i < encoding_count; i += 1)
+    u8 buffers[batch_element_count][max_instruction_byte_count];
+    u8 instruction_lengths[batch_element_count];
+
+    for (u32 i = 0; i < batch_element_count; i += 1)
     {
         InstructionEncoding encoding = encodings[i];
+    
+        const u8* const start = (const u8* const) &buffers[i];
+        u8* restrict it = (u8* restrict) &buffers[i];
 
+        u8 operand_size_override_prefix = 0x66;
         *it = operand_size_override_prefix;
         it += encoding.is_16_mode;
 
@@ -411,9 +145,9 @@ fn u64 encode_instructions(u8* restrict output, InstructionEncoding* restrict en
         u8 rex_x = 0x02;
         u8 rex_r = 0x04;
         u8 rex_w = 0x08;
-        u8 byte_rex_b = rex_b * ((encoding.reg1 & 0b1000) != 0);
+        u8 byte_rex_b = rex_b * ((encoding.reg1 & 0b1000) >> 3);
         u8 byte_rex_x = rex_x * encoding.scaled_index_register;
-        u8 byte_rex_r = rex_r * ((encoding.reg2 & 0b1000) != 0);
+        u8 byte_rex_r = rex_r * ((encoding.reg2 & 0b1000) >> 3);
         u8 byte_rex_w = rex_w * encoding.is_64_bit;
         u8 byte_rex = (byte_rex_b | byte_rex_x) | (byte_rex_r | byte_rex_w);
         u8 rex = (rex_base | byte_rex);
@@ -468,92 +202,331 @@ fn u64 encode_instructions(u8* restrict output, InstructionEncoding* restrict en
 
         *(typeof(encoding.immediate64)*) it = encoding.immediate64;
         it += encoding.is_immediate64 * sizeof(encoding.immediate64);
+
+        let_cast(u8, instruction_length, it - start);
+        instruction_lengths[i] = instruction_length;
     }
 
-    u64 length = (u64)(it - output);
-    return length;
+    u8* restrict it = output;
+
+    for (u32 i = 0; i < MIN(encoding_count, batch_element_count); i += 1)
+    {
+        let(instruction_length, instruction_lengths[i]);
+#if USE_MEMCPY
+        memcpy(it, &buffers[i], instruction_length);
+#else
+        for (u8 byte = 0; byte < instruction_length; byte += 1)
+        {
+            it[byte] = buffers[i][byte];
+        }
+        it += instruction_length;
+#endif
+    }
+
+    return it - output;
+}
+
+typedef enum Mnemonic_x86_64
+{
+    MNEMONIC_x86_64_add,
+} Mnemonic_x86_64;
+
+fn String mnemonic_x86_64_to_string(Mnemonic_x86_64 mnemonic)
+{
+    switch (mnemonic)
+    {
+        case_to_name(MNEMONIC_x86_64_, add);
+    }
 }
 
 STRUCT(EncodingTestCase)
 {
     InstructionEncoding encoding;
     String expected;
-    String text;
 };
 
-fn u8 encoding_test_all(EncodingTestCase* restrict test_cases, u64 test_case_count)
+typedef enum BatchEncodingKind
 {
-    u8 buffer[256];
+    BATCH_ENCODING_KIND_RA8_IMM8,
+    BATCH_ENCODING_KIND_RA16_IMM16,
+    BATCH_ENCODING_KIND_RA32_IMM32,
+    BATCH_ENCODING_KIND_RA64_IMM32,
+
+    BATCH_ENCODING_KIND_RM8_IMM8,
+    BATCH_ENCODING_KIND_RM16_IMM16,
+    BATCH_ENCODING_KIND_RM32_IMM32,
+    BATCH_ENCODING_KIND_RM64_IMM32,
+
+    BATCH_ENCODING_KIND_RM16_IMM8,
+    BATCH_ENCODING_KIND_RM32_IMM8,
+    BATCH_ENCODING_KIND_RM64_IMM8,
+
+    BATCH_ENCODING_KIND_RM8_R8,
+    BATCH_ENCODING_KIND_RM16_R16,
+    BATCH_ENCODING_KIND_RM32_R32,
+    BATCH_ENCODING_KIND_RM64_R64,
+
+    BATCH_ENCODING_KIND_R8_RM8,
+    BATCH_ENCODING_KIND_R16_RM16,
+    BATCH_ENCODING_KIND_R32_RM32,
+    BATCH_ENCODING_KIND_R64_RM64,
+
+    BATCH_ENCODING_COUNT,
+} BatchEncodingKind;
+
+STRUCT(BatchEncoding)
+{
+    u32 expected_offset;
+    u8 expected_length;
+    u8 valid;
+};
+
+STRUCT(Batch)
+{
+    Mnemonic_x86_64 mnemonic;
+
+    BatchEncoding encodings[BATCH_ENCODING_COUNT];
+};
+decl_vb(Batch);
+
+STRUCT(TestDataset)
+{
+    const Batch* const restrict batches;
+    u64 batch_count;
+    u8* restrict expected_buffer;
+};
+
+fn u8 encoding_test_instruction_batches(TestDataset dataset)
+{
     u8 result = 0;
 
-    for (u64 i = 0; i < test_case_count; i += 1)
+    print("Dataset batch count: {u64}\n", dataset.batch_count);
+    for (u64 i = 0; i < dataset.batch_count; i += 1)
     {
-        print("{s}... ", test_cases[i].text);
-        u64 length = encode_instructions(buffer, &test_cases[i].encoding, 1);
-        String expected = test_cases[i].expected;
-        u8 error = length != expected.length;
+        const Batch* const restrict batch = &dataset.batches[i];
 
-        u64 error_byte = length;
-        if (!error)
+        for (BatchEncodingKind kind = 0; kind < BATCH_ENCODING_COUNT; kind += 1)
         {
-            for (u64 i = 0; i < length; i += 1)
+            const BatchEncoding* const restrict batch_encoding = &batch->encodings[kind];
+            if (batch_encoding->valid)
             {
-                if (buffer[i] != expected.pointer[i])
+                u8 buffer[max_instruction_byte_count];
+                print("{s}", mnemonic_x86_64_to_string(batch->mnemonic));
+
+                InstructionEncoding encoding = {};
+                let(length, encode_instruction_batch(buffer, &encoding, 1));
+
+                let(expected_length, batch_encoding->expected_length);
+                let(expected_pointer, &dataset.expected_buffer[batch_encoding->expected_offset]);
+
+                u8 error = length != expected_length;
+                u64 error_byte = length;
+
+                if (!error)
                 {
-                    error_byte = i;
-                    break;
+                    for (u64 i = 0; i < length; i += 1)
+                    {
+                        if (buffer[i] != expected_pointer[i])
+                        {
+                            error_byte = i;
+                            break;
+                        }
+                    }
+                }
+
+                error = error | (error_byte != length);
+
+                if (unlikely(error))
+                {
+                    result = 1;
+
+                    print("[FAILED]\n");
+
+                    print("=============================\n");
+
+                    if (length != expected_length)
+                    {
+                        print("error: mismatch in the length of the instruction\n");
+                    }
+
+                    if (error_byte != length)
+                    {
+                        print("error: byte {u64} does not match. Expected: 0x{u32:x}. Produced: 0x{u32:x}\n", error_byte, (u32)expected_pointer[error_byte], (u32)buffer[error_byte]);
+                    }
+
+                    print("Expected {u64} bytes:\n", expected_length);
+
+                    for (u64 i = 0; i < expected_length; i += 1)
+                    {
+                        print("0x{u32:x} ", (u32)expected_pointer[i]);
+                    }
+
+                    print("\nOutput {u64} bytes:\n", length);
+
+                    for (u64 i = 0; i < length; i += 1)
+                    {
+                        print("0x{u32:x} ", (u32)buffer[i]);
+                    }
+
+                    print("\n");
+                    print("=============================\n");
+                }
+                else
+                {
+                    print("[OK] [ ");
+                    for (u64 i = 0; i < length; i += 1)
+                    {
+                        print("0x{u32:x} ", (u32)buffer[i]);
+                    }
+                    print("]\n");
                 }
             }
         }
-
-        error = error | (error_byte != length);
-
-        if (unlikely(error))
-        {
-            result = 1;
-
-            print("[FAILED]\n");
-
-            print("=============================\n");
-
-            if (length != expected.length)
-            {
-                print("error: mismatch in the length of the instruction\n");
-            }
-
-            if (error_byte != length)
-            {
-                print("error: byte {u64} does not match. Expected: 0x{u32:x}. Produced: 0x{u32:x}\n", error_byte, (u32)expected.pointer[error_byte], (u32)buffer[error_byte]);
-            }
-
-            print("Expected {u64} bytes:\n", expected.length);
-
-            for (u64 i = 0; i < expected.length; i += 1)
-            {
-                print("0x{u32:x} ", (u32)expected.pointer[i]);
-            }
-
-            print("\nOutput {u64} bytes:\n", length);
-
-            for (u64 i = 0; i < length; i += 1)
-            {
-                print("0x{u32:x} ", (u32)buffer[i]);
-            }
-
-            print("\n");
-            print("=============================\n");
-        }
-        else
-        {
-            print("[OK] [ ");
-            for (u64 i = 0; i < length; i += 1)
-            {
-                print("0x{u32:x} ", (u32)buffer[i]);
-            }
-            print("]\n");
-        }
     }
 
+    return result;
+}
+
+STRUCT(DatasetPreparer)
+{
+    VirtualBuffer(u8) expected_buffer;
+    VirtualBuffer(Batch) batches;
+};
+
+STRUCT(BatchCreate)
+{
+    Mnemonic_x86_64 mnemonic;
+};
+
+fn Batch* prepare_get_batch(DatasetPreparer* restrict preparer, BatchCreate create)
+{
+    Batch* batch = vb_add(&preparer->batches, 1);
+    batch->mnemonic = create.mnemonic;
+    return batch;
+}
+
+STRUCT(Opcode)
+{
+    u8 length;
+    u8 bytes[4];
+};
+
+typedef enum ImmediateKind
+{
+    IMMEDIATE_KIND_8 = 0,
+    IMMEDIATE_KIND_16 = 1,
+    IMMEDIATE_KIND_32 = 2,
+    IMMEDIATE_KIND_64 = 3,
+} ImmediateKind;
+
+STRUCT(Immediate)
+{
+    u64 value;
+    union
+    {
+        struct
+        {
+            u8 immediate8:1;
+            u8 immediate16:1;
+            u8 immediate32:1;
+            u8 immediate64:1;
+            u8 reserved:4;
+        };
+        u8 raw;
+    };
+};
+
+typedef enum OperandKind
+{
+    op_none,
+    op_ra8,
+    op_ra16,
+    op_ra32,
+    op_ra64,
+    op_r8,
+    op_r16,
+    op_r32,
+    op_r64,
+    op_rm8,
+    op_rm16,
+    op_rm32,
+    op_rm64,
+    op_imm8,
+    op_imm16,
+    op_imm32,
+    op_imm64,
+} OperandKind;
+
+#define operand_kind_array_element_count (4)
+
+UNION(Operand)
+{
+    Immediate immediate;
+};
+
+STRUCT(EncodingPrepare)
+{
+    Opcode opcode;
+    BatchEncodingKind kind;
+    OperandKind operands[operand_kind_array_element_count];
+    u8 instruction_bytes[16];
+    u8 instruction_length;
+};
+
+fn Opcode opcode1(u8 opcode)
+{
+    Opcode result = {
+        .length = 1,
+        .bytes = { opcode },
+    };
+    return result;
+}
+
+fn void prepare_batch_encoding(DatasetPreparer* restrict preparer, Batch* restrict batch, EncodingPrepare prepare)
+{
+    unused(preparer);
+    unused(batch);
+    unused(prepare);
+}
+
+#define batch_start(_mnemonic) let(batch, prepare_get_batch(preparer, (BatchCreate) { .mnemonic = (MNEMONIC_x86_64_ ## _mnemonic), }));
+#define encode(_opcode, _expected_b, _operands) \
+    do {\
+        EncodingPrepare encoding_prepare = {\
+            .opcode = (_opcode),\
+            .instruction_length = array_length(_operands),\
+        };\
+        for (u32 i = 0; i < array_length(_operands); i += 1)\
+        {\
+            encoding_prepare.operands[i] = (_operands)[i];\
+        }\
+        for (u32 i = 0; i < array_length(_expected_b); i += 1)\
+        {\
+            encoding_prepare.instruction_bytes[i] = (_expected_b)[i];\
+        }\
+        prepare_batch_encoding(preparer, batch, encoding_prepare);\
+    } while (0)
+#define batch_end()
+#define exp(...) ((u8[]){ __VA_ARGS__ })
+#define ops(...) ((OperandKind[]){ __VA_ARGS__ })
+
+fn TestDataset construct_test_cases()
+{
+    DatasetPreparer preparer_memory = {};
+    DatasetPreparer* restrict preparer = &preparer_memory;
+
+    {
+        batch_start(add);
+        // do { prepare_batch_encoding(preparer, batch, (EncodingPrepare) { .opcode = opcode1(0x04), .operands = ((((OperandKind[]){ op_ra8, op_imm8 }))), .expected = ((((u8[])({ 0x04 })))), }); } while (0);
+        encode(opcode1(0x04), exp(0x04), ops(op_ra8, op_imm8));
+        batch_end();
+    }
+
+    TestDataset result = {
+        .expected_buffer = preparer->expected_buffer.pointer,
+        .batches = preparer->batches.pointer,
+        .batch_count = preparer->batches.length,
+    };
     return result;
 }
 
@@ -563,752 +536,738 @@ int main(int argc, char** argv, char** envp)
     unused(argv);
     unused(envp);
 
-#define immediate8_literal  0x10
-#define immediate16_literal 0x1000
-#define immediate32_literal 0x10000000
-#define immediate64_literal 0x1000000000000000
+    TestDataset dataset = construct_test_cases();
+    u8 result = encoding_test_instruction_batches(dataset);
+    return result;
 
-#define immediate8_string  "0x10"
-#define immediate16_string "0x1000"
-#define immediate32_string "0x10000000"
-#define immediate64_string "0x1000000000000000"
+    // EncodingTestCase test_cases[] = {
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x04,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x04, immediate8_array })),
+    //         .text = strlit("add al, " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x05,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x05, immediate16_array })),
+    //         .text = strlit("add ax, " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x05,
+    //             .is_immediate32 = 1,
+    //             .immediate32 = immediate32_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x05, immediate32_array })),
+    //         .text = strlit("add eax, " immediate32_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x05,
+    //             .is_immediate32 = 1,
+    //             .immediate32 = immediate32_literal,
+    //             .is_64_bit = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x48, 0x05, immediate32_array })),
+    //         .text = strlit("add rax, " immediate32_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_AL,
+    //             .is_reg1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x80, 0xc0, immediate8_array })),
+    //         .text = strlit("add al, " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_CL,
+    //             .is_reg1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x80, 0xc1, immediate8_array })),
+    //         .text = strlit("add cl, " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_DL,
+    //             .is_reg1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x80, 0xc2, immediate8_array })),
+    //         .text = strlit("add dl, " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_BL,
+    //             .is_reg1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x80, 0xc3, immediate8_array })),
+    //         .text = strlit("add bl, " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_AH,
+    //             .is_reg1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x80, 0xc4, immediate8_array })),
+    //         .text = strlit("add ah, " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_CH,
+    //             .is_reg1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x80, 0xc5, immediate8_array })),
+    //         .text = strlit("add ch, " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_DH,
+    //             .is_reg1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x80, 0xc6, immediate8_array })),
+    //         .text = strlit("add dh, " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_BH,
+    //             .is_reg1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x80, 0xc7, immediate8_array })),
+    //         .text = strlit("add bh, " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_RAX,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x80, 0x00, immediate8_array })),
+    //         .text = strlit("add byte ptr [rax], " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_RCX,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x80, 0x01, immediate8_array })),
+    //         .text = strlit("add byte ptr [rcx], " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_RDX,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x80, 0x02, immediate8_array })),
+    //         .text = strlit("add byte ptr [rdx], " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_RBX,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x80, 0x03, immediate8_array })),
+    //         .text = strlit("add byte ptr [rbx], " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_RSP,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //             .sib_base = REGISTER_X86_64_RSP,
+    //             .sib_index = 0b100,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x80, 0x04, 0x24, immediate8_array })),
+    //         .text = strlit("add byte ptr [rsp], " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_RBP,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x80, 0x45, 0x00, immediate8_array })),
+    //         .text = strlit("add byte ptr [rbp], " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_RSI,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x80, 0x06, immediate8_array })),
+    //         .text = strlit("add byte ptr [rsi], " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_RDI,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x80, 0x07, immediate8_array })),
+    //         .text = strlit("add byte ptr [rdi], " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_R8,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x00, immediate8_array })),
+    //         .text = strlit("add byte ptr [r8], " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_R9,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x01, immediate8_array })),
+    //         .text = strlit("add byte ptr [r9], " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_R10,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x02, immediate8_array })),
+    //         .text = strlit("add byte ptr [r10], " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_R11,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x03, immediate8_array })),
+    //         .text = strlit("add byte ptr [r11], " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_R12,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //             .sib_base = REGISTER_X86_64_R12,
+    //             .sib_index = 0b100,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x04, 0x24, immediate8_array })),
+    //         .text = strlit("add byte ptr [r12], " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_R13,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x45, 0x00, immediate8_array })),
+    //         .text = strlit("add byte ptr [r13], " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_R14,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x06, immediate8_array })),
+    //         .text = strlit("add byte ptr [r14], " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x80,
+    //             .reg1 = REGISTER_X86_64_R15,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate8 = 1,
+    //             .immediate8 = immediate8_literal,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x07, immediate8_array })),
+    //         .text = strlit("add byte ptr [r15], " immediate8_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_AX,
+    //             .is_reg1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc0, immediate16_array })),
+    //         .text = strlit("add ax, " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_CX,
+    //             .is_reg1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc1, immediate16_array })),
+    //         .text = strlit("add cx, " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_DX,
+    //             .is_reg1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc2, immediate16_array })),
+    //         .text = strlit("add dx, " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_BX,
+    //             .is_reg1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc3, immediate16_array })),
+    //         .text = strlit("add bx, " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_SP,
+    //             .is_reg1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc4, immediate16_array })),
+    //         .text = strlit("add sp, " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_BP,
+    //             .is_reg1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc5, immediate16_array })),
+    //         .text = strlit("add bp, " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_SI,
+    //             .is_reg1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc6, immediate16_array })),
+    //         .text = strlit("add si, " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_DI,
+    //             .is_reg1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc7, immediate16_array })),
+    //         .text = strlit("add di, " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_R8W,
+    //             .is_reg1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc0, immediate16_array })),
+    //         .text = strlit("add r8w, " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_R9W,
+    //             .is_reg1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc1, immediate16_array })),
+    //         .text = strlit("add r9w, " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_R10W,
+    //             .is_reg1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc2, immediate16_array })),
+    //         .text = strlit("add r10w, " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_R11W,
+    //             .is_reg1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc3, immediate16_array })),
+    //         .text = strlit("add r11w, " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_R12W,
+    //             .is_reg1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc4, immediate16_array })),
+    //         .text = strlit("add r12w, " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_R13W,
+    //             .is_reg1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc5, immediate16_array })),
+    //         .text = strlit("add r13w, " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_R14W,
+    //             .is_reg1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc6, immediate16_array })),
+    //         .text = strlit("add r14w, " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_R15W,
+    //             .is_reg1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc7, immediate16_array })),
+    //         .text = strlit("add r15w, " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_RAX,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x00, immediate16_array })),
+    //         .text = strlit("add word ptr [rax], " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_RCX,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x01, immediate16_array })),
+    //         .text = strlit("add word ptr [rcx], " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_RDX,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x02, immediate16_array })),
+    //         .text = strlit("add word ptr [rdx], " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_RBX,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x03, immediate16_array })),
+    //         .text = strlit("add word ptr [rbx], " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_RSP,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .sib_base = REGISTER_X86_64_RSP,
+    //             .sib_index = 0b100,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x04, 0x24, immediate16_array })),
+    //         .text = strlit("add word ptr [rsp], " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_RBP,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x45, 0x00, immediate16_array })),
+    //         .text = strlit("add word ptr [rbp], " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_RSI,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x06, immediate16_array })),
+    //         .text = strlit("add word ptr [rsi], " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_RDI,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x07, immediate16_array })),
+    //         .text = strlit("add word ptr [rdi], " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_R8,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x00, immediate16_array })),
+    //         .text = strlit("add word ptr [r8], " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_R9,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x01, immediate16_array })),
+    //         .text = strlit("add word ptr [r9], " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_R10,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x02, immediate16_array })),
+    //         .text = strlit("add word ptr [r10], " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_R11,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x03, immediate16_array })),
+    //         .text = strlit("add word ptr [r11], " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_R12,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .sib_base = REGISTER_X86_64_R12,
+    //             .sib_index = 0b100,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x04, 0x24, immediate16_array })),
+    //         .text = strlit("add word ptr [r12], " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_R13,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x45, 0x00, immediate16_array })),
+    //         .text = strlit("add word ptr [r13], " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_R14,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x06, immediate16_array })),
+    //         .text = strlit("add word ptr [r14], " immediate16_string),
+    //     },
+    //     {
+    //         .encoding = {
+    //             .opcode = 0x81,
+    //             .reg1 = REGISTER_X86_64_R15,
+    //             .is_reg1 = 1,
+    //             .is_indirect1 = 1,
+    //             .is_immediate16 = 1,
+    //             .immediate16 = immediate16_literal,
+    //             .is_16_mode = 1,
+    //         },
+    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x07, immediate16_array })),
+    //         .text = strlit("add word ptr [r15], " immediate16_string),
+    //     },
+    // };
 
-#define immediate8_array  0x10,
-#define immediate16_array 0x00, 0x10,
-#define immediate32_array 0x00, 0x00, 0x00, 0x10,
-#define immediate64_array 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
-
-#define stringify(x) #x
-
-    EncodingTestCase test_cases[] = {
-        {
-            .encoding = {
-                .opcode = 0x04,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x04, immediate8_array })),
-            .text = strlit("add al, " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x05,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x05, immediate16_array })),
-            .text = strlit("add ax, " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x05,
-                .is_immediate32 = 1,
-                .immediate32 = immediate32_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x05, immediate32_array })),
-            .text = strlit("add eax, " immediate32_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x05,
-                .is_immediate32 = 1,
-                .immediate32 = immediate32_literal,
-                .is_64_bit = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x48, 0x05, immediate32_array })),
-            .text = strlit("add rax, " immediate32_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_AL,
-                .is_reg1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x80, 0xc0, immediate8_array })),
-            .text = strlit("add al, " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_CL,
-                .is_reg1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x80, 0xc1, immediate8_array })),
-            .text = strlit("add cl, " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_DL,
-                .is_reg1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x80, 0xc2, immediate8_array })),
-            .text = strlit("add dl, " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_BL,
-                .is_reg1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x80, 0xc3, immediate8_array })),
-            .text = strlit("add bl, " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_AH,
-                .is_reg1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x80, 0xc4, immediate8_array })),
-            .text = strlit("add ah, " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_CH,
-                .is_reg1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x80, 0xc5, immediate8_array })),
-            .text = strlit("add ch, " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_DH,
-                .is_reg1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x80, 0xc6, immediate8_array })),
-            .text = strlit("add dh, " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_BH,
-                .is_reg1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x80, 0xc7, immediate8_array })),
-            .text = strlit("add bh, " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_RAX,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x80, 0x00, immediate8_array })),
-            .text = strlit("add byte ptr [rax], " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_RCX,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x80, 0x01, immediate8_array })),
-            .text = strlit("add byte ptr [rcx], " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_RDX,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x80, 0x02, immediate8_array })),
-            .text = strlit("add byte ptr [rdx], " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_RBX,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x80, 0x03, immediate8_array })),
-            .text = strlit("add byte ptr [rbx], " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_RSP,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-                .sib_base = REGISTER_X86_64_RSP,
-                .sib_index = 0b100,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x80, 0x04, 0x24, immediate8_array })),
-            .text = strlit("add byte ptr [rsp], " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_RBP,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x80, 0x45, 0x00, immediate8_array })),
-            .text = strlit("add byte ptr [rbp], " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_RSI,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x80, 0x06, immediate8_array })),
-            .text = strlit("add byte ptr [rsi], " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_RDI,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x80, 0x07, immediate8_array })),
-            .text = strlit("add byte ptr [rdi], " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_R8,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x00, immediate8_array })),
-            .text = strlit("add byte ptr [r8], " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_R9,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x01, immediate8_array })),
-            .text = strlit("add byte ptr [r9], " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_R10,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x02, immediate8_array })),
-            .text = strlit("add byte ptr [r10], " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_R11,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x03, immediate8_array })),
-            .text = strlit("add byte ptr [r11], " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_R12,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-                .sib_base = REGISTER_X86_64_R12,
-                .sib_index = 0b100,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x04, 0x24, immediate8_array })),
-            .text = strlit("add byte ptr [r12], " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_R13,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x45, 0x00, immediate8_array })),
-            .text = strlit("add byte ptr [r13], " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_R14,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x06, immediate8_array })),
-            .text = strlit("add byte ptr [r14], " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x80,
-                .reg1 = REGISTER_X86_64_R15,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate8 = 1,
-                .immediate8 = immediate8_literal,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x07, immediate8_array })),
-            .text = strlit("add byte ptr [r15], " immediate8_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_AX,
-                .is_reg1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc0, immediate16_array })),
-            .text = strlit("add ax, " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_CX,
-                .is_reg1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc1, immediate16_array })),
-            .text = strlit("add cx, " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_DX,
-                .is_reg1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc2, immediate16_array })),
-            .text = strlit("add dx, " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_BX,
-                .is_reg1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc3, immediate16_array })),
-            .text = strlit("add bx, " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_SP,
-                .is_reg1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc4, immediate16_array })),
-            .text = strlit("add sp, " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_BP,
-                .is_reg1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc5, immediate16_array })),
-            .text = strlit("add bp, " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_SI,
-                .is_reg1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc6, immediate16_array })),
-            .text = strlit("add si, " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_DI,
-                .is_reg1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc7, immediate16_array })),
-            .text = strlit("add di, " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_R8W,
-                .is_reg1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc0, immediate16_array })),
-            .text = strlit("add r8w, " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_R9W,
-                .is_reg1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc1, immediate16_array })),
-            .text = strlit("add r9w, " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_R10W,
-                .is_reg1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc2, immediate16_array })),
-            .text = strlit("add r10w, " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_R11W,
-                .is_reg1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc3, immediate16_array })),
-            .text = strlit("add r11w, " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_R12W,
-                .is_reg1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc4, immediate16_array })),
-            .text = strlit("add r12w, " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_R13W,
-                .is_reg1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc5, immediate16_array })),
-            .text = strlit("add r13w, " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_R14W,
-                .is_reg1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc6, immediate16_array })),
-            .text = strlit("add r14w, " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_R15W,
-                .is_reg1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc7, immediate16_array })),
-            .text = strlit("add r15w, " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_RAX,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x00, immediate16_array })),
-            .text = strlit("add word ptr [rax], " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_RCX,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x01, immediate16_array })),
-            .text = strlit("add word ptr [rcx], " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_RDX,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x02, immediate16_array })),
-            .text = strlit("add word ptr [rdx], " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_RBX,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x03, immediate16_array })),
-            .text = strlit("add word ptr [rbx], " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_RSP,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .sib_base = REGISTER_X86_64_RSP,
-                .sib_index = 0b100,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x04, 0x24, immediate16_array })),
-            .text = strlit("add word ptr [rsp], " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_RBP,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x45, 0x00, immediate16_array })),
-            .text = strlit("add word ptr [rbp], " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_RSI,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x06, immediate16_array })),
-            .text = strlit("add word ptr [rsi], " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_RDI,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x07, immediate16_array })),
-            .text = strlit("add word ptr [rdi], " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_R8,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x00, immediate16_array })),
-            .text = strlit("add word ptr [r8], " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_R9,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x01, immediate16_array })),
-            .text = strlit("add word ptr [r9], " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_R10,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x02, immediate16_array })),
-            .text = strlit("add word ptr [r10], " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_R11,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x03, immediate16_array })),
-            .text = strlit("add word ptr [r11], " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_R12,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .sib_base = REGISTER_X86_64_R12,
-                .sib_index = 0b100,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x04, 0x24, immediate16_array })),
-            .text = strlit("add word ptr [r12], " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_R13,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x45, 0x00, immediate16_array })),
-            .text = strlit("add word ptr [r13], " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_R14,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x06, immediate16_array })),
-            .text = strlit("add word ptr [r14], " immediate16_string),
-        },
-        {
-            .encoding = {
-                .opcode = 0x81,
-                .reg1 = REGISTER_X86_64_R15,
-                .is_reg1 = 1,
-                .is_indirect1 = 1,
-                .is_immediate16 = 1,
-                .immediate16 = immediate16_literal,
-                .is_16_mode = 1,
-            },
-            .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x07, immediate16_array })),
-            .text = strlit("add word ptr [r15], " immediate16_string),
-        },
-    };
-
-    return encoding_test_all(test_cases, array_length(test_cases));
+    // return encoding_test_all(test_cases, array_length(test_cases));
 }
-#endif

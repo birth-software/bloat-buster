@@ -1,5 +1,7 @@
 #pragma once 
 
+#define USE_MEMCPY 1
+
 #if _WIN32
 #define _CRT_SECURE_NO_WARNINGS
 #endif
