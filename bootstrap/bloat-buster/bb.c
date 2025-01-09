@@ -459,18 +459,22 @@ typedef enum OperandKind
 
 #define operand_kind_array_element_count (4)
 
-UNION(Operand)
+STRUCT(Operands)
 {
-    Immediate immediate;
+    OperandKind values[operand_kind_array_element_count];
+    u8 count;
+};
+STRUCT(InstructionBytes)
+{
+    u8 bytes[max_instruction_byte_count];
+    u8 length;
 };
 
 STRUCT(EncodingPrepare)
 {
     Opcode opcode;
-    BatchEncodingKind kind;
-    OperandKind operands[operand_kind_array_element_count];
-    u8 instruction_bytes[16];
-    u8 instruction_length;
+    InstructionBytes expected;
+    Operands operands;
 };
 
 fn Opcode opcode1(u8 opcode)
@@ -490,25 +494,11 @@ fn void prepare_batch_encoding(DatasetPreparer* restrict preparer, Batch* restri
 }
 
 #define batch_start(_mnemonic) let(batch, prepare_get_batch(preparer, (BatchCreate) { .mnemonic = (MNEMONIC_x86_64_ ## _mnemonic), }));
-#define encode(_opcode, _expected_b, _operands) \
-    do {\
-        EncodingPrepare encoding_prepare = {\
-            .opcode = (_opcode),\
-            .instruction_length = array_length(_operands),\
-        };\
-        for (u32 i = 0; i < array_length(_operands); i += 1)\
-        {\
-            encoding_prepare.operands[i] = (_operands)[i];\
-        }\
-        for (u32 i = 0; i < array_length(_expected_b); i += 1)\
-        {\
-            encoding_prepare.instruction_bytes[i] = (_expected_b)[i];\
-        }\
-        prepare_batch_encoding(preparer, batch, encoding_prepare);\
-    } while (0)
+#define encode(_opcode, _expected, _operands) prepare_batch_encoding(preparer, batch, ((EncodingPrepare) { .opcode = _opcode, .expected = _expected, .operands = _operands, }));
 #define batch_end()
-#define exp(...) ((u8[]){ __VA_ARGS__ })
-#define ops(...) ((OperandKind[]){ __VA_ARGS__ })
+#define exp(...) ((InstructionBytes) { .length = array_length(((u8[]){__VA_ARGS__})), .bytes = { __VA_ARGS__ } })
+#define ops(...) ((Operands){ .values = { __VA_ARGS__ }, .count = array_length(((OperandKind[]){ __VA_ARGS__ })), })
+#define opc(...) ((Opcode) { .length = array_length(((u8[]){__VA_ARGS__})), .bytes = { __VA_ARGS__ }})
 
 fn TestDataset construct_test_cases()
 {
@@ -517,8 +507,7 @@ fn TestDataset construct_test_cases()
 
     {
         batch_start(add);
-        // do { prepare_batch_encoding(preparer, batch, (EncodingPrepare) { .opcode = opcode1(0x04), .operands = ((((OperandKind[]){ op_ra8, op_imm8 }))), .expected = ((((u8[])({ 0x04 })))), }); } while (0);
-        encode(opcode1(0x04), exp(0x04), ops(op_ra8, op_imm8));
+        encode(opc(0x04), exp(0x04), ops(op_ra8, op_imm8));
         batch_end();
     }
 
