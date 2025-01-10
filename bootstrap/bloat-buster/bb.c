@@ -708,10 +708,6 @@ fn String format_displacement(String buffer, String register_string, String disp
 
 fn void prepare_batch_encoding(DatasetPreparer* restrict preparer, BatchBuilder* restrict batch, EncodingPrepare prepare)
 {
-    unused(preparer);
-    unused(batch);
-    unused(prepare);
-
     OperandKind first_operand = prepare.operands.values[0];
     let(operand_count, prepare.operands.count);
     // TODO: Do we need to compute `mnemonic_string` every encoding?
@@ -841,17 +837,58 @@ fn void prepare_batch_encoding(DatasetPreparer* restrict preparer, BatchBuilder*
 
                             if (first_is_rm)
                             {
-                                todo();
+                                for (GPR_x86_64 first_gpr = 0; first_gpr < X86_64_GPR_COUNT; first_gpr += 1)
+                                {
+                                    for (u32 i = 0; i < array_length(displacements); i += 1)
+                                    {
+                                        String first_operand_string = first_rm_strings[first_gpr][i];
+
+                                        for (GPR_x86_64 second_gpr = 0; second_gpr < second_operand_register_count; second_gpr += 1)
+                                        {
+                                            String second_operand_string = gpr_to_string(second_gpr, second_operand_index, 0);
+                                            BatchEncoding* encoding = vb_add(&batch->encodings, 1);
+                                            format_instruction2_text(preparer, encoding, mnemonic_string, first_operand_string, second_operand_string);
+                                        }
+                                    }
+                                }
                             }
 
                             if (second_is_rm)
                             {
-                                todo();
+                                for (GPR_x86_64 first_gpr = 0; first_gpr < first_operand_register_count; first_gpr += 1)
+                                {
+                                    String first_operand_string = gpr_to_string(first_gpr, first_operand_index, 0);
+
+                                    for (GPR_x86_64 second_gpr = 0; second_gpr < X86_64_GPR_COUNT; second_gpr += 1)
+                                    {
+                                        for (u32 i = 0; i < array_length(displacements); i += 1)
+                                        {
+                                            String second_operand_string = second_rm_strings[second_gpr][i];
+                                            BatchEncoding* encoding = vb_add(&batch->encodings, 1);
+                                            format_instruction2_text(preparer, encoding, mnemonic_string, first_operand_string, second_operand_string);
+                                        }
+                                    }
+                                }
                             }
 
                             if (first_is_rm && second_is_rm)
                             {
-                                todo();
+                                for (GPR_x86_64 first_gpr = 0; first_gpr < X86_64_GPR_COUNT; first_gpr += 1)
+                                {
+                                    for (u32 first_displacement_i = 0; first_displacement_i < array_length(displacements); first_displacement_i += 1)
+                                    {
+                                        String first_operand_string = first_rm_strings[first_gpr][first_displacement_i];
+                                        for (GPR_x86_64 second_gpr = 0; second_gpr < X86_64_GPR_COUNT; second_gpr += 1)
+                                        {
+                                            for (u32 second_displacement_i = 0; second_displacement_i < array_length(displacements); second_displacement_i += 1)
+                                            {
+                                                String second_operand_string = second_rm_strings[second_gpr][second_displacement_i];
+                                                BatchEncoding* encoding = vb_add(&batch->encodings, 1);
+                                                format_instruction2_text(preparer, encoding, mnemonic_string, first_operand_string, second_operand_string);
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         else
