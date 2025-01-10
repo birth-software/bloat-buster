@@ -27,9 +27,17 @@ typedef enum TimeUnit
     TIME_UNIT_SECONDS,
 } TimeUnit;
 
+STRUCT(RunCommandResult)
+{
+    String stdout_string;
+    String stderr_string;
+};
+
 STRUCT(RunCommandOptions)
 {
     u64 debug:1;
+    u64 capture_stdout:1;
+    u64 capture_stderr:1;
 };
 
 STRUCT(Timestamp)
@@ -99,7 +107,7 @@ global_variable u64 default_size = GB(4);
 
 fn void vprint(const char* format, va_list args);
 fn void print(const char* format, ...);
-fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunCommandOptions options);
+fn RunCommandResult run_command(Arena* arena, CStringSlice arguments, char* envp[], RunCommandOptions options);
 fn String file_read(Arena* arena, String path);
 fn void file_write(FileWriteOptions options);
 

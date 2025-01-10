@@ -1,5 +1,4 @@
-#include <std/virtual_buffer.h>
-#include <std/os.h>
+#pragma once
 
 fn void vb_generic_ensure_capacity(VirtualBuffer(u8)* vb, u32 item_size, u32 item_count)
 {
@@ -49,11 +48,13 @@ fn u8* vb_append_bytes(VirtualBuffer(u8*) vb, Slice(u8) bytes)
     return pointer;
 }
 
-fn void vb_copy_string(VirtualBuffer(u8)* buffer, String string)
+fn u32 vb_copy_string(VirtualBuffer(u8)* buffer, String string)
 {
+    let(offset, buffer->length);
     let_cast(u32, length, string.length);
     let(pointer, vb_add(buffer, length));
     memcpy(pointer, string.pointer, length);
+    return offset;
 }
 
 fn u64 vb_copy_string_zero_terminated(VirtualBuffer(u8)* buffer, String string)

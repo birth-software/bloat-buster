@@ -277,9 +277,12 @@ typedef enum BatchEncodingKind
 STRUCT(BatchEncoding)
 {
     u32 expected_offset;
+    u32 text_offset;
     u8 expected_length;
+    u8 text_length;
     u8 valid;
 };
+decl_vb(BatchEncoding);
 
 STRUCT(Batch)
 {
@@ -289,11 +292,18 @@ STRUCT(Batch)
 };
 decl_vb(Batch);
 
+STRUCT(BatchBuilder)
+{
+    Mnemonic_x86_64 mnemonic;
+
+    VirtualBuffer(BatchEncoding) encodings;
+};
+
 STRUCT(TestDataset)
 {
     const Batch* const restrict batches;
     u64 batch_count;
-    u8* restrict expected_buffer;
+    u8* restrict string_buffer;
 };
 
 fn u8 encoding_test_instruction_batches(TestDataset dataset)
@@ -317,7 +327,7 @@ fn u8 encoding_test_instruction_batches(TestDataset dataset)
                 let(length, encode_instruction_batch(buffer, &encoding, 1));
 
                 let(expected_length, batch_encoding->expected_length);
-                let(expected_pointer, &dataset.expected_buffer[batch_encoding->expected_offset]);
+                let(expected_pointer, &dataset.string_buffer[batch_encoding->expected_offset]);
 
                 u8 error = length != expected_length;
                 u64 error_byte = length;
@@ -389,7 +399,7 @@ fn u8 encoding_test_instruction_batches(TestDataset dataset)
 
 STRUCT(DatasetPreparer)
 {
-    VirtualBuffer(u8) expected_buffer;
+    VirtualBuffer(u8) string_buffer;
     VirtualBuffer(Batch) batches;
 };
 
@@ -397,13 +407,6 @@ STRUCT(BatchCreate)
 {
     Mnemonic_x86_64 mnemonic;
 };
-
-fn Batch* prepare_get_batch(DatasetPreparer* restrict preparer, BatchCreate create)
-{
-    Batch* batch = vb_add(&preparer->batches, 1);
-    batch->mnemonic = create.mnemonic;
-    return batch;
-}
 
 STRUCT(Opcode)
 {
@@ -473,7 +476,7 @@ STRUCT(InstructionBytes)
 STRUCT(EncodingPrepare)
 {
     Opcode opcode;
-    InstructionBytes expected;
+    // InstructionBytes expected;
     Operands operands;
 };
 
@@ -486,19 +489,388 @@ fn Opcode opcode1(u8 opcode)
     return result;
 }
 
-fn void prepare_batch_encoding(DatasetPreparer* restrict preparer, Batch* restrict batch, EncodingPrepare prepare)
+fn u8 op_is_gpra(OperandKind operand_kind)
+{
+    return operand_kind >= op_ra8 && operand_kind <= op_ra64;
+}
+
+fn u8 op_is_imm(OperandKind operand_kind)
+{
+    return operand_kind >= op_imm8 && operand_kind <= op_imm64;
+}
+
+fn u8 op_is_gpr_no_gpra_exclusive(OperandKind operand_kind)
+{
+    return operand_kind >= op_r8 && operand_kind <= op_r64;
+}
+
+fn u8 op_is_rm(OperandKind operand_kind)
+{
+    return operand_kind >= op_rm8 && operand_kind <= op_rm64;
+}
+
+fn u8 op_is_gpr_no_gpra(OperandKind operand_kind)
+{
+    return op_is_gpr_no_gpra_exclusive(operand_kind) | op_is_rm(operand_kind);
+}
+
+fn u8 op_rm_get_index(OperandKind operand_kind)
+{
+    assert(op_is_rm(operand_kind));
+    return operand_kind - op_rm8;
+}
+
+fn u8 op_gpr_exclusive_get_index(OperandKind operand_kind)
+{
+    assert(op_is_gpr_no_gpra_exclusive(operand_kind));
+    return operand_kind - op_r8;
+}
+
+fn u8 op_gpr_get_index(OperandKind operand_kind)
+{
+    assert(op_is_gpr_no_gpra(operand_kind));
+    return op_is_rm(operand_kind) ? op_rm_get_index(operand_kind) : op_gpr_exclusive_get_index(operand_kind);
+}
+
+fn u8 op_imm_get_index(OperandKind operand_kind)
+{
+    assert(op_is_imm(operand_kind));
+    return operand_kind - op_imm8;
+}
+
+fn u8 op_get_size_out_of_index(u8 index)
+{
+    return 1 << index;
+}
+
+fn String gpr_to_string(GPR_x86_64 gpr, u8 index, u8 switcher)
+{
+    assert(switcher == 0 || switcher == 1);
+    global_variable const String gpr_names[16][4] = {
+        [REGISTER_X86_64_AX] = {
+            strlit("al"),
+            strlit("ax"),
+            strlit("eax"),
+            strlit("rax"),
+        },
+        [REGISTER_X86_64_CX] = {
+            strlit("cl"),
+            strlit("cx"),
+            strlit("ecx"),
+            strlit("rcx"),
+        },
+        [REGISTER_X86_64_DX] = {
+            strlit("dl"),
+            strlit("dx"),
+            strlit("edx"),
+            strlit("rdx"),
+        },
+        [REGISTER_X86_64_BX] = {
+            strlit("bl"),
+            strlit("bx"),
+            strlit("ebx"),
+            strlit("rbx"),
+        },
+        [REGISTER_X86_64_SP] = {
+            strlit("ah"), // Check alt names
+            strlit("sp"),
+            strlit("esp"),
+            strlit("rsp"),
+        },
+        [REGISTER_X86_64_BP] = {
+            strlit("ch"),
+            strlit("bp"),
+            strlit("ebp"),
+            strlit("rbp"),
+        },
+        [REGISTER_X86_64_SI] = {
+            strlit("dh"),
+            strlit("si"),
+            strlit("esi"),
+            strlit("rsi"),
+        },
+        [REGISTER_X86_64_DI] = {
+            strlit("bh"),
+            strlit("di"),
+            strlit("edi"),
+            strlit("rdi"),
+        },
+        [REGISTER_X86_64_R8] = {
+            strlit("r8l"),
+            strlit("r8w"),
+            strlit("r8d"),
+            strlit("r8"),
+        },
+        [REGISTER_X86_64_R9] = {
+            strlit("r9l"),
+            strlit("r9w"),
+            strlit("r9d"),
+            strlit("r9"),
+        },
+        [REGISTER_X86_64_R10] = {
+            strlit("r10l"),
+            strlit("r10w"),
+            strlit("r10d"),
+            strlit("r10"),
+        },
+        [REGISTER_X86_64_R11] = {
+            strlit("r11l"),
+            strlit("r11w"),
+            strlit("r11d"),
+            strlit("r11"),
+        },
+        [REGISTER_X86_64_R12] = {
+            strlit("r12l"),
+            strlit("r12w"),
+            strlit("r12d"),
+            strlit("r12"),
+        },
+        [REGISTER_X86_64_R13] = {
+            strlit("r13l"),
+            strlit("r13w"),
+            strlit("r13d"),
+            strlit("r13"),
+        },
+        [REGISTER_X86_64_R14] = {
+            strlit("r14l"),
+            strlit("r14w"),
+            strlit("r14d"),
+            strlit("r14"),
+        },
+        [REGISTER_X86_64_R15] = {
+            strlit("r15l"),
+            strlit("r15w"),
+            strlit("r15d"),
+            strlit("r15"),
+        },
+    };
+
+    global_variable const String alt_register_names[] = {
+        strlit("spl"),
+        strlit("bpl"),
+        strlit("sil"),
+        strlit("dil"),
+    };
+
+    return (unlikely(((gpr & 0b100) >> 2) & ((switcher != 0) & (index == 0)))) ? alt_register_names[gpr & 0b11] : gpr_names[gpr][index];
+}
+
+fn String sample_immediate_strings(u8 index)
+{
+    global_variable const String strings[] = {
+        strlit("0x10"),
+        strlit("0x1000"),
+        strlit("0x10000000"),
+        strlit("0x1000000000000000"),
+    };
+
+    return strings[index];
+}
+
+fn void format_instruction2_text(DatasetPreparer* restrict preparer, BatchEncoding* restrict encoding, String mnemonic, String op1, String op2)
+{
+    u8 buffer[256];
+    String string = format_string((String)array_to_slice(buffer), "{s} {s}, {s}", mnemonic, op1, op2);
+    u32 offset = vb_copy_string(&preparer->string_buffer, string);
+
+    encoding->text_offset = offset;
+    assign_cast(encoding->text_length, string.length);
+}
+
+fn String format_displacement(String buffer, String register_string, String displacement_string)
+{
+    u64 length = 0;
+    String result = {
+        .pointer = buffer.pointer,
+    };
+
+    buffer.pointer[length] = '[';
+    length += 1;
+
+    memcpy(&buffer.pointer[length], register_string.pointer, register_string.length);
+    length += register_string.length;
+
+    buffer.pointer[length] = '+';
+    length += 1;
+
+    memcpy(&buffer.pointer[length], displacement_string.pointer, displacement_string.length);
+    length += displacement_string.length;
+
+    buffer.pointer[length] = ']';
+    length += 1;
+
+    result.length = length;
+
+    return result;
+}
+
+fn void prepare_batch_encoding(DatasetPreparer* restrict preparer, BatchBuilder* restrict batch, EncodingPrepare prepare)
 {
     unused(preparer);
     unused(batch);
     unused(prepare);
+
+    OperandKind first_operand = prepare.operands.values[0];
+    let(operand_count, prepare.operands.count);
+    // TODO: Do we need to compute `mnemonic_string` every encoding?
+    String mnemonic_string = mnemonic_x86_64_to_string(batch->mnemonic);
+
+    if (operand_count == 0)
+    {
+        todo();
+    }
+    else if (op_is_gpra(first_operand))
+    {
+        let(register_a_index, first_operand - op_ra8);
+        String names[] = {
+            strlit("al"),
+            strlit("ax"),
+            strlit("eax"),
+            strlit("rax"),
+        };
+        String reg_name = names[register_a_index];
+
+        switch (operand_count)
+        {
+            case 1:
+                {
+                    todo();
+                } break;
+            case 2:
+                {
+                    OperandKind second_operand = prepare.operands.values[1];
+                    assert(op_is_imm(second_operand));
+                    let(imm_index, op_imm_get_index(second_operand));
+                    // We output the string directly to avoid formatting cost
+                    String imm_string = sample_immediate_strings(imm_index);
+                    BatchEncoding* encoding = vb_add(&batch->encodings, 1);
+                    format_instruction2_text(preparer, encoding, mnemonic_string, reg_name, imm_string);
+                } break;
+            case 3:
+                {
+                    todo();
+                } break;
+            case 4:
+                {
+                    todo();
+                } break;
+            default: unreachable();
+        }
+    }
+    else
+    {
+        switch (operand_count)
+        {
+            case 1:
+                {
+                    todo();
+                } break;
+            case 2:
+                {
+                    OperandKind second_operand = prepare.operands.values[1];
+
+                    if (op_is_gpr_no_gpra(first_operand))
+                    {
+                        // u8 is_indirect = 0;
+                        u8 first_operand_index = op_gpr_get_index(first_operand);
+                        GPR_x86_64 first_operand_register_count = (unlikely(first_operand_index == 0)) ? 8 : 16;
+                        String first_operand_reg_names[16];
+                        for (GPR_x86_64 gpr = 0; gpr < first_operand_register_count; gpr += 1)
+                        {
+                            first_operand_reg_names[gpr] = gpr_to_string(gpr, first_operand_index, 0);
+                        }
+
+                        String first_operand_rm_names[16];
+                        u8 first_is_rm = op_is_rm(first_operand);
+                        if (first_is_rm)
+                        {
+                            for (GPR_x86_64 gpr = 0; gpr < 16; gpr += 1)
+                            {
+                                first_operand_rm_names[gpr] = gpr_to_string(gpr, 3, 0);
+                            }
+                        }
+
+                        if (op_is_gpr_no_gpra(second_operand))
+                        {
+                            todo();
+                        }
+                        else
+                        {
+                            assert(op_is_imm(second_operand));
+                            u8 second_operand_index = op_imm_get_index(second_operand);
+                            String imm_string = sample_immediate_strings(second_operand_index);
+
+                            for (GPR_x86_64 first_operand_index = 0; first_operand_index < first_operand_register_count; first_operand_index += 1)
+                            {
+                                BatchEncoding* encoding = vb_add(&batch->encodings, 1);
+                                format_instruction2_text(preparer, encoding, mnemonic_string, first_operand_reg_names[first_operand_index], imm_string);
+                            }
+
+                            if (first_is_rm)
+                            {
+                                s32 displacements[] = {
+                                    0,
+                                    0x10,
+                                    0x10000000,
+                                };
+
+                                String displacement_strings[] = {
+                                    strlit("0"),
+                                    strlit("0x10"),
+                                    strlit("0x10000000"),
+                                };
+
+                                for (GPR_x86_64 r = 0; r < 16; r += 1)
+                                {
+                                    for (u32 i = 0; i < array_length(displacements); i += 1)
+                                    {
+                                        BatchEncoding* encoding = vb_add(&batch->encodings, 1);
+                                        u8 displacement_buffer[256];
+                                        String first_operand_string = format_displacement((String)array_to_slice(displacement_buffer), first_operand_rm_names[first_operand_index], displacement_strings[i]);
+                                        format_instruction2_text(preparer, encoding, mnemonic_string, first_operand_string, imm_string);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        todo();
+                    }
+                }; break;
+            case 3:
+                {
+                    todo();
+                } break;
+            case 4:
+                {
+                    todo();
+                } break;
+        }
+    }
 }
 
-#define batch_start(_mnemonic) let(batch, prepare_get_batch(preparer, (BatchCreate) { .mnemonic = (MNEMONIC_x86_64_ ## _mnemonic), }));
-#define encode(_opcode, _expected, _operands) prepare_batch_encoding(preparer, batch, ((EncodingPrepare) { .opcode = _opcode, .expected = _expected, .operands = _operands, }));
+#define batch_start(_mnemonic) BatchBuilder batch_builder = { .mnemonic =  (MNEMONIC_x86_64_ ## _mnemonic), }
+#define encode(_opcode, _operands) prepare_batch_encoding(preparer, &batch_builder, ((EncodingPrepare) { .opcode = _opcode, .operands = _operands, }));
 #define batch_end()
-#define exp(...) ((InstructionBytes) { .length = array_length(((u8[]){__VA_ARGS__})), .bytes = { __VA_ARGS__ } })
+// #define exp(...) ((InstructionBytes) { .length = array_length(((u8[]){__VA_ARGS__})), .bytes = { __VA_ARGS__ } })
 #define ops(...) ((Operands){ .values = { __VA_ARGS__ }, .count = array_length(((OperandKind[]){ __VA_ARGS__ })), })
 #define opc(...) ((Opcode) { .length = array_length(((u8[]){__VA_ARGS__})), .bytes = { __VA_ARGS__ }})
+
+#define imm8_l  0x10
+#define imm16_l 0x1000
+#define imm32_l 0x10000000
+#define imm64_l 0x1000000000000000
+
+#define imm8_s  "0x10"
+#define imm16_s "0x1000"
+#define imm32_s "0x10000000"
+#define imm64_s "0x1000000000000000"
+
+#define imm8_a  0x10,
+#define imm16_a 0x00, 0x10,
+#define imm32_a 0x00, 0x00, 0x00, 0x10,
+#define imm64_a 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
 
 fn TestDataset construct_test_cases()
 {
@@ -507,12 +879,36 @@ fn TestDataset construct_test_cases()
 
     {
         batch_start(add);
-        encode(opc(0x04), exp(0x04), ops(op_ra8, op_imm8));
+
+        encode(opc(0x04), ops(op_ra8,  op_imm8));
+        encode(opc(0x05), ops(op_ra16, op_imm16));
+        encode(opc(0x05), ops(op_ra32, op_imm32));
+        encode(opc(0x05), ops(op_ra64, op_imm32));
+
+        encode(opc(0x80), ops(op_rm8,  op_imm8));
+        encode(opc(0x81), ops(op_rm16, op_imm16));
+        encode(opc(0x81), ops(op_rm32, op_imm32));
+        encode(opc(0x81), ops(op_rm64, op_imm32));
+
+        encode(opc(0x83), ops(op_rm16, op_imm8));
+        encode(opc(0x83), ops(op_rm32, op_imm8));
+        encode(opc(0x83), ops(op_rm64, op_imm8));
+
+        encode(opc(0x00), ops(op_rm8,  op_r8));
+        encode(opc(0x01), ops(op_rm16, op_r16));
+        encode(opc(0x01), ops(op_rm32, op_r32));
+        encode(opc(0x01), ops(op_rm64, op_r64));
+
+        encode(opc(0x02), ops(op_r8,  op_rm8));
+        encode(opc(0x03), ops(op_r16, op_rm16));
+        encode(opc(0x03), ops(op_r32, op_rm32));
+        encode(opc(0x03), ops(op_r64, op_rm64));
+
         batch_end();
     }
 
     TestDataset result = {
-        .expected_buffer = preparer->expected_buffer.pointer,
+        .string_buffer = preparer->string_buffer.pointer,
         .batches = preparer->batches.pointer,
         .batch_count = preparer->batches.length,
     };
@@ -528,735 +924,4 @@ int main(int argc, char** argv, char** envp)
     TestDataset dataset = construct_test_cases();
     u8 result = encoding_test_instruction_batches(dataset);
     return result;
-
-    // EncodingTestCase test_cases[] = {
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x04,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x04, immediate8_array })),
-    //         .text = strlit("add al, " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x05,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x05, immediate16_array })),
-    //         .text = strlit("add ax, " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x05,
-    //             .is_immediate32 = 1,
-    //             .immediate32 = immediate32_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x05, immediate32_array })),
-    //         .text = strlit("add eax, " immediate32_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x05,
-    //             .is_immediate32 = 1,
-    //             .immediate32 = immediate32_literal,
-    //             .is_64_bit = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x48, 0x05, immediate32_array })),
-    //         .text = strlit("add rax, " immediate32_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_AL,
-    //             .is_reg1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x80, 0xc0, immediate8_array })),
-    //         .text = strlit("add al, " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_CL,
-    //             .is_reg1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x80, 0xc1, immediate8_array })),
-    //         .text = strlit("add cl, " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_DL,
-    //             .is_reg1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x80, 0xc2, immediate8_array })),
-    //         .text = strlit("add dl, " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_BL,
-    //             .is_reg1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x80, 0xc3, immediate8_array })),
-    //         .text = strlit("add bl, " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_AH,
-    //             .is_reg1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x80, 0xc4, immediate8_array })),
-    //         .text = strlit("add ah, " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_CH,
-    //             .is_reg1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x80, 0xc5, immediate8_array })),
-    //         .text = strlit("add ch, " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_DH,
-    //             .is_reg1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x80, 0xc6, immediate8_array })),
-    //         .text = strlit("add dh, " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_BH,
-    //             .is_reg1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x80, 0xc7, immediate8_array })),
-    //         .text = strlit("add bh, " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_RAX,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x80, 0x00, immediate8_array })),
-    //         .text = strlit("add byte ptr [rax], " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_RCX,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x80, 0x01, immediate8_array })),
-    //         .text = strlit("add byte ptr [rcx], " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_RDX,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x80, 0x02, immediate8_array })),
-    //         .text = strlit("add byte ptr [rdx], " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_RBX,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x80, 0x03, immediate8_array })),
-    //         .text = strlit("add byte ptr [rbx], " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_RSP,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //             .sib_base = REGISTER_X86_64_RSP,
-    //             .sib_index = 0b100,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x80, 0x04, 0x24, immediate8_array })),
-    //         .text = strlit("add byte ptr [rsp], " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_RBP,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x80, 0x45, 0x00, immediate8_array })),
-    //         .text = strlit("add byte ptr [rbp], " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_RSI,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x80, 0x06, immediate8_array })),
-    //         .text = strlit("add byte ptr [rsi], " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_RDI,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x80, 0x07, immediate8_array })),
-    //         .text = strlit("add byte ptr [rdi], " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_R8,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x00, immediate8_array })),
-    //         .text = strlit("add byte ptr [r8], " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_R9,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x01, immediate8_array })),
-    //         .text = strlit("add byte ptr [r9], " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_R10,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x02, immediate8_array })),
-    //         .text = strlit("add byte ptr [r10], " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_R11,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x03, immediate8_array })),
-    //         .text = strlit("add byte ptr [r11], " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_R12,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //             .sib_base = REGISTER_X86_64_R12,
-    //             .sib_index = 0b100,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x04, 0x24, immediate8_array })),
-    //         .text = strlit("add byte ptr [r12], " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_R13,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x45, 0x00, immediate8_array })),
-    //         .text = strlit("add byte ptr [r13], " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_R14,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x06, immediate8_array })),
-    //         .text = strlit("add byte ptr [r14], " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x80,
-    //             .reg1 = REGISTER_X86_64_R15,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate8 = 1,
-    //             .immediate8 = immediate8_literal,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x41, 0x80, 0x07, immediate8_array })),
-    //         .text = strlit("add byte ptr [r15], " immediate8_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_AX,
-    //             .is_reg1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc0, immediate16_array })),
-    //         .text = strlit("add ax, " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_CX,
-    //             .is_reg1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc1, immediate16_array })),
-    //         .text = strlit("add cx, " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_DX,
-    //             .is_reg1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc2, immediate16_array })),
-    //         .text = strlit("add dx, " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_BX,
-    //             .is_reg1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc3, immediate16_array })),
-    //         .text = strlit("add bx, " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_SP,
-    //             .is_reg1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc4, immediate16_array })),
-    //         .text = strlit("add sp, " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_BP,
-    //             .is_reg1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc5, immediate16_array })),
-    //         .text = strlit("add bp, " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_SI,
-    //             .is_reg1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc6, immediate16_array })),
-    //         .text = strlit("add si, " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_DI,
-    //             .is_reg1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0xc7, immediate16_array })),
-    //         .text = strlit("add di, " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_R8W,
-    //             .is_reg1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc0, immediate16_array })),
-    //         .text = strlit("add r8w, " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_R9W,
-    //             .is_reg1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc1, immediate16_array })),
-    //         .text = strlit("add r9w, " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_R10W,
-    //             .is_reg1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc2, immediate16_array })),
-    //         .text = strlit("add r10w, " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_R11W,
-    //             .is_reg1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc3, immediate16_array })),
-    //         .text = strlit("add r11w, " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_R12W,
-    //             .is_reg1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc4, immediate16_array })),
-    //         .text = strlit("add r12w, " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_R13W,
-    //             .is_reg1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc5, immediate16_array })),
-    //         .text = strlit("add r13w, " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_R14W,
-    //             .is_reg1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc6, immediate16_array })),
-    //         .text = strlit("add r14w, " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_R15W,
-    //             .is_reg1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0xc7, immediate16_array })),
-    //         .text = strlit("add r15w, " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_RAX,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x00, immediate16_array })),
-    //         .text = strlit("add word ptr [rax], " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_RCX,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x01, immediate16_array })),
-    //         .text = strlit("add word ptr [rcx], " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_RDX,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x02, immediate16_array })),
-    //         .text = strlit("add word ptr [rdx], " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_RBX,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x03, immediate16_array })),
-    //         .text = strlit("add word ptr [rbx], " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_RSP,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .sib_base = REGISTER_X86_64_RSP,
-    //             .sib_index = 0b100,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x04, 0x24, immediate16_array })),
-    //         .text = strlit("add word ptr [rsp], " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_RBP,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x45, 0x00, immediate16_array })),
-    //         .text = strlit("add word ptr [rbp], " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_RSI,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x06, immediate16_array })),
-    //         .text = strlit("add word ptr [rsi], " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_RDI,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x81, 0x07, immediate16_array })),
-    //         .text = strlit("add word ptr [rdi], " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_R8,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x00, immediate16_array })),
-    //         .text = strlit("add word ptr [r8], " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_R9,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x01, immediate16_array })),
-    //         .text = strlit("add word ptr [r9], " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_R10,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x02, immediate16_array })),
-    //         .text = strlit("add word ptr [r10], " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_R11,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x03, immediate16_array })),
-    //         .text = strlit("add word ptr [r11], " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_R12,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .sib_base = REGISTER_X86_64_R12,
-    //             .sib_index = 0b100,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x04, 0x24, immediate16_array })),
-    //         .text = strlit("add word ptr [r12], " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_R13,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x45, 0x00, immediate16_array })),
-    //         .text = strlit("add word ptr [r13], " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_R14,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x06, immediate16_array })),
-    //         .text = strlit("add word ptr [r14], " immediate16_string),
-    //     },
-    //     {
-    //         .encoding = {
-    //             .opcode = 0x81,
-    //             .reg1 = REGISTER_X86_64_R15,
-    //             .is_reg1 = 1,
-    //             .is_indirect1 = 1,
-    //             .is_immediate16 = 1,
-    //             .immediate16 = immediate16_literal,
-    //             .is_16_mode = 1,
-    //         },
-    //         .expected = array_to_bytes(((u8[]){ 0x66, 0x41, 0x81, 0x07, immediate16_array })),
-    //         .text = strlit("add word ptr [r15], " immediate16_string),
-    //     },
-    // };
-
-    // return encoding_test_all(test_cases, array_length(test_cases));
 }

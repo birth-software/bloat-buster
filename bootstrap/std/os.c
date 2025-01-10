@@ -2,9 +2,11 @@
 
 #include <std/string.h>
 #include <std/format.h>
+#include <std/virtual_buffer.h>
 
 #include <std/string.c>
 #include <std/format.c>
+#include <std/virtual_buffer.c>
 
 #if _WIN32
 global_variable u64 cpu_frequency;
@@ -1122,10 +1124,12 @@ fn void file_write(FileWriteOptions options)
     os_file_close(fd);
 }
 
-fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunCommandOptions run_options)
+fn RunCommandResult run_command(Arena* arena, CStringSlice arguments, char* envp[], RunCommandOptions run_options)
 {
     assert(arguments.length > 0);
     assert(arguments.pointer[arguments.length - 1] == 0);
+
+    RunCommandResult result = {};
 
     if (run_options.debug)
     {
@@ -1232,9 +1236,21 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
     unused(end_timestamp);
     unused(envp);
 #else
-    unused(arena);
-    pid_t pid = syscall_fork();
+    int stdout_pipe[2];
+    int stderr_pipe[2];
 
+    if (run_options.capture_stdout && pipe(stdout_pipe) == -1)
+    {
+        todo();
+    }
+
+    if (run_options.capture_stderr && pipe(stderr_pipe) == -1)
+    {
+        todo();
+    }
+
+
+    pid_t pid = syscall_fork();
     if (pid == -1)
     {
         todo();
@@ -1244,18 +1260,96 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
 
     if (pid == 0)
     {
-        // close(pipes[0]);
+        if (run_options.capture_stdout)
+        {
+            close(stdout_pipe[0]);
+            dup2(stdout_pipe[1], STDOUT_FILENO);
+            close(stdout_pipe[1]);
+        }
+
+        if (run_options.capture_stderr)
+        {
+            close(stderr_pipe[0]);
+            dup2(stderr_pipe[1], STDERR_FILENO);
+            close(stderr_pipe[1]);
+        }
+
         // fcntl(pipes[1], F_SETFD, FD_CLOEXEC);
         let(result, syscall_execve(arguments.pointer[0], arguments.pointer, envp));
         unused(result);
-#if LINK_LIBC
         panic("Execve failed! Error: {cstr}\n", strerror(errno));
-#else
-        todo();
-#endif
     }
     else
     {
+        if (run_options.capture_stdout)
+        {
+            close(stdout_pipe[1]);
+        }
+
+        if (run_options.capture_stderr)
+        {
+            close(stderr_pipe[1]);
+        }
+
+        if (run_options.capture_stdout)
+        {
+            // TODO: better allocation strategy
+            unused(arena);
+            u8 buffer[1024];
+            VirtualBuffer(u8) final_buffer = {};
+
+            while (1)
+            {
+                ssize_t byte_count = read(stdout_pipe[0], buffer, sizeof(buffer));
+                assert(byte_count >= 0);
+                if (byte_count == 0)
+                {
+                    break;
+                }
+                String slice = {
+                    .pointer = buffer,
+                    .length = cast_to(u64, byte_count),
+                };
+                vb_copy_string(&final_buffer, slice);
+            }
+
+            close(stdout_pipe[0]);
+
+            result.stdout_string = (String) {
+                .pointer = final_buffer.pointer,
+                .length = final_buffer.length,
+            };
+        }
+
+        if (run_options.capture_stderr)
+        {
+            // TODO: better allocation strategy
+            u8 buffer[1024];
+            VirtualBuffer(u8) final_buffer = {};
+
+            while (1)
+            {
+                ssize_t byte_count = read(stderr_pipe[0], buffer, sizeof(buffer));
+                assert(byte_count >= 0);
+                if (byte_count == 0)
+                {
+                    break;
+                }
+                String slice = {
+                    .pointer = buffer,
+                    .length = cast_to(u64, byte_count),
+                };
+                vb_copy_string(&final_buffer, slice);
+            }
+
+            close(stderr_pipe[0]);
+
+            result.stderr_string = (String) {
+                .pointer = final_buffer.pointer,
+                .length = final_buffer.length,
+            };
+        }
+
         int status = 0;
         int options = 0;
         pid_t result = syscall_waitpid(pid, &status, options);
@@ -1322,6 +1416,8 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
         }
     }
 #endif
+
+    return result;
 }
 
 fn u8 os_is_being_debugged()
