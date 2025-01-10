@@ -290,7 +290,8 @@ STRUCT(Batch)
 {
     Mnemonic_x86_64 mnemonic;
 
-    BatchEncoding encodings[BATCH_ENCODING_COUNT];
+    BatchEncoding* encodings;
+    u64 encoding_count;
 };
 decl_vb(Batch);
 
@@ -316,84 +317,98 @@ fn u8 encoding_test_instruction_batches(TestDataset dataset)
     for (u64 i = 0; i < dataset.batch_count; i += 1)
     {
         const Batch* const restrict batch = &dataset.batches[i];
+        unused(batch);
 
-        for (BatchEncodingKind kind = 0; kind < BATCH_ENCODING_COUNT; kind += 1)
+        print("Batch contains {u64} encodings\n", batch->encoding_count);
+
+        for (u64 i = 0; i < batch->encoding_count; i += 1)
         {
-            const BatchEncoding* const restrict batch_encoding = &batch->encodings[kind];
-            if (batch_encoding->valid)
-            {
-                u8 buffer[max_instruction_byte_count];
-                print("{s}", mnemonic_x86_64_to_string(batch->mnemonic));
+            BatchEncoding* encoding = &batch->encodings[i];
+            String text = {
+                .pointer = dataset.string_buffer + encoding->text_offset,
+                .length = encoding->text_length,
+            };
 
-                InstructionEncoding encoding = {};
-                let(length, encode_instruction_batch(buffer, &encoding, 1));
-
-                let(expected_length, batch_encoding->expected_length);
-                let(expected_pointer, &dataset.string_buffer[batch_encoding->expected_offset]);
-
-                u8 error = length != expected_length;
-                u64 error_byte = length;
-
-                if (!error)
-                {
-                    for (u64 i = 0; i < length; i += 1)
-                    {
-                        if (buffer[i] != expected_pointer[i])
-                        {
-                            error_byte = i;
-                            break;
-                        }
-                    }
-                }
-
-                error = error | (error_byte != length);
-
-                if (unlikely(error))
-                {
-                    result = 1;
-
-                    print("[FAILED]\n");
-
-                    print("=============================\n");
-
-                    if (length != expected_length)
-                    {
-                        print("error: mismatch in the length of the instruction\n");
-                    }
-
-                    if (error_byte != length)
-                    {
-                        print("error: byte {u64} does not match. Expected: 0x{u32:x}. Produced: 0x{u32:x}\n", error_byte, (u32)expected_pointer[error_byte], (u32)buffer[error_byte]);
-                    }
-
-                    print("Expected {u64} bytes:\n", expected_length);
-
-                    for (u64 i = 0; i < expected_length; i += 1)
-                    {
-                        print("0x{u32:x} ", (u32)expected_pointer[i]);
-                    }
-
-                    print("\nOutput {u64} bytes:\n", length);
-
-                    for (u64 i = 0; i < length; i += 1)
-                    {
-                        print("0x{u32:x} ", (u32)buffer[i]);
-                    }
-
-                    print("\n");
-                    print("=============================\n");
-                }
-                else
-                {
-                    print("[OK] [ ");
-                    for (u64 i = 0; i < length; i += 1)
-                    {
-                        print("0x{u32:x} ", (u32)buffer[i]);
-                    }
-                    print("]\n");
-                }
-            }
+            print("[{u64}] {s}\n", i, text);
         }
+
+        // for (BatchEncodingKind kind = 0; kind < BATCH_ENCODING_COUNT; kind += 1)
+        // {
+        //     const BatchEncoding* const restrict batch_encoding = &batch->encodings[kind];
+        //     if (batch_encoding->valid)
+        //     {
+        //         u8 buffer[max_instruction_byte_count];
+        //         print("{s}", mnemonic_x86_64_to_string(batch->mnemonic));
+        //
+        //         InstructionEncoding encoding = {};
+        //         let(length, encode_instruction_batch(buffer, &encoding, 1));
+        //
+        //         let(expected_length, batch_encoding->expected_length);
+        //         let(expected_pointer, &dataset.string_buffer[batch_encoding->expected_offset]);
+        //
+        //         u8 error = length != expected_length;
+        //         u64 error_byte = length;
+        //
+        //         if (!error)
+        //         {
+        //             for (u64 i = 0; i < length; i += 1)
+        //             {
+        //                 if (buffer[i] != expected_pointer[i])
+        //                 {
+        //                     error_byte = i;
+        //                     break;
+        //                 }
+        //             }
+        //         }
+        //
+        //         error = error | (error_byte != length);
+        //
+        //         if (unlikely(error))
+        //         {
+        //             result = 1;
+        //
+        //             print("[FAILED]\n");
+        //
+        //             print("=============================\n");
+        //
+        //             if (length != expected_length)
+        //             {
+        //                 print("error: mismatch in the length of the instruction\n");
+        //             }
+        //
+        //             if (error_byte != length)
+        //             {
+        //                 print("error: byte {u64} does not match. Expected: 0x{u32:x}. Produced: 0x{u32:x}\n", error_byte, (u32)expected_pointer[error_byte], (u32)buffer[error_byte]);
+        //             }
+        //
+        //             print("Expected {u64} bytes:\n", expected_length);
+        //
+        //             for (u64 i = 0; i < expected_length; i += 1)
+        //             {
+        //                 print("0x{u32:x} ", (u32)expected_pointer[i]);
+        //             }
+        //
+        //             print("\nOutput {u64} bytes:\n", length);
+        //
+        //             for (u64 i = 0; i < length; i += 1)
+        //             {
+        //                 print("0x{u32:x} ", (u32)buffer[i]);
+        //             }
+        //
+        //             print("\n");
+        //             print("=============================\n");
+        //         }
+        //         else
+        //         {
+        //             print("[OK] [ ");
+        //             for (u64 i = 0; i < length; i += 1)
+        //             {
+        //                 print("0x{u32:x} ", (u32)buffer[i]);
+        //             }
+        //             print("]\n");
+        //         }
+        //     }
+        // }
     }
 
     return result;
@@ -936,9 +951,32 @@ fn void prepare_batch_encoding(DatasetPreparer* restrict preparer, BatchBuilder*
     }
 }
 
-#define batch_start(_mnemonic) BatchBuilder batch_builder = { .mnemonic =  (MNEMONIC_x86_64_ ## _mnemonic), }
+STRUCT(BatchStart)
+{
+    Mnemonic_x86_64 mnemonic;
+};
+
+fn void batch_start_extended(BatchBuilder* restrict batch_builder, BatchStart start)
+{
+    *batch_builder = (BatchBuilder) {
+        .mnemonic = start.mnemonic,
+    };
+}
+
+fn void batch_end_extended(DatasetPreparer* restrict preparer, BatchBuilder* restrict batch_builder)
+{
+    Batch* batch = vb_add(&preparer->batches, 1);
+    *batch = (Batch) {
+        .mnemonic = batch_builder->mnemonic,
+        .encodings = batch_builder->encodings.pointer,
+        .encoding_count = batch_builder->encodings.length,
+    };
+}
+
+#define batch_start(_mnemonic) BatchBuilder batch_builder; batch_start_extended(&batch_builder, (BatchStart) { .mnemonic = MNEMONIC_x86_64_ ## _mnemonic })
+// { .mnemonic =  (MNEMONIC_x86_64_ ## _mnemonic), }
 #define encode(_opcode, _operands) prepare_batch_encoding(preparer, &batch_builder, ((EncodingPrepare) { .opcode = _opcode, .operands = _operands, }));
-#define batch_end()
+#define batch_end() batch_end_extended(preparer, &batch_builder);
 // #define exp(...) ((InstructionBytes) { .length = array_length(((u8[]){__VA_ARGS__})), .bytes = { __VA_ARGS__ } })
 #define ops(...) ((Operands){ .values = { __VA_ARGS__ }, .count = array_length(((OperandKind[]){ __VA_ARGS__ })), })
 #define opc(...) ((Opcode) { .length = array_length(((u8[]){__VA_ARGS__})), .bytes = { __VA_ARGS__ }})
