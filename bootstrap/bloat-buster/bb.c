@@ -6,6 +6,8 @@
 #include <std/os.c>
 #include <std/virtual_buffer.c>
 
+global_variable char** environment_pointer;
+
 typedef enum GPR_x86_64
 {
     REGISTER_X86_64_AL  = 0x0,
@@ -527,29 +529,76 @@ fn String format_displacement(String buffer, String register_string, String disp
     return result;
 }
 
-fn u8 encoding_test_instruction_batches(TestDataset dataset)
+fn String clang_compile_assembly(Arena* arena, String instruction_text, String clang_path)
+{
+    String my_assembly_path = strlit("my_assembly_source");
+    String out_path = strlit("my_assembly_output");
+    FileWriteOptions options = {
+        .path = my_assembly_path,
+        .content = instruction_text,
+    };
+    file_write(options);
+
+    char* arguments[] = {
+        string_to_c(clang_path),
+        string_to_c(my_assembly_path),
+        "-o",
+        string_to_c(out_path),
+        "-nostdlib",
+        "-Wl,--oformat=binary",
+        0,
+    };
+    RunCommandOptions run_options = {};
+    run_command(arena, (CStringSlice)array_to_slice(arguments), environment_pointer, run_options);
+
+    String bytes = file_read(arena, out_path);
+    return bytes;
+}
+
+fn String disassemble_binary(Arena* arena, String binary_path, String objdump_path)
+{
+    char* arguments[] = {
+        string_to_c(objdump_path),
+        "-D",
+        string_to_c(binary_path),
+        "--no-addresses",
+        "--no-show-raw-insn",
+        "-m",
+        "i386:x86-64:intel",
+        "-b",
+        "binary",
+        0,
+    };
+    RunCommandOptions run_options = {
+        .capture_stdout = 1,
+    };
+    RunCommandResult result = run_command(arena, (CStringSlice)array_to_slice(arguments), environment_pointer, run_options);
+    return result.stdout_string;
+}
+
+fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
 {
     u8 result = 0;
     u8 instruction_buffer[256];
     String instruction_buffer_slice = array_to_slice(instruction_buffer);
-    print("Dataset batch count: {u64}\n", dataset.batch_count);
+
+    String clang_path = executable_find_in_path(arena, strlit("clang"), cstr(getenv("PATH")));
+    assert(clang_path.pointer);
+
     for (u64 batch_index = 0; batch_index < dataset.batch_count; batch_index += 1)
     {
         let(batch, &dataset.batches[batch_index]);
 
-        print("Batch contains {u64} encodings\n", batch->encoding_count);
+        String mnemonic_string = mnemonic_x86_64_to_string(batch->mnemonic);
 
         u64 encoding_top = batch->encoding_offset + batch->encoding_count;
 
         for (u64 encoding_index = batch->encoding_offset; encoding_index < encoding_top; encoding_index += 1)
         {
             let(encoding, &dataset.encodings[encoding_index]);
-            unused(encoding);
             OperandId first_operand = encoding->operands.values[0];
             OperandId second_operand = encoding->operands.values[1];
             let(operand_count, encoding->operands.count);
-            // TODO: Do we need to compute `mnemonic_string` every encoding?
-            String mnemonic_string = mnemonic_x86_64_to_string(batch->mnemonic);
 
             if (operand_count == 0)
             {
@@ -834,22 +883,6 @@ fn u8 encoding_test_instruction_batches(TestDataset dataset)
     return result;
 }
 
-
-// fn void format_instruction2_text(DatasetPreparer* restrict preparer, BatchEncoding* restrict encoding, String mnemonic, String op1, String op2)
-// {
-//     u8 buffer[256];
-//     String string = format_string((String)array_to_slice(buffer), "{s} {s}, {s}", mnemonic, op1, op2);
-//     u32 offset = vb_copy_string(&preparer->string_buffer, string);
-//
-//     encoding->text_offset = offset;
-//     assign_cast(encoding->text_length, string.length);
-// }
-
-
-// fn void prepare_batch_encoding(DatasetPreparer* restrict preparer, BatchBuilder* restrict batch, EncodingPrepare prepare)
-// {
-// }
-
 #define batch_start(_mnemonic) Mnemonic_x86_64 batch_mnemonic = MNEMONIC_x86_64_ ## _mnemonic; u32 encoding_offset = encodings.length
 #define encode(_opcode, _operands)\
     do{\
@@ -927,9 +960,11 @@ int main(int argc, char** argv, char** envp)
 {
     unused(argc);
     unused(argv);
-    unused(envp);
+
+    environment_pointer = envp;
 
     TestDataset dataset = construct_test_cases();
-    u8 result = encoding_test_instruction_batches(dataset);
+    Arena* arena = arena_initialize_default(MB(2));
+    u8 result = encoding_test_instruction_batches(arena, dataset);
     return result;
 }
