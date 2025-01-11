@@ -107,15 +107,13 @@ STRUCT(InstructionEncoding)
     u64 is_reg2:1;
     u64 is_indirect1:1;
     u64 is_indirect2:1;
-    u64 is_immediate8:1;
-    u64 is_immediate16:1;
-    u64 is_immediate32:1;
-    u64 is_immediate64:1;
+    u64 is_immediate:4;
     u64 is_16_mode:1;
     u64 immediate;
     // TODO: merge?
     s32 displacement32;
     s8 displacement8;
+    // TODO: support more bytes
     u8 opcode;
     u8 reg1;
     u8 reg2;
@@ -196,16 +194,16 @@ fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
         it += sizeof(encoding.displacement32) * is_displacement32;
 
         *(u8*) it = (u8)encoding.immediate;
-        it += encoding.is_immediate8 * sizeof(u8);
+        it += ((encoding.is_immediate & (1 << 0)) >> 0) * sizeof(u8);
 
         *(u16*) it = (u16)encoding.immediate;
-        it += encoding.is_immediate16 * sizeof(u16);
+        it += ((encoding.is_immediate & (1 << 1)) >> 1) * sizeof(u16);
 
         *(u32*) it = (u32)encoding.immediate;
-        it += encoding.is_immediate32 * sizeof(u32);
+        it += ((encoding.is_immediate & (1 << 2)) >> 2) * sizeof(u32);
 
         *(u64*) it = encoding.immediate;
-        it += encoding.is_immediate64 * sizeof(u64);
+        it += ((encoding.is_immediate & (1 << 3)) >> 3) * sizeof(u64);
 
         let_cast(u8, instruction_length, it - start);
         instruction_lengths[i] = instruction_length;
@@ -365,6 +363,17 @@ fn String sample_immediate_strings(u8 index)
     };
 
     return strings[index];
+}
+
+fn u64 sample_immediate_values(u8 index)
+{
+    global_variable const u64 immediates[] = {
+        0x10,
+        0x1000,
+        0x10000000,
+        0x1000000000000000,
+    };
+    return immediates[index];
 }
 
 fn String gpr_to_string(GPR_x86_64 gpr, u8 index, u8 switcher)
@@ -610,7 +619,7 @@ STRUCT(CheckInstructionArguments)
 fn void check_instruction(Arena* arena, CheckInstructionArguments arguments)
 {
     String disassembly_text = disassemble_binary(arena, arguments.binary, arguments.objdump_path);
-    unused(disassembly_text);
+    print("Disasembly text: {s}\n", disassembly_text);
     todo();
 
     if (arguments.check_text)
@@ -678,9 +687,29 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                             let(imm_index, op_imm_get_index(second_operand));
                             // We output the string directly to avoid formatting cost
                             String second_operand_string = sample_immediate_strings(imm_index);
+                            u64 immediate = sample_immediate_values(imm_index);
                             String instruction_string = format_instruction2(instruction_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
-                            InstructionEncoding encoding = {};
-                            u16 length = encode_instruction_batch(instruction_buffer, &encoding, 1);
+                            InstructionEncoding batch_encoding = {
+                                .is_64_bit = register_a_index == 3,
+                                .has_rex = 0,
+                                .scaled_index_register = 0,
+                                .is_reg1 = 0,
+                                .is_reg2 = 0,
+                                .is_indirect1 = 0,
+                                .is_indirect2 = 0,
+                                .is_immediate = 1 << imm_index,
+                                .is_16_mode = (register_a_index & (1 << 1)) >> 1,
+                                .immediate = immediate,
+                                .displacement32 = 0,
+                                .displacement8 = 0,
+                                .opcode = encoding->opcode.bytes[0],
+                                .reg1 = 0,
+                                .reg2 = 0,
+                                .sib_scale = 0,
+                                .sib_index = 0,
+                                .sib_base = 0,
+                            };
+                            u16 length = encode_instruction_batch(instruction_buffer, &batch_encoding, 1);
                             String instruction_bytes = {
                                 .pointer = instruction_buffer,
                                 .length = length,
