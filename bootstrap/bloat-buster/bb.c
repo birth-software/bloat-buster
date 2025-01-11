@@ -100,27 +100,25 @@ typedef enum GPR_x86_64
 
 STRUCT(InstructionEncoding)
 {
-    u8 is_64_bit;
-    u8 has_rex;
-    u8 scaled_index_register;
+    u64 is_64_bit:1;
+    u64 has_rex:1;
+    u64 scaled_index_register:1;
+    u64 is_reg1:1;
+    u64 is_reg2:1;
+    u64 is_indirect1:1;
+    u64 is_indirect2:1;
+    u64 is_immediate8:1;
+    u64 is_immediate16:1;
+    u64 is_immediate32:1;
+    u64 is_immediate64:1;
+    u64 is_16_mode:1;
+    u64 immediate;
+    // TODO: merge?
+    s32 displacement32;
+    s8 displacement8;
     u8 opcode;
     u8 reg1;
     u8 reg2;
-    u8 is_reg1;
-    u8 is_reg2;
-    u8 is_indirect1;
-    u8 is_indirect2;
-    u8 is_immediate8;
-    u8 is_immediate16;
-    u8 is_immediate32;
-    u8 is_immediate64;
-    u8 immediate8;
-    u16 immediate16;
-    u32 immediate32;
-    u64 immediate64;
-    u8 is_16_mode;
-    s8 displacement8;
-    s32 displacement32;
     u8 sib_scale;
     u8 sib_index;
     u8 sib_base;
@@ -196,17 +194,17 @@ fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
         *(u32*)it = encoding.displacement32;
         it += sizeof(encoding.displacement32) * is_displacement32;
 
-        *(typeof(encoding.immediate8)*) it = encoding.immediate8;
-        it += encoding.is_immediate8 * sizeof(encoding.immediate8);
+        *(u8*) it = (u8)encoding.immediate;
+        it += encoding.is_immediate8 * sizeof(u8);
 
-        *(typeof(encoding.immediate16)*) it = encoding.immediate16;
-        it += encoding.is_immediate16 * sizeof(encoding.immediate16);
+        *(u16*) it = (u16)encoding.immediate;
+        it += encoding.is_immediate16 * sizeof(u16);
 
-        *(typeof(encoding.immediate32)*) it = encoding.immediate32;
-        it += encoding.is_immediate32 * sizeof(encoding.immediate32);
+        *(u32*) it = (u32)encoding.immediate;
+        it += encoding.is_immediate32 * sizeof(u32);
 
-        *(typeof(encoding.immediate64)*) it = encoding.immediate64;
-        it += encoding.is_immediate64 * sizeof(encoding.immediate64);
+        *(u64*) it = encoding.immediate;
+        it += encoding.is_immediate64 * sizeof(u64);
 
         let_cast(u8, instruction_length, it - start);
         instruction_lengths[i] = instruction_length;
