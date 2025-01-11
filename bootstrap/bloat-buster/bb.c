@@ -570,7 +570,7 @@ fn String format_displacement(String buffer, String register_string, String disp
 
 fn String clang_compile_assembly(Arena* arena, String instruction_text, String clang_path)
 {
-    String my_assembly_path = strlit(BUILD_DIR "/my_assembly_source");
+    String my_assembly_path = strlit(BUILD_DIR "/my_assembly_source.S");
     FileWriteOptions options = {
         .path = my_assembly_path,
         .content = instruction_text,
@@ -584,15 +584,19 @@ fn String clang_compile_assembly(Arena* arena, String instruction_text, String c
         string_to_c(my_assembly_path),
         "-o",
         string_to_c(out_path),
+        "-masm=intel",
         "-nostdlib",
         "-Wl,--oformat=binary",
         0,
     };
-    RunCommandOptions run_options = {};
+    RunCommandOptions run_options = {
+        .capture_stderr = 1,
+    };
     RunCommandResult result = run_command(arena, (CStringSlice)array_to_slice(arguments), environment_pointer, run_options);
     let(success, result.termination_kind == PROCESS_TERMINATION_EXIT && result.termination_code == 0);
     if (!success)
     {
+        print("Clang failed: {s}\n", result.stderr_string);
         os_exit(1);
     }
 
@@ -735,12 +739,17 @@ STRUCT(CheckInstructionArguments)
     String clang_path;
     String text;
     String binary;
+    String error_buffer;
+    u64* error_buffer_length;
     u64 check_text:1;
     u64 reserved:63;
 };
 
-fn u8 check_instruction(Arena* arena, CheckInstructionArguments arguments)
+fn u64 check_instruction(Arena* arena, CheckInstructionArguments arguments)
 {
+    StringFormatter error_buffer = {
+        .buffer = arguments.error_buffer,
+    };
     DisassemblyArguments disassemble_arguments = {
         .binary = arguments.binary,
         .objdump_path = arguments.objdump_path,
@@ -770,8 +779,31 @@ fn u8 check_instruction(Arena* arena, CheckInstructionArguments arguments)
         if (disassembly_text.length && disassembly_text.pointer[0] == '.')
         {
             result = 0;
-            disassemble_arguments.gross = 1;
-            print("Some corrupted output was generated:\n{s}\n", disassemble_binary(arena, disassemble_arguments));
+
+            formatter_append_string(&error_buffer, strlit("Some corrupted output was generated:\n\t"));
+
+            for (u64 bin_i = 0; bin_i < arguments.binary.length; bin_i += 1)
+            {
+                formatter_append(&error_buffer, "0x{u32:x,w=2} ", (u32)arguments.binary.pointer[bin_i]);
+            }
+
+            formatter_append(&error_buffer, "\n");
+
+            String clang_binary = clang_compile_assembly(arena, arguments.text, arguments.clang_path);
+            if (clang_binary.pointer)
+            {
+                formatter_append_string(&error_buffer, strlit("While clang generated the following:\n\t"));
+
+                for (u64 bin_i = 0; bin_i < clang_binary.length; bin_i += 1)
+                {
+                    formatter_append(&error_buffer, "0x{u32:x,w=2} ", (u32)clang_binary.pointer[bin_i]);
+                }
+                formatter_append_string(&error_buffer, strlit("\n"));
+            }
+            else
+            {
+                todo();
+            }
         }
         else
         {
@@ -788,7 +820,9 @@ fn u8 check_instruction(Arena* arena, CheckInstructionArguments arguments)
         todo();
     }
 
-    return result;
+    assert(!!error_buffer.index == !result);
+
+    return error_buffer.index;
 }
 
 fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
@@ -797,6 +831,8 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
     u8 instruction_binary_buffer[256];
     u8 instruction_text_buffer[256];
     String instruction_text_buffer_slice = array_to_slice(instruction_text_buffer);
+    u8 error_buffer[4096];
+    String error_buffer_slice = array_to_slice(error_buffer);
 
     String clang_path = executable_find_in_path(arena, strlit("clang"), cstr(getenv("PATH")));
     assert(clang_path.pointer);
@@ -809,7 +845,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
         let(batch, &dataset.batches[batch_index]);
 
         String mnemonic_string = mnemonic_x86_64_to_string(batch->mnemonic);
-        print("Mnemonic: {s}\n", mnemonic_string);
+        print("============================\n~~~~~~~ MNEMONIC {s} ~~~~~~~\n============================\n", mnemonic_string);
 
         u64 encoding_top = batch->encoding_offset + batch->encoding_count;
 
@@ -820,6 +856,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
             OperandId second_operand = encoding->operands.values[1];
             let(operand_count, encoding->operands.count);
 
+            u64 instance_index = 0;
             {
                 u8 encoding_buffer[256];
                 u64 encoding_buffer_i = 0;
@@ -844,10 +881,21 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                     encoding_buffer_i += not_last_operand;
                 }
 
+                let(current_length, encoding_buffer_i);
+
+                encoding_buffer[encoding_buffer_i] = '\n';
+                encoding_buffer_i += 1;
+
+                for (u64 ei = 0; ei < current_length; ei += 1)
+                {
+                    encoding_buffer[encoding_buffer_i] = '-';
+                    encoding_buffer_i += 1;
+                }
+
                 encoding_buffer[encoding_buffer_i] = 0;
 
                 String encoding_string = { .pointer = encoding_buffer, .length = encoding_buffer_i };
-                print("{s}\n", encoding_string);
+                print("{s}\n{s}\n", s_get_slice(u8, encoding_string, current_length + 1, encoding_string.length), encoding_string);
             }
 
             if (operand_count == 0)
@@ -910,8 +958,12 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                 .objdump_path = objdump_path,
                                 .text = instruction_string,
                                 .binary = instruction_bytes,
+                                .error_buffer = error_buffer_slice,
                             };
-                            check_instruction(arena, check_args);
+                            u64 error_buffer_length = check_instruction(arena, check_args);
+                            String error_string = { .pointer = error_buffer, .length = error_buffer_length };
+                            let(success, error_buffer_length == 0);
+                            print("{u64}) {s}... [{cstr}]\n{s}{cstr}", instance_index, instruction_string, success ? "OK" : "FAILED", error_string, success ? "" : "\n");
                         } break;
                     case 3:
                         {

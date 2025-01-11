@@ -19,6 +19,29 @@ fn u8 log2_alignment(u64 alignment)
     return result;
 }
 
+fn u8 log2_u64(u64 v)
+{
+    assert(v != 0);
+    return (sizeof(u64) * 8 - 1) - __builtin_clzll(v);
+}
+
+fn u8 log2_u32(u32 v)
+{
+    assert(v != 0);
+    return (sizeof(u32) * 8 - 1) - __builtin_clz(v);
+}
+
+fn u8 hex_digit_count(u64 v)
+{
+    u8 result = 1;
+    if (v)
+    {
+        result = log2_u64(v) / log2_u64(16) + 1;
+    }
+
+    return result;
+}
+
 fn u128 u128_from_u64(u64 n)
 {
 #if defined(__TINYC__) || defined(_MSC_VER)
