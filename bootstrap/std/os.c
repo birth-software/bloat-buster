@@ -1087,6 +1087,18 @@ fn String arena_join_string(Arena* arena, Slice(String) pieces)
     return (String) { .pointer = pointer, .length = size };
 }
 
+fn String arena_duplicate_string(Arena* arena, String string)
+{
+    u8* result = arena_allocate(arena, u8, string.length + 1);
+    memcpy(result, string.pointer, string.length);
+    result[string.length] = 0;
+
+    return (String) {
+        .pointer = result,
+        .length = string.length,
+    };
+}
+
 fn void arena_reset(Arena* arena)
 {
     arena->position = minimum_position;
@@ -1135,7 +1147,6 @@ fn String file_read(Arena* arena, String path)
 
 fn void file_write(FileWriteOptions options)
 {
-    print("Writing file \"{s}\"...\n", options.path);
     let(fd, os_file_open(options.path, (OSFileOpenFlags) {
         .write = 1,
         .truncate = 1,

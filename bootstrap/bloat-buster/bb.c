@@ -492,19 +492,24 @@ fn String format_instruction2(String buffer, String mnemonic, String op1, String
 {
     u64 i = 0;
 
-    memcpy(buffer.pointer, mnemonic.pointer, mnemonic.length);
+    memcpy(buffer.pointer + i, mnemonic.pointer, mnemonic.length);
     i += mnemonic.length;
 
-    memcpy(buffer.pointer, op1.pointer, op1.length);
+    buffer.pointer[i] = ' ';
+    i += 1;
+
+    memcpy(buffer.pointer + i, op1.pointer, op1.length);
     i += op1.length;
 
-    memcpy(buffer.pointer, op2.pointer, op2.length);
+    buffer.pointer[i] = ',';
+    buffer.pointer[i + 1] = ' ';
+    i += 2;
+
+    memcpy(buffer.pointer + i, op2.pointer, op2.length);
     i += op2.length;
 
     assert(i < buffer.length);
-
     buffer.pointer[i] = 0;
-    i += 1;
 
     return (String) {
         .pointer = buffer.pointer,
@@ -571,18 +576,43 @@ fn String clang_compile_assembly(Arena* arena, String instruction_text, String c
     return bytes;
 }
 
-fn String disassemble_binary(Arena* arena, String binary, String objdump_path)
+STRUCT(DisassemblyResult)
 {
-    assert(binary.length);
+    String whole;
+    String instruction;
+};
+
+STRUCT(DisassemblyArguments)
+{
+    String binary;
+    String objdump_path;
+    u64 gross:1;
+};
+
+fn String disassemble_binary(Arena* arena, DisassemblyArguments arguments)
+{
+    assert(arguments.binary.length);
     String binary_path = strlit(BUILD_DIR "/my_binary_path");
     FileWriteOptions options = {
         .path = binary_path,
-        .content = binary,
+        .content = arguments.binary,
     };
     file_write(options);
 
-    char* arguments[] = {
-        string_to_c(objdump_path),
+    char* arguments_gross[] = {
+        string_to_c(arguments.objdump_path),
+        "-D",
+        string_to_c(binary_path),
+        "-m",
+        "i386:x86-64:intel",
+        "-b",
+        "binary",
+        0,
+    };
+    CStringSlice arguments_gross_slice = array_to_slice(arguments_gross);
+
+    char* arguments_pruned[] = {
+        string_to_c(arguments.objdump_path),
         "-D",
         string_to_c(binary_path),
         "--no-addresses",
@@ -593,17 +623,86 @@ fn String disassemble_binary(Arena* arena, String binary, String objdump_path)
         "binary",
         0,
     };
+    CStringSlice arguments_pruned_slice = array_to_slice(arguments_pruned);
     RunCommandOptions run_options = {
         .capture_stdout = 1,
-        .capture_stderr = 1,
     };
-    RunCommandResult result = run_command(arena, (CStringSlice)array_to_slice(arguments), environment_pointer, run_options);
-    let(success, result.termination_kind == PROCESS_TERMINATION_EXIT && result.termination_code == 0);
+    RunCommandResult run_result = run_command(arena, arguments.gross ? arguments_gross_slice : arguments_pruned_slice, environment_pointer, run_options);
+    let(success, run_result.termination_kind == PROCESS_TERMINATION_EXIT && run_result.termination_code == 0);
     if (!success)
     {
         todo();
     }
-    return result.stdout_string;
+
+    String search_token = strlit("<.data>:\n");
+    let(index, string_first_occurrence(run_result.stdout_string, search_token));
+    assert(index != STRING_NO_MATCH);
+    String result = s_get_slice(u8, run_result.stdout_string, index + search_token.length, run_result.stdout_string.length);
+    if (result.pointer[0] == '\t')
+    {
+        result.pointer += 1;
+        result.length -= 1;
+    }
+
+
+    if (!arguments.gross)
+    {
+        index = string_first_ch(result, '\n');
+        assert(index != STRING_NO_MATCH);
+        result = s_get_slice(u8, result, 0, index);
+
+        u8 buffer[256];
+        u64 buffer_i = 0;
+
+        u64 i = 0;
+        while (result.pointer[i] != '\n' && result.pointer[i] != ' ')
+        {
+            i += 1;
+        }
+
+        String mnemonic = s_get_slice(u8, result, 0, i);
+        memcpy(buffer + buffer_i, mnemonic.pointer, mnemonic.length);
+        buffer_i += mnemonic.length;
+
+        if (i != result.length)
+        {
+            buffer[buffer_i] = ' ';
+            buffer_i += 1;
+
+            while (result.pointer[i] != '\n')
+            {
+                while (result.pointer[i] == ' ')
+                {
+                    i += 1;
+                }
+
+                u64 operand_start = i;
+                while (result.pointer[i] != ',' && result.pointer[i] != '\n')
+                {
+                    i += 1;
+                }
+
+                u64 operand_end = i;
+
+                String operand = s_get_slice(u8, result, operand_start, operand_end);
+                memcpy(buffer + buffer_i, operand.pointer, operand.length);
+                buffer_i += operand.length;
+
+                u8 more_operands_left = result.pointer[i] == ',';
+                i += more_operands_left;
+
+                buffer[buffer_i] = ',';
+                buffer_i += more_operands_left;
+
+                buffer[buffer_i] = ' ';
+                buffer_i += more_operands_left;
+            }
+        }
+
+        result = arena_duplicate_string(arena, (String) { .pointer = buffer, .length = buffer_i } );
+    }
+
+    return result;
 }
 
 STRUCT(CheckInstructionArguments)
@@ -616,11 +715,45 @@ STRUCT(CheckInstructionArguments)
     u64 reserved:63;
 };
 
-fn void check_instruction(Arena* arena, CheckInstructionArguments arguments)
+fn u8 check_instruction(Arena* arena, CheckInstructionArguments arguments)
 {
-    String disassembly_text = disassemble_binary(arena, arguments.binary, arguments.objdump_path);
-    print("Disasembly text: {s}\n", disassembly_text);
-    todo();
+    DisassemblyArguments disassemble_arguments = {
+        .binary = arguments.binary,
+        .objdump_path = arguments.objdump_path,
+    };
+    String disassembly_text = disassemble_binary(arena, disassemble_arguments);
+    u8 result = 1;
+
+    if (disassembly_text.length == arguments.text.length)
+    {
+        for (u64 i = 0; i < arguments.text.length; i += 1)
+        {
+            if (disassembly_text.pointer[i] != arguments.text.pointer[i])
+            {
+                if (i == 0 && disassembly_text.pointer[i] == '.')
+                {
+                    todo();
+                }
+                else
+                {
+                    todo();
+                }
+            }
+        }
+    }
+    else
+    {
+        if (disassembly_text.length && disassembly_text.pointer[0] == '.')
+        {
+            result = 0;
+            disassemble_arguments.gross = 1;
+            print("Some corrupted output was generated:\n{s}\n", disassemble_binary(arena, disassemble_arguments));
+        }
+        else
+        {
+            todo();
+        }
+    }
 
     if (arguments.check_text)
     {
@@ -630,13 +763,16 @@ fn void check_instruction(Arena* arena, CheckInstructionArguments arguments)
         unused(my_binary);
         todo();
     }
+
+    return result;
 }
 
 fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
 {
     u8 result = 0;
-    u8 instruction_buffer[256];
-    String instruction_buffer_slice = array_to_slice(instruction_buffer);
+    u8 instruction_binary_buffer[256];
+    u8 instruction_text_buffer[256];
+    String instruction_text_buffer_slice = array_to_slice(instruction_text_buffer);
 
     String clang_path = executable_find_in_path(arena, strlit("clang"), cstr(getenv("PATH")));
     assert(clang_path.pointer);
@@ -688,7 +824,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                             // We output the string directly to avoid formatting cost
                             String second_operand_string = sample_immediate_strings(imm_index);
                             u64 immediate = sample_immediate_values(imm_index);
-                            String instruction_string = format_instruction2(instruction_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
+                            String instruction_string = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
                             InstructionEncoding batch_encoding = {
                                 .is_64_bit = register_a_index == 3,
                                 .has_rex = 0,
@@ -709,9 +845,9 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                 .sib_index = 0,
                                 .sib_base = 0,
                             };
-                            u16 length = encode_instruction_batch(instruction_buffer, &batch_encoding, 1);
+                            u16 length = encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1);
                             String instruction_bytes = {
-                                .pointer = instruction_buffer,
+                                .pointer = instruction_binary_buffer,
                                 .length = length,
                             };
                             CheckInstructionArguments check_args = {
@@ -806,7 +942,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                         for (GPR_x86_64 second_gpr = 0; second_gpr < second_operand_register_count; second_gpr += 1)
                                         {
                                             String second_operand_string = gpr_to_string(second_gpr, second_operand_index, 0);
-                                            String instruction_string = format_instruction2(instruction_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
+                                            String instruction_string = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
                                             unused(instruction_string);
                                         }
                                     }
@@ -822,7 +958,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                 for (GPR_x86_64 second_gpr = 0; second_gpr < second_operand_register_count; second_gpr += 1)
                                                 {
                                                     String second_operand_string = gpr_to_string(second_gpr, second_operand_index, 0);
-                                                    String instruction_string = format_instruction2(instruction_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
+                                                    String instruction_string = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
                                                     unused(instruction_string);
                                                 }
                                             }
@@ -840,7 +976,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                 for (u32 i = 0; i < array_length(displacements); i += 1)
                                                 {
                                                     String second_operand_string = second_rm_strings[second_gpr][i];
-                                                    String instruction_string = format_instruction2(instruction_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
+                                                    String instruction_string = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
                                                     unused(instruction_string);
                                                 }
                                             }
@@ -856,7 +992,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                     for (GPR_x86_64 first_gpr = 0; first_gpr < first_operand_register_count; first_gpr += 1)
                                     {
                                         String first_operand_string = gpr_to_string(first_gpr, first_operand_index, 0);
-                                        String instruction_string = format_instruction2(instruction_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
+                                        String instruction_string = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
                                         unused(instruction_string);
                                     }
 
@@ -867,7 +1003,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                             for (u32 i = 0; i < array_length(displacements); i += 1)
                                             {
                                                 String first_operand_string = first_rm_strings[gpr][i];
-                                                String instruction_string = format_instruction2(instruction_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
+                                                String instruction_string = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
                                                 unused(instruction_string);
                                             }
                                         }
