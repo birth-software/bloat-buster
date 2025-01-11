@@ -1433,3 +1433,10 @@ fn void formatter_append_string(StringFormatter* formatter, String string)
     memcpy(formatter->buffer.pointer + formatter->index, string.pointer, string.length);
     formatter->index += string.length;
 }
+
+fn void formatter_append_character(StringFormatter* formatter, u8 ch)
+{
+    assert(formatter->index < formatter->buffer.length);
+    formatter->buffer.pointer[formatter->index] = ch;
+    formatter->index += 1;
+}

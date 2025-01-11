@@ -798,7 +798,7 @@ fn u64 check_instruction(Arena* arena, CheckInstructionArguments arguments)
                 {
                     formatter_append(&error_buffer, "0x{u32:x,w=2} ", (u32)clang_binary.pointer[bin_i]);
                 }
-                formatter_append_string(&error_buffer, strlit("\n"));
+                formatter_append_character(&error_buffer, '\n');
             }
             else
             {
