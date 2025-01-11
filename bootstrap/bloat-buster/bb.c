@@ -137,7 +137,8 @@ fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
         InstructionEncoding encoding = encodings[i];
     
         const u8* const start = (const u8* const) &buffers[i];
-        u8* restrict it = (u8* restrict) &buffers[i];
+        u8* restrict local_buffer = (u8* restrict)&buffers[i];
+        u8* restrict it = local_buffer;
 
         u8 operand_size_override_prefix = 0x66;
         *it = operand_size_override_prefix;
@@ -222,8 +223,8 @@ fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
         {
             it[byte] = buffers[i][byte];
         }
-        it += instruction_length;
 #endif
+        it += instruction_length;
     }
 
     return it - output;
@@ -239,6 +240,7 @@ fn String mnemonic_x86_64_to_string(Mnemonic_x86_64 mnemonic)
     switch (mnemonic)
     {
         case_to_name(MNEMONIC_x86_64_, add);
+        default: return (String){};
     }
 }
 
@@ -677,13 +679,19 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                             // We output the string directly to avoid formatting cost
                             String second_operand_string = sample_immediate_strings(imm_index);
                             String instruction_string = format_instruction2(instruction_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
+                            InstructionEncoding encoding = {};
+                            u16 length = encode_instruction_batch(instruction_buffer, &encoding, 1);
+                            String instruction_bytes = {
+                                .pointer = instruction_buffer,
+                                .length = length,
+                            };
                             CheckInstructionArguments check_args = {
                                 .clang_path = clang_path,
                                 .objdump_path = objdump_path,
                                 .text = instruction_string,
+                                .binary = instruction_bytes,
                             };
                             check_instruction(arena, check_args);
-                            unused(instruction_string);
                         } break;
                     case 3:
                         {
@@ -736,7 +744,6 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
 
                                         for (u32 i = 0; i < array_length(displacements); i += 1)
                                         {
-                                            unused(first_operand_rm_name);
                                             first_rm_strings[gpr][i] = format_displacement((String)array_to_slice(first_rm_buffer[gpr][i]), first_operand_rm_name, displacement_strings[i]);
                                         }
                                     }
