@@ -532,12 +532,13 @@ fn String format_displacement(String buffer, String register_string, String disp
 fn String clang_compile_assembly(Arena* arena, String instruction_text, String clang_path)
 {
     String my_assembly_path = strlit("my_assembly_source");
-    String out_path = strlit("my_assembly_output");
     FileWriteOptions options = {
         .path = my_assembly_path,
         .content = instruction_text,
     };
     file_write(options);
+
+    String out_path = strlit("my_assembly_output");
 
     char* arguments[] = {
         string_to_c(clang_path),
@@ -555,8 +556,15 @@ fn String clang_compile_assembly(Arena* arena, String instruction_text, String c
     return bytes;
 }
 
-fn String disassemble_binary(Arena* arena, String binary_path, String objdump_path)
+fn String disassemble_binary(Arena* arena, String binary, String objdump_path)
 {
+    String binary_path = strlit("my_binary_path");
+    FileWriteOptions options = {
+        .path = binary_path,
+        .content = binary,
+    };
+    file_write(options);
+
     char* arguments[] = {
         string_to_c(objdump_path),
         "-D",
@@ -576,6 +584,32 @@ fn String disassemble_binary(Arena* arena, String binary_path, String objdump_pa
     return result.stdout_string;
 }
 
+STRUCT(CheckInstructionArguments)
+{
+    String objdump_path;
+    String clang_path;
+    String text;
+    String binary;
+    u64 check_text:1;
+    u64 reserved:63;
+};
+
+fn void check_instruction(Arena* arena, CheckInstructionArguments arguments)
+{
+    String disassembly_text = disassemble_binary(arena, arguments.binary, arguments.objdump_path);
+    unused(disassembly_text);
+    todo();
+
+    if (arguments.check_text)
+    {
+        String clang_binary = clang_compile_assembly(arena, arguments.text, arguments.clang_path);
+        String my_binary = arguments.binary;
+        unused(clang_binary);
+        unused(my_binary);
+        todo();
+    }
+}
+
 fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
 {
     u8 result = 0;
@@ -584,6 +618,9 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
 
     String clang_path = executable_find_in_path(arena, strlit("clang"), cstr(getenv("PATH")));
     assert(clang_path.pointer);
+
+    String objdump_path = executable_find_in_path(arena, strlit("objdump"), cstr(getenv("PATH")));
+    assert(objdump_path.pointer);
 
     for (u64 batch_index = 0; batch_index < dataset.batch_count; batch_index += 1)
     {
