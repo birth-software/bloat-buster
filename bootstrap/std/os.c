@@ -965,8 +965,36 @@ fn void os_directory_make(String path)
 #endif
 }
 
+fn u8 os_is_being_debugged()
+{
+    u8 result = 0;
+#if _WIN32
+    result = IsDebuggerPresent() != 0;
+#else
+#ifdef __APPLE__
+    let(request, PT_TRACE_ME);
+#else
+    let(request, PTRACE_TRACEME);
+#endif
+    if (ptrace(request, 0, 0, 0) == -1)
+    {
+        let(error, errno);
+        if (error == EPERM)
+        {
+            result = 1;
+        }
+    }
+#endif
+
+    return result;
+}
+
 BB_NORETURN BB_COLD fn void os_exit(u32 exit_code)
 {
+    if (exit_code != 0 && os_is_being_debugged())
+    {
+        trap();
+    }
     exit(exit_code);
 }
 
@@ -1352,43 +1380,60 @@ fn RunCommandResult run_command(Arena* arena, CStringSlice arguments, char* envp
 
         int status = 0;
         int options = 0;
-        pid_t result = syscall_waitpid(pid, &status, options);
+        pid_t waitpid_result = syscall_waitpid(pid, &status, options);
         let(end_timestamp, os_timestamp());
-        int success = 0;
-        if (result == pid)
+
+        if (waitpid_result == pid)
         {
             if (run_options.debug)
             {
                 print("{cstr} ", arguments.pointer[0]);
-
-                if (WIFEXITED(status))
-                {
-                    let(exit_code, WEXITSTATUS(status));
-                    print("exited with code {u32}\n", exit_code);
-                }
-                else if (WIFSIGNALED(status))
-                {
-                    let(signal_code, WTERMSIG(status));
-                    print("was signaled: {u32}\n", signal_code);
-                }
-                else if (WIFSTOPPED(status))
-                {
-                    let(stopped_code, WSTOPSIG(status));
-                    print("was stopped: {u32}\n", stopped_code);
-                }
-                else
-                {
-                    print("terminated unexpectedly with status {u32}\n", status);
-                }
             }
 
             if (WIFEXITED(status))
             {
                 let(exit_code, WEXITSTATUS(status));
-                success = exit_code == 0;
+                result.termination_code = exit_code;
+                result.termination_kind = PROCESS_TERMINATION_EXIT;
+
+                if (run_options.debug)
+                {
+                    print("exited with code {u32}\n", exit_code);
+                }
+            }
+            else if (WIFSIGNALED(status))
+            {
+                let(signal_code, WTERMSIG(status));
+                result.termination_code = signal_code;
+                result.termination_kind = PROCESS_TERMINATION_SIGNAL;
+
+                if (run_options.debug)
+                {
+                    print("was signaled: {u32}\n", signal_code);
+                }
+            }
+            else if (WIFSTOPPED(status))
+            {
+                let(stop_code, WSTOPSIG(status));
+                result.termination_code = stop_code;
+                result.termination_kind = PROCESS_TERMINATION_STOP;
+
+                if (run_options.debug)
+                {
+                    print("was stopped: {u32}\n", stop_code);
+                }
+            }
+            else
+            {
+                result.termination_kind = PROCESS_TERMINATION_UNKNOWN;
+
+                if (run_options.debug)
+                {
+                    print("terminated unexpectedly with status {u32}\n", status);
+                }
             }
         }
-        else if (result == -1)
+        else if (waitpid_result == -1)
         {
             let(waitpid_error, errno);
             print("Error waiting for process termination: {u32}\n", waitpid_error);
@@ -1399,10 +1444,10 @@ fn RunCommandResult run_command(Arena* arena, CStringSlice arguments, char* envp
             todo();
         }
 
-        if (!success)
+        let(success, result.termination_kind == PROCESS_TERMINATION_EXIT && result.termination_code == 0);
+        if (run_options.debug && !success)
         {
-            print("Program failed to run successfully!\n");
-            failed_execution();
+            print("{cstr} failed to run successfully!\n", arguments.pointer[0]);
         }
 
         if (run_options.debug)
@@ -1412,31 +1457,7 @@ fn RunCommandResult run_command(Arena* arena, CStringSlice arguments, char* envp
 #if LINK_LIBC == 0
             ticks = cpu_frequency != 0;
 #endif
-            print("Command run successfully in {f64} {cstr}\n", ms, ticks ? "ticks" : "ms");
-        }
-    }
-#endif
-
-    return result;
-}
-
-fn u8 os_is_being_debugged()
-{
-    u8 result = 0;
-#if _WIN32
-    result = IsDebuggerPresent() != 0;
-#else
-#ifdef __APPLE__
-    let(request, PT_TRACE_ME);
-#else
-    let(request, PTRACE_TRACEME);
-#endif
-    if (ptrace(request, 0, 0, 0) == -1)
-    {
-        let(error, errno);
-        if (error == EPERM)
-        {
-            result = 1;
+            print("Command run {cstr} in {f64} {cstr}\n", success ? "successfully" : "with errors", ms, ticks ? "ticks" : "ms");
         }
     }
 #endif

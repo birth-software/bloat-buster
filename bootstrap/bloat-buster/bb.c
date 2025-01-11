@@ -1,6 +1,7 @@
 #include <std/base.h>
 #include <std/os.h>
 #include <std/virtual_buffer.h>
+#include <std/project.h>
 
 #include <std/base.c>
 #include <std/os.c>
@@ -531,14 +532,14 @@ fn String format_displacement(String buffer, String register_string, String disp
 
 fn String clang_compile_assembly(Arena* arena, String instruction_text, String clang_path)
 {
-    String my_assembly_path = strlit("my_assembly_source");
+    String my_assembly_path = strlit(BUILD_DIR "/my_assembly_source");
     FileWriteOptions options = {
         .path = my_assembly_path,
         .content = instruction_text,
     };
     file_write(options);
 
-    String out_path = strlit("my_assembly_output");
+    String out_path = strlit(BUILD_DIR "/my_assembly_output");
 
     char* arguments[] = {
         string_to_c(clang_path),
@@ -550,7 +551,12 @@ fn String clang_compile_assembly(Arena* arena, String instruction_text, String c
         0,
     };
     RunCommandOptions run_options = {};
-    run_command(arena, (CStringSlice)array_to_slice(arguments), environment_pointer, run_options);
+    RunCommandResult result = run_command(arena, (CStringSlice)array_to_slice(arguments), environment_pointer, run_options);
+    let(success, result.termination_kind == PROCESS_TERMINATION_EXIT && result.termination_code == 0);
+    if (!success)
+    {
+        os_exit(1);
+    }
 
     String bytes = file_read(arena, out_path);
     return bytes;
@@ -558,7 +564,8 @@ fn String clang_compile_assembly(Arena* arena, String instruction_text, String c
 
 fn String disassemble_binary(Arena* arena, String binary, String objdump_path)
 {
-    String binary_path = strlit("my_binary_path");
+    assert(binary.length);
+    String binary_path = strlit(BUILD_DIR "/my_binary_path");
     FileWriteOptions options = {
         .path = binary_path,
         .content = binary,
@@ -579,8 +586,14 @@ fn String disassemble_binary(Arena* arena, String binary, String objdump_path)
     };
     RunCommandOptions run_options = {
         .capture_stdout = 1,
+        .capture_stderr = 1,
     };
     RunCommandResult result = run_command(arena, (CStringSlice)array_to_slice(arguments), environment_pointer, run_options);
+    let(success, result.termination_kind == PROCESS_TERMINATION_EXIT && result.termination_code == 0);
+    if (!success)
+    {
+        todo();
+    }
     return result.stdout_string;
 }
 
@@ -666,6 +679,12 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                             // We output the string directly to avoid formatting cost
                             String second_operand_string = sample_immediate_strings(imm_index);
                             String instruction_string = format_instruction2(instruction_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
+                            CheckInstructionArguments check_args = {
+                                .clang_path = clang_path,
+                                .objdump_path = objdump_path,
+                                .text = instruction_string,
+                            };
+                            check_instruction(arena, check_args);
                             unused(instruction_string);
                         } break;
                     case 3:

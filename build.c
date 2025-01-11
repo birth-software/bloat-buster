@@ -689,7 +689,12 @@ fn void compile_program(Arena* arena, CompileOptions options)
     RunCommandOptions run_options = {
         .debug = options.flags.debug,
     };
-    run_command(arena, arguments, environment_pointer, run_options);
+    RunCommandResult result = run_command(arena, arguments, environment_pointer, run_options);
+    let(success, result.termination_kind == PROCESS_TERMINATION_EXIT && result.termination_code == 0); 
+    if (!success)
+    {
+        os_exit(1);
+    }
 }
 
 int main(int argc, char* argv[], char** envp)

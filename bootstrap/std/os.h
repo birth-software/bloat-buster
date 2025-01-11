@@ -27,10 +27,19 @@ typedef enum TimeUnit
     TIME_UNIT_SECONDS,
 } TimeUnit;
 
+ENUM(ProcessTerminationKind, u8,
+    PROCESS_TERMINATION_UNKNOWN,
+    PROCESS_TERMINATION_EXIT,
+    PROCESS_TERMINATION_SIGNAL,
+    PROCESS_TERMINATION_STOP,
+);
+
 STRUCT(RunCommandResult)
 {
     String stdout_string;
     String stderr_string;
+    u32 termination_code;
+    ProcessTerminationKind termination_kind;
 };
 
 STRUCT(RunCommandOptions)
