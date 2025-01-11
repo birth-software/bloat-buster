@@ -285,9 +285,8 @@ decl_vb(Encoding);
 STRUCT(Batch)
 {
     Mnemonic_x86_64 mnemonic;
-
-    Encoding* encodings;
-    u64 encoding_count;
+    u32 encoding_offset;
+    u32 encoding_count;
 };
 decl_vb(Batch);
 
@@ -349,7 +348,8 @@ STRUCT(TestDataset)
 {
     const Batch* const restrict batches;
     u64 batch_count;
-    u8* restrict string_buffer;
+    const Encoding* const restrict encodings;
+    u64 encoding_count;
 };
 
 fn u8 encoding_test_instruction_batches(TestDataset dataset)
@@ -872,11 +872,11 @@ STRUCT(BatchStart)
 // }
 
 // #define batch_start(_mnemonic) BatchBuilder batch_builder; batch_start_extended(&batch_builder, (BatchStart) { .mnemonic = MNEMONIC_x86_64_ ## _mnemonic })
-#define batch_start(_mnemonic) Mnemonic_x86_64 batch_mnemonic = MNEMONIC_x86_64_ ## _mnemonic; VirtualBuffer(Encoding) batch_encodings = {}
+#define batch_start(_mnemonic) Mnemonic_x86_64 batch_mnemonic = MNEMONIC_x86_64_ ## _mnemonic; u32 encoding_offset = encodings.length
 // { .mnemonic =  (MNEMONIC_x86_64_ ## _mnemonic), }
 //#define encode(_opcode, _operands) prepare_batch_encoding(preparer, &batch_builder, ((EncodingPrepare) { .opcode = _opcode, .operands = _operands, }));
-#define encode(_opcode, _operands) *vb_add(&batch_encodings, 1) = (Encoding) { .opcode = _opcode, .operands = _operands }
-#define batch_end()
+#define encode(_opcode, _operands) *vb_add(&encodings, 1) = (Encoding) { .opcode = _opcode, .operands = _operands }
+#define batch_end() *vb_add(&batches, 1) = (Batch) { .mnemonic = batch_mnemonic, .encoding_offset = encoding_offset, .encoding_count = encodings.length - encoding_offset, }
 // #define exp(...) ((InstructionBytes) { .length = array_length(((u8[]){__VA_ARGS__})), .bytes = { __VA_ARGS__ } })
 #define ops(...) ((Operands){ .values = { __VA_ARGS__ }, .count = array_length(((OperandKind[]){ __VA_ARGS__ })), })
 #define opc(...) ((Opcode) { .length = array_length(((u8[]){__VA_ARGS__})), .bytes = { __VA_ARGS__ }})
@@ -901,6 +901,7 @@ fn TestDataset construct_test_cases()
     // DatasetPreparer preparer_memory = {};
     // DatasetPreparer* restrict preparer = &preparer_memory;
     VirtualBuffer(Batch) batches = {};
+    VirtualBuffer(Encoding) encodings = {};
 
     {
         batch_start(add);
