@@ -126,7 +126,7 @@ STRUCT(InstructionEncoding)
 #define batch_element_count (16)
 #define max_instruction_byte_count (16)
 
-u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* const restrict encodings, u64 encoding_count)
+fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* const restrict encodings, u64 encoding_count)
 {
     u8 buffers[batch_element_count][max_instruction_byte_count];
     u8 instruction_lengths[batch_element_count];
@@ -241,66 +241,109 @@ fn String mnemonic_x86_64_to_string(Mnemonic_x86_64 mnemonic)
     }
 }
 
-STRUCT(EncodingTestCase)
+STRUCT(Opcode)
 {
-    InstructionEncoding encoding;
-    String expected;
+    u8 length;
+    u8 bytes[4];
 };
 
-typedef enum BatchEncodingKind
+ENUM(OperandKind, u8,
+    op_none,
+    op_ra8,
+    op_ra16,
+    op_ra32,
+    op_ra64,
+    op_r8,
+    op_r16,
+    op_r32,
+    op_r64,
+    op_rm8,
+    op_rm16,
+    op_rm32,
+    op_rm64,
+    op_imm8,
+    op_imm16,
+    op_imm32,
+    op_imm64,
+);
+
+#define operand_kind_array_element_count (4)
+
+STRUCT(Operands)
 {
-    BATCH_ENCODING_KIND_RA8_IMM8,
-    BATCH_ENCODING_KIND_RA16_IMM16,
-    BATCH_ENCODING_KIND_RA32_IMM32,
-    BATCH_ENCODING_KIND_RA64_IMM32,
-
-    BATCH_ENCODING_KIND_RM8_IMM8,
-    BATCH_ENCODING_KIND_RM16_IMM16,
-    BATCH_ENCODING_KIND_RM32_IMM32,
-    BATCH_ENCODING_KIND_RM64_IMM32,
-
-    BATCH_ENCODING_KIND_RM16_IMM8,
-    BATCH_ENCODING_KIND_RM32_IMM8,
-    BATCH_ENCODING_KIND_RM64_IMM8,
-
-    BATCH_ENCODING_KIND_RM8_R8,
-    BATCH_ENCODING_KIND_RM16_R16,
-    BATCH_ENCODING_KIND_RM32_R32,
-    BATCH_ENCODING_KIND_RM64_R64,
-
-    BATCH_ENCODING_KIND_R8_RM8,
-    BATCH_ENCODING_KIND_R16_RM16,
-    BATCH_ENCODING_KIND_R32_RM32,
-    BATCH_ENCODING_KIND_R64_RM64,
-
-    BATCH_ENCODING_COUNT,
-} BatchEncodingKind;
-
-STRUCT(BatchEncoding)
-{
-    u32 expected_offset;
-    u32 text_offset;
-    u8 expected_length;
-    u8 text_length;
-    u8 valid;
+    OperandKind values[operand_kind_array_element_count];
+    u8 count;
 };
-decl_vb(BatchEncoding);
+
+STRUCT(Encoding)
+{
+    Opcode opcode;
+    Operands operands;
+};
+decl_vb(Encoding);
 
 STRUCT(Batch)
 {
     Mnemonic_x86_64 mnemonic;
 
-    BatchEncoding* encodings;
+    Encoding* encodings;
     u64 encoding_count;
 };
 decl_vb(Batch);
 
-STRUCT(BatchBuilder)
+fn u8 op_is_gpra(OperandKind operand_kind)
 {
-    Mnemonic_x86_64 mnemonic;
+    return operand_kind >= op_ra8 && operand_kind <= op_ra64;
+}
 
-    VirtualBuffer(BatchEncoding) encodings;
-};
+fn u8 op_is_imm(OperandKind operand_kind)
+{
+    return operand_kind >= op_imm8 && operand_kind <= op_imm64;
+}
+
+fn u8 op_is_gpr_no_gpra_exclusive(OperandKind operand_kind)
+{
+    return operand_kind >= op_r8 && operand_kind <= op_r64;
+}
+
+fn u8 op_is_rm(OperandKind operand_kind)
+{
+    return operand_kind >= op_rm8 && operand_kind <= op_rm64;
+}
+
+fn u8 op_is_gpr_no_gpra(OperandKind operand_kind)
+{
+    return op_is_gpr_no_gpra_exclusive(operand_kind) | op_is_rm(operand_kind);
+}
+
+fn u8 op_rm_get_index(OperandKind operand_kind)
+{
+    assert(op_is_rm(operand_kind));
+    return operand_kind - op_rm8;
+}
+
+fn u8 op_gpr_exclusive_get_index(OperandKind operand_kind)
+{
+    assert(op_is_gpr_no_gpra_exclusive(operand_kind));
+    return operand_kind - op_r8;
+}
+
+fn u8 op_gpr_get_index(OperandKind operand_kind)
+{
+    assert(op_is_gpr_no_gpra(operand_kind));
+    return op_is_rm(operand_kind) ? op_rm_get_index(operand_kind) : op_gpr_exclusive_get_index(operand_kind);
+}
+
+fn u8 op_imm_get_index(OperandKind operand_kind)
+{
+    assert(op_is_imm(operand_kind));
+    return operand_kind - op_imm8;
+}
+
+fn u8 op_get_size_out_of_index(u8 index)
+{
+    return 1 << index;
+}
 
 STRUCT(TestDataset)
 {
@@ -323,13 +366,14 @@ fn u8 encoding_test_instruction_batches(TestDataset dataset)
 
         for (u64 i = 0; i < batch->encoding_count; i += 1)
         {
-            BatchEncoding* encoding = &batch->encodings[i];
-            String text = {
-                .pointer = dataset.string_buffer + encoding->text_offset,
-                .length = encoding->text_length,
-            };
-
-            print("[{u64}] {s}\n", i, text);
+            todo();
+            // BatchEncoding* encoding = &batch->encodings[i];
+            // String text = {
+            //     .pointer = dataset.string_buffer + encoding->text_offset,
+            //     .length = encoding->text_length,
+            // };
+            //
+            // print("[{u64}] {s}\n", i, text);
         }
 
         // for (BatchEncodingKind kind = 0; kind < BATCH_ENCODING_COUNT; kind += 1)
@@ -412,152 +456,6 @@ fn u8 encoding_test_instruction_batches(TestDataset dataset)
     }
 
     return result;
-}
-
-STRUCT(DatasetPreparer)
-{
-    VirtualBuffer(u8) string_buffer;
-    VirtualBuffer(Batch) batches;
-};
-
-STRUCT(BatchCreate)
-{
-    Mnemonic_x86_64 mnemonic;
-};
-
-STRUCT(Opcode)
-{
-    u8 length;
-    u8 bytes[4];
-};
-
-typedef enum ImmediateKind
-{
-    IMMEDIATE_KIND_8 = 0,
-    IMMEDIATE_KIND_16 = 1,
-    IMMEDIATE_KIND_32 = 2,
-    IMMEDIATE_KIND_64 = 3,
-} ImmediateKind;
-
-STRUCT(Immediate)
-{
-    u64 value;
-    union
-    {
-        struct
-        {
-            u8 immediate8:1;
-            u8 immediate16:1;
-            u8 immediate32:1;
-            u8 immediate64:1;
-            u8 reserved:4;
-        };
-        u8 raw;
-    };
-};
-
-typedef enum OperandKind
-{
-    op_none,
-    op_ra8,
-    op_ra16,
-    op_ra32,
-    op_ra64,
-    op_r8,
-    op_r16,
-    op_r32,
-    op_r64,
-    op_rm8,
-    op_rm16,
-    op_rm32,
-    op_rm64,
-    op_imm8,
-    op_imm16,
-    op_imm32,
-    op_imm64,
-} OperandKind;
-
-#define operand_kind_array_element_count (4)
-
-STRUCT(Operands)
-{
-    OperandKind values[operand_kind_array_element_count];
-    u8 count;
-};
-STRUCT(InstructionBytes)
-{
-    u8 bytes[max_instruction_byte_count];
-    u8 length;
-};
-
-STRUCT(EncodingPrepare)
-{
-    Opcode opcode;
-    // InstructionBytes expected;
-    Operands operands;
-};
-
-fn Opcode opcode1(u8 opcode)
-{
-    Opcode result = {
-        .length = 1,
-        .bytes = { opcode },
-    };
-    return result;
-}
-
-fn u8 op_is_gpra(OperandKind operand_kind)
-{
-    return operand_kind >= op_ra8 && operand_kind <= op_ra64;
-}
-
-fn u8 op_is_imm(OperandKind operand_kind)
-{
-    return operand_kind >= op_imm8 && operand_kind <= op_imm64;
-}
-
-fn u8 op_is_gpr_no_gpra_exclusive(OperandKind operand_kind)
-{
-    return operand_kind >= op_r8 && operand_kind <= op_r64;
-}
-
-fn u8 op_is_rm(OperandKind operand_kind)
-{
-    return operand_kind >= op_rm8 && operand_kind <= op_rm64;
-}
-
-fn u8 op_is_gpr_no_gpra(OperandKind operand_kind)
-{
-    return op_is_gpr_no_gpra_exclusive(operand_kind) | op_is_rm(operand_kind);
-}
-
-fn u8 op_rm_get_index(OperandKind operand_kind)
-{
-    assert(op_is_rm(operand_kind));
-    return operand_kind - op_rm8;
-}
-
-fn u8 op_gpr_exclusive_get_index(OperandKind operand_kind)
-{
-    assert(op_is_gpr_no_gpra_exclusive(operand_kind));
-    return operand_kind - op_r8;
-}
-
-fn u8 op_gpr_get_index(OperandKind operand_kind)
-{
-    assert(op_is_gpr_no_gpra(operand_kind));
-    return op_is_rm(operand_kind) ? op_rm_get_index(operand_kind) : op_gpr_exclusive_get_index(operand_kind);
-}
-
-fn u8 op_imm_get_index(OperandKind operand_kind)
-{
-    assert(op_is_imm(operand_kind));
-    return operand_kind - op_imm8;
-}
-
-fn u8 op_get_size_out_of_index(u8 index)
-{
-    return 1 << index;
 }
 
 fn String gpr_to_string(GPR_x86_64 gpr, u8 index, u8 switcher)
@@ -684,299 +582,301 @@ fn String sample_immediate_strings(u8 index)
     return strings[index];
 }
 
-fn void format_instruction2_text(DatasetPreparer* restrict preparer, BatchEncoding* restrict encoding, String mnemonic, String op1, String op2)
-{
-    u8 buffer[256];
-    String string = format_string((String)array_to_slice(buffer), "{s} {s}, {s}", mnemonic, op1, op2);
-    u32 offset = vb_copy_string(&preparer->string_buffer, string);
+// fn void format_instruction2_text(DatasetPreparer* restrict preparer, BatchEncoding* restrict encoding, String mnemonic, String op1, String op2)
+// {
+//     u8 buffer[256];
+//     String string = format_string((String)array_to_slice(buffer), "{s} {s}, {s}", mnemonic, op1, op2);
+//     u32 offset = vb_copy_string(&preparer->string_buffer, string);
+//
+//     encoding->text_offset = offset;
+//     assign_cast(encoding->text_length, string.length);
+// }
 
-    encoding->text_offset = offset;
-    assign_cast(encoding->text_length, string.length);
-}
+// fn String format_displacement(String buffer, String register_string, String displacement_string)
+// {
+//     u64 length = 0;
+//     String result = {
+//         .pointer = buffer.pointer,
+//     };
+//
+//     buffer.pointer[length] = '[';
+//     length += 1;
+//
+//     memcpy(&buffer.pointer[length], register_string.pointer, register_string.length);
+//     length += register_string.length;
+//
+//     buffer.pointer[length] = '+';
+//     length += 1;
+//
+//     memcpy(&buffer.pointer[length], displacement_string.pointer, displacement_string.length);
+//     length += displacement_string.length;
+//
+//     buffer.pointer[length] = ']';
+//     length += 1;
+//
+//     result.length = length;
+//
+//     return result;
+// }
 
-fn String format_displacement(String buffer, String register_string, String displacement_string)
-{
-    u64 length = 0;
-    String result = {
-        .pointer = buffer.pointer,
-    };
-
-    buffer.pointer[length] = '[';
-    length += 1;
-
-    memcpy(&buffer.pointer[length], register_string.pointer, register_string.length);
-    length += register_string.length;
-
-    buffer.pointer[length] = '+';
-    length += 1;
-
-    memcpy(&buffer.pointer[length], displacement_string.pointer, displacement_string.length);
-    length += displacement_string.length;
-
-    buffer.pointer[length] = ']';
-    length += 1;
-
-    result.length = length;
-
-    return result;
-}
-
-fn void prepare_batch_encoding(DatasetPreparer* restrict preparer, BatchBuilder* restrict batch, EncodingPrepare prepare)
-{
-    OperandKind first_operand = prepare.operands.values[0];
-    let(operand_count, prepare.operands.count);
-    // TODO: Do we need to compute `mnemonic_string` every encoding?
-    String mnemonic_string = mnemonic_x86_64_to_string(batch->mnemonic);
-
-    if (operand_count == 0)
-    {
-        todo();
-    }
-    else if (op_is_gpra(first_operand))
-    {
-        let(register_a_index, first_operand - op_ra8);
-        String names[] = {
-            strlit("al"),
-            strlit("ax"),
-            strlit("eax"),
-            strlit("rax"),
-        };
-        String reg_name = names[register_a_index];
-
-        switch (operand_count)
-        {
-            case 1:
-                {
-                    todo();
-                } break;
-            case 2:
-                {
-                    OperandKind second_operand = prepare.operands.values[1];
-                    assert(op_is_imm(second_operand));
-                    let(imm_index, op_imm_get_index(second_operand));
-                    // We output the string directly to avoid formatting cost
-                    String imm_string = sample_immediate_strings(imm_index);
-                    BatchEncoding* encoding = vb_add(&batch->encodings, 1);
-                    format_instruction2_text(preparer, encoding, mnemonic_string, reg_name, imm_string);
-                } break;
-            case 3:
-                {
-                    todo();
-                } break;
-            case 4:
-                {
-                    todo();
-                } break;
-            default: unreachable();
-        }
-    }
-    else
-    {
-        switch (operand_count)
-        {
-            case 1:
-                {
-                    todo();
-                } break;
-            case 2:
-                {
-                    OperandKind second_operand = prepare.operands.values[1];
-
-                    s32 displacements[] = {
-                        0,
-                        0x10,
-                        0x10000000,
-                    };
-
-                    String displacement_strings[] = {
-                        strlit("0"),
-                        strlit("0x10"),
-                        strlit("0x10000000"),
-                    };
-
-                    if (op_is_gpr_no_gpra(first_operand))
-                    {
-                        // u8 is_indirect = 0;
-                        u8 first_operand_index = op_gpr_get_index(first_operand);
-                        GPR_x86_64 first_operand_register_count = (unlikely(first_operand_index == 0)) ? (X86_64_GPR_COUNT / 2) : X86_64_GPR_COUNT;
-
-                        u8 first_rm_buffer[X86_64_GPR_COUNT][array_length(displacements)][32];
-                        String first_rm_strings[X86_64_GPR_COUNT][array_length(displacements)];
-                        u8 first_is_rm = op_is_rm(first_operand);
-
-                        if (first_is_rm)
-                        {
-                            for (GPR_x86_64 gpr = 0; gpr < X86_64_GPR_COUNT; gpr += 1)
-                            {
-                                String first_operand_rm_name = gpr_to_string(gpr, 3, 0);
-
-                                for (u32 i = 0; i < array_length(displacements); i += 1)
-                                {
-                                    first_rm_strings[gpr][i] = format_displacement((String)array_to_slice(first_rm_buffer[gpr][i]), first_operand_rm_name, displacement_strings[i]);
-                                }
-                            }
-                        }
-
-                        if (op_is_gpr_no_gpra(second_operand))
-                        {
-                            u8 second_operand_index = op_gpr_get_index(second_operand);
-                            GPR_x86_64 second_operand_register_count = (unlikely(second_operand_index == 0)) ? (X86_64_GPR_COUNT / 2) : X86_64_GPR_COUNT;
-                            u8 second_is_rm = op_is_rm(second_operand);
-                            u8 second_rm_buffer[X86_64_GPR_COUNT][array_length(displacements)][32];
-                            String second_rm_strings[X86_64_GPR_COUNT][array_length(displacements)];
-
-                            if (second_is_rm)
-                            {
-                                for (GPR_x86_64 gpr = 0; gpr < X86_64_GPR_COUNT; gpr += 1)
-                                {
-                                    String second_operand_rm_name = gpr_to_string(gpr, 3, 0);
-
-                                    for (u32 i = 0; i < array_length(displacements); i += 1)
-                                    {
-                                        second_rm_strings[gpr][i] = format_displacement((String)array_to_slice(second_rm_buffer[gpr][i]), second_operand_rm_name, displacement_strings[i]);
-                                    }
-                                }
-                            }
-
-                            for (GPR_x86_64 first_gpr = 0; first_gpr < first_operand_register_count; first_gpr += 1)
-                            {
-                                String first_operand_string = gpr_to_string(first_gpr, first_operand_index, 0);
-
-                                for (GPR_x86_64 second_gpr = 0; second_gpr < second_operand_register_count; second_gpr += 1)
-                                {
-                                    String second_operand_string = gpr_to_string(second_gpr, second_operand_index, 0);
-                                    BatchEncoding* encoding = vb_add(&batch->encodings, 1);
-                                    format_instruction2_text(preparer, encoding, mnemonic_string, first_operand_string, second_operand_string);
-                                }
-                            }
-
-                            if (first_is_rm)
-                            {
-                                for (GPR_x86_64 first_gpr = 0; first_gpr < X86_64_GPR_COUNT; first_gpr += 1)
-                                {
-                                    for (u32 i = 0; i < array_length(displacements); i += 1)
-                                    {
-                                        String first_operand_string = first_rm_strings[first_gpr][i];
-
-                                        for (GPR_x86_64 second_gpr = 0; second_gpr < second_operand_register_count; second_gpr += 1)
-                                        {
-                                            String second_operand_string = gpr_to_string(second_gpr, second_operand_index, 0);
-                                            BatchEncoding* encoding = vb_add(&batch->encodings, 1);
-                                            format_instruction2_text(preparer, encoding, mnemonic_string, first_operand_string, second_operand_string);
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (second_is_rm)
-                            {
-                                for (GPR_x86_64 first_gpr = 0; first_gpr < first_operand_register_count; first_gpr += 1)
-                                {
-                                    String first_operand_string = gpr_to_string(first_gpr, first_operand_index, 0);
-
-                                    for (GPR_x86_64 second_gpr = 0; second_gpr < X86_64_GPR_COUNT; second_gpr += 1)
-                                    {
-                                        for (u32 i = 0; i < array_length(displacements); i += 1)
-                                        {
-                                            String second_operand_string = second_rm_strings[second_gpr][i];
-                                            BatchEncoding* encoding = vb_add(&batch->encodings, 1);
-                                            format_instruction2_text(preparer, encoding, mnemonic_string, first_operand_string, second_operand_string);
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (first_is_rm && second_is_rm)
-                            {
-                                for (GPR_x86_64 first_gpr = 0; first_gpr < X86_64_GPR_COUNT; first_gpr += 1)
-                                {
-                                    for (u32 first_displacement_i = 0; first_displacement_i < array_length(displacements); first_displacement_i += 1)
-                                    {
-                                        String first_operand_string = first_rm_strings[first_gpr][first_displacement_i];
-                                        for (GPR_x86_64 second_gpr = 0; second_gpr < X86_64_GPR_COUNT; second_gpr += 1)
-                                        {
-                                            for (u32 second_displacement_i = 0; second_displacement_i < array_length(displacements); second_displacement_i += 1)
-                                            {
-                                                String second_operand_string = second_rm_strings[second_gpr][second_displacement_i];
-                                                BatchEncoding* encoding = vb_add(&batch->encodings, 1);
-                                                format_instruction2_text(preparer, encoding, mnemonic_string, first_operand_string, second_operand_string);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        else
-                        {
-                            assert(op_is_imm(second_operand));
-                            u8 second_operand_index = op_imm_get_index(second_operand);
-                            String imm_string = sample_immediate_strings(second_operand_index);
-
-                            for (GPR_x86_64 first_gpr = 0; first_gpr < first_operand_register_count; first_gpr += 1)
-                            {
-                                BatchEncoding* encoding = vb_add(&batch->encodings, 1);
-
-                                String first_operand_string = gpr_to_string(first_gpr, first_operand_index, 0);
-                                format_instruction2_text(preparer, encoding, mnemonic_string, first_operand_string, imm_string);
-                            }
-
-                            if (first_is_rm)
-                            {
-                                for (GPR_x86_64 gpr = 0; gpr < X86_64_GPR_COUNT; gpr += 1)
-                                {
-                                    for (u32 i = 0; i < array_length(displacements); i += 1)
-                                    {
-                                        BatchEncoding* encoding = vb_add(&batch->encodings, 1);
-                                        String first_operand_string = first_rm_strings[gpr][i];
-                                        format_instruction2_text(preparer, encoding, mnemonic_string, first_operand_string, imm_string);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    else
-                    {
-                        todo();
-                    }
-                }; break;
-            case 3:
-                {
-                    todo();
-                } break;
-            case 4:
-                {
-                    todo();
-                } break;
-        }
-    }
-}
+// fn void prepare_batch_encoding(DatasetPreparer* restrict preparer, BatchBuilder* restrict batch, EncodingPrepare prepare)
+// {
+//     OperandKind first_operand = prepare.operands.values[0];
+//     let(operand_count, prepare.operands.count);
+//     // TODO: Do we need to compute `mnemonic_string` every encoding?
+//     String mnemonic_string = mnemonic_x86_64_to_string(batch->mnemonic);
+//
+//     if (operand_count == 0)
+//     {
+//         todo();
+//     }
+//     else if (op_is_gpra(first_operand))
+//     {
+//         let(register_a_index, first_operand - op_ra8);
+//         String names[] = {
+//             strlit("al"),
+//             strlit("ax"),
+//             strlit("eax"),
+//             strlit("rax"),
+//         };
+//         String reg_name = names[register_a_index];
+//
+//         switch (operand_count)
+//         {
+//             case 1:
+//                 {
+//                     todo();
+//                 } break;
+//             case 2:
+//                 {
+//                     OperandKind second_operand = prepare.operands.values[1];
+//                     assert(op_is_imm(second_operand));
+//                     let(imm_index, op_imm_get_index(second_operand));
+//                     // We output the string directly to avoid formatting cost
+//                     String imm_string = sample_immediate_strings(imm_index);
+//                     BatchEncoding* encoding = vb_add(&batch->encodings, 1);
+//                     format_instruction2_text(preparer, encoding, mnemonic_string, reg_name, imm_string);
+//                 } break;
+//             case 3:
+//                 {
+//                     todo();
+//                 } break;
+//             case 4:
+//                 {
+//                     todo();
+//                 } break;
+//             default: unreachable();
+//         }
+//     }
+//     else
+//     {
+//         switch (operand_count)
+//         {
+//             case 1:
+//                 {
+//                     todo();
+//                 } break;
+//             case 2:
+//                 {
+//                     OperandKind second_operand = prepare.operands.values[1];
+//
+//                     s32 displacements[] = {
+//                         0,
+//                         0x10,
+//                         0x10000000,
+//                     };
+//
+//                     String displacement_strings[] = {
+//                         strlit("0"),
+//                         strlit("0x10"),
+//                         strlit("0x10000000"),
+//                     };
+//
+//                     if (op_is_gpr_no_gpra(first_operand))
+//                     {
+//                         // u8 is_indirect = 0;
+//                         u8 first_operand_index = op_gpr_get_index(first_operand);
+//                         GPR_x86_64 first_operand_register_count = (unlikely(first_operand_index == 0)) ? (X86_64_GPR_COUNT / 2) : X86_64_GPR_COUNT;
+//
+//                         u8 first_rm_buffer[X86_64_GPR_COUNT][array_length(displacements)][32];
+//                         String first_rm_strings[X86_64_GPR_COUNT][array_length(displacements)];
+//                         u8 first_is_rm = op_is_rm(first_operand);
+//
+//                         if (first_is_rm)
+//                         {
+//                             for (GPR_x86_64 gpr = 0; gpr < X86_64_GPR_COUNT; gpr += 1)
+//                             {
+//                                 String first_operand_rm_name = gpr_to_string(gpr, 3, 0);
+//
+//                                 for (u32 i = 0; i < array_length(displacements); i += 1)
+//                                 {
+//                                     first_rm_strings[gpr][i] = format_displacement((String)array_to_slice(first_rm_buffer[gpr][i]), first_operand_rm_name, displacement_strings[i]);
+//                                 }
+//                             }
+//                         }
+//
+//                         if (op_is_gpr_no_gpra(second_operand))
+//                         {
+//                             u8 second_operand_index = op_gpr_get_index(second_operand);
+//                             GPR_x86_64 second_operand_register_count = (unlikely(second_operand_index == 0)) ? (X86_64_GPR_COUNT / 2) : X86_64_GPR_COUNT;
+//                             u8 second_is_rm = op_is_rm(second_operand);
+//                             u8 second_rm_buffer[X86_64_GPR_COUNT][array_length(displacements)][32];
+//                             String second_rm_strings[X86_64_GPR_COUNT][array_length(displacements)];
+//
+//                             if (second_is_rm)
+//                             {
+//                                 for (GPR_x86_64 gpr = 0; gpr < X86_64_GPR_COUNT; gpr += 1)
+//                                 {
+//                                     String second_operand_rm_name = gpr_to_string(gpr, 3, 0);
+//
+//                                     for (u32 i = 0; i < array_length(displacements); i += 1)
+//                                     {
+//                                         second_rm_strings[gpr][i] = format_displacement((String)array_to_slice(second_rm_buffer[gpr][i]), second_operand_rm_name, displacement_strings[i]);
+//                                     }
+//                                 }
+//                             }
+//
+//                             for (GPR_x86_64 first_gpr = 0; first_gpr < first_operand_register_count; first_gpr += 1)
+//                             {
+//                                 String first_operand_string = gpr_to_string(first_gpr, first_operand_index, 0);
+//
+//                                 for (GPR_x86_64 second_gpr = 0; second_gpr < second_operand_register_count; second_gpr += 1)
+//                                 {
+//                                     String second_operand_string = gpr_to_string(second_gpr, second_operand_index, 0);
+//                                     BatchEncoding* encoding = vb_add(&batch->encodings, 1);
+//                                     format_instruction2_text(preparer, encoding, mnemonic_string, first_operand_string, second_operand_string);
+//                                 }
+//                             }
+//
+//                             if (first_is_rm)
+//                             {
+//                                 for (GPR_x86_64 first_gpr = 0; first_gpr < X86_64_GPR_COUNT; first_gpr += 1)
+//                                 {
+//                                     for (u32 i = 0; i < array_length(displacements); i += 1)
+//                                     {
+//                                         String first_operand_string = first_rm_strings[first_gpr][i];
+//
+//                                         for (GPR_x86_64 second_gpr = 0; second_gpr < second_operand_register_count; second_gpr += 1)
+//                                         {
+//                                             String second_operand_string = gpr_to_string(second_gpr, second_operand_index, 0);
+//                                             BatchEncoding* encoding = vb_add(&batch->encodings, 1);
+//                                             format_instruction2_text(preparer, encoding, mnemonic_string, first_operand_string, second_operand_string);
+//                                         }
+//                                     }
+//                                 }
+//                             }
+//
+//                             if (second_is_rm)
+//                             {
+//                                 for (GPR_x86_64 first_gpr = 0; first_gpr < first_operand_register_count; first_gpr += 1)
+//                                 {
+//                                     String first_operand_string = gpr_to_string(first_gpr, first_operand_index, 0);
+//
+//                                     for (GPR_x86_64 second_gpr = 0; second_gpr < X86_64_GPR_COUNT; second_gpr += 1)
+//                                     {
+//                                         for (u32 i = 0; i < array_length(displacements); i += 1)
+//                                         {
+//                                             String second_operand_string = second_rm_strings[second_gpr][i];
+//                                             BatchEncoding* encoding = vb_add(&batch->encodings, 1);
+//                                             format_instruction2_text(preparer, encoding, mnemonic_string, first_operand_string, second_operand_string);
+//                                         }
+//                                     }
+//                                 }
+//                             }
+//
+//                             if (first_is_rm && second_is_rm)
+//                             {
+//                                 for (GPR_x86_64 first_gpr = 0; first_gpr < X86_64_GPR_COUNT; first_gpr += 1)
+//                                 {
+//                                     for (u32 first_displacement_i = 0; first_displacement_i < array_length(displacements); first_displacement_i += 1)
+//                                     {
+//                                         String first_operand_string = first_rm_strings[first_gpr][first_displacement_i];
+//                                         for (GPR_x86_64 second_gpr = 0; second_gpr < X86_64_GPR_COUNT; second_gpr += 1)
+//                                         {
+//                                             for (u32 second_displacement_i = 0; second_displacement_i < array_length(displacements); second_displacement_i += 1)
+//                                             {
+//                                                 String second_operand_string = second_rm_strings[second_gpr][second_displacement_i];
+//                                                 BatchEncoding* encoding = vb_add(&batch->encodings, 1);
+//                                                 format_instruction2_text(preparer, encoding, mnemonic_string, first_operand_string, second_operand_string);
+//                                             }
+//                                         }
+//                                     }
+//                                 }
+//                             }
+//                         }
+//                         else
+//                         {
+//                             assert(op_is_imm(second_operand));
+//                             u8 second_operand_index = op_imm_get_index(second_operand);
+//                             String imm_string = sample_immediate_strings(second_operand_index);
+//
+//                             for (GPR_x86_64 first_gpr = 0; first_gpr < first_operand_register_count; first_gpr += 1)
+//                             {
+//                                 BatchEncoding* encoding = vb_add(&batch->encodings, 1);
+//
+//                                 String first_operand_string = gpr_to_string(first_gpr, first_operand_index, 0);
+//                                 format_instruction2_text(preparer, encoding, mnemonic_string, first_operand_string, imm_string);
+//                             }
+//
+//                             if (first_is_rm)
+//                             {
+//                                 for (GPR_x86_64 gpr = 0; gpr < X86_64_GPR_COUNT; gpr += 1)
+//                                 {
+//                                     for (u32 i = 0; i < array_length(displacements); i += 1)
+//                                     {
+//                                         BatchEncoding* encoding = vb_add(&batch->encodings, 1);
+//                                         String first_operand_string = first_rm_strings[gpr][i];
+//                                         format_instruction2_text(preparer, encoding, mnemonic_string, first_operand_string, imm_string);
+//                                     }
+//                                 }
+//                             }
+//                         }
+//                     }
+//                     else
+//                     {
+//                         todo();
+//                     }
+//                 }; break;
+//             case 3:
+//                 {
+//                     todo();
+//                 } break;
+//             case 4:
+//                 {
+//                     todo();
+//                 } break;
+//         }
+//     }
+// }
 
 STRUCT(BatchStart)
 {
     Mnemonic_x86_64 mnemonic;
 };
 
-fn void batch_start_extended(BatchBuilder* restrict batch_builder, BatchStart start)
-{
-    *batch_builder = (BatchBuilder) {
-        .mnemonic = start.mnemonic,
-    };
-}
+// fn void batch_start_extended(BatchBuilder* restrict batch_builder, BatchStart start)
+// {
+//     *batch_builder = (BatchBuilder) {
+//         .mnemonic = start.mnemonic,
+//     };
+// }
 
-fn void batch_end_extended(DatasetPreparer* restrict preparer, BatchBuilder* restrict batch_builder)
-{
-    Batch* batch = vb_add(&preparer->batches, 1);
-    *batch = (Batch) {
-        .mnemonic = batch_builder->mnemonic,
-        .encodings = batch_builder->encodings.pointer,
-        .encoding_count = batch_builder->encodings.length,
-    };
-}
+// fn void batch_end_extended(DatasetPreparer* restrict preparer, BatchBuilder* restrict batch_builder)
+// {
+//     Batch* batch = vb_add(&preparer->batches, 1);
+//     *batch = (Batch) {
+//         .mnemonic = batch_builder->mnemonic,
+//         .encodings = batch_builder->encodings.pointer,
+//         .encoding_count = batch_builder->encodings.length,
+//     };
+// }
 
-#define batch_start(_mnemonic) BatchBuilder batch_builder; batch_start_extended(&batch_builder, (BatchStart) { .mnemonic = MNEMONIC_x86_64_ ## _mnemonic })
+// #define batch_start(_mnemonic) BatchBuilder batch_builder; batch_start_extended(&batch_builder, (BatchStart) { .mnemonic = MNEMONIC_x86_64_ ## _mnemonic })
+#define batch_start(_mnemonic) Mnemonic_x86_64 batch_mnemonic = MNEMONIC_x86_64_ ## _mnemonic; VirtualBuffer(Encoding) batch_encodings = {}
 // { .mnemonic =  (MNEMONIC_x86_64_ ## _mnemonic), }
-#define encode(_opcode, _operands) prepare_batch_encoding(preparer, &batch_builder, ((EncodingPrepare) { .opcode = _opcode, .operands = _operands, }));
-#define batch_end() batch_end_extended(preparer, &batch_builder);
+//#define encode(_opcode, _operands) prepare_batch_encoding(preparer, &batch_builder, ((EncodingPrepare) { .opcode = _opcode, .operands = _operands, }));
+#define encode(_opcode, _operands) *vb_add(&batch_encodings, 1) = (Encoding) { .opcode = _opcode, .operands = _operands }
+#define batch_end()
 // #define exp(...) ((InstructionBytes) { .length = array_length(((u8[]){__VA_ARGS__})), .bytes = { __VA_ARGS__ } })
 #define ops(...) ((Operands){ .values = { __VA_ARGS__ }, .count = array_length(((OperandKind[]){ __VA_ARGS__ })), })
 #define opc(...) ((Opcode) { .length = array_length(((u8[]){__VA_ARGS__})), .bytes = { __VA_ARGS__ }})
@@ -998,8 +898,9 @@ fn void batch_end_extended(DatasetPreparer* restrict preparer, BatchBuilder* res
 
 fn TestDataset construct_test_cases()
 {
-    DatasetPreparer preparer_memory = {};
-    DatasetPreparer* restrict preparer = &preparer_memory;
+    // DatasetPreparer preparer_memory = {};
+    // DatasetPreparer* restrict preparer = &preparer_memory;
+    VirtualBuffer(Batch) batches = {};
 
     {
         batch_start(add);
@@ -1031,12 +932,13 @@ fn TestDataset construct_test_cases()
         batch_end();
     }
 
-    TestDataset result = {
-        .string_buffer = preparer->string_buffer.pointer,
-        .batches = preparer->batches.pointer,
-        .batch_count = preparer->batches.length,
-    };
-    return result;
+    todo();
+    // TestDataset result = {
+    //     .string_buffer = preparer->string_buffer.pointer,
+    //     .batches = preparer->batches.pointer,
+    //     .batch_count = preparer->batches.length,
+    // };
+    // return result;
 }
 
 int main(int argc, char** argv, char** envp)
