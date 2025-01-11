@@ -270,6 +270,30 @@ ENUM(OperandId, u8,
 
 #define operand_kind_array_element_count (4)
 
+fn String operand_to_string(OperandId operand_id)
+{
+    switch (operand_id)
+    {
+        case_to_name(op_, none);
+        case_to_name(op_, ra8);
+        case_to_name(op_, ra16);
+        case_to_name(op_, ra32);
+        case_to_name(op_, ra64);
+        case_to_name(op_, r8);
+        case_to_name(op_, r16);
+        case_to_name(op_, r32);
+        case_to_name(op_, r64);
+        case_to_name(op_, rm8);
+        case_to_name(op_, rm16);
+        case_to_name(op_, rm32);
+        case_to_name(op_, rm64);
+        case_to_name(op_, imm8);
+        case_to_name(op_, imm16);
+        case_to_name(op_, imm32);
+        case_to_name(op_, imm64);
+    }
+}
+
 STRUCT(Operands)
 {
     OperandId values[operand_kind_array_element_count];
@@ -785,6 +809,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
         let(batch, &dataset.batches[batch_index]);
 
         String mnemonic_string = mnemonic_x86_64_to_string(batch->mnemonic);
+        print("Mnemonic: {s}\n", mnemonic_string);
 
         u64 encoding_top = batch->encoding_offset + batch->encoding_count;
 
@@ -794,6 +819,36 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
             OperandId first_operand = encoding->operands.values[0];
             OperandId second_operand = encoding->operands.values[1];
             let(operand_count, encoding->operands.count);
+
+            {
+                u8 encoding_buffer[256];
+                u64 encoding_buffer_i = 0;
+                memcpy(encoding_buffer + encoding_buffer_i, mnemonic_string.pointer, mnemonic_string.length);
+                encoding_buffer_i += mnemonic_string.length;
+
+                encoding_buffer[encoding_buffer_i] = ' ';
+                encoding_buffer_i += operand_count != 0;
+
+                for (u8 operand_i = 0; operand_i < operand_count; operand_i += 1)
+                {
+                    String operand_string = operand_to_string(encoding->operands.values[operand_i]);
+                    memcpy(encoding_buffer + encoding_buffer_i, operand_string.pointer, operand_string.length);
+                    encoding_buffer_i += operand_string.length;
+
+                    u8 not_last_operand = operand_i != operand_count - 1;
+
+                    encoding_buffer[encoding_buffer_i] = ',';
+                    encoding_buffer_i += not_last_operand;
+
+                    encoding_buffer[encoding_buffer_i] = ' ';
+                    encoding_buffer_i += not_last_operand;
+                }
+
+                encoding_buffer[encoding_buffer_i] = 0;
+
+                String encoding_string = { .pointer = encoding_buffer, .length = encoding_buffer_i };
+                print("{s}\n", encoding_string);
+            }
 
             if (operand_count == 0)
             {
