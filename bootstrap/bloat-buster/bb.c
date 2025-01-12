@@ -851,9 +851,13 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
             let(operand_count, encoding->operands.count);
 
             u64 instance_index = 0;
+            u64 failure_count = 0;
+            u8 encoding_buffer[256];
+            u8 encoding_separator[256];
+            u64 encoding_buffer_i = 0;
+            String encoding_string;
+            String encoding_separator_string;
             {
-                u8 encoding_buffer[256];
-                u64 encoding_buffer_i = 0;
                 memcpy(encoding_buffer + encoding_buffer_i, mnemonic_string.pointer, mnemonic_string.length);
                 encoding_buffer_i += mnemonic_string.length;
 
@@ -874,22 +878,30 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                     encoding_buffer[encoding_buffer_i] = ' ';
                     encoding_buffer_i += not_last_operand;
                 }
+                memcpy(&encoding_buffer[encoding_buffer_i], "... ", 4);
+                encoding_buffer_i += 4;
 
-                let(current_length, encoding_buffer_i);
+                // let(current_length, encoding_buffer_i);
 
-                encoding_buffer[encoding_buffer_i] = '\n';
-                encoding_buffer_i += 1;
-
-                for (u64 ei = 0; ei < current_length; ei += 1)
-                {
-                    encoding_buffer[encoding_buffer_i] = '-';
-                    encoding_buffer_i += 1;
-                }
+                // encoding_buffer[encoding_buffer_i] = '\n';
+                // encoding_buffer_i += 1;
+                //
+                // for (u64 ei = 0; ei < current_length; ei += 1)
+                // {
+                //     encoding_buffer[encoding_buffer_i] = '-';
+                //     encoding_buffer_i += 1;
+                // }
 
                 encoding_buffer[encoding_buffer_i] = 0;
 
-                String encoding_string = { .pointer = encoding_buffer, .length = encoding_buffer_i };
-                print("{s}\n{s}\n", s_get_slice(u8, encoding_string, current_length + 1, encoding_string.length), encoding_string);
+                encoding_string = (String) { .pointer = encoding_buffer, .length = encoding_buffer_i };
+
+                let(failed_string, strlit("FAILED"));
+                encoding_separator_string = (String) { .pointer = encoding_separator, .length = encoding_buffer_i + 3 + 1 + failed_string.length };
+                memset(encoding_separator, '-', encoding_separator_string.length);
+                print_string(encoding_separator_string);
+                print_string(strlit("\n"));
+                print_string(encoding_string);
             }
 
             if (operand_count == 0)
@@ -956,9 +968,12 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                             };
                             u64 error_buffer_length = check_instruction(arena, check_args);
                             instance_index += 1;
+                            failure_count += error_buffer_length != 0;
                             String error_string = { .pointer = error_buffer, .length = error_buffer_length };
-                            let(success, error_buffer_length == 0);
-                            print("{u64}) {s}... [{cstr}]\n{s}{cstr}", instance_index, instruction_string, success ? "OK" : "FAILED", error_string, success ? "" : "\n");
+                            if (error_buffer_length != 0)
+                            {
+                                print("{u64}) {s}... [FAILED]\n{s}\n", instance_index, instruction_string, error_string);
+                            }
                         } break;
                     case 3:
                         {
@@ -1082,9 +1097,12 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                 };
                                                 u64 error_buffer_length = check_instruction(arena, check_args);
                                                 instance_index += 1;
+                                                failure_count = error_buffer_length != 0;
                                                 String error_string = { .pointer = error_buffer, .length = error_buffer_length };
-                                                let(success, error_buffer_length == 0);
-                                                print("{u64}) {s}... [{cstr}]\n{s}{cstr}", instance_index, instruction_string, success ? "OK" : "FAILED", error_string, success ? "" : "\n");
+                                                if (error_buffer_length != 0)
+                                                {
+                                                    print("{u64}) {s}... [FAILED]\n{s}\n", instance_index, instruction_string, error_string);
+                                                }
                                             }
                                         }
                                     }
@@ -1167,6 +1185,18 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                         } break;
                 }
             }
+
+            if (failure_count)
+            {
+                print("{s}... [FAILED] {u64}/{u64} failures\n", encoding_string, failure_count, instance_index);
+            }
+            else
+            {
+                print_string(strlit("[OK]\n"));
+            }
+
+            print_string(encoding_separator_string);
+            print_string(strlit("\n"));
         }
 
         // for (BatchEncodingKind kind = 0; kind < BATCH_ENCODING_COUNT; kind += 1)
