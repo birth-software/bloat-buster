@@ -96,6 +96,11 @@ typedef enum GPR_x86_64
     REGISTER_X86_64_R15  = REGISTER_X86_64_R15L,
 } GPR_x86_64;
 
+fn u8 gpr_is_extended(GPR_x86_64 gpr)
+{
+    return (gpr & 0b1000) >> 3;
+}
+
 #define X86_64_GPR_COUNT (16)
 
 STRUCT(InstructionEncoding)
@@ -111,8 +116,7 @@ STRUCT(InstructionEncoding)
     u64 is_16_mode:1;
     u64 immediate;
     // TODO: merge?
-    s32 displacement32;
-    s8 displacement8;
+    s32 displacement;
     // TODO: support more bytes
     u8 opcode;
     u8 reg1;
@@ -147,9 +151,9 @@ fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
         u8 rex_x = 0x02;
         u8 rex_r = 0x04;
         u8 rex_w = 0x08;
-        u8 byte_rex_b = rex_b * ((encoding.reg1 & 0b1000) >> 3);
+        u8 byte_rex_b = rex_b * gpr_is_extended(encoding.reg1);
         u8 byte_rex_x = rex_x * encoding.scaled_index_register;
-        u8 byte_rex_r = rex_r * ((encoding.reg2 & 0b1000) >> 3);
+        u8 byte_rex_r = rex_r * gpr_is_extended(encoding.reg2); 
         u8 byte_rex_w = rex_w * encoding.is_64_bit;
         u8 byte_rex = (byte_rex_b | byte_rex_x) | (byte_rex_r | byte_rex_w);
         u8 rex = (rex_base | byte_rex);
@@ -168,8 +172,8 @@ fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
         // 10: 32-bit signed displacement follows.
         // 11: Register addressing (no memory access).
         
-        u8 is_displacement32 = encoding.displacement32 != 0;
-        u8 is_displacement8 = (encoding.displacement8 != 0) | (((encoding.is_indirect1 & ((encoding.reg1 & 0b111) == REGISTER_X86_64_RBP)) | (encoding.is_indirect2 & ((encoding.reg2 & 0b111) == REGISTER_X86_64_RBP))) & !is_displacement32);
+        u8 is_displacement32 = encoding.displacement != 0 && (s32)((s8)encoding.displacement) != encoding.displacement;
+        u8 is_displacement8 = (!is_displacement32) & ((encoding.displacement != 0) | ((encoding.is_indirect1 & ((encoding.reg1 & 0b111) == REGISTER_X86_64_RBP)) | (encoding.is_indirect2 & ((encoding.reg2 & 0b111) == REGISTER_X86_64_RBP))));
         u8 is_reg_direct_addressing_mode = !(encoding.is_indirect1 | encoding.is_indirect1);
         u8 mod = ((is_displacement32 << 1) | is_displacement8) | ((is_reg_direct_addressing_mode << 1) | is_reg_direct_addressing_mode);
         // A register operand.
@@ -187,11 +191,11 @@ fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
         *it = sib_byte;
         it += (mod != 0b11) & (rm == 0b100);
 
-        *it = encoding.displacement8;
-        it += is_displacement8;
+        *(s8*)it = (s8)encoding.displacement;
+        it += is_displacement8 * sizeof(s8);
 
-        *(u32*)it = encoding.displacement32;
-        it += sizeof(encoding.displacement32) * is_displacement32;
+        *(s32*)it = encoding.displacement;
+        it += is_displacement32 * sizeof(s32);
 
         *(u8*) it = (u8)encoding.immediate;
         it += ((encoding.is_immediate & (1 << 0)) >> 0) * sizeof(u8);
@@ -541,12 +545,24 @@ fn String format_instruction2(String buffer, String mnemonic, String op1, String
     };
 }
 
-fn String format_displacement(String buffer, String register_string, String displacement_string)
+fn String format_displacement(String buffer, String register_string, String displacement_string, u8 register_index, u8 omit_displacement)
 {
     u64 length = 0;
     String result = {
         .pointer = buffer.pointer,
     };
+
+    const String indirect_types[] = {
+        strlit("BYTE PTR "),
+        strlit("WORD PTR "),
+        strlit("DWORD PTR "),
+        strlit("QWORD PTR "),
+    };
+
+    String indirect_type = indirect_types[register_index];
+
+    memcpy(&buffer.pointer[length], indirect_type.pointer, indirect_type.length);
+    length += indirect_type.length;
 
     buffer.pointer[length] = '[';
     length += 1;
@@ -555,10 +571,10 @@ fn String format_displacement(String buffer, String register_string, String disp
     length += register_string.length;
 
     buffer.pointer[length] = '+';
-    length += 1;
+    length += !omit_displacement;
 
     memcpy(&buffer.pointer[length], displacement_string.pointer, displacement_string.length);
-    length += displacement_string.length;
+    length += displacement_string.length * !omit_displacement;
 
     buffer.pointer[length] = ']';
     length += 1;
@@ -635,6 +651,7 @@ fn String disassemble_binary(Arena* arena, DisassemblyArguments arguments)
         "i386:x86-64:intel",
         "-b",
         "binary",
+        "--disassemble-zeroes",
         0,
     };
     CStringSlice arguments_gross_slice = array_to_slice(arguments_gross);
@@ -649,6 +666,7 @@ fn String disassemble_binary(Arena* arena, DisassemblyArguments arguments)
         "i386:x86-64:intel",
         "-b",
         "binary",
+        "--disassemble-zeroes",
         0,
     };
     CStringSlice arguments_pruned_slice = array_to_slice(arguments_pruned);
@@ -778,6 +796,7 @@ fn u64 check_instruction(Arena* arena, CheckInstructionArguments arguments)
         if (!result)
         {
             formatter_append_string(&error_buffer, strlit("Failed to match correct output. Got:\n\t"));
+            todo();
 
             for (u64 bin_i = 0; bin_i < arguments.binary.length; bin_i += 1)
             {
@@ -801,8 +820,6 @@ fn u64 check_instruction(Arena* arena, CheckInstructionArguments arguments)
             {
                 todo();
             }
-
-            todo();
         }
     }
     else
@@ -945,8 +962,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                 .is_immediate = 1 << imm_index,
                                 .is_16_mode = register_a_index == 1,
                                 .immediate = immediate,
-                                .displacement32 = 0,
-                                .displacement8 = 0,
+                                .displacement = 0,
                                 .opcode = encoding->opcode.bytes[0],
                                 .reg1 = 0,
                                 .reg2 = 0,
@@ -968,11 +984,12 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                             };
                             u64 error_buffer_length = check_instruction(arena, check_args);
                             instance_index += 1;
+                            let(first_failure, failure_count == 0);
                             failure_count += error_buffer_length != 0;
                             String error_string = { .pointer = error_buffer, .length = error_buffer_length };
                             if (error_buffer_length != 0)
                             {
-                                print("{u64}) {s}... [FAILED]\n{s}\n", instance_index, instruction_string, error_string);
+                                print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
                             }
                         } break;
                     case 3:
@@ -1003,7 +1020,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                             };
 
                             String displacement_strings[] = {
-                                strlit("0"),
+                                strlit("0x0"),
                                 strlit("0x10"),
                                 strlit("0x10000000"),
                             };
@@ -1024,9 +1041,10 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                     {
                                         String first_operand_rm_name = gpr_to_string(gpr, 3, 0);
 
-                                        for (u32 i = 0; i < array_length(displacements); i += 1)
+                                        for (u32 displacement_index = 0; displacement_index < array_length(displacements); displacement_index += 1)
                                         {
-                                            first_rm_strings[gpr][i] = format_displacement((String)array_to_slice(first_rm_buffer[gpr][i]), first_operand_rm_name, displacement_strings[i]);
+                                            u8 omit_displacement = displacements[displacement_index] == 0 && (gpr & 0b111) != REGISTER_X86_64_BP;
+                                            first_rm_strings[gpr][displacement_index] = format_displacement((String)array_to_slice(first_rm_buffer[gpr][displacement_index]), first_operand_rm_name, displacement_strings[displacement_index], first_operand_index, omit_displacement);
                                         }
                                     }
                                 }
@@ -1045,9 +1063,10 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                         {
                                             String second_operand_rm_name = gpr_to_string(gpr, 3, 0);
 
-                                            for (u32 i = 0; i < array_length(displacements); i += 1)
+                                            for (u32 displacement_index = 0; displacement_index < array_length(displacements); displacement_index += 1)
                                             {
-                                                second_rm_strings[gpr][i] = format_displacement((String)array_to_slice(second_rm_buffer[gpr][i]), second_operand_rm_name, displacement_strings[i]);
+                                                u8 omit_displacement = displacements[displacement_index] == 0 && (gpr & 0b111) != REGISTER_X86_64_BP;
+                                                second_rm_strings[gpr][displacement_index] = format_displacement((String)array_to_slice(second_rm_buffer[gpr][displacement_index]), second_operand_rm_name, displacement_strings[displacement_index], second_operand_index, omit_displacement);
                                             }
                                         }
                                     }
@@ -1073,8 +1092,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                     .is_immediate = 0,
                                                     .is_16_mode = first_operand_index == 1,
                                                     .immediate = 0,
-                                                    .displacement32 = 0,
-                                                    .displacement8 = 0,
+                                                    .displacement = 0,
                                                     .opcode = encoding->opcode.bytes[0],
                                                     .reg1 = first_gpr,
                                                     .reg2 = second_gpr,
@@ -1097,11 +1115,12 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                 };
                                                 u64 error_buffer_length = check_instruction(arena, check_args);
                                                 instance_index += 1;
+                                                let(first_failure, failure_count == 0);
                                                 failure_count = error_buffer_length != 0;
                                                 String error_string = { .pointer = error_buffer, .length = error_buffer_length };
                                                 if (error_buffer_length != 0)
                                                 {
-                                                    print("{u64}) {s}... [FAILED]\n{s}\n", instance_index, instruction_string, error_string);
+                                                    print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
                                                 }
                                             }
                                         }
@@ -1111,15 +1130,55 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                     {
                                         for (GPR_x86_64 first_gpr = 0; first_gpr < X86_64_GPR_COUNT; first_gpr += 1)
                                         {
-                                            for (u32 i = 0; i < array_length(displacements); i += 1)
+                                            for (u32 displacement_index = 0; displacement_index < array_length(displacements); displacement_index += 1)
                                             {
-                                                String first_operand_string = first_rm_strings[first_gpr][i];
+                                                String first_operand_string = first_rm_strings[first_gpr][displacement_index];
 
                                                 for (GPR_x86_64 second_gpr = 0; second_gpr < second_operand_register_count; second_gpr += 1)
                                                 {
-                                                    String second_operand_string = gpr_to_string(second_gpr, second_operand_index, 0);
+                                                    String second_operand_string = gpr_to_string(second_gpr, second_operand_index, gpr_is_extended(first_gpr));
                                                     String instruction_string = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
-                                                    unused(instruction_string);
+                                                    InstructionEncoding batch_encoding = {
+                                                        .is_64_bit = first_operand_index == 3,
+                                                        .has_rex = 0,
+                                                        .scaled_index_register = 0,
+                                                        .is_reg1 = 1,
+                                                        .is_reg2 = 1,
+                                                        .is_indirect1 = 1,
+                                                        .is_indirect2 = 0,
+                                                        .is_immediate = 0,
+                                                        .is_16_mode = first_operand_index == 1,
+                                                        .immediate = 0,
+                                                        .displacement = displacements[displacement_index],
+                                                        .opcode = encoding->opcode.bytes[0],
+                                                        .reg1 = first_gpr,
+                                                        .reg2 = second_gpr,
+                                                        .sib_scale = 0,
+                                                        .sib_index = 0b100,
+                                                        .sib_base = (first_gpr & 0b111) == REGISTER_X86_64_SP ? first_gpr : 0,
+                                                    };
+                                                    u16 length = encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1);
+                                                    String instruction_bytes = {
+                                                        .pointer = instruction_binary_buffer,
+                                                        .length = length,
+                                                    };
+                                                    CheckInstructionArguments check_args = {
+                                                        .clang_path = clang_path,
+                                                        .objdump_path = objdump_path,
+                                                        .text = instruction_string,
+                                                        .binary = instruction_bytes,
+                                                        .error_buffer = error_buffer_slice,
+                                                        // .check_text = !first_is_rm && second_is_rm,
+                                                    };
+                                                    u64 error_buffer_length = check_instruction(arena, check_args);
+                                                    instance_index += 1;
+                                                    let(first_failure, failure_count == 0);
+                                                    failure_count = error_buffer_length != 0;
+                                                    String error_string = { .pointer = error_buffer, .length = error_buffer_length };
+                                                    if (error_buffer_length != 0)
+                                                    {
+                                                        print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                                    }
                                                 }
                                             }
                                         }
@@ -1133,9 +1192,9 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
 
                                             for (GPR_x86_64 second_gpr = 0; second_gpr < X86_64_GPR_COUNT; second_gpr += 1)
                                             {
-                                                for (u32 i = 0; i < array_length(displacements); i += 1)
+                                                for (u32 displacement_index = 0; displacement_index < array_length(displacements); displacement_index += 1)
                                                 {
-                                                    String second_operand_string = second_rm_strings[second_gpr][i];
+                                                    String second_operand_string = second_rm_strings[second_gpr][displacement_index];
                                                     String instruction_string = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
                                                     unused(instruction_string);
                                                 }
@@ -1160,9 +1219,9 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                     {
                                         for (GPR_x86_64 gpr = 0; gpr < X86_64_GPR_COUNT; gpr += 1)
                                         {
-                                            for (u32 i = 0; i < array_length(displacements); i += 1)
+                                            for (u32 displacement_index = 0; displacement_index < array_length(displacements); displacement_index += 1)
                                             {
-                                                String first_operand_string = first_rm_strings[gpr][i];
+                                                String first_operand_string = first_rm_strings[gpr][displacement_index];
                                                 String instruction_string = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
                                                 unused(instruction_string);
                                             }
@@ -1198,84 +1257,6 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
             print_string(encoding_separator_string);
             print_string(strlit("\n"));
         }
-
-        // for (BatchEncodingKind kind = 0; kind < BATCH_ENCODING_COUNT; kind += 1)
-        // {
-        //     const BatchEncoding* const restrict batch_encoding = &batch->encodings[kind];
-        //     if (batch_encoding->valid)
-        //     {
-        //         u8 buffer[max_instruction_byte_count];
-        //         print("{s}", mnemonic_x86_64_to_string(batch->mnemonic));
-        //
-        //         InstructionEncoding encoding = {};
-        //         let(length, encode_instruction_batch(buffer, &encoding, 1));
-        //
-        //         let(expected_length, batch_encoding->expected_length);
-        //         let(expected_pointer, &dataset.string_buffer[batch_encoding->expected_offset]);
-        //
-        //         u8 error = length != expected_length;
-        //         u64 error_byte = length;
-        //
-        //         if (!error)
-        //         {
-        //             for (u64 i = 0; i < length; i += 1)
-        //             {
-        //                 if (buffer[i] != expected_pointer[i])
-        //                 {
-        //                     error_byte = i;
-        //                     break;
-        //                 }
-        //             }
-        //         }
-        //
-        //         error = error | (error_byte != length);
-        //
-        //         if (unlikely(error))
-        //         {
-        //             result = 1;
-        //
-        //             print("[FAILED]\n");
-        //
-        //             print("=============================\n");
-        //
-        //             if (length != expected_length)
-        //             {
-        //                 print("error: mismatch in the length of the instruction\n");
-        //             }
-        //
-        //             if (error_byte != length)
-        //             {
-        //                 print("error: byte {u64} does not match. Expected: 0x{u32:x}. Produced: 0x{u32:x}\n", error_byte, (u32)expected_pointer[error_byte], (u32)buffer[error_byte]);
-        //             }
-        //
-        //             print("Expected {u64} bytes:\n", expected_length);
-        //
-        //             for (u64 i = 0; i < expected_length; i += 1)
-        //             {
-        //                 print("0x{u32:x} ", (u32)expected_pointer[i]);
-        //             }
-        //
-        //             print("\nOutput {u64} bytes:\n", length);
-        //
-        //             for (u64 i = 0; i < length; i += 1)
-        //             {
-        //                 print("0x{u32:x} ", (u32)buffer[i]);
-        //             }
-        //
-        //             print("\n");
-        //             print("=============================\n");
-        //         }
-        //         else
-        //         {
-        //             print("[OK] [ ");
-        //             for (u64 i = 0; i < length; i += 1)
-        //             {
-        //                 print("0x{u32:x} ", (u32)buffer[i]);
-        //             }
-        //             print("]\n");
-        //         }
-        //     }
-        // }
     }
 
     return result;
