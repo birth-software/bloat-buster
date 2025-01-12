@@ -151,9 +151,12 @@ fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
         u8 rex_x = 0x02;
         u8 rex_r = 0x04;
         u8 rex_w = 0x08;
-        u8 byte_rex_b = rex_b * gpr_is_extended(encoding.reg1);
+        u8 is_reg_direct_addressing_mode = !(encoding.is_indirect1 | encoding.is_indirect2);
+        u8 reg_register = is_reg_direct_addressing_mode ? encoding.reg2 : (encoding.is_indirect1 ? encoding.reg2 : encoding.reg1);
+        u8 rm_register = is_reg_direct_addressing_mode ? encoding.reg1 : (encoding.is_indirect1 ? encoding.reg1 : encoding.reg2);
+        u8 byte_rex_b = rex_b * gpr_is_extended(rm_register);
         u8 byte_rex_x = rex_x * encoding.scaled_index_register;
-        u8 byte_rex_r = rex_r * gpr_is_extended(encoding.reg2); 
+        u8 byte_rex_r = rex_r * gpr_is_extended(reg_register); 
         u8 byte_rex_w = rex_w * encoding.is_64_bit;
         u8 byte_rex = (byte_rex_b | byte_rex_x) | (byte_rex_r | byte_rex_w);
         u8 rex = (rex_base | byte_rex);
@@ -174,14 +177,13 @@ fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
         
         u8 is_displacement32 = encoding.displacement != 0 && (s32)((s8)encoding.displacement) != encoding.displacement;
         u8 is_displacement8 = (!is_displacement32) & ((encoding.displacement != 0) | ((encoding.is_indirect1 & ((encoding.reg1 & 0b111) == REGISTER_X86_64_RBP)) | (encoding.is_indirect2 & ((encoding.reg2 & 0b111) == REGISTER_X86_64_RBP))));
-        u8 is_reg_direct_addressing_mode = !(encoding.is_indirect1 | encoding.is_indirect1);
         u8 mod = ((is_displacement32 << 1) | is_displacement8) | ((is_reg_direct_addressing_mode << 1) | is_reg_direct_addressing_mode);
         // A register operand.
         // An opcode extension (in some instructions).
-        u8 reg_opcode = encoding.reg2 & 0b111;
+        u8 reg_opcode = reg_register & 0b111;
         // When mod is 00, 01, or 10: Specifies a memory address or a base register.
         // When mod is 11: Specifies a register.
-        u8 rm = encoding.reg1 & 0b111;
+        u8 rm = rm_register & 0b111;
         u8 modrm = (mod << 6) | (reg_opcode << 3) | rm;
         *it = modrm;
         it += encode_modrm;
@@ -1187,15 +1189,56 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                     {
                                         for (GPR_x86_64 first_gpr = 0; first_gpr < first_operand_register_count; first_gpr += 1)
                                         {
-                                            String first_operand_string = gpr_to_string(first_gpr, first_operand_index, 0);
 
                                             for (GPR_x86_64 second_gpr = 0; second_gpr < X86_64_GPR_COUNT; second_gpr += 1)
                                             {
+                                                String first_operand_string = gpr_to_string(first_gpr, first_operand_index, gpr_is_extended(second_gpr));
+
                                                 for (u32 displacement_index = 0; displacement_index < array_length(displacements); displacement_index += 1)
                                                 {
                                                     String second_operand_string = second_rm_strings[second_gpr][displacement_index];
                                                     String instruction_string = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
-                                                    unused(instruction_string);
+                                                    InstructionEncoding batch_encoding = {
+                                                        .is_64_bit = first_operand_index == 3,
+                                                        .has_rex = 0,
+                                                        .scaled_index_register = 0,
+                                                        .is_reg1 = 1,
+                                                        .is_reg2 = 1,
+                                                        .is_indirect1 = 0,
+                                                        .is_indirect2 = 1,
+                                                        .is_immediate = 0,
+                                                        .is_16_mode = first_operand_index == 1,
+                                                        .immediate = 0,
+                                                        .displacement = displacements[displacement_index],
+                                                        .opcode = encoding->opcode.bytes[0],
+                                                        .reg1 = first_gpr,
+                                                        .reg2 = second_gpr,
+                                                        .sib_scale = 0,
+                                                        .sib_index = 0b100,
+                                                        .sib_base = (second_gpr & 0b111) == REGISTER_X86_64_SP ? second_gpr : 0,
+                                                    };
+                                                    u16 length = encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1);
+                                                    String instruction_bytes = {
+                                                        .pointer = instruction_binary_buffer,
+                                                        .length = length,
+                                                    };
+                                                    CheckInstructionArguments check_args = {
+                                                        .clang_path = clang_path,
+                                                        .objdump_path = objdump_path,
+                                                        .text = instruction_string,
+                                                        .binary = instruction_bytes,
+                                                        .error_buffer = error_buffer_slice,
+                                                        // .check_text = !first_is_rm && second_is_rm,
+                                                    };
+                                                    u64 error_buffer_length = check_instruction(arena, check_args);
+                                                    instance_index += 1;
+                                                    let(first_failure, failure_count == 0);
+                                                    failure_count = error_buffer_length != 0;
+                                                    String error_string = { .pointer = error_buffer, .length = error_buffer_length };
+                                                    if (error_buffer_length != 0)
+                                                    {
+                                                        print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                                    }
                                                 }
                                             }
                                         }
