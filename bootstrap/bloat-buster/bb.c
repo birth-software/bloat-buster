@@ -1027,7 +1027,6 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
 
                             if (op_is_gpr_no_gpra(first_operand))
                             {
-                                // u8 is_indirect = 0;
                                 u8 first_operand_index = op_gpr_get_index(first_operand);
                                 GPR_x86_64 first_operand_register_count = (unlikely(first_operand_index == 0)) ? (X86_64_GPR_COUNT / 2) : X86_64_GPR_COUNT;
 
@@ -1202,17 +1201,56 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                         }
                                     }
                                 }
-                                else
+                                else if (op_is_imm(second_operand))
                                 {
-                                    assert(op_is_imm(second_operand));
                                     u8 second_operand_index = op_imm_get_index(second_operand);
                                     String second_operand_string = sample_immediate_strings(second_operand_index);
+                                    u64 immediate = sample_immediate_values(second_operand_index);
 
                                     for (GPR_x86_64 first_gpr = 0; first_gpr < first_operand_register_count; first_gpr += 1)
                                     {
                                         String first_operand_string = gpr_to_string(first_gpr, first_operand_index, 0);
                                         String instruction_string = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
-                                        unused(instruction_string);
+                                        InstructionEncoding batch_encoding = {
+                                            .is_64_bit = first_operand_index == 3,
+                                            .has_rex = 0,
+                                            .scaled_index_register = 0,
+                                            .is_reg1 = 1,
+                                            .is_reg2 = 0,
+                                            .is_indirect1 = 0,
+                                            .is_indirect2 = 0,
+                                            .is_immediate = 1 << second_operand_index,
+                                            .is_16_mode = first_operand_index == 1,
+                                            .immediate = immediate,
+                                            .displacement = 0,
+                                            .opcode = encoding->opcode.bytes[0],
+                                            .reg1 = first_gpr,
+                                            .reg2 = 0,
+                                            .sib_scale = 0,
+                                            .sib_index = 0,
+                                            .sib_base = 0,
+                                        };
+                                        u16 length = encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1);
+                                        String instruction_bytes = {
+                                            .pointer = instruction_binary_buffer,
+                                            .length = length,
+                                        };
+                                        CheckInstructionArguments check_args = {
+                                            .clang_path = clang_path,
+                                            .objdump_path = objdump_path,
+                                            .text = instruction_string,
+                                            .binary = instruction_bytes,
+                                            .error_buffer = error_buffer_slice,
+                                        };
+                                        u64 error_buffer_length = check_instruction(arena, check_args);
+                                        instance_index += 1;
+                                        let(first_failure, failure_count == 0);
+                                        failure_count += error_buffer_length != 0;
+                                        String error_string = { .pointer = error_buffer, .length = error_buffer_length };
+                                        if (error_buffer_length != 0)
+                                        {
+                                            print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                        }
                                     }
 
                                     if (first_is_rm)
@@ -1227,6 +1265,10 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                             }
                                         }
                                     }
+                                }
+                                else
+                                {
+                                    todo();
                                 }
                             }
                             else
