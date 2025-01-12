@@ -1298,13 +1298,52 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
 
                                     if (first_is_rm)
                                     {
-                                        for (GPR_x86_64 gpr = 0; gpr < X86_64_GPR_COUNT; gpr += 1)
+                                        for (GPR_x86_64 first_gpr = 0; first_gpr < X86_64_GPR_COUNT; first_gpr += 1)
                                         {
                                             for (u32 displacement_index = 0; displacement_index < array_length(displacements); displacement_index += 1)
                                             {
-                                                String first_operand_string = first_rm_strings[gpr][displacement_index];
+                                                String first_operand_string = first_rm_strings[first_gpr][displacement_index];
                                                 String instruction_string = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
-                                                unused(instruction_string);
+                                                InstructionEncoding batch_encoding = {
+                                                    .is_64_bit = first_operand_index == 3,
+                                                    .has_rex = 0,
+                                                    .scaled_index_register = 0,
+                                                    .is_reg1 = 1,
+                                                    .is_reg2 = 0,
+                                                    .is_indirect1 = 1,
+                                                    .is_indirect2 = 0,
+                                                    .is_immediate = 1 << second_operand_index,
+                                                    .is_16_mode = first_operand_index == 1,
+                                                    .immediate = immediate,
+                                                    .displacement = displacements[displacement_index],
+                                                    .opcode = encoding->opcode.bytes[0],
+                                                    .reg1 = first_gpr,
+                                                    .reg2 = 0,
+                                                    .sib_scale = 0,
+                                                    .sib_index = 0b100,
+                                                    .sib_base = (first_gpr & 0b111) == REGISTER_X86_64_SP ? first_gpr : 0,
+                                                };
+                                                u16 length = encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1);
+                                                String instruction_bytes = {
+                                                    .pointer = instruction_binary_buffer,
+                                                    .length = length,
+                                                };
+                                                CheckInstructionArguments check_args = {
+                                                    .clang_path = clang_path,
+                                                    .objdump_path = objdump_path,
+                                                    .text = instruction_string,
+                                                    .binary = instruction_bytes,
+                                                    .error_buffer = error_buffer_slice,
+                                                };
+                                                u64 error_buffer_length = check_instruction(arena, check_args);
+                                                instance_index += 1;
+                                                let(first_failure, failure_count == 0);
+                                                failure_count += error_buffer_length != 0;
+                                                String error_string = { .pointer = error_buffer, .length = error_buffer_length };
+                                                if (error_buffer_length != 0)
+                                                {
+                                                    print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                                }
                                             }
                                         }
                                     }
