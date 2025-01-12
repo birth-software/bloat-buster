@@ -750,44 +750,41 @@ fn u64 check_instruction(Arena* arena, CheckInstructionArguments arguments)
     StringFormatter error_buffer = {
         .buffer = arguments.error_buffer,
     };
-    DisassemblyArguments disassemble_arguments = {
-        .binary = arguments.binary,
-        .objdump_path = arguments.objdump_path,
-    };
-    String disassembly_text = disassemble_binary(arena, disassemble_arguments);
+
     u8 result = 1;
 
-    if (disassembly_text.length == arguments.text.length)
+    if (!arguments.check_text)
     {
-        for (u64 i = 0; i < arguments.text.length; i += 1)
+        DisassemblyArguments disassemble_arguments = {
+            .binary = arguments.binary,
+            .objdump_path = arguments.objdump_path,
+        };
+        String disassembly_text = disassemble_binary(arena, disassemble_arguments);
+
+        result = disassembly_text.length == arguments.text.length;
+        if (result)
         {
-            if (disassembly_text.pointer[i] != arguments.text.pointer[i])
+            for (u64 i = 0; i < arguments.text.length; i += 1)
             {
-                if (i == 0 && disassembly_text.pointer[i] == '.')
+                if (disassembly_text.pointer[i] != arguments.text.pointer[i])
                 {
-                    todo();
-                }
-                else
-                {
-                    todo();
+                    result = 0;
+
+                    break;
                 }
             }
         }
-    }
-    else
-    {
-        if (disassembly_text.length && disassembly_text.pointer[0] == '.')
-        {
-            result = 0;
 
-            formatter_append_string(&error_buffer, strlit("Some corrupted output was generated:\n\t"));
+        if (!result)
+        {
+            formatter_append_string(&error_buffer, strlit("Failed to match correct output. Got:\n\t"));
 
             for (u64 bin_i = 0; bin_i < arguments.binary.length; bin_i += 1)
             {
                 formatter_append(&error_buffer, "0x{u32:x,w=2} ", (u32)arguments.binary.pointer[bin_i]);
             }
 
-            formatter_append(&error_buffer, "\n");
+            formatter_append_character(&error_buffer, '\n');
 
             String clang_binary = clang_compile_assembly(arena, arguments.text, arguments.clang_path);
             if (clang_binary.pointer)
@@ -804,14 +801,11 @@ fn u64 check_instruction(Arena* arena, CheckInstructionArguments arguments)
             {
                 todo();
             }
-        }
-        else
-        {
+
             todo();
         }
     }
-
-    if (arguments.check_text)
+    else
     {
         String clang_binary = clang_compile_assembly(arena, arguments.text, arguments.clang_path);
         String my_binary = arguments.binary;
@@ -937,7 +931,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                 .is_indirect1 = 0,
                                 .is_indirect2 = 0,
                                 .is_immediate = 1 << imm_index,
-                                .is_16_mode = (register_a_index & (1 << 1)) >> 1,
+                                .is_16_mode = register_a_index == 1,
                                 .immediate = immediate,
                                 .displacement32 = 0,
                                 .displacement8 = 0,
@@ -961,6 +955,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                 .error_buffer = error_buffer_slice,
                             };
                             u64 error_buffer_length = check_instruction(arena, check_args);
+                            instance_index += 1;
                             String error_string = { .pointer = error_buffer, .length = error_buffer_length };
                             let(success, error_buffer_length == 0);
                             print("{u64}) {s}... [{cstr}]\n{s}{cstr}", instance_index, instruction_string, success ? "OK" : "FAILED", error_string, success ? "" : "\n");
@@ -1042,15 +1037,55 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                         }
                                     }
 
-                                    for (GPR_x86_64 first_gpr = 0; first_gpr < first_operand_register_count; first_gpr += 1)
+                                    if (first_is_rm)
                                     {
-                                        String first_operand_string = gpr_to_string(first_gpr, first_operand_index, 0);
-
-                                        for (GPR_x86_64 second_gpr = 0; second_gpr < second_operand_register_count; second_gpr += 1)
+                                        for (GPR_x86_64 first_gpr = 0; first_gpr < first_operand_register_count; first_gpr += 1)
                                         {
-                                            String second_operand_string = gpr_to_string(second_gpr, second_operand_index, 0);
-                                            String instruction_string = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
-                                            unused(instruction_string);
+                                            String first_operand_string = gpr_to_string(first_gpr, first_operand_index, 0);
+
+                                            for (GPR_x86_64 second_gpr = 0; second_gpr < second_operand_register_count; second_gpr += 1)
+                                            {
+                                                String second_operand_string = gpr_to_string(second_gpr, second_operand_index, 0);
+                                                String instruction_string = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
+                                                InstructionEncoding batch_encoding = {
+                                                    .is_64_bit = first_operand_index == 3,
+                                                    .has_rex = 0,
+                                                    .scaled_index_register = 0,
+                                                    .is_reg1 = 1,
+                                                    .is_reg2 = 1,
+                                                    .is_indirect1 = 0,
+                                                    .is_indirect2 = 0,
+                                                    .is_immediate = 0,
+                                                    .is_16_mode = first_operand_index == 1,
+                                                    .immediate = 0,
+                                                    .displacement32 = 0,
+                                                    .displacement8 = 0,
+                                                    .opcode = encoding->opcode.bytes[0],
+                                                    .reg1 = first_gpr,
+                                                    .reg2 = second_gpr,
+                                                    .sib_scale = 0,
+                                                    .sib_index = 0,
+                                                    .sib_base = 0,
+                                                };
+                                                u16 length = encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1);
+                                                String instruction_bytes = {
+                                                    .pointer = instruction_binary_buffer,
+                                                    .length = length,
+                                                };
+                                                CheckInstructionArguments check_args = {
+                                                    .clang_path = clang_path,
+                                                    .objdump_path = objdump_path,
+                                                    .text = instruction_string,
+                                                    .binary = instruction_bytes,
+                                                    .error_buffer = error_buffer_slice,
+                                                    // .check_text = !first_is_rm && second_is_rm,
+                                                };
+                                                u64 error_buffer_length = check_instruction(arena, check_args);
+                                                instance_index += 1;
+                                                String error_string = { .pointer = error_buffer, .length = error_buffer_length };
+                                                let(success, error_buffer_length == 0);
+                                                print("{u64}) {s}... [{cstr}]\n{s}{cstr}", instance_index, instruction_string, success ? "OK" : "FAILED", error_string, success ? "" : "\n");
+                                            }
                                         }
                                     }
 
