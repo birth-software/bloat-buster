@@ -7,7 +7,7 @@
 #include <std/os.c>
 #include <std/virtual_buffer.c>
 
-#define USE_LLVM_OBJDUMP 1
+#define USE_LLVM_OBJDUMP 0
 
 global_variable char** environment_pointer;
 
