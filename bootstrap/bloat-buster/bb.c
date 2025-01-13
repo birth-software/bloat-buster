@@ -7,6 +7,8 @@
 #include <std/os.c>
 #include <std/virtual_buffer.c>
 
+#define USE_LLVM_OBJDUMP 1
+
 global_variable char** environment_pointer;
 
 typedef enum GPR_x86_64
@@ -586,19 +588,26 @@ fn String format_displacement(String buffer, String register_string, String disp
     return result;
 }
 
-fn String clang_compile_assembly(Arena* arena, String instruction_text, String clang_path)
+STRUCT(ClangCompileAssembly)
+{
+    String instruction;
+    String clang_path;
+    VirtualBuffer(u8)* clang_pipe_buffer;
+};
+
+fn String clang_compile_assembly(Arena* arena, ClangCompileAssembly args)
 {
     String my_assembly_path = strlit(BUILD_DIR "/my_assembly_source.S");
     FileWriteOptions options = {
         .path = my_assembly_path,
-        .content = instruction_text,
+        .content = args.instruction,
     };
     file_write(options);
 
     String out_path = strlit(BUILD_DIR "/my_assembly_output");
 
     char* arguments[] = {
-        string_to_c(clang_path),
+        string_to_c(args.clang_path),
         string_to_c(my_assembly_path),
         "-o",
         string_to_c(out_path),
@@ -608,13 +617,20 @@ fn String clang_compile_assembly(Arena* arena, String instruction_text, String c
         0,
     };
     RunCommandOptions run_options = {
-        .capture_stderr = 1,
+        .stdout_stream = {
+            .buffer = args.clang_pipe_buffer->pointer,
+            .length = &args.clang_pipe_buffer->length,
+            .capacity = args.clang_pipe_buffer->capacity,
+            .policy = CHILD_PROCESS_STREAM_PIPE,
+        },
+        // .stderr_stream = {
+        //     .policy = CHILD_PROCESS_STREAM_IGNORE,
+        // },
     };
     RunCommandResult result = run_command(arena, (CStringSlice)array_to_slice(arguments), environment_pointer, run_options);
     let(success, result.termination_kind == PROCESS_TERMINATION_EXIT && result.termination_code == 0);
     if (!success)
     {
-        print("Clang failed: {s}\n", result.stderr_string);
         os_exit(1);
     }
 
@@ -632,6 +648,7 @@ STRUCT(DisassemblyArguments)
 {
     String binary;
     String objdump_path;
+    VirtualBuffer(u8)* disassembly_pipe_buffer;
     u64 gross:1;
 };
 
@@ -644,36 +661,43 @@ fn String disassemble_binary(Arena* arena, DisassemblyArguments arguments)
         .content = arguments.binary,
     };
     file_write(options);
+#if USE_LLVM_OBJDUMP
+#else
+#endif
+
+#define common_disassembly_args \
+        string_to_c(arguments.objdump_path), \
+        "-D", \
+        string_to_c(binary_path), \
+        "-m", \
+        "i386:x86-64:intel", \
+        "-b", \
+        "binary", \
+        "--disassemble-zeroes"
 
     char* arguments_gross[] = {
-        string_to_c(arguments.objdump_path),
-        "-D",
-        string_to_c(binary_path),
-        "-m",
-        "i386:x86-64:intel",
-        "-b",
-        "binary",
-        "--disassemble-zeroes",
+        common_disassembly_args,
         0,
     };
     CStringSlice arguments_gross_slice = array_to_slice(arguments_gross);
 
     char* arguments_pruned[] = {
-        string_to_c(arguments.objdump_path),
-        "-D",
-        string_to_c(binary_path),
+        common_disassembly_args,
         "--no-addresses",
         "--no-show-raw-insn",
-        "-m",
-        "i386:x86-64:intel",
-        "-b",
-        "binary",
-        "--disassemble-zeroes",
         0,
     };
     CStringSlice arguments_pruned_slice = array_to_slice(arguments_pruned);
     RunCommandOptions run_options = {
-        .capture_stdout = 1,
+        .stdout_stream = {
+            .buffer = arguments.disassembly_pipe_buffer->pointer,
+            .length = &arguments.disassembly_pipe_buffer->length,
+            .capacity = arguments.disassembly_pipe_buffer->capacity,
+            .policy = CHILD_PROCESS_STREAM_PIPE,
+        },
+        // .stderr_stream = {
+        //     .policy = CHILD_PROCESS_STREAM_IGNORE,
+        // },
     };
     RunCommandResult run_result = run_command(arena, arguments.gross ? arguments_gross_slice : arguments_pruned_slice, environment_pointer, run_options);
     let(success, run_result.termination_kind == PROCESS_TERMINATION_EXIT && run_result.termination_code == 0);
@@ -683,9 +707,10 @@ fn String disassemble_binary(Arena* arena, DisassemblyArguments arguments)
     }
 
     String search_token = strlit("<.data>:\n");
-    let(index, string_first_occurrence(run_result.stdout_string, search_token));
+    String disassembly_string = { .pointer = arguments.disassembly_pipe_buffer->pointer, arguments.disassembly_pipe_buffer->length };
+    let(index, string_first_occurrence(disassembly_string, search_token));
     assert(index != STRING_NO_MATCH);
-    String result = s_get_slice(u8, run_result.stdout_string, index + search_token.length, run_result.stdout_string.length);
+    String result = s_get_slice(u8, disassembly_string, index + search_token.length, disassembly_string.length);
     if (result.pointer[0] == '\t')
     {
         result.pointer += 1;
@@ -761,6 +786,8 @@ STRUCT(CheckInstructionArguments)
     String binary;
     String error_buffer;
     u64* error_buffer_length;
+    VirtualBuffer(u8)* disassembly_pipe_buffer;
+    VirtualBuffer(u8)* clang_pipe_buffer;
     u64 check_text:1;
     u64 reserved:63;
 };
@@ -778,6 +805,7 @@ fn u64 check_instruction(Arena* arena, CheckInstructionArguments arguments)
         DisassemblyArguments disassemble_arguments = {
             .binary = arguments.binary,
             .objdump_path = arguments.objdump_path,
+            .disassembly_pipe_buffer = arguments.disassembly_pipe_buffer,
         };
         String disassembly_text = disassemble_binary(arena, disassemble_arguments);
 
@@ -807,7 +835,12 @@ fn u64 check_instruction(Arena* arena, CheckInstructionArguments arguments)
 
             formatter_append_character(&error_buffer, '\n');
 
-            String clang_binary = clang_compile_assembly(arena, arguments.text, arguments.clang_path);
+            ClangCompileAssembly args = {
+                .instruction = arguments.text,
+                .clang_path = arguments.clang_path,
+                .clang_pipe_buffer = arguments.clang_pipe_buffer,
+            };
+            String clang_binary = clang_compile_assembly(arena, args);
             if (clang_binary.pointer)
             {
                 formatter_append_string(&error_buffer, strlit("While clang generated the following:\n\t"));
@@ -826,10 +859,10 @@ fn u64 check_instruction(Arena* arena, CheckInstructionArguments arguments)
     }
     else
     {
-        String clang_binary = clang_compile_assembly(arena, arguments.text, arguments.clang_path);
-        String my_binary = arguments.binary;
-        unused(clang_binary);
-        unused(my_binary);
+        // String clang_binary = clang_compile_assembly(arena, arguments.text, arguments.clang_path);
+        // String my_binary = arguments.binary;
+        // unused(clang_binary);
+        // unused(my_binary);
         todo();
     }
 
@@ -846,11 +879,20 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
     String instruction_text_buffer_slice = array_to_slice(instruction_text_buffer);
     u8 error_buffer[4096];
     String error_buffer_slice = array_to_slice(error_buffer);
+    VirtualBuffer(u8) disassembly_pipe_buffer = {};
+    vb_ensure_capacity(&disassembly_pipe_buffer, 1024*1024);
+    VirtualBuffer(u8) clang_pipe_buffer = {};
+    vb_ensure_capacity(&clang_pipe_buffer, 1024*1024);
 
     String clang_path = executable_find_in_path(arena, strlit("clang"), cstr(getenv("PATH")));
     assert(clang_path.pointer);
 
-    String objdump_path = executable_find_in_path(arena, strlit("objdump"), cstr(getenv("PATH")));
+#if USE_LLVM_OBJDUMP
+    String objdump_exe_name = strlit("llvm-objdump");
+#else
+    String objdump_exe_name = strlit("objdump");
+#endif
+    String objdump_path = executable_find_in_path(arena, objdump_exe_name, cstr(getenv("PATH")));
     assert(objdump_path.pointer);
 
     for (u64 batch_index = 0; batch_index < dataset.batch_count; batch_index += 1)
@@ -983,6 +1025,8 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                 .text = instruction_string,
                                 .binary = instruction_bytes,
                                 .error_buffer = error_buffer_slice,
+                                .disassembly_pipe_buffer = &disassembly_pipe_buffer,
+                                .clang_pipe_buffer = &clang_pipe_buffer,
                             };
                             u64 error_buffer_length = check_instruction(arena, check_args);
                             instance_index += 1;
@@ -1113,6 +1157,8 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                     .binary = instruction_bytes,
                                                     .error_buffer = error_buffer_slice,
                                                     // .check_text = !first_is_rm && second_is_rm,
+                                                    .disassembly_pipe_buffer = &disassembly_pipe_buffer,
+                                                    .clang_pipe_buffer = &clang_pipe_buffer,
                                                 };
                                                 u64 error_buffer_length = check_instruction(arena, check_args);
                                                 instance_index += 1;
@@ -1170,6 +1216,8 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                         .binary = instruction_bytes,
                                                         .error_buffer = error_buffer_slice,
                                                         // .check_text = !first_is_rm && second_is_rm,
+                                                        .disassembly_pipe_buffer = &disassembly_pipe_buffer,
+                                                        .clang_pipe_buffer = &clang_pipe_buffer,
                                                     };
                                                     u64 error_buffer_length = check_instruction(arena, check_args);
                                                     instance_index += 1;
@@ -1229,6 +1277,8 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                         .binary = instruction_bytes,
                                                         .error_buffer = error_buffer_slice,
                                                         // .check_text = !first_is_rm && second_is_rm,
+                                                        .disassembly_pipe_buffer = &disassembly_pipe_buffer,
+                                                        .clang_pipe_buffer = &clang_pipe_buffer,
                                                     };
                                                     u64 error_buffer_length = check_instruction(arena, check_args);
                                                     instance_index += 1;
@@ -1284,6 +1334,8 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                             .text = instruction_string,
                                             .binary = instruction_bytes,
                                             .error_buffer = error_buffer_slice,
+                                            .disassembly_pipe_buffer = &disassembly_pipe_buffer,
+                                            .clang_pipe_buffer = &clang_pipe_buffer,
                                         };
                                         u64 error_buffer_length = check_instruction(arena, check_args);
                                         instance_index += 1;
@@ -1334,6 +1386,8 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                     .text = instruction_string,
                                                     .binary = instruction_bytes,
                                                     .error_buffer = error_buffer_slice,
+                                                    .disassembly_pipe_buffer = &disassembly_pipe_buffer,
+                                                    .clang_pipe_buffer = &clang_pipe_buffer,
                                                 };
                                                 u64 error_buffer_length = check_instruction(arena, check_args);
                                                 instance_index += 1;

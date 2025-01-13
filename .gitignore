@@ -8,3 +8,4 @@ project
 imgui.ini
 /cache/
 .DS_Store
+/*.perf

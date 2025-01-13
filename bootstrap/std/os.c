@@ -776,6 +776,15 @@ fn u64 os_timer_get()
 #endif
 }
 
+FileDescriptor os_file_descriptor_invalid()
+{
+#if _WIN32
+    return INVALID_HANDLE_VALUE;
+#else
+    return -1;
+#endif
+}
+
 fn u8 os_file_descriptor_is_valid(FileDescriptor fd)
 {
 #if _WIN32
@@ -1165,10 +1174,15 @@ fn void file_write(FileWriteOptions options)
 
 fn RunCommandResult run_command(Arena* arena, CStringSlice arguments, char* envp[], RunCommandOptions run_options)
 {
+    unused(arena);
     assert(arguments.length > 0);
     assert(arguments.pointer[arguments.length - 1] == 0);
 
     RunCommandResult result = {};
+    Timestamp start_timestamp = {};
+    Timestamp end_timestamp = {};
+    f64 ms = 0.0;
+    u8 measure_time = run_options.debug;
 
     if (run_options.debug)
     {
@@ -1182,8 +1196,6 @@ fn RunCommandResult run_command(Arena* arena, CStringSlice arguments, char* envp
     }
 
 #if _WIN32
-    let(start_timestamp, os_timestamp());
-
     u32 length = 0;
     for (u32 i = 0; i < arguments.length; i += 1)
     {
@@ -1210,7 +1222,6 @@ fn RunCommandResult run_command(Arena* arena, CStringSlice arguments, char* envp
         }
     }
     bytes[byte_i - 1] = 0;
-    let(end_timestamp, os_timestamp());
 
     PROCESS_INFORMATION process_information = {};
     STARTUPINFOA startup_info = {};
@@ -1218,14 +1229,22 @@ fn RunCommandResult run_command(Arena* arena, CStringSlice arguments, char* envp
     startup_info.dwFlags |= STARTF_USESTDHANDLES;
     startup_info.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
     startup_info.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-
     let(handle_inheritance, 1);
-    let(start, os_timestamp());
+
+    if (measure_time)
+    {
+        start_timestamp = os_timestamp();
+    }
+
     if (CreateProcessA(0, bytes, 0, 0, handle_inheritance, 0, 0, 0, &startup_info, &process_information))
     {
         WaitForSingleObject(process_information.hProcess, INFINITE);
-        let(end, os_timestamp());
-        let(ms, os_resolve_timestamps(start, end, TIME_UNIT_MILLISECONDS));
+        if (measure_time)
+        {
+            end_timestamp = os_timestamp();
+            ms = os_resolve_timestamps(start, end, TIME_UNIT_MILLISECONDS);
+        }
+
 
         if (run_options.debug)
         {
@@ -1270,24 +1289,32 @@ fn RunCommandResult run_command(Arena* arena, CStringSlice arguments, char* envp
         print("CreateProcessA call failed: {cstr}\n", lpMsgBuf);
         todo();
     }
-
-    unused(start_timestamp);
-    unused(end_timestamp);
-    unused(envp);
 #else
+    int null_fd;
+
+    if (run_options.use_null_file_descriptor)
+    {
+        null_fd = run_options.null_file_descriptor;
+        assert(os_file_descriptor_is_valid(null_fd));
+    }
+    else if (run_options.stdout_stream.policy == CHILD_PROCESS_STREAM_IGNORE || run_options.stderr_stream.policy == CHILD_PROCESS_STREAM_IGNORE)
+    {
+        null_fd = open("/dev/null", O_WRONLY);
+        assert(os_file_descriptor_is_valid(null_fd));
+    }
+
     int stdout_pipe[2];
     int stderr_pipe[2];
 
-    if (run_options.capture_stdout && pipe(stdout_pipe) == -1)
+    if (run_options.stdout_stream.policy == CHILD_PROCESS_STREAM_PIPE && pipe(stdout_pipe) == -1)
     {
         todo();
     }
 
-    if (run_options.capture_stderr && pipe(stderr_pipe) == -1)
+    if (run_options.stderr_stream.policy == CHILD_PROCESS_STREAM_PIPE && pipe(stderr_pipe) == -1)
     {
         todo();
     }
-
 
     pid_t pid = syscall_fork();
     if (pid == -1)
@@ -1295,22 +1322,47 @@ fn RunCommandResult run_command(Arena* arena, CStringSlice arguments, char* envp
         todo();
     }
 
-    let(start_timestamp, os_timestamp());
+    if (measure_time)
+    {
+        start_timestamp = os_timestamp();
+    }
 
     if (pid == 0)
     {
-        if (run_options.capture_stdout)
+        switch (run_options.stdout_stream.policy)
         {
-            close(stdout_pipe[0]);
-            dup2(stdout_pipe[1], STDOUT_FILENO);
-            close(stdout_pipe[1]);
+            case CHILD_PROCESS_STREAM_PIPE:
+                {
+                    close(stdout_pipe[0]);
+                    dup2(stdout_pipe[1], STDOUT_FILENO);
+                    close(stdout_pipe[1]);
+                } break;
+            case CHILD_PROCESS_STREAM_IGNORE:
+                {
+                    dup2(null_fd, STDOUT_FILENO);
+                    close(null_fd);
+                } break;
+            case CHILD_PROCESS_STREAM_INHERIT:
+                {
+                } break;
         }
 
-        if (run_options.capture_stderr)
+        switch (run_options.stderr_stream.policy)
         {
-            close(stderr_pipe[0]);
-            dup2(stderr_pipe[1], STDERR_FILENO);
-            close(stderr_pipe[1]);
+            case CHILD_PROCESS_STREAM_PIPE:
+                {
+                    close(stderr_pipe[0]);
+                    dup2(stderr_pipe[1], STDERR_FILENO);
+                    close(stderr_pipe[1]);
+                } break;
+            case CHILD_PROCESS_STREAM_IGNORE:
+                {
+                    dup2(null_fd, STDERR_FILENO);
+                    close(null_fd);
+                } break;
+            case CHILD_PROCESS_STREAM_INHERIT:
+                {
+                } break;
         }
 
         // fcntl(pipes[1], F_SETFD, FD_CLOEXEC);
@@ -1320,79 +1372,44 @@ fn RunCommandResult run_command(Arena* arena, CStringSlice arguments, char* envp
     }
     else
     {
-        if (run_options.capture_stdout)
+        if (run_options.stdout_stream.policy == CHILD_PROCESS_STREAM_PIPE)
         {
             close(stdout_pipe[1]);
         }
 
-        if (run_options.capture_stderr)
+        if (run_options.stderr_stream.policy == CHILD_PROCESS_STREAM_PIPE)
         {
             close(stderr_pipe[1]);
         }
 
-        if (run_options.capture_stdout)
+        if (run_options.stdout_stream.policy == CHILD_PROCESS_STREAM_PIPE)
         {
-            // TODO: better allocation strategy
-            unused(arena);
-            u8 buffer[1024];
-            VirtualBuffer(u8) final_buffer = {};
-
-            while (1)
-            {
-                ssize_t byte_count = read(stdout_pipe[0], buffer, sizeof(buffer));
-                assert(byte_count >= 0);
-                if (byte_count == 0)
-                {
-                    break;
-                }
-                String slice = {
-                    .pointer = buffer,
-                    .length = cast_to(u64, byte_count),
-                };
-                vb_copy_string(&final_buffer, slice);
-            }
+            assert(run_options.stdout_stream.capacity);
+            ssize_t byte_count = read(stdout_pipe[0], run_options.stdout_stream.buffer, run_options.stdout_stream.capacity);
+            assert(byte_count >= 0);
+            *run_options.stdout_stream.length = byte_count;
 
             close(stdout_pipe[0]);
-
-            result.stdout_string = (String) {
-                .pointer = final_buffer.pointer,
-                .length = final_buffer.length,
-            };
         }
 
-        if (run_options.capture_stderr)
+        if (run_options.stderr_stream.policy == CHILD_PROCESS_STREAM_PIPE)
         {
-            // TODO: better allocation strategy
-            u8 buffer[1024];
-            VirtualBuffer(u8) final_buffer = {};
-
-            while (1)
-            {
-                ssize_t byte_count = read(stderr_pipe[0], buffer, sizeof(buffer));
-                assert(byte_count >= 0);
-                if (byte_count == 0)
-                {
-                    break;
-                }
-                String slice = {
-                    .pointer = buffer,
-                    .length = cast_to(u64, byte_count),
-                };
-                vb_copy_string(&final_buffer, slice);
-            }
+            assert(run_options.stderr_stream.capacity);
+            ssize_t byte_count = read(stderr_pipe[0], run_options.stderr_stream.buffer, run_options.stderr_stream.capacity);
+            assert(byte_count >= 0);
+            *run_options.stderr_stream.length = byte_count;
 
             close(stderr_pipe[0]);
-
-            result.stderr_string = (String) {
-                .pointer = final_buffer.pointer,
-                .length = final_buffer.length,
-            };
         }
 
         int status = 0;
         int options = 0;
         pid_t waitpid_result = syscall_waitpid(pid, &status, options);
-        let(end_timestamp, os_timestamp());
+
+        if (measure_time)
+        {
+            end_timestamp = os_timestamp();
+        }
 
         if (waitpid_result == pid)
         {
@@ -1463,12 +1480,17 @@ fn RunCommandResult run_command(Arena* arena, CStringSlice arguments, char* envp
 
         if (run_options.debug)
         {
-            let(ms, os_resolve_timestamps(start_timestamp, end_timestamp, TIME_UNIT_MILLISECONDS));
+            ms = os_resolve_timestamps(start_timestamp, end_timestamp, TIME_UNIT_MILLISECONDS);
             u32 ticks = 0;
 #if LINK_LIBC == 0
             ticks = cpu_frequency != 0;
 #endif
             print("Command run {cstr} in {f64} {cstr}\n", success ? "successfully" : "with errors", ms, ticks ? "ticks" : "ms");
+        }
+
+        if (!run_options.use_null_file_descriptor && os_file_descriptor_is_valid(null_fd))
+        {
+            close(null_fd);
         }
     }
 #endif

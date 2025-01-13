@@ -36,17 +36,32 @@ ENUM(ProcessTerminationKind, u8,
 
 STRUCT(RunCommandResult)
 {
-    String stdout_string;
-    String stderr_string;
     u32 termination_code;
     ProcessTerminationKind termination_kind;
 };
 
+typedef enum ChildProcessStreamPolicy
+{
+    CHILD_PROCESS_STREAM_INHERIT,
+    CHILD_PROCESS_STREAM_PIPE,
+    CHILD_PROCESS_STREAM_IGNORE,
+} ChildProcessStreamPolicy;
+
+STRUCT(ChildProcessStream)
+{
+    u8* buffer;
+    u32* length;
+    u32 capacity;
+    ChildProcessStreamPolicy policy;
+};
+
 STRUCT(RunCommandOptions)
 {
+    ChildProcessStream stdout_stream;
+    ChildProcessStream stderr_stream;
+    FileDescriptor null_file_descriptor;
+    u64 use_null_file_descriptor:1;
     u64 debug:1;
-    u64 capture_stdout:1;
-    u64 capture_stderr:1;
 };
 
 STRUCT(Timestamp)
