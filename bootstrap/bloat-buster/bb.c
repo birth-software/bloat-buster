@@ -9,8 +9,6 @@
 
 #include <llvm-c/Disassembler.h>
 
-#define USE_LLVM_OBJDUMP 0
-
 global_variable char** environment_pointer;
 
 typedef enum GPR_x86_64
@@ -390,10 +388,10 @@ STRUCT(TestDataset)
 fn String sample_immediate_strings(u8 index)
 {
     global_variable const String strings[] = {
-        strlit("0x10"),
-        strlit("0x1000"),
-        strlit("0x10000000"),
-        strlit("0x1000000000000000"),
+        strlit("10"),
+        strlit("1000"),
+        strlit("10000000"),
+        strlit("1000000000000000"),
     };
 
     return strings[index];
@@ -402,10 +400,10 @@ fn String sample_immediate_strings(u8 index)
 fn u64 sample_immediate_values(u8 index)
 {
     global_variable const u64 immediates[] = {
-        0x10,
-        0x1000,
-        0x10000000,
-        0x1000000000000000,
+        10,
+        1000,
+        10000000,
+        1000000000000000,
     };
     return immediates[index];
 }
@@ -551,7 +549,7 @@ fn String format_instruction2(String buffer, String mnemonic, String op1, String
     };
 }
 
-fn String format_displacement(String buffer, String register_string, String displacement_string, u8 register_index, u8 omit_displacement)
+fn String format_displacement(String buffer, String register_string, String displacement_string, u8 register_index)
 {
     u64 length = 0;
     String result = {
@@ -559,10 +557,10 @@ fn String format_displacement(String buffer, String register_string, String disp
     };
 
     const String indirect_types[] = {
-        strlit("BYTE PTR "),
-        strlit("WORD PTR "),
-        strlit("DWORD PTR "),
-        strlit("QWORD PTR "),
+        strlit("byte ptr "),
+        strlit("word ptr "),
+        strlit("dword ptr "),
+        strlit("qword ptr "),
     };
 
     String indirect_type = indirect_types[register_index];
@@ -576,7 +574,14 @@ fn String format_displacement(String buffer, String register_string, String disp
     memcpy(&buffer.pointer[length], register_string.pointer, register_string.length);
     length += register_string.length;
 
+    u8 omit_displacement = displacement_string.pointer[0] == '0' && displacement_string.length == 1;
+    buffer.pointer[length] = ' ';
+    length += !omit_displacement;
+
     buffer.pointer[length] = '+';
+    length += !omit_displacement;
+
+    buffer.pointer[length] = ' ';
     length += !omit_displacement;
 
     memcpy(&buffer.pointer[length], displacement_string.pointer, displacement_string.length);
@@ -650,7 +655,8 @@ STRUCT(DisassemblyArguments)
 {
     String binary;
     String objdump_path;
-    VirtualBuffer(u8)* disassembly_pipe_buffer;
+    LLVMDisasmContextRef context;
+    String disassembly_buffer;
     u64 gross:1;
 };
 
@@ -661,145 +667,158 @@ STRUCT(DisassemblyArguments)
     fn_prefix LLVMInitialize ## target ## AsmParser();\
     fn_prefix LLVMInitialize ## target ## AsmPrinter();\
     fn_prefix LLVMInitialize ## target ## Disassembler()
-#define asjkd()
+
+#define _null_prefix_()
+
 llvm_initialize_macro(X86, extern void);
-
-fn void disassemble_binary_llvm(String code)
-{
-    unused(code);
-    llvm_initialize_macro(X86, asjkd());
-    let(disassembler, LLVMCreateDisasm("x86_64-freestanding", 0, 0, 0, 0));
-    u64 options = LLVMDisassembler_Option_AsmPrinterVariant | LLVMDisassembler_Option_PrintImmHex;
-    LLVMSetDisasmOptions(disassembler, options);
-    char buffer[256];
-    let(bytes, LLVMDisasmInstruction(disassembler, code.pointer, code.length, 0, buffer, array_length(buffer)));
-    unused(bytes);
-    // LLVMDisassembler_Option_AsmPrinterVarianto
-
-    trap();
-}
 
 fn String disassemble_binary(Arena* arena, DisassemblyArguments arguments)
 {
-    assert(arguments.binary.length);
-    String binary_path = strlit(BUILD_DIR "/my_binary_path");
-    FileWriteOptions options = {
-        .path = binary_path,
-        .content = arguments.binary,
-    };
-    file_write(options);
-#define common_disassembly_args \
-        string_to_c(arguments.objdump_path), \
-        "-D", \
-        string_to_c(binary_path), \
-        "-m", \
-        "i386:x86-64:intel", \
-        "-b", \
-        "binary", \
-        "--disassemble-zeroes"
+    unused(arena);
+    unused(arguments);
+    String result = {};
+    let(instruction_bytes, LLVMDisasmInstruction(arguments.context, arguments.binary.pointer, arguments.binary.length, 0, (char*)arguments.disassembly_buffer.pointer, arguments.disassembly_buffer.length));
 
-    char* arguments_gross[] = {
-        common_disassembly_args,
-        0,
-    };
-    CStringSlice arguments_gross_slice = array_to_slice(arguments_gross);
-
-    char* arguments_pruned[] = {
-        common_disassembly_args,
-        "--no-addresses",
-        "--no-show-raw-insn",
-        0,
-    };
-    CStringSlice arguments_pruned_slice = array_to_slice(arguments_pruned);
-    RunCommandOptions run_options = {
-        .stdout_stream = {
-            .buffer = arguments.disassembly_pipe_buffer->pointer,
-            .length = &arguments.disassembly_pipe_buffer->length,
-            .capacity = arguments.disassembly_pipe_buffer->capacity,
-            .policy = CHILD_PROCESS_STREAM_PIPE,
-        },
-        // .stderr_stream = {
-        //     .policy = CHILD_PROCESS_STREAM_IGNORE,
-        // },
-    };
-    RunCommandResult run_result = run_command(arena, arguments.gross ? arguments_gross_slice : arguments_pruned_slice, environment_pointer, run_options);
-    let(success, run_result.termination_kind == PROCESS_TERMINATION_EXIT && run_result.termination_code == 0);
-    if (!success)
+    if (instruction_bytes)
     {
-        todo();
-    }
+        result = cstr(arguments.disassembly_buffer.pointer);
 
-    String search_token = strlit("<.data>:\n");
-    String disassembly_string = { .pointer = arguments.disassembly_pipe_buffer->pointer, arguments.disassembly_pipe_buffer->length };
-    let(index, string_first_occurrence(disassembly_string, search_token));
-    assert(index != STRING_NO_MATCH);
-    String result = s_get_slice(u8, disassembly_string, index + search_token.length, disassembly_string.length);
-    if (result.pointer[0] == '\t')
-    {
+        assert(result.pointer[0] == '\t');
         result.pointer += 1;
         result.length -= 1;
-    }
-
-
-    if (!arguments.gross)
-    {
-        index = string_first_ch(result, '\n');
-        assert(index != STRING_NO_MATCH);
-        result = s_get_slice(u8, result, 0, index);
-
-        u8 buffer[256];
-        u64 buffer_i = 0;
-
-        u64 i = 0;
-        while (result.pointer[i] != '\n' && result.pointer[i] != ' ')
+        for (u64 i = 0; i < result.length; i += 1)
         {
-            i += 1;
-        }
-
-        String mnemonic = s_get_slice(u8, result, 0, i);
-        memcpy(buffer + buffer_i, mnemonic.pointer, mnemonic.length);
-        buffer_i += mnemonic.length;
-
-        if (i != result.length)
-        {
-            buffer[buffer_i] = ' ';
-            buffer_i += 1;
-
-            while (result.pointer[i] != '\n')
+            if (result.pointer[i] == '\t')
             {
-                while (result.pointer[i] == ' ')
-                {
-                    i += 1;
-                }
-
-                u64 operand_start = i;
-                while (result.pointer[i] != ',' && result.pointer[i] != '\n')
-                {
-                    i += 1;
-                }
-
-                u64 operand_end = i;
-
-                String operand = s_get_slice(u8, result, operand_start, operand_end);
-                memcpy(buffer + buffer_i, operand.pointer, operand.length);
-                buffer_i += operand.length;
-
-                u8 more_operands_left = result.pointer[i] == ',';
-                i += more_operands_left;
-
-                buffer[buffer_i] = ',';
-                buffer_i += more_operands_left;
-
-                buffer[buffer_i] = ' ';
-                buffer_i += more_operands_left;
+                result.pointer[i] = ' ';
             }
         }
-
-        result = arena_duplicate_string(arena, (String) { .pointer = buffer, .length = buffer_i } );
     }
-
+    
     return result;
 }
+
+// fn String disassemble_binary(Arena* arena, DisassemblyArguments arguments)
+// {
+//     assert(arguments.binary.length);
+//     String binary_path = strlit(BUILD_DIR "/my_binary_path");
+//     FileWriteOptions options = {
+//         .path = binary_path,
+//         .content = arguments.binary,
+//     };
+//     file_write(options);
+// #define common_disassembly_args \
+//         string_to_c(arguments.objdump_path), \
+//         "-D", \
+//         string_to_c(binary_path), \
+//         "-m", \
+//         "i386:x86-64:intel", \
+//         "-b", \
+//         "binary", \
+//         "--disassemble-zeroes"
+//
+//     char* arguments_gross[] = {
+//         common_disassembly_args,
+//         0,
+//     };
+//     CStringSlice arguments_gross_slice = array_to_slice(arguments_gross);
+//
+//     char* arguments_pruned[] = {
+//         common_disassembly_args,
+//         "--no-addresses",
+//         "--no-show-raw-insn",
+//         0,
+//     };
+//     CStringSlice arguments_pruned_slice = array_to_slice(arguments_pruned);
+//     RunCommandOptions run_options = {
+//         .stdout_stream = {
+//             .buffer = arguments.disassembly_pipe_buffer->pointer,
+//             .length = &arguments.disassembly_pipe_buffer->length,
+//             .capacity = arguments.disassembly_pipe_buffer->capacity,
+//             .policy = CHILD_PROCESS_STREAM_PIPE,
+//         },
+//         // .stderr_stream = {
+//         //     .policy = CHILD_PROCESS_STREAM_IGNORE,
+//         // },
+//     };
+//     RunCommandResult run_result = run_command(arena, arguments.gross ? arguments_gross_slice : arguments_pruned_slice, environment_pointer, run_options);
+//     let(success, run_result.termination_kind == PROCESS_TERMINATION_EXIT && run_result.termination_code == 0);
+//     if (!success)
+//     {
+//         todo();
+//     }
+//
+//     String search_token = strlit("<.data>:\n");
+//     String disassembly_string = { .pointer = arguments.disassembly_pipe_buffer->pointer, arguments.disassembly_pipe_buffer->length };
+//     let(index, string_first_occurrence(disassembly_string, search_token));
+//     assert(index != STRING_NO_MATCH);
+//     String result = s_get_slice(u8, disassembly_string, index + search_token.length, disassembly_string.length);
+//     if (result.pointer[0] == '\t')
+//     {
+//         result.pointer += 1;
+//         result.length -= 1;
+//     }
+//
+//
+//     if (!arguments.gross)
+//     {
+//         index = string_first_ch(result, '\n');
+//         assert(index != STRING_NO_MATCH);
+//         result = s_get_slice(u8, result, 0, index);
+//
+//         u8 buffer[256];
+//         u64 buffer_i = 0;
+//
+//         u64 i = 0;
+//         while (result.pointer[i] != '\n' && result.pointer[i] != ' ')
+//         {
+//             i += 1;
+//         }
+//
+//         String mnemonic = s_get_slice(u8, result, 0, i);
+//         memcpy(buffer + buffer_i, mnemonic.pointer, mnemonic.length);
+//         buffer_i += mnemonic.length;
+//
+//         if (i != result.length)
+//         {
+//             buffer[buffer_i] = ' ';
+//             buffer_i += 1;
+//
+//             while (result.pointer[i] != '\n')
+//             {
+//                 while (result.pointer[i] == ' ')
+//                 {
+//                     i += 1;
+//                 }
+//
+//                 u64 operand_start = i;
+//                 while (result.pointer[i] != ',' && result.pointer[i] != '\n')
+//                 {
+//                     i += 1;
+//                 }
+//
+//                 u64 operand_end = i;
+//
+//                 String operand = s_get_slice(u8, result, operand_start, operand_end);
+//                 memcpy(buffer + buffer_i, operand.pointer, operand.length);
+//                 buffer_i += operand.length;
+//
+//                 u8 more_operands_left = result.pointer[i] == ',';
+//                 i += more_operands_left;
+//
+//                 buffer[buffer_i] = ',';
+//                 buffer_i += more_operands_left;
+//
+//                 buffer[buffer_i] = ' ';
+//                 buffer_i += more_operands_left;
+//             }
+//         }
+//
+//         result = arena_duplicate_string(arena, (String) { .pointer = buffer, .length = buffer_i } );
+//     }
+//
+//     return result;
+// }
 
 STRUCT(CheckInstructionArguments)
 {
@@ -811,6 +830,7 @@ STRUCT(CheckInstructionArguments)
     u64* error_buffer_length;
     VirtualBuffer(u8)* disassembly_pipe_buffer;
     VirtualBuffer(u8)* clang_pipe_buffer;
+    LLVMDisasmContextRef disassembler;
     u64 check_text:1;
     u64 reserved:63;
 };
@@ -820,6 +840,7 @@ fn u64 check_instruction(Arena* arena, CheckInstructionArguments arguments)
     StringFormatter error_buffer = {
         .buffer = arguments.error_buffer,
     };
+    u8 disassembly_buffer[256];
 
     u8 result = 1;
 
@@ -828,7 +849,8 @@ fn u64 check_instruction(Arena* arena, CheckInstructionArguments arguments)
         DisassemblyArguments disassemble_arguments = {
             .binary = arguments.binary,
             .objdump_path = arguments.objdump_path,
-            .disassembly_pipe_buffer = arguments.disassembly_pipe_buffer,
+            .disassembly_buffer = (String)array_to_slice(disassembly_buffer),
+            .context = arguments.disassembler,
         };
         String disassembly_text = disassemble_binary(arena, disassemble_arguments);
 
@@ -906,15 +928,18 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
     vb_ensure_capacity(&disassembly_pipe_buffer, 1024*1024);
     VirtualBuffer(u8) clang_pipe_buffer = {};
     vb_ensure_capacity(&clang_pipe_buffer, 1024*1024);
+    llvm_initialize_macro(X86, _null_prefix_());
+    let(disassembler, LLVMCreateDisasm("x86_64-freestanding", 0, 0, 0, 0));
+    u64 options = LLVMDisassembler_Option_AsmPrinterVariant | LLVMDisassembler_Option_PrintImmHex;
+    if (!LLVMSetDisasmOptions(disassembler, options))
+    {
+        failed_execution();
+    }
 
     String clang_path = executable_find_in_path(arena, strlit("clang"), cstr(getenv("PATH")));
     assert(clang_path.pointer);
 
-#if USE_LLVM_OBJDUMP
-    String objdump_exe_name = strlit("llvm-objdump");
-#else
     String objdump_exe_name = strlit("objdump");
-#endif
     String objdump_path = executable_find_in_path(arena, objdump_exe_name, cstr(getenv("PATH")));
     assert(objdump_path.pointer);
 
@@ -1050,6 +1075,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                 .error_buffer = error_buffer_slice,
                                 .disassembly_pipe_buffer = &disassembly_pipe_buffer,
                                 .clang_pipe_buffer = &clang_pipe_buffer,
+                                .disassembler = disassembler,
                             };
                             u64 error_buffer_length = check_instruction(arena, check_args);
                             instance_index += 1;
@@ -1084,14 +1110,14 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                         {
                             s32 displacements[] = {
                                 0,
-                                0x10,
-                                0x10000000,
+                                10,
+                                10000000,
                             };
 
                             String displacement_strings[] = {
-                                strlit("0x0"),
-                                strlit("0x10"),
-                                strlit("0x10000000"),
+                                strlit("0"),
+                                strlit("10"),
+                                strlit("10000000"),
                             };
 
                             if (op_is_gpr_no_gpra(first_operand))
@@ -1111,8 +1137,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
 
                                         for (u32 displacement_index = 0; displacement_index < array_length(displacements); displacement_index += 1)
                                         {
-                                            u8 omit_displacement = displacements[displacement_index] == 0 && (gpr & 0b111) != REGISTER_X86_64_BP;
-                                            first_rm_strings[gpr][displacement_index] = format_displacement((String)array_to_slice(first_rm_buffer[gpr][displacement_index]), first_operand_rm_name, displacement_strings[displacement_index], first_operand_index, omit_displacement);
+                                            first_rm_strings[gpr][displacement_index] = format_displacement((String)array_to_slice(first_rm_buffer[gpr][displacement_index]), first_operand_rm_name, displacement_strings[displacement_index], first_operand_index);
                                         }
                                     }
                                 }
@@ -1133,8 +1158,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
 
                                             for (u32 displacement_index = 0; displacement_index < array_length(displacements); displacement_index += 1)
                                             {
-                                                u8 omit_displacement = displacements[displacement_index] == 0 && (gpr & 0b111) != REGISTER_X86_64_BP;
-                                                second_rm_strings[gpr][displacement_index] = format_displacement((String)array_to_slice(second_rm_buffer[gpr][displacement_index]), second_operand_rm_name, displacement_strings[displacement_index], second_operand_index, omit_displacement);
+                                                second_rm_strings[gpr][displacement_index] = format_displacement((String)array_to_slice(second_rm_buffer[gpr][displacement_index]), second_operand_rm_name, displacement_strings[displacement_index], second_operand_index);
                                             }
                                         }
                                     }
@@ -1182,6 +1206,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                     // .check_text = !first_is_rm && second_is_rm,
                                                     .disassembly_pipe_buffer = &disassembly_pipe_buffer,
                                                     .clang_pipe_buffer = &clang_pipe_buffer,
+                                                    .disassembler = disassembler,
                                                 };
                                                 u64 error_buffer_length = check_instruction(arena, check_args);
                                                 instance_index += 1;
@@ -1241,6 +1266,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                         // .check_text = !first_is_rm && second_is_rm,
                                                         .disassembly_pipe_buffer = &disassembly_pipe_buffer,
                                                         .clang_pipe_buffer = &clang_pipe_buffer,
+                                                        .disassembler = disassembler,
                                                     };
                                                     u64 error_buffer_length = check_instruction(arena, check_args);
                                                     instance_index += 1;
@@ -1302,6 +1328,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                         // .check_text = !first_is_rm && second_is_rm,
                                                         .disassembly_pipe_buffer = &disassembly_pipe_buffer,
                                                         .clang_pipe_buffer = &clang_pipe_buffer,
+                                                        .disassembler = disassembler,
                                                     };
                                                     u64 error_buffer_length = check_instruction(arena, check_args);
                                                     instance_index += 1;
@@ -1359,6 +1386,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                             .error_buffer = error_buffer_slice,
                                             .disassembly_pipe_buffer = &disassembly_pipe_buffer,
                                             .clang_pipe_buffer = &clang_pipe_buffer,
+                                            .disassembler = disassembler,
                                         };
                                         u64 error_buffer_length = check_instruction(arena, check_args);
                                         instance_index += 1;
@@ -1411,6 +1439,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                     .error_buffer = error_buffer_slice,
                                                     .disassembly_pipe_buffer = &disassembly_pipe_buffer,
                                                     .clang_pipe_buffer = &clang_pipe_buffer,
+                                                    .disassembler = disassembler,
                                                 };
                                                 u64 error_buffer_length = check_instruction(arena, check_args);
                                                 instance_index += 1;
@@ -1542,10 +1571,6 @@ int main(int argc, char** argv, char** envp)
     unused(argv);
 
     environment_pointer = envp;
-
-    String code = strlit("\x00\x00");
-
-    disassemble_binary_llvm(code);
 
     TestDataset dataset = construct_test_cases();
     Arena* arena = arena_initialize_default(MB(2));
