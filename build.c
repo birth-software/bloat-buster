@@ -445,6 +445,10 @@ fn void compile_program(Arena* arena, CompileOptions options)
         add_arg(string_to_c(options.output_path));
     }
 
+#ifdef __linux__
+    add_arg("-fuse-ld=mold");
+#endif
+
     add_arg("-Ibootstrap");
     add_arg("-Idependencies/stb");
 
@@ -634,6 +638,7 @@ fn void compile_program(Arena* arena, CompileOptions options)
 
 #ifndef _WIN32
     add_arg("-lm");
+    add_arg("-lLLVM");
 #endif
 
     switch (options.windowing_backend)

@@ -7,6 +7,8 @@
 #include <std/os.c>
 #include <std/virtual_buffer.c>
 
+#include <llvm-c/Disassembler.h>
+
 #define USE_LLVM_OBJDUMP 0
 
 global_variable char** environment_pointer;
@@ -652,6 +654,31 @@ STRUCT(DisassemblyArguments)
     u64 gross:1;
 };
 
+#define llvm_initialize_macro(target, fn_prefix) \
+    fn_prefix LLVMInitialize ## target ## Target();\
+    fn_prefix LLVMInitialize ## target ## TargetInfo();\
+    fn_prefix LLVMInitialize ## target ## TargetMC();\
+    fn_prefix LLVMInitialize ## target ## AsmParser();\
+    fn_prefix LLVMInitialize ## target ## AsmPrinter();\
+    fn_prefix LLVMInitialize ## target ## Disassembler()
+#define asjkd()
+llvm_initialize_macro(X86, extern void);
+
+fn void disassemble_binary_llvm(String code)
+{
+    unused(code);
+    llvm_initialize_macro(X86, asjkd());
+    let(disassembler, LLVMCreateDisasm("x86_64-freestanding", 0, 0, 0, 0));
+    u64 options = LLVMDisassembler_Option_AsmPrinterVariant | LLVMDisassembler_Option_PrintImmHex;
+    LLVMSetDisasmOptions(disassembler, options);
+    char buffer[256];
+    let(bytes, LLVMDisasmInstruction(disassembler, code.pointer, code.length, 0, buffer, array_length(buffer)));
+    unused(bytes);
+    // LLVMDisassembler_Option_AsmPrinterVarianto
+
+    trap();
+}
+
 fn String disassemble_binary(Arena* arena, DisassemblyArguments arguments)
 {
     assert(arguments.binary.length);
@@ -661,10 +688,6 @@ fn String disassemble_binary(Arena* arena, DisassemblyArguments arguments)
         .content = arguments.binary,
     };
     file_write(options);
-#if USE_LLVM_OBJDUMP
-#else
-#endif
-
 #define common_disassembly_args \
         string_to_c(arguments.objdump_path), \
         "-D", \
@@ -1519,6 +1542,10 @@ int main(int argc, char** argv, char** envp)
     unused(argv);
 
     environment_pointer = envp;
+
+    String code = strlit("\x00\x00");
+
+    disassemble_binary_llvm(code);
 
     TestDataset dataset = construct_test_cases();
     Arena* arena = arena_initialize_default(MB(2));
