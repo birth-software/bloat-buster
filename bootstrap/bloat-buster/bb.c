@@ -105,6 +105,13 @@ fn u8 gpr_is_extended(GPR_x86_64 gpr)
 
 #define X86_64_GPR_COUNT (16)
 
+STRUCT(Opcode)
+{
+    u8 length;
+    u8 bytes[4];
+    u8 extension;
+};
+
 STRUCT(InstructionEncoding)
 {
     u64 is_64_bit:1;
@@ -116,12 +123,12 @@ STRUCT(InstructionEncoding)
     u64 is_indirect2:1;
     u64 is_immediate:4;
     u64 is_16_mode:1;
+    u64 legacy_prefix_66:1;
     u64 immediate;
     // TODO: merge?
     s32 displacement;
     // TODO: support more bytes
-    u8 opcode;
-    u8 opcode_extension;
+    Opcode opcode;
     u8 reg1;
     u8 reg2;
     u8 sib_scale;
@@ -147,7 +154,7 @@ fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
 
         u8 operand_size_override_prefix = 0x66;
         *it = operand_size_override_prefix;
-        it += encoding.is_16_mode;
+        it += encoding.is_16_mode | encoding.legacy_prefix_66;
 
         u8 rex_base = 0x40;
         u8 rex_b = 0x01;
@@ -167,8 +174,18 @@ fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
         *it = rex;
         it += encode_rex;
 
-        *it = encoding.opcode;
+        // Opcode
+        *it = encoding.opcode.bytes[0];
         it += 1;
+
+        *it = encoding.opcode.bytes[1];
+        it += encoding.opcode.length > 1;
+
+        *it = encoding.opcode.bytes[2];
+        it += encoding.opcode.length > 2;
+
+        *it = encoding.opcode.bytes[3];
+        it += encoding.opcode.length > 3;
 
         u8 encode_modrm = encoding.is_reg1 | encoding.is_reg2;
 
@@ -183,7 +200,7 @@ fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
         u8 mod = ((is_displacement32 << 1) | is_displacement8) | ((is_reg_direct_addressing_mode << 1) | is_reg_direct_addressing_mode);
         // A register operand.
         // An opcode extension (in some instructions).
-        u8 reg_opcode = (reg_register & 0b111) | encoding.opcode_extension;
+        u8 reg_opcode = (reg_register & 0b111) | encoding.opcode.extension;
         // When mod is 00, 01, or 10: Specifies a memory address or a base register.
         // When mod is 11: Specifies a register.
         u8 rm = rm_register & 0b111;
@@ -240,6 +257,7 @@ fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
 typedef enum Mnemonic_x86_64
 {
     MNEMONIC_x86_64_adc,
+    MNEMONIC_x86_64_adcx,
     MNEMONIC_x86_64_add,
 } Mnemonic_x86_64;
 
@@ -248,17 +266,11 @@ fn String mnemonic_x86_64_to_string(Mnemonic_x86_64 mnemonic)
     switch (mnemonic)
     {
         case_to_name(MNEMONIC_x86_64_, adc);
+        case_to_name(MNEMONIC_x86_64_, adcx);
         case_to_name(MNEMONIC_x86_64_, add);
         default: return (String){};
     }
 }
-
-STRUCT(Opcode)
-{
-    u8 length;
-    u8 bytes[4];
-    u8 extension;
-};
 
 ENUM(OperandId, u8,
     op_none,
@@ -955,6 +967,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
         print("============================\n~~~~~~~ MNEMONIC {s} ~~~~~~~\n============================\n", mnemonic_string);
 
         u64 encoding_top = batch->encoding_offset + batch->encoding_count;
+        let(legacy_prefix_66, batch->mnemonic == MNEMONIC_x86_64_adcx);
 
         for (u64 encoding_index = batch->encoding_offset; encoding_index < encoding_top; encoding_index += 1)
         {
@@ -1057,10 +1070,10 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                 .is_indirect2 = 0,
                                 .is_immediate = 1 << imm_index,
                                 .is_16_mode = register_a_index == 1,
+                                .legacy_prefix_66 = legacy_prefix_66,
                                 .immediate = immediate,
                                 .displacement = 0,
-                                .opcode = encoding->opcode.bytes[0],
-                                .opcode_extension = encoding->opcode.extension,
+                                .opcode = encoding->opcode,
                                 .reg1 = 0,
                                 .reg2 = 0,
                                 .sib_scale = 0,
@@ -1188,10 +1201,10 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                     .is_indirect2 = 0,
                                                     .is_immediate = 0,
                                                     .is_16_mode = first_operand_index == 1,
+                                                    .legacy_prefix_66 = legacy_prefix_66,
                                                     .immediate = 0,
                                                     .displacement = 0,
-                                                    .opcode = encoding->opcode.bytes[0],
-                                                    .opcode_extension = encoding->opcode.extension,
+                                                    .opcode = encoding->opcode,
                                                     .reg1 = first_gpr,
                                                     .reg2 = second_gpr,
                                                     .sib_scale = 0,
@@ -1249,10 +1262,10 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                         .is_indirect2 = 0,
                                                         .is_immediate = 0,
                                                         .is_16_mode = first_operand_index == 1,
+                                                        .legacy_prefix_66 = legacy_prefix_66,
                                                         .immediate = 0,
                                                         .displacement = displacements[displacement_index],
-                                                        .opcode = encoding->opcode.bytes[0],
-                                                        .opcode_extension = encoding->opcode.extension,
+                                                        .opcode = encoding->opcode,
                                                         .reg1 = first_gpr,
                                                         .reg2 = second_gpr,
                                                         .sib_scale = 0,
@@ -1311,10 +1324,10 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                         .is_indirect2 = 1,
                                                         .is_immediate = 0,
                                                         .is_16_mode = first_operand_index == 1,
+                                                        .legacy_prefix_66 = legacy_prefix_66,
                                                         .immediate = 0,
                                                         .displacement = displacements[displacement_index],
-                                                        .opcode = encoding->opcode.bytes[0],
-                                                        .opcode_extension = encoding->opcode.extension,
+                                                        .opcode = encoding->opcode,
                                                         .reg1 = first_gpr,
                                                         .reg2 = second_gpr,
                                                         .sib_scale = 0,
@@ -1371,10 +1384,10 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                             .is_indirect2 = 0,
                                             .is_immediate = 1 << second_operand_index,
                                             .is_16_mode = first_operand_index == 1,
+                                            .legacy_prefix_66 = legacy_prefix_66,
                                             .immediate = immediate,
                                             .displacement = 0,
-                                            .opcode = encoding->opcode.bytes[0],
-                                            .opcode_extension = encoding->opcode.extension,
+                                            .opcode = encoding->opcode,
                                             .reg1 = first_gpr,
                                             .reg2 = 0,
                                             .sib_scale = 0,
@@ -1430,10 +1443,10 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                     .is_indirect2 = 0,
                                                     .is_immediate = 1 << second_operand_index,
                                                     .is_16_mode = first_operand_index == 1,
+                                                    .legacy_prefix_66 = legacy_prefix_66,
                                                     .immediate = immediate,
                                                     .displacement = displacements[displacement_index],
-                                                    .opcode = encoding->opcode.bytes[0],
-                                                    .opcode_extension = encoding->opcode.extension,
+                                                    .opcode = encoding->opcode,
                                                     .reg1 = first_gpr,
                                                     .reg2 = 0,
                                                     .sib_scale = 0,
@@ -1515,7 +1528,6 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
         *vb_add(&builder->encodings, 1) = encoding;\
     } while (0)
 
-#define batch_end() *vb_add(&batches, 1) = (Batch) { .mnemonic = batch_mnemonic, .encoding_offset = encoding_offset, .encoding_count = encodings.length - encoding_offset, }
 #define ops(...) ((Operands){ .values = { __VA_ARGS__ }, .count = array_length(((OperandId[]){ __VA_ARGS__ })), })
 #define extension_and_opcode(_opcode_extension, ...) ((Opcode) { .length = array_length(((u8[]){__VA_ARGS__})), .bytes = { __VA_ARGS__ }, _opcode_extension })
 #define opcode(...) ((Opcode) { .length = array_length(((u8[]){__VA_ARGS__})), .bytes = { __VA_ARGS__ } })
@@ -1557,12 +1569,25 @@ fn Opcode decrement_opcode(Opcode opcode)
     return result;
 }
 
-fn void encode_arithmetic_ex(TestBuilder* builder, Mnemonic_x86_64 mnemonic, ArithmeticOpcodes opcodes)
+fn Batch batch_start(TestBuilder* builder, Mnemonic_x86_64 mnemonic)
 {
     Batch batch = {
         .mnemonic = mnemonic,
         .encoding_offset = builder->encodings.length,
     };
+
+    return batch;
+}
+
+fn void batch_end(TestBuilder* builder, Batch batch)
+{
+    batch.encoding_count = builder->encodings.length - batch.encoding_offset;
+    *vb_add(&builder->batches, 1) = batch;
+}
+
+fn void encode_arithmetic_ex(TestBuilder* builder, Mnemonic_x86_64 mnemonic, ArithmeticOpcodes opcodes)
+{
+    Batch batch = batch_start(builder, mnemonic);
 
     Opcode ra_imm8 = decrement_opcode(opcodes.ra_imm);
     encode(ra_imm8,         ops(op_ra8,  op_imm8));
@@ -1592,17 +1617,28 @@ fn void encode_arithmetic_ex(TestBuilder* builder, Mnemonic_x86_64 mnemonic, Ari
     encode(opcodes.r_rm,    ops(op_r32, op_rm32));
     encode(opcodes.r_rm,    ops(op_r64, op_rm64));
 
-    batch.encoding_count = builder->encodings.length - batch.encoding_offset;
-    *vb_add(&builder->batches, 1) = batch;
+    batch_end(builder, batch);
+}
+
+fn void encode_adcx(TestBuilder* builder)
+{
+    Batch batch = batch_start(builder, MNEMONIC_x86_64_adcx);
+
+    encode(opcode(0x0f, 0x38, 0xf6), ops(op_r32, op_rm32));
+    encode(opcode(0x0f, 0x38, 0xf6), ops(op_r64, op_rm64));
+
+    batch_end(builder, batch);
 }
 
 #define encode_arithmetic(_mnemonic, ...) encode_arithmetic_ex(&builder, MNEMONIC_x86_64_ ## _mnemonic, (ArithmeticOpcodes) { __VA_ARGS__ })
+
 
 fn TestDataset construct_test_cases()
 {
     TestBuilder builder = {};
 
     encode_arithmetic(adc, .ra_imm = opcode(0x15), .rm_imm = extension_and_opcode(0x02, 0x81), .rm_imm8 = extension_and_opcode(0x02, 0x83), .rm_r = opcode(0x11), .r_rm = opcode(0x13));
+    encode_adcx(&builder);
     encode_arithmetic(add, .ra_imm = opcode(0x05), .rm_imm = extension_and_opcode(0x00, 0x81), .rm_imm8 = extension_and_opcode(0x00, 0x83), .rm_r = opcode(0x01), .r_rm = opcode(0x03));
 
     TestDataset result = {
