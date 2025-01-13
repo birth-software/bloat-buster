@@ -500,7 +500,7 @@ fn void compile_program(Arena* arena, CompileOptions options)
         add_arg("-march=native");
     }
 
-    // Inmutable options
+    // Immutable options
     switch (c_compiler)
     {
         case C_COMPILER_MSVC:

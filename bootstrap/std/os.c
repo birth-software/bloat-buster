@@ -1000,6 +1000,7 @@ fn u8 os_is_being_debugged()
 
 BB_NORETURN BB_COLD fn void os_exit(u32 exit_code)
 {
+    trap();
     if (exit_code != 0 && os_is_being_debugged())
     {
         trap();

@@ -123,7 +123,8 @@ STRUCT(InstructionEncoding)
     u64 is_indirect2:1;
     u64 is_immediate:4;
     u64 is_16_mode:1;
-    u64 legacy_prefix_66:1;
+    u64 prefix_66:1;
+    u64 prefix_f3:1;
     u64 immediate;
     // TODO: merge?
     s32 displacement;
@@ -141,20 +142,28 @@ STRUCT(InstructionEncoding)
 
 fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* const restrict encodings, u64 encoding_count)
 {
+    assert(encoding_count);
     u8 buffers[batch_element_count][max_instruction_byte_count];
     u8 instruction_lengths[batch_element_count];
 
+#if 0
     for (u32 i = 0; i < batch_element_count; i += 1)
+#else
+    for (u32 encoding_index = 0; encoding_index < encoding_count; encoding_index += 1)
+#endif
     {
-        InstructionEncoding encoding = encodings[i];
+        InstructionEncoding encoding = encodings[encoding_index];
     
-        const u8* const start = (const u8* const) &buffers[i];
-        u8* restrict local_buffer = (u8* restrict)&buffers[i];
+        const u8* const start = (const u8* const) &buffers[encoding_index];
+        u8* restrict local_buffer = (u8* restrict)&buffers[encoding_index];
         u8* restrict it = local_buffer;
 
         u8 operand_size_override_prefix = 0x66;
         *it = operand_size_override_prefix;
-        it += encoding.is_16_mode | encoding.legacy_prefix_66;
+        it += encoding.is_16_mode | encoding.prefix_66;
+
+        *it = 0xf3;
+        it += encoding.prefix_f3;
 
         u8 rex_base = 0x40;
         u8 rex_b = 0x01;
@@ -232,33 +241,41 @@ fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
         it += ((encoding.is_immediate & (1 << 3)) >> 3) * sizeof(u64);
 
         let_cast(u8, instruction_length, it - start);
-        instruction_lengths[i] = instruction_length;
+        instruction_lengths[encoding_index] = instruction_length;
     }
 
     u8* restrict it = output;
 
-    for (u32 i = 0; i < MIN(encoding_count, batch_element_count); i += 1)
+    for (u32 encoding_index = 0; encoding_index < MIN(encoding_count, batch_element_count); encoding_index += 1)
     {
-        let(instruction_length, instruction_lengths[i]);
+        let(instruction_length, instruction_lengths[encoding_index]);
 #if USE_MEMCPY
-        memcpy(it, &buffers[i], instruction_length);
+        memcpy(it, &buffers[encoding_index], instruction_length);
 #else
         for (u8 byte = 0; byte < instruction_length; byte += 1)
         {
-            it[byte] = buffers[i][byte];
+            it[byte] = buffers[encoding_index][byte];
         }
 #endif
         it += instruction_length;
     }
 
-    return it - output;
+    let(length, (u16)(it - output));
+    assert(it - output != 0);
+    assert(length);
+    return length;
 }
 
 typedef enum Mnemonic_x86_64
 {
     MNEMONIC_x86_64_adc,
-    MNEMONIC_x86_64_adcx,
+    MNEMONIC_x86_64_adcx, // adx
     MNEMONIC_x86_64_add,
+    MNEMONIC_x86_64_adox, // adx
+    MNEMONIC_x86_64_and,
+    MNEMONIC_x86_64_bsf,
+    MNEMONIC_x86_64_bsr,
+    MNEMONIC_x86_64_bswap,
 } Mnemonic_x86_64;
 
 fn String mnemonic_x86_64_to_string(Mnemonic_x86_64 mnemonic)
@@ -268,6 +285,11 @@ fn String mnemonic_x86_64_to_string(Mnemonic_x86_64 mnemonic)
         case_to_name(MNEMONIC_x86_64_, adc);
         case_to_name(MNEMONIC_x86_64_, adcx);
         case_to_name(MNEMONIC_x86_64_, add);
+        case_to_name(MNEMONIC_x86_64_, adox);
+        case_to_name(MNEMONIC_x86_64_, and);
+        case_to_name(MNEMONIC_x86_64_, bsf);
+        case_to_name(MNEMONIC_x86_64_, bsr);
+        case_to_name(MNEMONIC_x86_64_, bswap);
         default: return (String){};
     }
 }
@@ -857,6 +879,7 @@ fn u64 check_instruction(Arena* arena, CheckInstructionArguments arguments)
         .buffer = arguments.error_buffer,
     };
     u8 disassembly_buffer[256];
+    assert(arguments.binary.length);
 
     u8 result = 1;
 
@@ -879,6 +902,7 @@ fn u64 check_instruction(Arena* arena, CheckInstructionArguments arguments)
                 {
                     result = 0;
 
+                    formatter_append(&error_buffer, "Disassembly mismatch. Intended to assemble:\n\t{s}\nbut got from LLVM:\n\t{s}\n", arguments.text, disassembly_text);
                     break;
                 }
             }
@@ -887,7 +911,7 @@ fn u64 check_instruction(Arena* arena, CheckInstructionArguments arguments)
         if (!result)
         {
             formatter_append_string(&error_buffer, strlit("Failed to match correct output. Got:\n\t"));
-            todo();
+            assert(arguments.binary.length);
 
             for (u64 bin_i = 0; bin_i < arguments.binary.length; bin_i += 1)
             {
@@ -945,7 +969,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
     VirtualBuffer(u8) clang_pipe_buffer = {};
     vb_ensure_capacity(&clang_pipe_buffer, 1024*1024);
     llvm_initialize_macro(X86, _null_prefix_());
-    let(disassembler, LLVMCreateDisasm("x86_64-freestanding", 0, 0, 0, 0));
+    let(disassembler, LLVMCreateDisasmCPU("x86_64-freestanding", "znver4", 0, 0, 0, 0));
     u64 options = LLVMDisassembler_Option_AsmPrinterVariant | LLVMDisassembler_Option_PrintImmHex;
     if (!LLVMSetDisasmOptions(disassembler, options))
     {
@@ -967,7 +991,8 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
         print("============================\n~~~~~~~ MNEMONIC {s} ~~~~~~~\n============================\n", mnemonic_string);
 
         u64 encoding_top = batch->encoding_offset + batch->encoding_count;
-        let(legacy_prefix_66, batch->mnemonic == MNEMONIC_x86_64_adcx);
+        let(prefix_66, batch->mnemonic == MNEMONIC_x86_64_adcx);
+        let(prefix_f3, batch->mnemonic == MNEMONIC_x86_64_adox);
 
         for (u64 encoding_index = batch->encoding_offset; encoding_index < encoding_top; encoding_index += 1)
         {
@@ -1070,7 +1095,8 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                 .is_indirect2 = 0,
                                 .is_immediate = 1 << imm_index,
                                 .is_16_mode = register_a_index == 1,
-                                .legacy_prefix_66 = legacy_prefix_66,
+                                .prefix_66 = prefix_66,
+                                .prefix_f3 = prefix_f3,
                                 .immediate = immediate,
                                 .displacement = 0,
                                 .opcode = encoding->opcode,
@@ -1181,6 +1207,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                         }
                                     }
 
+                                    // Only test with rm_r and not r_rm with register direct addressing mode because it makes no sense otherwise
                                     if (first_is_rm)
                                     {
                                         for (GPR_x86_64 first_gpr = 0; first_gpr < first_operand_register_count; first_gpr += 1)
@@ -1201,7 +1228,8 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                     .is_indirect2 = 0,
                                                     .is_immediate = 0,
                                                     .is_16_mode = first_operand_index == 1,
-                                                    .legacy_prefix_66 = legacy_prefix_66,
+                                                    .prefix_66 = prefix_66,
+                                                    .prefix_f3 = prefix_f3,
                                                     .immediate = 0,
                                                     .displacement = 0,
                                                     .opcode = encoding->opcode,
@@ -1262,7 +1290,8 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                         .is_indirect2 = 0,
                                                         .is_immediate = 0,
                                                         .is_16_mode = first_operand_index == 1,
-                                                        .legacy_prefix_66 = legacy_prefix_66,
+                                                        .prefix_66 = prefix_66,
+                                                        .prefix_f3 = prefix_f3,
                                                         .immediate = 0,
                                                         .displacement = displacements[displacement_index],
                                                         .opcode = encoding->opcode,
@@ -1324,7 +1353,8 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                         .is_indirect2 = 1,
                                                         .is_immediate = 0,
                                                         .is_16_mode = first_operand_index == 1,
-                                                        .legacy_prefix_66 = legacy_prefix_66,
+                                                        .prefix_66 = prefix_66,
+                                                        .prefix_f3 = prefix_f3,
                                                         .immediate = 0,
                                                         .displacement = displacements[displacement_index],
                                                         .opcode = encoding->opcode,
@@ -1384,7 +1414,8 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                             .is_indirect2 = 0,
                                             .is_immediate = 1 << second_operand_index,
                                             .is_16_mode = first_operand_index == 1,
-                                            .legacy_prefix_66 = legacy_prefix_66,
+                                            .prefix_66 = prefix_66,
+                                            .prefix_f3 = prefix_f3,
                                             .immediate = immediate,
                                             .displacement = 0,
                                             .opcode = encoding->opcode,
@@ -1443,7 +1474,8 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                     .is_indirect2 = 0,
                                                     .is_immediate = 1 << second_operand_index,
                                                     .is_16_mode = first_operand_index == 1,
-                                                    .legacy_prefix_66 = legacy_prefix_66,
+                                                    .prefix_66 = prefix_66,
+                                                    .prefix_f3 = prefix_f3,
                                                     .immediate = immediate,
                                                     .displacement = displacements[displacement_index],
                                                     .opcode = encoding->opcode,
@@ -1620,9 +1652,9 @@ fn void encode_arithmetic_ex(TestBuilder* builder, Mnemonic_x86_64 mnemonic, Ari
     batch_end(builder, batch);
 }
 
-fn void encode_adcx(TestBuilder* builder)
+fn void encode_unsigned_add_flag(TestBuilder* builder, Mnemonic_x86_64 mnemonic)
 {
-    Batch batch = batch_start(builder, MNEMONIC_x86_64_adcx);
+    Batch batch = batch_start(builder, mnemonic);
 
     encode(opcode(0x0f, 0x38, 0xf6), ops(op_r32, op_rm32));
     encode(opcode(0x0f, 0x38, 0xf6), ops(op_r64, op_rm64));
@@ -1630,16 +1662,38 @@ fn void encode_adcx(TestBuilder* builder)
     batch_end(builder, batch);
 }
 
-#define encode_arithmetic(_mnemonic, ...) encode_arithmetic_ex(&builder, MNEMONIC_x86_64_ ## _mnemonic, (ArithmeticOpcodes) { __VA_ARGS__ })
+typedef enum BitScanKind
+{
+    BIT_SCAN_FORWARD = 0,
+    BIT_SCAN_BACKWARD = 1,
+} BitScanKind;
 
+fn void encode_bit_scan(TestBuilder* builder, BitScanKind bit_scan_kind)
+{
+    let(mnemonic, MNEMONIC_x86_64_bsf + bit_scan_kind);
+    Batch batch = batch_start(builder, mnemonic);
+
+    let(opcode, opcode(0x0f, 0xbc | bit_scan_kind));
+    encode(opcode, ops(op_r16, op_rm16));
+    encode(opcode, ops(op_r32, op_rm32));
+    encode(opcode, ops(op_r64, op_rm64));
+
+    batch_end(builder, batch);
+}
+
+#define encode_arithmetic(_mnemonic, ...) encode_arithmetic_ex(&builder, MNEMONIC_x86_64_ ## _mnemonic, (ArithmeticOpcodes) { __VA_ARGS__ })
 
 fn TestDataset construct_test_cases()
 {
     TestBuilder builder = {};
 
     encode_arithmetic(adc, .ra_imm = opcode(0x15), .rm_imm = extension_and_opcode(0x02, 0x81), .rm_imm8 = extension_and_opcode(0x02, 0x83), .rm_r = opcode(0x11), .r_rm = opcode(0x13));
-    encode_adcx(&builder);
+    encode_unsigned_add_flag(&builder, MNEMONIC_x86_64_adcx);
     encode_arithmetic(add, .ra_imm = opcode(0x05), .rm_imm = extension_and_opcode(0x00, 0x81), .rm_imm8 = extension_and_opcode(0x00, 0x83), .rm_r = opcode(0x01), .r_rm = opcode(0x03));
+    encode_unsigned_add_flag(&builder, MNEMONIC_x86_64_adox);
+    encode_arithmetic(and, .ra_imm = opcode(0x25), .rm_imm = extension_and_opcode(0x04, 0x81), .rm_imm8 = extension_and_opcode(0x04, 0x83), .rm_r = opcode(0x21), .r_rm = opcode(0x23));
+    encode_bit_scan(&builder, BIT_SCAN_FORWARD); 
+    encode_bit_scan(&builder, BIT_SCAN_BACKWARD); 
 
     TestDataset result = {
         .batches = builder.batches.pointer,
