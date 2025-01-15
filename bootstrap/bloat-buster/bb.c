@@ -266,6 +266,15 @@ fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
     return length;
 }
 
+#include <immintrin.h>
+STRUCT(EncodingBatch)
+{
+};
+
+u16 encode(u8* restrict buffer, EncodingBatch* restrict batch)
+{
+}
+
 typedef enum Mnemonic_x86_64
 {
     MNEMONIC_x86_64_adc,
@@ -369,6 +378,48 @@ STRUCT(Encoding)
     Opcode opcode;
 };
 decl_vb(Encoding);
+
+STRUCT(Encoding2)
+{
+    // Values
+    union
+    {
+        union
+        {
+            s8 cb;
+            s16 cw;
+            s32 cd;
+            s32 cp_offset;
+            s64 co;
+            s64 ct_offset;
+        } code_offset;
+        union
+        {
+            u8 ib;
+            u16 iw;
+            u32 id;
+            u64 io;
+        } immediate;
+    };
+    u16 segment_selector;
+    u32 digit:3;
+
+    // Encoding description
+    u32 np:1;
+    u32 nfx:1;
+    u32 rex_w:1;
+    u32 is_digit:1;
+    u32 reg:1;
+    u32 is_code_offset:6;
+    u32 is_immediate:4;
+    u32 is_plus_reg:4;
+};
+
+fn u8 encode_instruction(u8* restrict buffer, Encoding2 encoding)
+{
+    u8* restrict it = buffer;
+
+}
 
 STRUCT(Batch)
 {
