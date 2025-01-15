@@ -1008,7 +1008,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
     VirtualBuffer(u8) clang_pipe_buffer = {};
     vb_ensure_capacity(&clang_pipe_buffer, 1024*1024);
     llvm_initialize_macro(X86, _null_prefix_());
-    let(disassembler, LLVMCreateDisasmCPU("x86_64-freestanding", "znver4", 0, 0, 0, 0));
+    let(disassembler, LLVMCreateDisasmCPU("x86_64-freestanding", "znver5", 0, 0, 0, 0));
     u64 options = LLVMDisassembler_Option_AsmPrinterVariant | LLVMDisassembler_Option_PrintImmHex;
     if (!LLVMSetDisasmOptions(disassembler, options))
     {
