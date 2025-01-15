@@ -209,11 +209,11 @@ fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
         u8 mod = ((is_displacement32 << 1) | is_displacement8) | ((is_reg_direct_addressing_mode << 1) | is_reg_direct_addressing_mode);
         // A register operand.
         // An opcode extension (in some instructions).
-        u8 reg_opcode = (reg_register & 0b111) | encoding.opcode.extension;
+        u8 reg = (reg_register & 0b111) | encoding.opcode.extension;
         // When mod is 00, 01, or 10: Specifies a memory address or a base register.
         // When mod is 11: Specifies a register.
         u8 rm = rm_register & 0b111;
-        u8 modrm = (mod << 6) | (reg_opcode << 3) | rm;
+        u8 modrm = (mod << 6) | (reg << 3) | rm;
         *it = modrm;
         it += encode_modrm;
 
@@ -276,6 +276,23 @@ typedef enum Mnemonic_x86_64
     MNEMONIC_x86_64_bsf,
     MNEMONIC_x86_64_bsr,
     MNEMONIC_x86_64_bswap,
+    MNEMONIC_x86_64_bt,
+    MNEMONIC_x86_64_btc,
+    MNEMONIC_x86_64_btr,
+    MNEMONIC_x86_64_bts,
+    MNEMONIC_x86_64_call,
+    // Same opcode
+    MNEMONIC_x86_64_cbw,
+    MNEMONIC_x86_64_cwde,
+    MNEMONIC_x86_64_cdqe,
+    // Same opcode
+    MNEMONIC_x86_64_cwd,
+    MNEMONIC_x86_64_cdq,
+    MNEMONIC_x86_64_cqo,
+
+    //...
+    Mnemonic_x86_64_clc,
+    Mnemonic_x86_64_cld,
 } Mnemonic_x86_64;
 
 fn String mnemonic_x86_64_to_string(Mnemonic_x86_64 mnemonic)
@@ -556,6 +573,28 @@ fn String gpr_to_string(GPR_x86_64 gpr, u8 index, u8 switcher)
     };
 
     return (unlikely(((gpr & 0b100) >> 2) & ((switcher != 0) & (index == 0)))) ? alt_register_names[gpr & 0b11] : gpr_names[gpr][index];
+}
+
+fn String format_instruction1(String buffer, String mnemonic, String op)
+{
+    u64 i = 0;
+
+    memcpy(buffer.pointer + i, mnemonic.pointer, mnemonic.length);
+    i += mnemonic.length;
+
+    buffer.pointer[i] = ' ';
+    i += 1;
+
+    memcpy(buffer.pointer + i, op.pointer, op.length);
+    i += op.length;
+
+    assert(i < buffer.length);
+    buffer.pointer[i] = 0;
+
+    return (String) {
+        .pointer = buffer.pointer,
+        .length = i,
+    };
 }
 
 fn String format_instruction2(String buffer, String mnemonic, String op1, String op2)
@@ -983,6 +1022,12 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
     String objdump_path = executable_find_in_path(arena, objdump_exe_name, cstr(getenv("PATH")));
     assert(objdump_path.pointer);
 
+    global_variable const s32 displacements[] = {
+        0,
+        10,
+        10000000,
+    };
+
     for (u64 batch_index = 0; batch_index < dataset.batch_count; batch_index += 1)
     {
         let(batch, &dataset.batches[batch_index]);
@@ -1148,15 +1193,85 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                 {
                     case 1:
                         {
-                            todo();
+                            if (op_is_gpr_no_gpra(first_operand))
+                            {
+                                u8 first_operand_index = op_gpr_get_index(first_operand);
+                                GPR_x86_64 first_operand_register_count = (unlikely(first_operand_index == 0)) ? (X86_64_GPR_COUNT / 2) : X86_64_GPR_COUNT;
+                                u8 first_rm_buffer[X86_64_GPR_COUNT][array_length(displacements)][32];
+                                String first_rm_strings[X86_64_GPR_COUNT][array_length(displacements)];
+                                u8 first_is_rm = op_is_rm(first_operand);
+
+                                if (first_is_rm)
+                                {
+                                    unused(first_rm_buffer);
+                                    unused(first_rm_strings);
+                                    todo();
+                                }
+
+                                for (GPR_x86_64 first_gpr = 0; first_gpr < first_operand_register_count; first_gpr += 1)
+                                {
+                                    String first_operand_string = gpr_to_string(first_gpr, first_operand_index, 0);
+                                    String instruction_string = format_instruction1(instruction_text_buffer_slice, mnemonic_string, first_operand_string);
+                                    InstructionEncoding batch_encoding = {
+                                        .is_64_bit = first_operand_index == 3,
+                                        .has_rex = 0,
+                                        .scaled_index_register = 0,
+                                        .is_reg1 = 1,
+                                        .is_reg2 = 0,
+                                        .is_indirect1 = 0,
+                                        .is_indirect2 = 0,
+                                        .is_immediate = 0,
+                                        .is_16_mode = first_operand_index == 1,
+                                        .prefix_66 = prefix_66,
+                                        .prefix_f3 = prefix_f3,
+                                        .immediate = 0,
+                                        .displacement = 0,
+                                        .opcode = encoding->opcode,
+                                        .reg1 = first_gpr,
+                                        .reg2 = 0,
+                                        .sib_scale = 0,
+                                        .sib_index = 0,
+                                        .sib_base = 0,
+                                    };
+                                    u16 length = encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1);
+                                    String instruction_bytes = {
+                                        .pointer = instruction_binary_buffer,
+                                        .length = length,
+                                    };
+                                    CheckInstructionArguments check_args = {
+                                        .clang_path = clang_path,
+                                        .objdump_path = objdump_path,
+                                        .text = instruction_string,
+                                        .binary = instruction_bytes,
+                                        .error_buffer = error_buffer_slice,
+                                        // .check_text = !first_is_rm && second_is_rm,
+                                        .disassembly_pipe_buffer = &disassembly_pipe_buffer,
+                                        .clang_pipe_buffer = &clang_pipe_buffer,
+                                        .disassembler = disassembler,
+                                    };
+                                    u64 error_buffer_length = check_instruction(arena, check_args);
+                                    instance_index += 1;
+                                    let(first_failure, failure_count == 0);
+                                    failure_count = error_buffer_length != 0;
+                                    String error_string = { .pointer = error_buffer, .length = error_buffer_length };
+                                    if (error_buffer_length != 0)
+                                    {
+                                        print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                    }
+                                }
+
+                                if (first_is_rm)
+                                {
+                                    todo();
+                                }
+                            }
+                            else
+                            {
+                                todo();
+                            }
                         } break;
                     case 2:
                         {
-                            s32 displacements[] = {
-                                0,
-                                10,
-                                10000000,
-                            };
 
                             String displacement_strings[] = {
                                 strlit("0"),
@@ -1662,6 +1777,19 @@ fn void encode_unsigned_add_flag(TestBuilder* builder, Mnemonic_x86_64 mnemonic)
     batch_end(builder, batch);
 }
 
+// TODO: undo abstraction?
+fn void encode_bit_instruction(TestBuilder* builder, Mnemonic_x86_64 mnemonic, u8 opcode_byte)
+{
+    Batch batch = batch_start(builder, mnemonic);
+
+    let(opcode, opcode(0x0f, opcode_byte));
+    encode(opcode, ops(op_r16, op_rm16));
+    encode(opcode, ops(op_r32, op_rm32));
+    encode(opcode, ops(op_r64, op_rm64));
+
+    batch_end(builder, batch);
+}
+
 typedef enum BitScanKind
 {
     BIT_SCAN_FORWARD = 0,
@@ -1671,12 +1799,19 @@ typedef enum BitScanKind
 fn void encode_bit_scan(TestBuilder* builder, BitScanKind bit_scan_kind)
 {
     let(mnemonic, MNEMONIC_x86_64_bsf + bit_scan_kind);
+    let(opcode_byte, 0xbc | bit_scan_kind);
+    encode_bit_instruction(builder, mnemonic, opcode_byte);
+}
+
+fn void encode_bswap(TestBuilder* builder)
+{
+    let(mnemonic, MNEMONIC_x86_64_bswap);
     Batch batch = batch_start(builder, mnemonic);
 
-    let(opcode, opcode(0x0f, 0xbc | bit_scan_kind));
-    encode(opcode, ops(op_r16, op_rm16));
-    encode(opcode, ops(op_r32, op_rm32));
-    encode(opcode, ops(op_r64, op_rm64));
+    let(opcode, opcode(0x0f, 0xc8));
+
+    encode(opcode, ops(op_r32));
+    encode(opcode, ops(op_r64));
 
     batch_end(builder, batch);
 }
@@ -1694,6 +1829,7 @@ fn TestDataset construct_test_cases()
     encode_arithmetic(and, .ra_imm = opcode(0x25), .rm_imm = extension_and_opcode(0x04, 0x81), .rm_imm8 = extension_and_opcode(0x04, 0x83), .rm_r = opcode(0x21), .r_rm = opcode(0x23));
     encode_bit_scan(&builder, BIT_SCAN_FORWARD); 
     encode_bit_scan(&builder, BIT_SCAN_BACKWARD); 
+    encode_bswap(&builder);
 
     TestDataset result = {
         .batches = builder.batches.pointer,
