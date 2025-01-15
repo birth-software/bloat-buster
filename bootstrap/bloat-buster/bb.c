@@ -731,7 +731,6 @@ STRUCT(DisassemblyResult)
 STRUCT(DisassemblyArguments)
 {
     String binary;
-    String objdump_path;
     LLVMDisasmContextRef context;
     String disassembly_buffer;
     u64 gross:1;
@@ -775,137 +774,13 @@ fn String disassemble_binary(Arena* arena, DisassemblyArguments arguments)
     return result;
 }
 
-// fn String disassemble_binary(Arena* arena, DisassemblyArguments arguments)
-// {
-//     assert(arguments.binary.length);
-//     String binary_path = strlit(BUILD_DIR "/my_binary_path");
-//     FileWriteOptions options = {
-//         .path = binary_path,
-//         .content = arguments.binary,
-//     };
-//     file_write(options);
-// #define common_disassembly_args \
-//         string_to_c(arguments.objdump_path), \
-//         "-D", \
-//         string_to_c(binary_path), \
-//         "-m", \
-//         "i386:x86-64:intel", \
-//         "-b", \
-//         "binary", \
-//         "--disassemble-zeroes"
-//
-//     char* arguments_gross[] = {
-//         common_disassembly_args,
-//         0,
-//     };
-//     CStringSlice arguments_gross_slice = array_to_slice(arguments_gross);
-//
-//     char* arguments_pruned[] = {
-//         common_disassembly_args,
-//         "--no-addresses",
-//         "--no-show-raw-insn",
-//         0,
-//     };
-//     CStringSlice arguments_pruned_slice = array_to_slice(arguments_pruned);
-//     RunCommandOptions run_options = {
-//         .stdout_stream = {
-//             .buffer = arguments.disassembly_pipe_buffer->pointer,
-//             .length = &arguments.disassembly_pipe_buffer->length,
-//             .capacity = arguments.disassembly_pipe_buffer->capacity,
-//             .policy = CHILD_PROCESS_STREAM_PIPE,
-//         },
-//         // .stderr_stream = {
-//         //     .policy = CHILD_PROCESS_STREAM_IGNORE,
-//         // },
-//     };
-//     RunCommandResult run_result = run_command(arena, arguments.gross ? arguments_gross_slice : arguments_pruned_slice, environment_pointer, run_options);
-//     let(success, run_result.termination_kind == PROCESS_TERMINATION_EXIT && run_result.termination_code == 0);
-//     if (!success)
-//     {
-//         todo();
-//     }
-//
-//     String search_token = strlit("<.data>:\n");
-//     String disassembly_string = { .pointer = arguments.disassembly_pipe_buffer->pointer, arguments.disassembly_pipe_buffer->length };
-//     let(index, string_first_occurrence(disassembly_string, search_token));
-//     assert(index != STRING_NO_MATCH);
-//     String result = s_get_slice(u8, disassembly_string, index + search_token.length, disassembly_string.length);
-//     if (result.pointer[0] == '\t')
-//     {
-//         result.pointer += 1;
-//         result.length -= 1;
-//     }
-//
-//
-//     if (!arguments.gross)
-//     {
-//         index = string_first_ch(result, '\n');
-//         assert(index != STRING_NO_MATCH);
-//         result = s_get_slice(u8, result, 0, index);
-//
-//         u8 buffer[256];
-//         u64 buffer_i = 0;
-//
-//         u64 i = 0;
-//         while (result.pointer[i] != '\n' && result.pointer[i] != ' ')
-//         {
-//             i += 1;
-//         }
-//
-//         String mnemonic = s_get_slice(u8, result, 0, i);
-//         memcpy(buffer + buffer_i, mnemonic.pointer, mnemonic.length);
-//         buffer_i += mnemonic.length;
-//
-//         if (i != result.length)
-//         {
-//             buffer[buffer_i] = ' ';
-//             buffer_i += 1;
-//
-//             while (result.pointer[i] != '\n')
-//             {
-//                 while (result.pointer[i] == ' ')
-//                 {
-//                     i += 1;
-//                 }
-//
-//                 u64 operand_start = i;
-//                 while (result.pointer[i] != ',' && result.pointer[i] != '\n')
-//                 {
-//                     i += 1;
-//                 }
-//
-//                 u64 operand_end = i;
-//
-//                 String operand = s_get_slice(u8, result, operand_start, operand_end);
-//                 memcpy(buffer + buffer_i, operand.pointer, operand.length);
-//                 buffer_i += operand.length;
-//
-//                 u8 more_operands_left = result.pointer[i] == ',';
-//                 i += more_operands_left;
-//
-//                 buffer[buffer_i] = ',';
-//                 buffer_i += more_operands_left;
-//
-//                 buffer[buffer_i] = ' ';
-//                 buffer_i += more_operands_left;
-//             }
-//         }
-//
-//         result = arena_duplicate_string(arena, (String) { .pointer = buffer, .length = buffer_i } );
-//     }
-//
-//     return result;
-// }
-
 STRUCT(CheckInstructionArguments)
 {
-    String objdump_path;
     String clang_path;
     String text;
     String binary;
     String error_buffer;
     u64* error_buffer_length;
-    VirtualBuffer(u8)* disassembly_pipe_buffer;
     VirtualBuffer(u8)* clang_pipe_buffer;
     LLVMDisasmContextRef disassembler;
     u64 check_text:1;
@@ -926,7 +801,6 @@ fn u64 check_instruction(Arena* arena, CheckInstructionArguments arguments)
     {
         DisassemblyArguments disassemble_arguments = {
             .binary = arguments.binary,
-            .objdump_path = arguments.objdump_path,
             .disassembly_buffer = (String)array_to_slice(disassembly_buffer),
             .context = arguments.disassembler,
         };
@@ -1003,8 +877,6 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
     String instruction_text_buffer_slice = array_to_slice(instruction_text_buffer);
     u8 error_buffer[4096];
     String error_buffer_slice = array_to_slice(error_buffer);
-    VirtualBuffer(u8) disassembly_pipe_buffer = {};
-    vb_ensure_capacity(&disassembly_pipe_buffer, 1024*1024);
     VirtualBuffer(u8) clang_pipe_buffer = {};
     vb_ensure_capacity(&clang_pipe_buffer, 1024*1024);
     llvm_initialize_macro(X86, _null_prefix_());
@@ -1017,10 +889,6 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
 
     String clang_path = executable_find_in_path(arena, strlit("clang"), cstr(getenv("PATH")));
     assert(clang_path.pointer);
-
-    String objdump_exe_name = strlit("objdump");
-    String objdump_path = executable_find_in_path(arena, objdump_exe_name, cstr(getenv("PATH")));
-    assert(objdump_path.pointer);
 
     global_variable const s32 displacements[] = {
         0,
@@ -1158,11 +1026,9 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                             };
                             CheckInstructionArguments check_args = {
                                 .clang_path = clang_path,
-                                .objdump_path = objdump_path,
                                 .text = instruction_string,
                                 .binary = instruction_bytes,
                                 .error_buffer = error_buffer_slice,
-                                .disassembly_pipe_buffer = &disassembly_pipe_buffer,
                                 .clang_pipe_buffer = &clang_pipe_buffer,
                                 .disassembler = disassembler,
                             };
@@ -1240,12 +1106,10 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                     };
                                     CheckInstructionArguments check_args = {
                                         .clang_path = clang_path,
-                                        .objdump_path = objdump_path,
                                         .text = instruction_string,
                                         .binary = instruction_bytes,
                                         .error_buffer = error_buffer_slice,
                                         // .check_text = !first_is_rm && second_is_rm,
-                                        .disassembly_pipe_buffer = &disassembly_pipe_buffer,
                                         .clang_pipe_buffer = &clang_pipe_buffer,
                                         .disassembler = disassembler,
                                     };
@@ -1361,12 +1225,10 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                 };
                                                 CheckInstructionArguments check_args = {
                                                     .clang_path = clang_path,
-                                                    .objdump_path = objdump_path,
                                                     .text = instruction_string,
                                                     .binary = instruction_bytes,
                                                     .error_buffer = error_buffer_slice,
                                                     // .check_text = !first_is_rm && second_is_rm,
-                                                    .disassembly_pipe_buffer = &disassembly_pipe_buffer,
                                                     .clang_pipe_buffer = &clang_pipe_buffer,
                                                     .disassembler = disassembler,
                                                 };
@@ -1423,12 +1285,10 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                     };
                                                     CheckInstructionArguments check_args = {
                                                         .clang_path = clang_path,
-                                                        .objdump_path = objdump_path,
                                                         .text = instruction_string,
                                                         .binary = instruction_bytes,
                                                         .error_buffer = error_buffer_slice,
                                                         // .check_text = !first_is_rm && second_is_rm,
-                                                        .disassembly_pipe_buffer = &disassembly_pipe_buffer,
                                                         .clang_pipe_buffer = &clang_pipe_buffer,
                                                         .disassembler = disassembler,
                                                     };
@@ -1486,12 +1346,10 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                     };
                                                     CheckInstructionArguments check_args = {
                                                         .clang_path = clang_path,
-                                                        .objdump_path = objdump_path,
                                                         .text = instruction_string,
                                                         .binary = instruction_bytes,
                                                         .error_buffer = error_buffer_slice,
                                                         // .check_text = !first_is_rm && second_is_rm,
-                                                        .disassembly_pipe_buffer = &disassembly_pipe_buffer,
                                                         .clang_pipe_buffer = &clang_pipe_buffer,
                                                         .disassembler = disassembler,
                                                     };
@@ -1552,11 +1410,9 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                         };
                                         CheckInstructionArguments check_args = {
                                             .clang_path = clang_path,
-                                            .objdump_path = objdump_path,
                                             .text = instruction_string,
                                             .binary = instruction_bytes,
                                             .error_buffer = error_buffer_slice,
-                                            .disassembly_pipe_buffer = &disassembly_pipe_buffer,
                                             .clang_pipe_buffer = &clang_pipe_buffer,
                                             .disassembler = disassembler,
                                         };
@@ -1607,11 +1463,9 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                 };
                                                 CheckInstructionArguments check_args = {
                                                     .clang_path = clang_path,
-                                                    .objdump_path = objdump_path,
                                                     .text = instruction_string,
                                                     .binary = instruction_bytes,
                                                     .error_buffer = error_buffer_slice,
-                                                    .disassembly_pipe_buffer = &disassembly_pipe_buffer,
                                                     .clang_pipe_buffer = &clang_pipe_buffer,
                                                     .disassembler = disassembler,
                                                 };
