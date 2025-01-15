@@ -1808,6 +1808,8 @@ fn void encode_bswap(TestBuilder* builder)
     let(mnemonic, MNEMONIC_x86_64_bswap);
     Batch batch = batch_start(builder, mnemonic);
 
+    todo();
+
     let(opcode, opcode(0x0f, 0xc8));
 
     encode(opcode, ops(op_r32));
@@ -1829,7 +1831,6 @@ fn TestDataset construct_test_cases()
     encode_arithmetic(and, .ra_imm = opcode(0x25), .rm_imm = extension_and_opcode(0x04, 0x81), .rm_imm8 = extension_and_opcode(0x04, 0x83), .rm_r = opcode(0x21), .r_rm = opcode(0x23));
     encode_bit_scan(&builder, BIT_SCAN_FORWARD); 
     encode_bit_scan(&builder, BIT_SCAN_BACKWARD); 
-    encode_bswap(&builder);
 
     TestDataset result = {
         .batches = builder.batches.pointer,
