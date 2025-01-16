@@ -267,12 +267,85 @@ fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
 }
 
 #include <immintrin.h>
-STRUCT(EncodingBatch)
+typedef u64 Bitset;
+typedef enum LegacyPrefix
 {
+    LEGACY_PREFIX_F0,
+    LEGACY_PREFIX_F2,
+    LEGACY_PREFIX_F3,
+    LEGACY_PREFIX_2E,
+    LEGACY_PREFIX_36,
+    LEGACY_PREFIX_3E,
+    LEGACY_PREFIX_26,
+    LEGACY_PREFIX_64,
+    LEGACY_PREFIX_65,
+    LEGACY_PREFIX_66,
+    LEGACY_PREFIX_67,
+    LEGACY_PREFIX_COUNT,
+} LegacyPrefix;
+
+STRUCT(GPRMask)
+{
+    Bitset mask[2];
 };
 
-u16 encode(u8* restrict buffer, EncodingBatch* restrict batch)
+STRUCT(EncodingBatch)
 {
+    Bitset legacy_prefixes[LEGACY_PREFIX_COUNT];
+    Bitset is_indirect[2];
+    Bitset is_register[2];
+    GPRMask register_mask[2];
+};
+
+__m512 encode(u8* restrict buffer, EncodingBatch* restrict batch)
+{
+    unused(buffer);
+    u8 legacy_prefix_bytes[] = {
+        [LEGACY_PREFIX_F0] = 0xf0,
+        [LEGACY_PREFIX_F2] = 0xf2,
+        [LEGACY_PREFIX_F3] = 0xf3,
+        [LEGACY_PREFIX_2E] = 0x2e,
+        [LEGACY_PREFIX_36] = 0x36,
+        [LEGACY_PREFIX_3E] = 0x3e,
+        [LEGACY_PREFIX_26] = 0x26,
+        [LEGACY_PREFIX_64] = 0x64,
+        [LEGACY_PREFIX_65] = 0x65,
+        [LEGACY_PREFIX_66] = 0x66,
+        [LEGACY_PREFIX_67] = 0x67,
+    };
+
+    __m512 legacy_prefixes = _mm512_setzero();
+
+    for (LegacyPrefix prefix = 0; prefix < LEGACY_PREFIX_COUNT; prefix += 1)
+    {
+        __mmask64 mask = _cvtu64_mask64(batch->legacy_prefixes[prefix]);
+        __m512 prefix_v = _mm512_set1_epi8(legacy_prefix_bytes[prefix]);
+        legacy_prefixes = _mm512_mask_mov_epi8(legacy_prefixes, mask, prefix_v);
+    }
+
+    for (u32 i = 0; i < 2; i += 1)
+    {
+        __mmask64 mask = _cvtu64_mask64(batch->is_indirect[i]);
+    }
+    // u8 rex_base = 0x40;
+    // u8 rex_b = 0x01;
+    // u8 rex_x = 0x02;
+    // u8 rex_r = 0x04;
+    // u8 rex_w = 0x08;
+    // u8 is_reg_direct_addressing_mode = !(encoding.is_indirect1 | encoding.is_indirect2);
+    // u8 reg_register = is_reg_direct_addressing_mode ? encoding.reg2 : (encoding.is_indirect1 ? encoding.reg2 : encoding.reg1);
+    // u8 rm_register = is_reg_direct_addressing_mode ? encoding.reg1 : (encoding.is_indirect1 ? encoding.reg1 : encoding.reg2);
+    // u8 byte_rex_b = rex_b * gpr_is_extended(rm_register);
+    // u8 byte_rex_x = rex_x * encoding.scaled_index_register;
+    // u8 byte_rex_r = rex_r * gpr_is_extended(reg_register); 
+    // u8 byte_rex_w = rex_w * encoding.is_64_bit;
+    // u8 byte_rex = (byte_rex_b | byte_rex_x) | (byte_rex_r | byte_rex_w);
+    // u8 rex = (rex_base | byte_rex);
+    // u8 encode_rex = byte_rex != 0;
+    // *it = rex;
+    // it += encode_rex;
+
+    return result;
 }
 
 typedef enum Mnemonic_x86_64
@@ -414,12 +487,6 @@ STRUCT(Encoding2)
     u32 is_immediate:4;
     u32 is_plus_reg:4;
 };
-
-fn u8 encode_instruction(u8* restrict buffer, Encoding2 encoding)
-{
-    u8* restrict it = buffer;
-
-}
 
 STRUCT(Batch)
 {
