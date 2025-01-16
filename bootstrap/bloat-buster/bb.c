@@ -108,7 +108,7 @@ fn u8 gpr_is_extended(GPR_x86_64 gpr)
 STRUCT(Opcode)
 {
     u8 length;
-    u8 bytes[4];
+    u8 bytes[3];
     u8 extension;
 };
 
@@ -137,7 +137,7 @@ STRUCT(InstructionEncoding)
     u8 sib_base;
 };
 
-#define batch_element_count (16)
+#define batch_element_count (64)
 #define max_instruction_byte_count (16)
 
 fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* const restrict encodings, u64 encoding_count)
@@ -192,9 +192,6 @@ fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
 
         *it = encoding.opcode.bytes[2];
         it += encoding.opcode.length > 2;
-
-        *it = encoding.opcode.bytes[3];
-        it += encoding.opcode.length > 3;
 
         u8 encode_modrm = encoding.is_reg1 | encoding.is_reg2;
 
@@ -289,72 +286,149 @@ STRUCT(GPRMask)
     Bitset mask[4];
 };
 
+STRUCT(OpcodeLen)
+{
+    u8 len0:2;
+    u8 len1:2;
+    u8 len2:2;
+    u8 len3:2;
+};
+
+STRUCT(VectorOpcode)
+{
+    u8 values[3][64];
+    OpcodeLen lengths[64/4];
+};
+
 STRUCT(EncodingBatch)
 {
     Bitset legacy_prefixes[LEGACY_PREFIX_COUNT];
     Bitset is_indirect[2];
     Bitset is_register[2];
     GPRMask register_mask[2];
+    VectorOpcode opcode;
 };
 
-__m512 encode(u8* restrict buffer, EncodingBatch* restrict batch)
+u32 encode(u8* restrict buffer, EncodingBatch* restrict batch)
 {
-    unused(buffer);
-    u8 legacy_prefix_bytes[] = {
-        [LEGACY_PREFIX_F0] = 0xf0,
-        [LEGACY_PREFIX_F2] = 0xf2,
-        [LEGACY_PREFIX_F3] = 0xf3,
-        [LEGACY_PREFIX_2E] = 0x2e,
-        [LEGACY_PREFIX_36] = 0x36,
-        [LEGACY_PREFIX_3E] = 0x3e,
-        [LEGACY_PREFIX_26] = 0x26,
-        [LEGACY_PREFIX_64] = 0x64,
-        [LEGACY_PREFIX_65] = 0x65,
-        [LEGACY_PREFIX_66] = 0x66,
-        [LEGACY_PREFIX_67] = 0x67,
-    };
+    __m512i prefix_f0 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_F0]), _mm512_set1_epi8(0xf0));
+    __m512i prefix_f2 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_F2]), _mm512_set1_epi8(0xf2));
+    __m512i prefix_f3 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_F3]), _mm512_set1_epi8(0xf3));
+    __m512i prefix_2e = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_2E]), _mm512_set1_epi8(0x2e));
+    __m512i prefix_36 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_36]), _mm512_set1_epi8(0x36));
+    __m512i prefix_3e = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_3E]), _mm512_set1_epi8(0x3e));
+    __m512i prefix_26 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_26]), _mm512_set1_epi8(0x26));
+    __m512i prefix_64 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_64]), _mm512_set1_epi8(0x64));
+    __m512i prefix_65 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_65]), _mm512_set1_epi8(0x65));
+    __m512i prefix_66 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_66]), _mm512_set1_epi8(0x66));
+    __m512i prefix_67 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_67]), _mm512_set1_epi8(0x67));
 
-    __m512 legacy_prefixes = _mm512_setzero();
+    __m512i legacy_prefix = _mm512_or_epi32(_mm512_or_epi32(_mm512_or_epi32(_mm512_or_epi32(prefix_65, prefix_66), prefix_67), _mm512_or_epi32(_mm512_or_epi32(prefix_f0, prefix_f2), _mm512_or_epi32(prefix_f3, prefix_2e))), _mm512_or_epi32(_mm512_or_epi32(prefix_36, prefix_3e), _mm512_or_epi32(prefix_26, prefix_64)));
+    __mmask64 legacy_prefix_mask = _mm512_test_epi8_mask(legacy_prefix, _mm512_set1_epi8(0xff));
+    __m512i legacy_prefix_position = _mm512_mask_set1_epi8(_mm512_set1_epi8(0x0f), legacy_prefix_mask, 0);
+    __m512i instruction_length = _mm512_maskz_mov_epi8(legacy_prefix_mask, _mm512_set1_epi8(0x01));
 
-    for (LegacyPrefix prefix = 0; prefix < LEGACY_PREFIX_COUNT; prefix += 1)
+    u8 legacy_prefixes[64];
+    u8 legacy_prefix_positions[64];
+    _mm512_storeu_epi8(legacy_prefixes, legacy_prefix);
+    _mm512_storeu_epi8(legacy_prefix_positions, legacy_prefix_position);
+
+    __mmask64 is_extended_mask[2];
+    for (u32 i = 0; i < array_length(batch->register_mask); i += 1)
     {
-        __mmask64 mask = _cvtu64_mask64(batch->legacy_prefixes[prefix]);
-        __m512 prefix_v = _mm512_set1_epi8(legacy_prefix_bytes[prefix]);
-        legacy_prefixes = _mm512_mask_mov_epi8(legacy_prefixes, mask, prefix_v);
+        __m256i register_mask_256 = _mm256_loadu_epi8(&batch->register_mask[i]);
+        __m256i selecting_mask = _mm256_set1_epi8(0x0f);
+        __m256i low_nibbles = _mm256_and_si256(register_mask_256, selecting_mask);
+        __m256i high_nibbles = _mm256_and_si256(_mm256_srli_epi64(register_mask_256, 4), selecting_mask);
+        __m512i register_mask_512 = _mm512_unpacklo_epi8(_mm512_castsi256_si512(low_nibbles), _mm512_castsi256_si512(high_nibbles));
+        is_extended_mask[i] = _mm512_test_epi8_mask(register_mask_512, _mm512_set1_epi8(0b1000));
     }
 
-    __m512 register_masks = _mm512_loadu_epi8(&batch->register_mask);
-    __m512 registers_are_extended = _mm512_and_epi32(register_masks, _mm512_set1_epi8(0b10000000));
-    __m512 rex_b;
-    __m512 rex_x;
-    __m512 rex_r;
-    __m512 rex_w;
-    __m512 rex_bytes = _mm512_or_epi32(_mm512_set1_epi32(0x40), _mm512_or_epi32(_mm512_or_epi32(rex_b, rex_x), _mm512_or_epi32(rex_r, rex_w)));
-    for (u32 i = 0; i < 2; i += 1)
-    {
-        __mmask64 mask = _cvtu64_mask64(batch->is_indirect[i]);
-        unused(rex_bytes);
-        unused(mask);
-    }
-    // u8 rex_base = 0x40;
-    // u8 rex_b = 0x01;
-    // u8 rex_x = 0x02;
-    // u8 rex_r = 0x04;
-    // u8 rex_w = 0x08;
-    // u8 is_reg_direct_addressing_mode = !(encoding.is_indirect1 | encoding.is_indirect2);
-    // u8 reg_register = is_reg_direct_addressing_mode ? encoding.reg2 : (encoding.is_indirect1 ? encoding.reg2 : encoding.reg1);
-    // u8 rm_register = is_reg_direct_addressing_mode ? encoding.reg1 : (encoding.is_indirect1 ? encoding.reg1 : encoding.reg2);
-    // u8 byte_rex_b = rex_b * gpr_is_extended(rm_register);
-    // u8 byte_rex_x = rex_x * encoding.scaled_index_register;
-    // u8 byte_rex_r = rex_r * gpr_is_extended(reg_register); 
-    // u8 byte_rex_w = rex_w * encoding.is_64_bit;
-    // u8 byte_rex = (byte_rex_b | byte_rex_x) | (byte_rex_r | byte_rex_w);
-    // u8 rex = (rex_base | byte_rex);
-    // u8 encode_rex = byte_rex != 0;
-    // *it = rex;
-    // it += encode_rex;
+    __m512i rex_b = _mm512_maskz_set1_epi8(is_extended_mask[0], 1 << 0);
+    __m512i rex_x = _mm512_setzero(); // TODO
+    __m512i rex_r = _mm512_maskz_set1_epi8(is_extended_mask[1], 1 << 2);
+    __m512i rex_w = _mm512_setzero(); // TODO
+    __m512i rex_byte = _mm512_or_epi32(_mm512_set1_epi32(0x40), _mm512_or_epi32(_mm512_or_epi32(rex_b, rex_x), _mm512_or_epi32(rex_r, rex_w)));
+    __mmask64 rex_mask = _mm512_test_epi8_mask(rex_byte, _mm512_set1_epi8(0x0f));
+    __m512i rex_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), rex_mask, instruction_length);
+    instruction_length = _mm512_maskz_add_epi8(rex_mask, instruction_length, _mm512_set1_epi8(0x01));
 
-    return legacy_prefixes;
+    u8 rex_bytes[64];
+    u8 rex_positions[64];
+    _mm512_storeu_epi8(rex_bytes, rex_byte);
+    _mm512_storeu_epi8(rex_positions, rex_position);
+
+    __m128i opcode_lengths_128 = _mm_loadu_epi8(&batch->opcode.lengths);
+    __m128i selecting_mask = _mm_set1_epi8(0x03);
+    __m128i opcode_length_nibbles_0 = _mm_and_si128(opcode_lengths_128, selecting_mask);
+    __m128i opcode_length_nibbles_1 = _mm_and_si128(_mm_srli_epi64(opcode_lengths_128, 2 * 1), selecting_mask);
+    __m128i opcode_length_nibbles_2 = _mm_and_si128(_mm_srli_epi64(opcode_lengths_128, 2 * 2), selecting_mask);
+    __m128i opcode_length_nibbles_3 = _mm_and_si128(_mm_srli_epi64(opcode_lengths_128, 2 * 3), selecting_mask);
+    __m512i opcode_lengths_512 = _mm512_unpacklo_epi8(_mm512_castsi256_si512(_mm256_unpacklo_epi8(_mm256_castsi128_si256(opcode_length_nibbles_0), _mm256_castsi128_si256(opcode_length_nibbles_1))), _mm512_castsi256_si512(_mm256_unpacklo_epi8(_mm256_castsi128_si256(opcode_length_nibbles_2), _mm256_castsi128_si256(opcode_length_nibbles_3))));
+
+    __m512i opcode1 = _mm512_loadu_epi8(&batch->opcode.values[0]);
+    __m512i opcode1_position = instruction_length;
+    instruction_length = _mm512_add_epi8(instruction_length, _mm512_set1_epi8(0x01));
+
+    u8 opcode1_bytes[64];
+    u8 opcode1_positions[64];
+    _mm512_storeu_epi8(opcode1_bytes, opcode1);
+    _mm512_storeu_epi8(opcode1_positions, opcode1_position);
+
+    __m512i opcode2 = _mm512_loadu_epi8(&batch->opcode.values[1]);
+    __mmask64 opcode2_mask = _mm512_test_epi8_mask(opcode_lengths_512, _mm512_set1_epi8(0b10));
+    __m512i opcode2_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), opcode2_mask, instruction_length);
+    instruction_length = _mm512_maskz_add_epi8(opcode2_mask, instruction_length, _mm512_set1_epi8(0x01));
+
+    u8 opcode2_bytes[64];
+    u8 opcode2_positions[64];
+    _mm512_storeu_epi8(opcode2_bytes, opcode2);
+    _mm512_storeu_epi8(opcode2_positions, opcode2_position);
+
+    __m512i opcode3 = _mm512_loadu_epi8(&batch->opcode.values[2]);
+    __mmask64 opcode3_mask = _mm512_cmpeq_epi8_mask(opcode_lengths_512, _mm512_set1_epi8(0b11));
+    __m512i opcode3_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), opcode3_mask, instruction_length);
+    instruction_length = _mm512_maskz_add_epi8(opcode3_mask, instruction_length, _mm512_set1_epi8(0x01));
+
+    u8 opcode3_bytes[64];
+    u8 opcode3_positions[64];
+    _mm512_storeu_epi8(opcode3_bytes, opcode3);
+    _mm512_storeu_epi8(opcode3_positions, opcode3_position);
+    
+    // TODO: modrm
+    // TODO: immediate
+    // TODO: displacement
+
+    u8 separate_buffers[64][max_instruction_byte_count];
+    u8 separate_lengths[64];
+    _mm512_storeu_epi8(separate_lengths, instruction_length);
+
+    for (u32 i = 0; i < array_length(separate_lengths); i += 1)
+    {
+        separate_buffers[i][legacy_prefix_positions[i]] = legacy_prefixes[i];
+        separate_buffers[i][rex_positions[i]] = rex_bytes[i];
+        separate_buffers[i][opcode1_positions[i]] = opcode1_bytes[i];
+        separate_buffers[i][opcode2_positions[i]] = opcode2_bytes[i];
+        separate_buffers[i][opcode3_positions[i]] = opcode3_bytes[i];
+    }
+
+    u32 buffer_i = 0;
+
+    for (u32 i = 0; array_length(instruction_length); i += 1)
+    {
+        let(separate_length, separate_lengths[i]);
+        if (separate_length >= 1 && separate_length <= 15)
+        {
+            memcpy(&buffer[buffer_i], &separate_buffers[i], separate_length);
+            buffer_i += separate_length;
+        }
+        else
+        {
+            unreachable();
+        }
+    }
+
+    return buffer_i;
 }
 
 typedef enum Mnemonic_x86_64
