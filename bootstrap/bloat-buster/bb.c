@@ -286,7 +286,7 @@ typedef enum LegacyPrefix
 
 STRUCT(GPRMask)
 {
-    Bitset mask[2];
+    Bitset mask[4];
 };
 
 STRUCT(EncodingBatch)
@@ -323,9 +323,18 @@ __m512 encode(u8* restrict buffer, EncodingBatch* restrict batch)
         legacy_prefixes = _mm512_mask_mov_epi8(legacy_prefixes, mask, prefix_v);
     }
 
+    __m512 register_masks = _mm512_loadu_epi8(&batch->register_mask);
+    __m512 registers_are_extended = _mm512_and_epi32(register_masks, _mm512_set1_epi8(0b10000000));
+    __m512 rex_b;
+    __m512 rex_x;
+    __m512 rex_r;
+    __m512 rex_w;
+    __m512 rex_bytes = _mm512_or_epi32(_mm512_set1_epi32(0x40), _mm512_or_epi32(_mm512_or_epi32(rex_b, rex_x), _mm512_or_epi32(rex_r, rex_w)));
     for (u32 i = 0; i < 2; i += 1)
     {
         __mmask64 mask = _cvtu64_mask64(batch->is_indirect[i]);
+        unused(rex_bytes);
+        unused(mask);
     }
     // u8 rex_base = 0x40;
     // u8 rex_b = 0x01;
@@ -345,7 +354,7 @@ __m512 encode(u8* restrict buffer, EncodingBatch* restrict batch)
     // *it = rex;
     // it += encode_rex;
 
-    return result;
+    return legacy_prefixes;
 }
 
 typedef enum Mnemonic_x86_64
