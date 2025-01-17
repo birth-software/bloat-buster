@@ -307,24 +307,26 @@ STRUCT(EncodingBatch)
     Bitset is_register[2];
     GPRMask register_mask[2];
     VectorOpcode opcode;
+    Bitset is_displacement8;
+    Bitset is_displacement32;
 };
 
 u32 encode(u8* restrict buffer, EncodingBatch* restrict batch)
 {
-    __m512i prefix_f0 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_F0]), _mm512_set1_epi8(0xf0));
-    __m512i prefix_f2 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_F2]), _mm512_set1_epi8(0xf2));
-    __m512i prefix_f3 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_F3]), _mm512_set1_epi8(0xf3));
-    __m512i prefix_2e = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_2E]), _mm512_set1_epi8(0x2e));
-    __m512i prefix_36 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_36]), _mm512_set1_epi8(0x36));
-    __m512i prefix_3e = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_3E]), _mm512_set1_epi8(0x3e));
-    __m512i prefix_26 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_26]), _mm512_set1_epi8(0x26));
-    __m512i prefix_64 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_64]), _mm512_set1_epi8(0x64));
-    __m512i prefix_65 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_65]), _mm512_set1_epi8(0x65));
-    __m512i prefix_66 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_66]), _mm512_set1_epi8(0x66));
-    __m512i prefix_67 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_67]), _mm512_set1_epi8(0x67));
+    __m512i prefix_f0 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_F0]), _mm512_set1_epi8((char)0xf0));
+    __m512i prefix_f2 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_F2]), _mm512_set1_epi8((char)0xf2));
+    __m512i prefix_f3 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_F3]), _mm512_set1_epi8((char)0xf3));
+    __m512i prefix_2e = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_2E]), _mm512_set1_epi8((char)0x2e));
+    __m512i prefix_36 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_36]), _mm512_set1_epi8((char)0x36));
+    __m512i prefix_3e = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_3E]), _mm512_set1_epi8((char)0x3e));
+    __m512i prefix_26 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_26]), _mm512_set1_epi8((char)0x26));
+    __m512i prefix_64 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_64]), _mm512_set1_epi8((char)0x64));
+    __m512i prefix_65 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_65]), _mm512_set1_epi8((char)0x65));
+    __m512i prefix_66 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_66]), _mm512_set1_epi8((char)0x66));
+    __m512i prefix_67 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_67]), _mm512_set1_epi8((char)0x67));
 
     __m512i legacy_prefix = _mm512_or_epi32(_mm512_or_epi32(_mm512_or_epi32(_mm512_or_epi32(prefix_65, prefix_66), prefix_67), _mm512_or_epi32(_mm512_or_epi32(prefix_f0, prefix_f2), _mm512_or_epi32(prefix_f3, prefix_2e))), _mm512_or_epi32(_mm512_or_epi32(prefix_36, prefix_3e), _mm512_or_epi32(prefix_26, prefix_64)));
-    __mmask64 legacy_prefix_mask = _mm512_test_epi8_mask(legacy_prefix, _mm512_set1_epi8(0xff));
+    __mmask64 legacy_prefix_mask = _mm512_test_epi8_mask(legacy_prefix, _mm512_set1_epi8((char)0xff));
     __m512i legacy_prefix_position = _mm512_mask_set1_epi8(_mm512_set1_epi8(0x0f), legacy_prefix_mask, 0);
     __m512i instruction_length = _mm512_maskz_mov_epi8(legacy_prefix_mask, _mm512_set1_epi8(0x01));
 
@@ -333,21 +335,33 @@ u32 encode(u8* restrict buffer, EncodingBatch* restrict batch)
     _mm512_storeu_epi8(legacy_prefixes, legacy_prefix);
     _mm512_storeu_epi8(legacy_prefix_positions, legacy_prefix_position);
 
-    __mmask64 is_extended_mask[2];
+    __mmask64 is_displacement8 = _cvtu64_mask64(batch->is_displacement8);
+    __mmask64 is_displacement32 = _cvtu64_mask64(batch->is_displacement32);
+
+    // __mmask64 is_extended_mask[2];
+    __mmask64 is_register[2];
+    __mmask64 is_indirect[2];
+    __m512i register_mask[2];
     for (u32 i = 0; i < array_length(batch->register_mask); i += 1)
     {
         __m256i register_mask_256 = _mm256_loadu_epi8(&batch->register_mask[i]);
         __m256i selecting_mask = _mm256_set1_epi8(0x0f);
         __m256i low_nibbles = _mm256_and_si256(register_mask_256, selecting_mask);
         __m256i high_nibbles = _mm256_and_si256(_mm256_srli_epi64(register_mask_256, 4), selecting_mask);
-        __m512i register_mask_512 = _mm512_unpacklo_epi8(_mm512_castsi256_si512(low_nibbles), _mm512_castsi256_si512(high_nibbles));
-        is_extended_mask[i] = _mm512_test_epi8_mask(register_mask_512, _mm512_set1_epi8(0b1000));
+        register_mask[i] = _mm512_unpacklo_epi8(_mm512_castsi256_si512(low_nibbles), _mm512_castsi256_si512(high_nibbles));
+        is_register[i] = _cvtu64_mask64(batch->is_register[i]);
+        is_indirect[i] = _cvtu64_mask64(batch->is_indirect[i]);
     }
 
-    __m512i rex_b = _mm512_maskz_set1_epi8(is_extended_mask[0], 1 << 0);
-    __m512i rex_x = _mm512_setzero(); // TODO
-    __m512i rex_r = _mm512_maskz_set1_epi8(is_extended_mask[1], 1 << 2);
-    __m512i rex_w = _mm512_setzero(); // TODO
+    __m512i indirect_register = _mm512_mask_mov_epi8(_mm512_maskz_mov_epi8(is_indirect[1], register_mask[1]), is_indirect[0], register_mask[0]);
+    __mmask64 is_reg_direct_addressing_mode = _knot_mask64(_kor_mask64(is_indirect[0], is_indirect[1]));
+    __m512i rm_register = _mm512_mask_mov_epi8(_mm512_mask_mov_epi8(register_mask[1], is_indirect[0], register_mask[0]), is_reg_direct_addressing_mode, register_mask[0]);
+    __m512i reg_register = _mm512_mask_mov_epi8(_mm512_mask_mov_epi8(register_mask[0], is_indirect[0], register_mask[1]), is_reg_direct_addressing_mode, register_mask[1]);
+
+    __m512i rex_b = _mm512_maskz_set1_epi8(_mm512_test_epi8_mask(rm_register, _mm512_set1_epi8(0b1000)), 1 << 0);
+    __m512i rex_x = _mm512_set1_epi8(0); // TODO
+    __m512i rex_r = _mm512_maskz_set1_epi8(_mm512_test_epi8_mask(reg_register, _mm512_set1_epi8(0b1000)), 1 << 2);
+    __m512i rex_w = _mm512_set1_epi8(0); // TODO
     __m512i rex_byte = _mm512_or_epi32(_mm512_set1_epi32(0x40), _mm512_or_epi32(_mm512_or_epi32(rex_b, rex_x), _mm512_or_epi32(rex_r, rex_w)));
     __mmask64 rex_mask = _mm512_test_epi8_mask(rex_byte, _mm512_set1_epi8(0x0f));
     __m512i rex_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), rex_mask, instruction_length);
@@ -395,7 +409,34 @@ u32 encode(u8* restrict buffer, EncodingBatch* restrict batch)
     _mm512_storeu_epi8(opcode3_bytes, opcode3);
     _mm512_storeu_epi8(opcode3_positions, opcode3_position);
     
-    // TODO: modrm
+    __mmask64 mod_rm_mask = _kor_mask64(is_register[0], is_register[1]);
+    __m512i register_direct_address_mode = _mm512_maskz_set1_epi8(is_reg_direct_addressing_mode, 1);
+    __m512i mod = _mm512_or_epi32(_mm512_or_epi32(_mm512_slli_epi32(_mm512_maskz_set1_epi8(is_displacement32, 1), 1), _mm512_maskz_set1_epi8(is_displacement8, 1)), _mm512_or_epi32(_mm512_slli_epi32(register_direct_address_mode, 1), register_direct_address_mode));
+    __m512i rm = _mm512_and_si512(rm_register, _mm512_set1_epi8(0b111));
+    __m512i reg = _mm512_and_si512(reg_register, _mm512_set1_epi8(0b111));
+    __m512i mod_rm = _mm512_or_epi32(_mm512_or_epi32(rm, _mm512_slli_epi32(reg, 3)), _mm512_slli_epi32(mod, 6));
+    __m512i mod_rm_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), mod_rm_mask, instruction_length);
+    instruction_length = _mm512_maskz_add_epi8(mod_rm_mask, instruction_length, _mm512_set1_epi8(0x01));
+
+    u8 mod_rm_bytes[64];
+    u8 mod_rm_positions[64];
+    _mm512_storeu_epi8(mod_rm_bytes, mod_rm);
+    _mm512_storeu_epi8(mod_rm_positions, mod_rm_position);
+
+    __m512i indirect_register_low3 = _mm512_and_si512(indirect_register, _mm512_set1_epi8(0b111));
+    __mmask64 sib_mask = _mm512_cmpeq_epi8_mask(indirect_register_low3, _mm512_set1_epi8(REGISTER_X86_64_SP));
+    __m512i sib_scale = _mm512_set1_epi8(0);
+    __m512i sib_index = _mm512_maskz_set1_epi8(sib_mask, 0b100 << 3);
+    __m512i sib_base = indirect_register_low3;
+    __m512i sib = _mm512_or_epi32(_mm512_or_epi32(sib_index, sib_base), sib_scale);
+    __m512i sib_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), sib_mask, instruction_length);
+    instruction_length = _mm512_maskz_add_epi8(sib_mask, instruction_length, _mm512_set1_epi8(0x01));
+
+    u8 sib_bytes[64];
+    u8 sib_positions[64];
+    _mm512_storeu_epi8(sib_bytes, sib);
+    _mm512_storeu_epi8(sib_positions, sib_position);
+
     // TODO: immediate
     // TODO: displacement
 
@@ -410,6 +451,8 @@ u32 encode(u8* restrict buffer, EncodingBatch* restrict batch)
         separate_buffers[i][opcode1_positions[i]] = opcode1_bytes[i];
         separate_buffers[i][opcode2_positions[i]] = opcode2_bytes[i];
         separate_buffers[i][opcode3_positions[i]] = opcode3_bytes[i];
+        separate_buffers[i][mod_rm_positions[i]] = mod_rm_bytes[i];
+        separate_buffers[i][sib_positions[i]] = sib_bytes[i];
     }
 
     u32 buffer_i = 0;
