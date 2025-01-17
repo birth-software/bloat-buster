@@ -1182,7 +1182,7 @@ fn RunCommandResult run_command(Arena* arena, CStringSlice arguments, char* envp
     Timestamp start_timestamp = {};
     Timestamp end_timestamp = {};
     f64 ms = 0.0;
-    u8 measure_time = run_options.debug;
+    let(measure_time, run_options.debug);
 
     if (run_options.debug)
     {
@@ -1242,7 +1242,7 @@ fn RunCommandResult run_command(Arena* arena, CStringSlice arguments, char* envp
         if (measure_time)
         {
             end_timestamp = os_timestamp();
-            ms = os_resolve_timestamps(start, end, TIME_UNIT_MILLISECONDS);
+            ms = os_resolve_timestamps(start_timestamp, end_timestamp, TIME_UNIT_MILLISECONDS);
         }
 
 

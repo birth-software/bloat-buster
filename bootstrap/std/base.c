@@ -1,20 +1,36 @@
 #pragma once
 
 #if _MSC_VER
+extern u32 _lzcnt_u32(u32);
+extern u32 _tzcnt_u32(u32);
 extern u64 _lzcnt_u64(u64);
 extern u64 _tzcnt_u64(u64);
 #endif
+
+fn u8 leading_zeroes_u32(u32 value)
+{
+#if _MSC_VER
+    return (u8)_lzcnt_u32(value);
+#else
+    return __builtin_clz(value);
+#endif
+}
+
+fn u8 leading_zeroes_u64(u64 value)
+{
+#if _MSC_VER
+    return (u8)_lzcnt_u64(value);
+#else
+    return __builtin_clzll(value);
+#endif
+}
 
 fn u8 log2_alignment(u64 alignment)
 {
     assert(alignment != 0);
     assert((alignment & (alignment - 1)) == 0);
-    u64 left = (sizeof(alignment) * 8) - 1;
-#if _MSC_VER
-    let_cast(u64, right, _lzcnt_u64(alignment));
-#else
-    let_cast(u64, right, __builtin_clzll(alignment));
-#endif
+    u8 left = (sizeof(alignment) * 8) - 1;
+    u8 right = leading_zeroes_u64(alignment);
     let_cast(u8, result, left - right);
     return result;
 }
@@ -22,13 +38,13 @@ fn u8 log2_alignment(u64 alignment)
 fn u8 log2_u64(u64 v)
 {
     assert(v != 0);
-    return (sizeof(u64) * 8 - 1) - __builtin_clzll(v);
+    return (sizeof(u64) * 8 - 1) - leading_zeroes_u64(v);
 }
 
 fn u8 log2_u32(u32 v)
 {
     assert(v != 0);
-    return (sizeof(u32) * 8 - 1) - __builtin_clz(v);
+    return (sizeof(u32) * 8 - 1) - leading_zeroes_u32(v);
 }
 
 fn u8 hex_digit_count(u64 v)

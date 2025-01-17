@@ -31,7 +31,7 @@ fn u8 rendering_backend_is_valid(RenderingBackend rendering_backend)
     {
 #ifdef __linux__
         valid = rendering_backend == RENDERING_BACKEND_VULKAN;
-#elif __APPLE__
+#elif defined(__APPLE__)
         valid = rendering_backend == RENDERING_BACKEND_METAL || rendering_backend == RENDERING_BACKEND_VULKAN;
 #elif _WIN32
         valid = rendering_backend == RENDERING_BACKEND_DIRECTX12 || rendering_backend == RENDERING_BACKEND_VULKAN;

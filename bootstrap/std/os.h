@@ -38,6 +38,7 @@ STRUCT(RunCommandResult)
 {
     u32 termination_code;
     ProcessTerminationKind termination_kind;
+    u8 reserved[3];
 };
 
 typedef enum ChildProcessStreamPolicy
@@ -62,6 +63,7 @@ STRUCT(RunCommandOptions)
     FileDescriptor null_file_descriptor;
     u64 use_null_file_descriptor:1;
     u64 debug:1;
+    u64 reserved:62;
 };
 
 STRUCT(Timestamp)

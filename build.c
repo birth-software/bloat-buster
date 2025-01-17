@@ -497,7 +497,14 @@ fn void compile_program(Arena* arena, CompileOptions options)
 
     if (!BB_CI)
     {
-        add_arg("-march=native");
+        if (c_compiler == C_COMPILER_MSVC)
+        {
+            add_arg("/arch:AVX512");
+        }
+        else
+        {
+            add_arg("-march=native");
+        }
     }
 
     // Immutable options
