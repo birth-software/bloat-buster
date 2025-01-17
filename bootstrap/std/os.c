@@ -1182,7 +1182,7 @@ fn RunCommandResult run_command(Arena* arena, CStringSlice arguments, char* envp
     Timestamp start_timestamp = {};
     Timestamp end_timestamp = {};
     f64 ms = 0.0;
-    let(measure_time, run_options.debug);
+    u64 measure_time = run_options.debug;
 
     if (run_options.debug)
     {

@@ -228,6 +228,8 @@ fn String get_c_compiler_path(Arena* arena)
         }
     }
 
+    return strlit("/usr/lib/llvm18/bin/clang-18");
+
     return cc_path;
 }
 
