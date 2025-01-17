@@ -408,6 +408,13 @@ fn void compile_program(Arena* arena, CompileOptions options)
         add_arg("/nologo");
     }
 
+    u8 llvm_mca = 0;
+    if (llvm_mca)
+    {
+        add_arg("-S");
+        add_arg("-masm=intel");
+    }
+
 #if __APPLE__
     add_arg("-x");
     add_arg("objective-c");
