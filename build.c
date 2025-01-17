@@ -547,6 +547,15 @@ fn void compile_program(Arena* arena, CompileOptions options)
         add_arg(optimization_switches[c_compiler == C_COMPILER_MSVC][options.build_type]);
     }
 
+    switch (options.build_type)
+    {
+        case BUILD_TYPE_COUNT: unreachable();
+        case BUILD_TYPE_DEBUG:
+        case BUILD_TYPE_RELEASE_SAFE: add_arg("-DBB_DEBUG=1"); add_arg("-D_DEBUG=1"); break;
+        case BUILD_TYPE_RELEASE_FAST:
+        case BUILD_TYPE_RELEASE_SMALL: add_arg("-DBB_DEBUG=0"); add_arg("-DNDEBUG=1"); break;
+    }
+
     // Inmutable options
     switch (c_compiler)
     {
@@ -757,7 +766,7 @@ int main(int argc, char* argv[], char** envp)
         .flags = {
             .colored_output = 1,
             .error_limit = BB_ERROR_LIMIT,
-            .debug = 1,
+            .debug = BB_CI,
             .time_trace = BB_TIMETRACE,
         },
     };

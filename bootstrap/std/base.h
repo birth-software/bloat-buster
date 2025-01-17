@@ -6,9 +6,7 @@
 
 #define LINK_LIBC 1
 
-#ifdef NDEBUG
-#define BB_DEBUG 0
-#else
+#ifndef BB_DEBUG
 #define BB_DEBUG 1
 #endif
 
@@ -26,7 +24,9 @@
 #include <stddef.h>
 #include <stdarg.h>
 
+#ifndef BB_SAFETY
 #define BB_SAFETY BB_DEBUG
+#endif
 
 #define STRUCT_FORWARD_DECL(S) typedef struct S S
 #define STRUCT(S) STRUCT_FORWARD_DECL(S); struct S
