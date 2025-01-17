@@ -309,6 +309,8 @@ STRUCT(EncodingBatch)
     VectorOpcode opcode;
     Bitset is_displacement8;
     Bitset is_displacement32;
+    Bitset is_immediate[4];
+    u8 immediate[8][64];
 };
 
 u32 encode(u8* restrict buffer, EncodingBatch* restrict batch)
@@ -437,7 +439,15 @@ u32 encode(u8* restrict buffer, EncodingBatch* restrict batch)
     _mm512_storeu_epi8(sib_bytes, sib);
     _mm512_storeu_epi8(sib_positions, sib_position);
 
-    // TODO: immediate
+    u8 immediate_positions[array_length(batch->is_immediate)][64];
+    for (u32 i = 0; i < array_length(immediate_positions); i += 1)
+    {
+        __mmask64 immediate_mask = _cvtu64_mask64(batch->is_immediate[i]);
+        __m512i immediate_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), immediate_mask, instruction_length);
+        instruction_length = _mm512_maskz_add_epi8(immediate_mask, instruction_length, _mm512_set1_epi8(1 << i));
+        _mm512_storeu_epi8(immediate_positions[i], immediate_position);
+    }
+
     // TODO: displacement
 
     u8 separate_buffers[64][max_instruction_byte_count];
@@ -453,6 +463,16 @@ u32 encode(u8* restrict buffer, EncodingBatch* restrict batch)
         separate_buffers[i][opcode3_positions[i]] = opcode3_bytes[i];
         separate_buffers[i][mod_rm_positions[i]] = mod_rm_bytes[i];
         separate_buffers[i][sib_positions[i]] = sib_bytes[i];
+
+        for (u32 immediate_position_index = 0; immediate_position_index < array_length(immediate_positions); immediate_position_index += 1)
+        {
+            u8 start_position = immediate_positions[immediate_position_index][i];
+            for (u32 byte = 0; byte < 1 << immediate_position_index; byte += 1)
+            {
+                u8 destination_index = start_position + byte * (start_position != 0xf);
+                separate_buffers[i][destination_index] = batch->immediate[byte][i];
+            }
+        }
     }
 
     u32 buffer_i = 0;

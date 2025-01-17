@@ -484,7 +484,7 @@ fn void compile_program(Arena* arena, CompileOptions options)
         add_arg(string_to_c(arg));
     }
 
-    let(debug_info, options.build_type != BUILD_TYPE_RELEASE_SMALL);
+    let(debug_info, options.build_type != BUILD_TYPE_RELEASE_SMALL && !llvm_mca);
     if (debug_info)
     {
         add_arg(compiler_switches[c_compiler == C_COMPILER_MSVC][COMPILER_SWITCH_DEBUG_INFO]);
