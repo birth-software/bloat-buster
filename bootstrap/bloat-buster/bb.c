@@ -1276,8 +1276,7 @@ fn u32 encode(u8* restrict buffer, const EncodingBatch* const restrict batch)
     __m512i rex_b = _mm512_maskz_set1_epi8(_mm512_test_epi8_mask(rm_register, _mm512_set1_epi8(0b1000)), 1 << 0);
     __m512i rex_x = _mm512_set1_epi8(0); // TODO
     __m512i rex_r = _mm512_maskz_set1_epi8(_mm512_test_epi8_mask(reg_register, _mm512_set1_epi8(0b1000)), 1 << 2);
-    __m512i rex_w = _mm512_set1_epi8(0); // TODO
-    _mm512_maskz_set1_epi8(_cvtu64_mask64asdjkasjdksad, 0x01);
+    __m512i rex_w = _mm512_maskz_set1_epi8(_cvtu64_mask64(batch->rex_w), 1 << 3);
     __m512i rex_byte = _mm512_or_epi32(_mm512_set1_epi32(0x40), _mm512_or_epi32(_mm512_or_epi32(rex_b, rex_x), _mm512_or_epi32(rex_r, rex_w)));
     __mmask64 rex_mask = _mm512_test_epi8_mask(rex_byte, _mm512_set1_epi8(0x0f));
     __m512i rex_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), rex_mask, instruction_length);
