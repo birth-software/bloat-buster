@@ -999,8 +999,12 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
             OperandId second_operand = encoding->operands.values[1];
             let(operand_count, encoding->operands.count);
 
-            u64 instance_index = 0;
-            u64 failure_count = 0;
+            u64 scalar_instance_index = 0;
+            u64 scalar_failure_count = 0;
+
+            u64 wide_instance_index = 0;
+            u64 wide_failure_count = 0;
+
             u8 encoding_buffer[256];
             u8 encoding_separator[256];
             u64 encoding_buffer_i = 0;
@@ -1103,13 +1107,13 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                     .disassembler = disassembler,
                                 };
                                 u64 error_buffer_length = check_instruction(arena, check_args);
-                                instance_index += 1;
-                                let(first_failure, failure_count == 0);
-                                failure_count += error_buffer_length != 0;
+                                scalar_instance_index += 1;
+                                let(first_failure, scalar_failure_count == 0);
+                                scalar_failure_count += error_buffer_length != 0;
                                 String error_string = { .pointer = error_buffer, .length = error_buffer_length };
                                 if (error_buffer_length != 0)
                                 {
-                                    print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                    print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", scalar_instance_index, instruction_string, error_string);
                                 }
                             }
 
@@ -1185,13 +1189,13 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                             .disassembler = disassembler,
                                         };
                                         u64 error_buffer_length = check_instruction(arena, check_args);
-                                        instance_index += 1;
-                                        let(first_failure, failure_count == 0);
-                                        failure_count = error_buffer_length != 0;
+                                        scalar_instance_index += 1;
+                                        let(first_failure, scalar_failure_count == 0);
+                                        scalar_failure_count = error_buffer_length != 0;
                                         String error_string = { .pointer = error_buffer, .length = error_buffer_length };
                                         if (error_buffer_length != 0)
                                         {
-                                            print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                            print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", scalar_instance_index, instruction_string, error_string);
                                         }
                                     }
                                 }
@@ -1301,13 +1305,13 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                                         .disassembler = disassembler,
                                                     };
                                                     u64 error_buffer_length = check_instruction(arena, check_args);
-                                                    instance_index += 1;
-                                                    let(first_failure, failure_count == 0);
-                                                    failure_count = error_buffer_length != 0;
+                                                    scalar_instance_index += 1;
+                                                    let(first_failure, scalar_failure_count == 0);
+                                                    scalar_failure_count = error_buffer_length != 0;
                                                     String error_string = { .pointer = error_buffer, .length = error_buffer_length };
                                                     if (error_buffer_length != 0)
                                                     {
-                                                        print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                                        print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", scalar_instance_index, instruction_string, error_string);
                                                     }
                                                 }
                                             }
@@ -1360,13 +1364,13 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                                             .disassembler = disassembler,
                                                         };
                                                         u64 error_buffer_length = check_instruction(arena, check_args);
-                                                        instance_index += 1;
-                                                        let(first_failure, failure_count == 0);
-                                                        failure_count = error_buffer_length != 0;
+                                                        scalar_instance_index += 1;
+                                                        let(first_failure, scalar_failure_count == 0);
+                                                        scalar_failure_count = error_buffer_length != 0;
                                                         String error_string = { .pointer = error_buffer, .length = error_buffer_length };
                                                         if (error_buffer_length != 0)
                                                         {
-                                                            print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                                            print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", scalar_instance_index, instruction_string, error_string);
                                                         }
                                                     }
                                                 }
@@ -1420,13 +1424,13 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                                             .disassembler = disassembler,
                                                         };
                                                         u64 error_buffer_length = check_instruction(arena, check_args);
-                                                        instance_index += 1;
-                                                        let(first_failure, failure_count == 0);
-                                                        failure_count = error_buffer_length != 0;
+                                                        scalar_instance_index += 1;
+                                                        let(first_failure, scalar_failure_count == 0);
+                                                        scalar_failure_count = error_buffer_length != 0;
                                                         String error_string = { .pointer = error_buffer, .length = error_buffer_length };
                                                         if (error_buffer_length != 0)
                                                         {
-                                                            print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                                            print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", scalar_instance_index, instruction_string, error_string);
                                                         }
                                                     }
                                                 }
@@ -1475,13 +1479,13 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                                 .disassembler = disassembler,
                                             };
                                             u64 error_buffer_length = check_instruction(arena, check_args);
-                                            instance_index += 1;
-                                            let(first_failure, failure_count == 0);
-                                            failure_count += error_buffer_length != 0;
+                                            scalar_instance_index += 1;
+                                            let(first_failure, scalar_failure_count == 0);
+                                            scalar_failure_count += error_buffer_length != 0;
                                             String error_string = { .pointer = error_buffer, .length = error_buffer_length };
                                             if (error_buffer_length != 0)
                                             {
-                                                print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                                print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", scalar_instance_index, instruction_string, error_string);
                                             }
                                         }
                                     }
@@ -1527,13 +1531,13 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                                         .disassembler = disassembler,
                                                     };
                                                     u64 error_buffer_length = check_instruction(arena, check_args);
-                                                    instance_index += 1;
-                                                    let(first_failure, failure_count == 0);
-                                                    failure_count += error_buffer_length != 0;
+                                                    scalar_instance_index += 1;
+                                                    let(first_failure, scalar_failure_count == 0);
+                                                    scalar_failure_count += error_buffer_length != 0;
                                                     String error_string = { .pointer = error_buffer, .length = error_buffer_length };
                                                     if (error_buffer_length != 0)
                                                     {
-                                                        print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                                        print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", scalar_instance_index, instruction_string, error_string);
                                                     }
                                                 }
                                             }
@@ -1561,19 +1565,28 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                 }
             }
 
-            if (failure_count)
+            if (scalar_failure_count)
             {
-                print("{s}... [FAILED] {u64}/{u64} failures\n", encoding_string, failure_count, instance_index);
+                print("\n[SCALAR] {s}... [FAILED] {u64}/{u64} failures", encoding_string, scalar_failure_count, scalar_instance_index);
             }
             else
             {
-                print_string(strlit("[OK]\n"));
+                print("[SCALAR] [OK] ({u64}/{u64}) ", scalar_instance_index, scalar_instance_index);
+            }
+
+            if (wide_failure_count)
+            {
+                print("\n[WIDE] {s}... [FAILED] {u64}/{u64} failures", encoding_string, wide_failure_count, wide_instance_index);
+            }
+            else
+            {
+                print("[WIDE] [OK] ({u64}/{u64})\n", wide_instance_index, wide_instance_index);
             }
 
             print_string(encoding_separator_string);
             print_string(strlit("\n"));
 
-            if (failure_count != 0)
+            if (scalar_failure_count != 0 || wide_failure_count != 0)
             {
                 failed_execution();
             }
