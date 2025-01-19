@@ -526,6 +526,7 @@ fn void compile_program(Arena* arena, CompileOptions options)
                 add_arg("/WX");
 #endif
                 add_arg("/wd4255");
+                add_arg("/J");
             } break;
         default:
             {
@@ -547,6 +548,7 @@ fn void compile_program(Arena* arena, CompileOptions options)
                 add_arg("-Werror");
 #endif
 
+                add_arg("-fno-signed-char");
                 add_arg("-fno-strict-aliasing");
                 add_arg("-fwrapv");
             } break;
