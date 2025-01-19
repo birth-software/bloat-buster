@@ -112,35 +112,68 @@ STRUCT(Opcode)
     u8 extension;
 };
 
-STRUCT(InstructionEncoding)
+typedef enum LegacyPrefix
 {
-    u64 is_64_bit:1;
-    u64 has_rex:1;
-    u64 scaled_index_register:1;
-    u64 is_reg1:1;
-    u64 is_reg2:1;
+    LEGACY_PREFIX_F0,
+    LEGACY_PREFIX_F2,
+    LEGACY_PREFIX_F3,
+    LEGACY_PREFIX_2E,
+    LEGACY_PREFIX_36,
+    LEGACY_PREFIX_3E,
+    LEGACY_PREFIX_26,
+    LEGACY_PREFIX_64,
+    LEGACY_PREFIX_65,
+    LEGACY_PREFIX_66,
+    LEGACY_PREFIX_67,
+    LEGACY_PREFIX_COUNT,
+} LegacyPrefix;
+
+global_variable u8 legacy_prefixes[] = {
+    0xf0,
+    0xf2,
+    0xf3,
+    0x2e,
+    0x36,
+    0x3e,
+    0x26,
+    0x64,
+    0x65,
+    0x66,
+    0x67,
+};
+
+static_assert(array_length(legacy_prefixes) == LEGACY_PREFIX_COUNT);
+
+STRUCT(EncodingScalar)
+{
+    u64 register1:4;
+    u64 register2:4;
     u64 is_indirect1:1;
     u64 is_indirect2:1;
+    u64 is_register1:1;
+    u64 is_register2:2;
     u64 is_immediate:4;
-    u64 is_16_mode:1;
-    u64 prefix_66:1;
-    u64 prefix_f3:1;
-    u64 immediate;
-    // TODO: merge?
-    s32 displacement;
-    // TODO: support more bytes
+    u64 is_displacement8:1;
+    u64 is_displacement32:1;
+    u64 rex_w:1;
+    u64 legacy_prefixes:LEGACY_PREFIX_COUNT;
+    union
+    {
+        u8 bytes[8];
+        u64 value;
+    } immediate;
+    union
+    {
+        s32 value;
+        s8 bytes[4];
+    } displacement;
     Opcode opcode;
-    u8 reg1;
-    u8 reg2;
-    u8 sib_scale;
-    u8 sib_index;
-    u8 sib_base;
 };
 
 #define batch_element_count (64)
 #define max_instruction_byte_count (16)
 
-fn u32 encode_instruction_batch(u8* restrict output, const InstructionEncoding* const restrict encodings, u64 encoding_count)
+fn u32 encode_instruction_batch(u8* restrict output, const EncodingScalar* const restrict encodings, u64 encoding_count)
 {
     assert(encoding_count);
     u8 buffers[batch_element_count][max_instruction_byte_count];
@@ -152,31 +185,33 @@ fn u32 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
     for (u32 encoding_index = 0; encoding_index < encoding_count; encoding_index += 1)
 #endif
     {
-        InstructionEncoding encoding = encodings[encoding_index];
+        let(encoding, encodings[encoding_index]);
     
         const u8* const start = (const u8* const) &buffers[encoding_index];
         u8* restrict local_buffer = (u8* restrict)&buffers[encoding_index];
         u8* restrict it = local_buffer;
 
-        u8 operand_size_override_prefix = 0x66;
-        *it = operand_size_override_prefix;
-        it += encoding.is_16_mode | encoding.prefix_66;
-
-        *it = 0xf3;
-        it += encoding.prefix_f3;
+        for (LegacyPrefix prefix = 0; prefix < LEGACY_PREFIX_COUNT; prefix += 1)
+        {
+            let(is_prefix, (encoding.legacy_prefixes & (1 << prefix)) >> prefix);
+            let(prefix_byte, legacy_prefixes[prefix]);
+            *it = prefix_byte;
+            it += is_prefix;
+        }
 
         u8 rex_base = 0x40;
         u8 rex_b = 0x01;
         u8 rex_x = 0x02;
+        unused(rex_x);
         u8 rex_r = 0x04;
         u8 rex_w = 0x08;
         u8 is_reg_direct_addressing_mode = !(encoding.is_indirect1 | encoding.is_indirect2);
-        u8 reg_register = is_reg_direct_addressing_mode ? encoding.reg2 : (encoding.is_indirect1 ? encoding.reg2 : encoding.reg1);
-        u8 rm_register = is_reg_direct_addressing_mode ? encoding.reg1 : (encoding.is_indirect1 ? encoding.reg1 : encoding.reg2);
+        u8 reg_register = is_reg_direct_addressing_mode ? encoding.register2 : (encoding.is_indirect1 ? encoding.register2 : encoding.register1);
+        u8 rm_register = is_reg_direct_addressing_mode ? encoding.register1 : (encoding.is_indirect1 ? encoding.register1 : encoding.register2);
         u8 byte_rex_b = rex_b * gpr_is_extended(rm_register);
-        u8 byte_rex_x = rex_x * encoding.scaled_index_register;
+        u8 byte_rex_x = 0; // TODO: rex_x * encoding.scaled_index_register;
         u8 byte_rex_r = rex_r * gpr_is_extended(reg_register); 
-        u8 byte_rex_w = rex_w * encoding.is_64_bit;
+        u8 byte_rex_w = rex_w * encoding.rex_w;
         u8 byte_rex = (byte_rex_b | byte_rex_x) | (byte_rex_r | byte_rex_w);
         u8 rex = (rex_base | byte_rex);
         u8 encode_rex = byte_rex != 0;
@@ -193,7 +228,7 @@ fn u32 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
         *it = encoding.opcode.bytes[2];
         it += encoding.opcode.length > 2;
 
-        u8 encode_modrm = encoding.is_reg1 | encoding.is_reg2;
+        u8 encode_modrm = encoding.is_register1 | encoding.is_register2;
 
         // Mod:
         // 00: No displacement (except when R/M = 101, where a 32-bit displacement follows).
@@ -201,8 +236,9 @@ fn u32 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
         // 10: 32-bit signed displacement follows.
         // 11: Register addressing (no memory access).
         
-        u8 is_displacement32 = encoding.displacement != 0 && (s32)((s8)encoding.displacement) != encoding.displacement;
-        u8 is_displacement8 = (!is_displacement32) & ((encoding.displacement != 0) | ((encoding.is_indirect1 & ((encoding.reg1 & 0b111) == REGISTER_X86_64_RBP)) | (encoding.is_indirect2 & ((encoding.reg2 & 0b111) == REGISTER_X86_64_RBP))));
+        // TODO: fix if necessary
+        u8 is_displacement32 = encoding.is_displacement32;
+        u8 is_displacement8 = encoding.is_displacement8 | ((!encoding.is_displacement32) & ((encoding.is_indirect1 & ((encoding.register1 & 0b111) == REGISTER_X86_64_RBP)) | (encoding.is_indirect2 & ((encoding.register2 & 0b111) == REGISTER_X86_64_RBP))));
         u8 mod = ((is_displacement32 << 1) | is_displacement8) | ((is_reg_direct_addressing_mode << 1) | is_reg_direct_addressing_mode);
         // A register operand.
         // An opcode extension (in some instructions).
@@ -215,26 +251,31 @@ fn u32 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
         it += encode_modrm;
 
         // When mod is 00, 01, or 10 and rm = 100, a SIB (Scale-Index-Base) byte follows the ModR/M byte to further specify the addressing mode.
-        u8 sib_byte = encoding.sib_scale << 6 | encoding.sib_index << 3 | (encoding.sib_base & 0b111);
+        u8 encode_sib = (mod != 0b11) & (rm == 0b100);
+        u8 indirect_register = encoding.is_indirect1 ? encoding.register1 : (encoding.is_indirect2 ? encoding.register2 : 0);
+        u8 sib_scale = 0;
+        u8 sib_index = 0b100;
+        u8 sib_base = indirect_register & 0b111;
+        u8 sib_byte = sib_scale << 6 | sib_index << 3 | sib_base;
         *it = sib_byte;
-        it += (mod != 0b11) & (rm == 0b100);
+        it += encode_sib;
 
-        *(s8*)it = (s8)encoding.displacement;
+        *(s8*)it = encoding.displacement.bytes[0];
         it += is_displacement8 * sizeof(s8);
 
-        *(s32*)it = encoding.displacement;
+        *(s32*)it = encoding.displacement.value;
         it += is_displacement32 * sizeof(s32);
 
-        *(u8*) it = (u8)encoding.immediate;
+        *(u8*) it = encoding.immediate.bytes[0];
         it += ((encoding.is_immediate & (1 << 0)) >> 0) * sizeof(u8);
 
-        *(u16*) it = (u16)encoding.immediate;
+        *(u16*) it = *(u16*)(&encoding.immediate.bytes[0]);
         it += ((encoding.is_immediate & (1 << 1)) >> 1) * sizeof(u16);
 
-        *(u32*) it = (u32)encoding.immediate;
+        *(u32*) it = *(u32*)(&encoding.immediate.bytes[0]);
         it += ((encoding.is_immediate & (1 << 2)) >> 2) * sizeof(u32);
 
-        *(u64*) it = encoding.immediate;
+        *(u64*) it = encoding.immediate.value;
         it += ((encoding.is_immediate & (1 << 3)) >> 3) * sizeof(u64);
 
         let_cast(u8, instruction_length, it - start);
@@ -848,7 +889,6 @@ fn u64 check_instruction(Arena* arena, CheckInstructionArguments arguments)
                 {
                     result = 0;
 
-                    formatter_append(&error_buffer, "Disassembly mismatch. Intended to assemble:\n\t{s}\nbut got from LLVM:\n\t{s}\n", arguments.text, disassembly_text);
                     break;
                 }
             }
@@ -856,6 +896,11 @@ fn u64 check_instruction(Arena* arena, CheckInstructionArguments arguments)
 
         if (!result)
         {
+            if (disassembly_text.length)
+            {
+                formatter_append(&error_buffer, "Disassembly mismatch. Intended to assemble:\n\t{s}\nbut got from LLVM:\n\t{s}\n", arguments.text, disassembly_text);
+            }
+
             formatter_append_string(&error_buffer, strlit("Failed to match correct output. Got:\n\t"));
             assert(arguments.binary.length);
 
@@ -905,7 +950,7 @@ fn u64 check_instruction(Arena* arena, CheckInstructionArguments arguments)
 STRUCT(EncodingTestOptions)
 {
     u64 scalar:1;
-    u64 vectorized:1;
+    u64 wide:1;
 };
 
 fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, EncodingTestOptions options)
@@ -945,6 +990,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
         u64 encoding_top = batch->encoding_offset + batch->encoding_count;
         let(prefix_66, batch->mnemonic == MNEMONIC_x86_64_adcx);
         let(prefix_f3, batch->mnemonic == MNEMONIC_x86_64_adox);
+        let(legacy_prefixes, prefix_66 << LEGACY_PREFIX_66 | prefix_f3 << LEGACY_PREFIX_F3);
 
         for (u64 encoding_index = batch->encoding_offset; encoding_index < encoding_top; encoding_index += 1)
         {
@@ -1026,26 +1072,19 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                             String second_operand_string = sample_immediate_strings(imm_index);
                             u64 immediate = sample_immediate_values(imm_index);
                             String instruction_string = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
-                            InstructionEncoding batch_encoding = {
-                                .is_64_bit = register_a_index == 3,
-                                .has_rex = 0,
-                                .scaled_index_register = 0,
-                                .is_reg1 = 0,
-                                .is_reg2 = 0,
+                            EncodingScalar batch_encoding = {
+                                .rex_w = register_a_index == 3,
+                                .is_register1 = 0,
+                                .is_register2 = 0,
                                 .is_indirect1 = 0,
                                 .is_indirect2 = 0,
                                 .is_immediate = 1 << imm_index,
-                                .is_16_mode = register_a_index == 1,
-                                .prefix_66 = prefix_66,
-                                .prefix_f3 = prefix_f3,
-                                .immediate = immediate,
-                                .displacement = 0,
+                                .legacy_prefixes = legacy_prefixes | (register_a_index == 1) << LEGACY_PREFIX_66,
+                                .immediate = { .value = immediate, },
+                                .displacement = { .value = 0, },
                                 .opcode = encoding->opcode,
-                                .reg1 = 0,
-                                .reg2 = 0,
-                                .sib_scale = 0,
-                                .sib_index = 0,
-                                .sib_base = 0,
+                                .register1 = 0,
+                                .register2 = 0,
                             };
 
                             if (options.scalar)
@@ -1072,6 +1111,10 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                 {
                                     print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
                                 }
+                            }
+
+                            if (options.wide)
+                            {
                             }
                         } break;
                     case 3:
@@ -1110,26 +1153,19 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                 {
                                     String first_operand_string = gpr_to_string(first_gpr, first_operand_index, 0);
                                     String instruction_string = format_instruction1(instruction_text_buffer_slice, mnemonic_string, first_operand_string);
-                                    InstructionEncoding batch_encoding = {
-                                        .is_64_bit = first_operand_index == 3,
-                                        .has_rex = 0,
-                                        .scaled_index_register = 0,
-                                        .is_reg1 = 1,
-                                        .is_reg2 = 0,
+                                    EncodingScalar batch_encoding = {
+                                        .rex_w = first_operand_index == 3,
+                                        .is_register1 = 1,
+                                        .is_register2 = 0,
                                         .is_indirect1 = 0,
                                         .is_indirect2 = 0,
                                         .is_immediate = 0,
-                                        .is_16_mode = first_operand_index == 1,
-                                        .prefix_66 = prefix_66,
-                                        .prefix_f3 = prefix_f3,
-                                        .immediate = 0,
-                                        .displacement = 0,
+                                        .legacy_prefixes = legacy_prefixes | (first_operand_index == 1) << LEGACY_PREFIX_66,
+                                        .immediate = { .value = 0, },
+                                        .displacement = { .value = 0, },
                                         .opcode = encoding->opcode,
-                                        .reg1 = first_gpr,
-                                        .reg2 = 0,
-                                        .sib_scale = 0,
-                                        .sib_index = 0,
-                                        .sib_base = 0,
+                                        .register1 = first_gpr,
+                                        .register2 = 0,
                                     };
 
                                     if (options.scalar)
@@ -1233,26 +1269,19 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                             {
                                                 String second_operand_string = gpr_to_string(second_gpr, second_operand_index, 0);
                                                 String instruction_string = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
-                                                InstructionEncoding batch_encoding = {
-                                                    .is_64_bit = first_operand_index == 3,
-                                                    .has_rex = 0,
-                                                    .scaled_index_register = 0,
-                                                    .is_reg1 = 1,
-                                                    .is_reg2 = 1,
+                                                EncodingScalar batch_encoding = {
+                                                    .rex_w = first_operand_index == 3,
+                                                    .is_register1 = 1,
+                                                    .is_register2 = 1,
                                                     .is_indirect1 = 0,
                                                     .is_indirect2 = 0,
                                                     .is_immediate = 0,
-                                                    .is_16_mode = first_operand_index == 1,
-                                                    .prefix_66 = prefix_66,
-                                                    .prefix_f3 = prefix_f3,
-                                                    .immediate = 0,
-                                                    .displacement = 0,
+                                                    .legacy_prefixes = legacy_prefixes | (first_operand_index == 1) << LEGACY_PREFIX_66,
+                                                    .immediate = { .value = 0, },
+                                                    .displacement = { .value = 0, },
                                                     .opcode = encoding->opcode,
-                                                    .reg1 = first_gpr,
-                                                    .reg2 = second_gpr,
-                                                    .sib_scale = 0,
-                                                    .sib_index = 0,
-                                                    .sib_base = 0,
+                                                    .register1 = first_gpr,
+                                                    .register2 = second_gpr,
                                                 };
 
                                                 if (options.scalar)
@@ -1297,26 +1326,21 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                                 {
                                                     String second_operand_string = gpr_to_string(second_gpr, second_operand_index, gpr_is_extended(first_gpr));
                                                     String instruction_string = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
-                                                    InstructionEncoding batch_encoding = {
-                                                        .is_64_bit = first_operand_index == 3,
-                                                        .has_rex = 0,
-                                                        .scaled_index_register = 0,
-                                                        .is_reg1 = 1,
-                                                        .is_reg2 = 1,
+                                                    EncodingScalar batch_encoding = {
+                                                        .rex_w = first_operand_index == 3,
+                                                        .is_register1 = 1,
+                                                        .is_register2 = 1,
                                                         .is_indirect1 = 1,
                                                         .is_indirect2 = 0,
                                                         .is_immediate = 0,
-                                                        .is_16_mode = first_operand_index == 1,
-                                                        .prefix_66 = prefix_66,
-                                                        .prefix_f3 = prefix_f3,
-                                                        .immediate = 0,
-                                                        .displacement = displacements[displacement_index],
+                                                        .legacy_prefixes = legacy_prefixes | (first_operand_index == 1) << LEGACY_PREFIX_66,
+                                                        .immediate = { .value = 0 },
+                                                        .displacement = { .value = displacements[displacement_index] },
+                                                        .is_displacement8 = displacement_index == 1,
+                                                        .is_displacement32 = displacement_index == 2,
                                                         .opcode = encoding->opcode,
-                                                        .reg1 = first_gpr,
-                                                        .reg2 = second_gpr,
-                                                        .sib_scale = 0,
-                                                        .sib_index = 0b100,
-                                                        .sib_base = (first_gpr & 0b111) == REGISTER_X86_64_SP ? first_gpr : 0,
+                                                        .register1 = first_gpr,
+                                                        .register2 = second_gpr,
                                                     };
 
                                                     if (options.scalar)
@@ -1362,26 +1386,21 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                                 {
                                                     String second_operand_string = second_rm_strings[second_gpr][displacement_index];
                                                     String instruction_string = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
-                                                    InstructionEncoding batch_encoding = {
-                                                        .is_64_bit = first_operand_index == 3,
-                                                        .has_rex = 0,
-                                                        .scaled_index_register = 0,
-                                                        .is_reg1 = 1,
-                                                        .is_reg2 = 1,
+                                                    EncodingScalar batch_encoding = {
+                                                        .rex_w = first_operand_index == 3,
+                                                        .is_register1 = 1,
+                                                        .is_register2 = 1,
                                                         .is_indirect1 = 0,
                                                         .is_indirect2 = 1,
                                                         .is_immediate = 0,
-                                                        .is_16_mode = first_operand_index == 1,
-                                                        .prefix_66 = prefix_66,
-                                                        .prefix_f3 = prefix_f3,
-                                                        .immediate = 0,
-                                                        .displacement = displacements[displacement_index],
+                                                        .legacy_prefixes = legacy_prefixes | (first_operand_index == 1) << LEGACY_PREFIX_66,
+                                                        .immediate = { .value = 0 },
+                                                        .displacement = { .value = displacements[displacement_index] },
+                                                        .is_displacement8 = displacement_index == 1,
+                                                        .is_displacement32 = displacement_index == 2,
                                                         .opcode = encoding->opcode,
-                                                        .reg1 = first_gpr,
-                                                        .reg2 = second_gpr,
-                                                        .sib_scale = 0,
-                                                        .sib_index = 0b100,
-                                                        .sib_base = (second_gpr & 0b111) == REGISTER_X86_64_SP ? second_gpr : 0,
+                                                        .register1 = first_gpr,
+                                                        .register2 = second_gpr,
                                                     };
 
                                                     if (options.scalar)
@@ -1425,26 +1444,19 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                     {
                                         String first_operand_string = gpr_to_string(first_gpr, first_operand_index, 0);
                                         String instruction_string = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
-                                        InstructionEncoding batch_encoding = {
-                                            .is_64_bit = first_operand_index == 3,
-                                            .has_rex = 0,
-                                            .scaled_index_register = 0,
-                                            .is_reg1 = 1,
-                                            .is_reg2 = 0,
+                                        EncodingScalar batch_encoding = {
+                                            .rex_w = first_operand_index == 3,
+                                            .is_register1 = 1,
+                                            .is_register2 = 0,
                                             .is_indirect1 = 0,
                                             .is_indirect2 = 0,
                                             .is_immediate = 1 << second_operand_index,
-                                            .is_16_mode = first_operand_index == 1,
-                                            .prefix_66 = prefix_66,
-                                            .prefix_f3 = prefix_f3,
-                                            .immediate = immediate,
-                                            .displacement = 0,
+                                            .legacy_prefixes = legacy_prefixes | (first_operand_index == 1) << LEGACY_PREFIX_66,
+                                            .immediate = { .value = immediate },
+                                            .displacement = { .value = 0 },
                                             .opcode = encoding->opcode,
-                                            .reg1 = first_gpr,
-                                            .reg2 = 0,
-                                            .sib_scale = 0,
-                                            .sib_index = 0,
-                                            .sib_base = 0,
+                                            .register1 = first_gpr,
+                                            .register2 = 0,
                                         };
 
                                         if (options.scalar)
@@ -1482,26 +1494,21 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                             {
                                                 String first_operand_string = first_rm_strings[first_gpr][displacement_index];
                                                 String instruction_string = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string);
-                                                InstructionEncoding batch_encoding = {
-                                                    .is_64_bit = first_operand_index == 3,
-                                                    .has_rex = 0,
-                                                    .scaled_index_register = 0,
-                                                    .is_reg1 = 1,
-                                                    .is_reg2 = 0,
+                                                EncodingScalar batch_encoding = {
+                                                    .rex_w = first_operand_index == 3,
+                                                    .is_register1 = 1,
+                                                    .is_register2 = 0,
                                                     .is_indirect1 = 1,
                                                     .is_indirect2 = 0,
                                                     .is_immediate = 1 << second_operand_index,
-                                                    .is_16_mode = first_operand_index == 1,
-                                                    .prefix_66 = prefix_66,
-                                                    .prefix_f3 = prefix_f3,
-                                                    .immediate = immediate,
-                                                    .displacement = displacements[displacement_index],
+                                                    .legacy_prefixes = legacy_prefixes | (first_operand_index == 1) << LEGACY_PREFIX_66,
+                                                    .immediate = { .value = immediate },
+                                                    .displacement = { .value = displacements[displacement_index] },
+                                                    .is_displacement8 = displacement_index == 1,
+                                                    .is_displacement32 = displacement_index == 2,
                                                     .opcode = encoding->opcode,
-                                                    .reg1 = first_gpr,
-                                                    .reg2 = 0,
-                                                    .sib_scale = 0,
-                                                    .sib_index = 0b100,
-                                                    .sib_base = (first_gpr & 0b111) == REGISTER_X86_64_SP ? first_gpr : 0,
+                                                    .register1 = first_gpr,
+                                                    .register2 = 0,
                                                 };
 
                                                 if (options.scalar)
@@ -1565,6 +1572,11 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
 
             print_string(encoding_separator_string);
             print_string(strlit("\n"));
+
+            if (failure_count != 0)
+            {
+                failed_execution();
+            }
         }
     }
 
@@ -1748,21 +1760,6 @@ fn TestDataset construct_test_cases()
 
 #include <immintrin.h>
 typedef u64 Bitset;
-typedef enum LegacyPrefix
-{
-    LEGACY_PREFIX_F0,
-    LEGACY_PREFIX_F2,
-    LEGACY_PREFIX_F3,
-    LEGACY_PREFIX_2E,
-    LEGACY_PREFIX_36,
-    LEGACY_PREFIX_3E,
-    LEGACY_PREFIX_26,
-    LEGACY_PREFIX_64,
-    LEGACY_PREFIX_65,
-    LEGACY_PREFIX_66,
-    LEGACY_PREFIX_67,
-    LEGACY_PREFIX_COUNT,
-} LegacyPrefix;
 
 STRUCT(GPRMask)
 {
@@ -1796,7 +1793,6 @@ STRUCT(EncodingBatch)
     u8 immediate[8][64];
 };
 
-
 fn Bitset bitset_from_bit(u8 bit)
 {
     assert(bit == 1 || bit == 0);
@@ -1811,23 +1807,6 @@ fn GPRMask register_mask_batch_from_scalar(u8 scalar_register)
     GPRMask result = { value64, value64, value64, value64 };
     return result;
 }
-
-STRUCT(EncodingScalar)
-{
-    u64 legacy_prefixes:LEGACY_PREFIX_COUNT;
-    u64 register1:4;
-    u64 register2:4;
-    u64 is_indirect1:1;
-    u64 is_indirect2:1;
-    u64 is_register1:1;
-    u64 is_register2:2;
-    u64 is_immediate:4;
-    u64 is_displacement8:1;
-    u64 is_displacement32:1;
-    u8 immediate_bytes[8];
-    u8 opcode[3];
-    u8 opcode_length;
-};
 
 fn EncodingBatch encoding_batch_from_scalar(EncodingScalar scalar)
 {
@@ -1852,47 +1831,44 @@ fn EncodingBatch encoding_batch_from_scalar(EncodingScalar scalar)
 
     for (u64 i = 0; i < batch_element_count; i += 1)
     {
-        batch.opcode.values[0][i] = scalar.opcode[0];
-        batch.opcode.values[1][i] = scalar.opcode[1];
-        batch.opcode.values[2][i] = scalar.opcode[2];
+        batch.opcode.values[0][i] = scalar.opcode.bytes[0];
+        batch.opcode.values[1][i] = scalar.opcode.bytes[1];
+        batch.opcode.values[2][i] = scalar.opcode.bytes[2];
     }
 
     for (u64 i = 0; i < array_length(batch.opcode.lengths); i += 1)
     {
         batch.opcode.lengths[i] = (OpcodeLen){
-            .length0 = scalar.opcode_length,
-            .length1 = scalar.opcode_length,
-            .length2 = scalar.opcode_length,
-            .length3 = scalar.opcode_length,
+            .length0 = scalar.opcode.length,
+            .length1 = scalar.opcode.length,
+            .length2 = scalar.opcode.length,
+            .length3 = scalar.opcode.length,
         };
     }
 
-    for (u32 immediate_index = 0; immediate_index < array_length(scalar.immediate_bytes); immediate_index += 1)
+    for (u32 immediate_index = 0; immediate_index < array_length(scalar.immediate.bytes); immediate_index += 1)
     {
         for (u32 batch_index = 0; batch_index < batch_element_count; batch_index += 1)
         {
-            batch.immediate[immediate_index][batch_index] = scalar.immediate_bytes[immediate_index];
+            batch.immediate[immediate_index][batch_index] = scalar.immediate.bytes[immediate_index];
         }
     }
 
     return batch;
 }
 
+
 fn u32 encode(u8* restrict buffer, const EncodingBatch* const restrict batch)
 {
-    __m512i prefix_f0 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_F0]), _mm512_set1_epi8(0xf0));
-    __m512i prefix_f2 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_F2]), _mm512_set1_epi8(0xf2));
-    __m512i prefix_f3 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_F3]), _mm512_set1_epi8(0xf3));
-    __m512i prefix_2e = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_2E]), _mm512_set1_epi8(0x2e));
-    __m512i prefix_36 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_36]), _mm512_set1_epi8(0x36));
-    __m512i prefix_3e = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_3E]), _mm512_set1_epi8(0x3e));
-    __m512i prefix_26 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_26]), _mm512_set1_epi8(0x26));
-    __m512i prefix_64 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_64]), _mm512_set1_epi8(0x64));
-    __m512i prefix_65 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_65]), _mm512_set1_epi8(0x65));
-    __m512i prefix_66 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_66]), _mm512_set1_epi8(0x66));
-    __m512i prefix_67 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_67]), _mm512_set1_epi8(0x67));
+    __m512i prefixes[LEGACY_PREFIX_COUNT];
+    for (LegacyPrefix prefix = 0; prefix < LEGACY_PREFIX_COUNT; prefix += 1)
+    {
+        prefixes[prefix] = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[prefix]), _mm512_set1_epi8(legacy_prefixes[prefix]));
+    }
 
-    __m512i legacy_prefix = _mm512_or_epi32(_mm512_or_epi32(_mm512_or_epi32(_mm512_or_epi32(prefix_65, prefix_66), prefix_67), _mm512_or_epi32(_mm512_or_epi32(prefix_f0, prefix_f2), _mm512_or_epi32(prefix_f3, prefix_2e))), _mm512_or_epi32(_mm512_or_epi32(prefix_36, prefix_3e), _mm512_or_epi32(prefix_26, prefix_64)));
+    // INFO: Asserting here because the following OR must be updated when a new legacy prefix is added
+    static_assert(LEGACY_PREFIX_COUNT == 11);
+    __m512i legacy_prefix = _mm512_or_epi32(_mm512_or_epi32(_mm512_or_epi32(_mm512_or_epi32(prefixes[0], prefixes[1]), prefixes[2]), _mm512_or_epi32(_mm512_or_epi32(prefixes[3], prefixes[4]), _mm512_or_epi32(prefixes[5], prefixes[6]))), _mm512_or_epi32(_mm512_or_epi32(prefixes[7], prefixes[8]), _mm512_or_epi32(prefixes[9], prefixes[10])));
     __mmask64 legacy_prefix_mask = _mm512_test_epi8_mask(legacy_prefix, _mm512_set1_epi8(0xff));
     __m512i legacy_prefix_position = _mm512_mask_set1_epi8(_mm512_set1_epi8(0x0f), legacy_prefix_mask, 0);
     __m512i instruction_length = _mm512_maskz_mov_epi8(legacy_prefix_mask, _mm512_set1_epi8(0x01));
@@ -1905,7 +1881,6 @@ fn u32 encode(u8* restrict buffer, const EncodingBatch* const restrict batch)
     __mmask64 is_displacement8 = _cvtu64_mask64(batch->is_displacement8);
     __mmask64 is_displacement32 = _cvtu64_mask64(batch->is_displacement32);
 
-    // __mmask64 is_extended_mask[2];
     __mmask64 is_register[2];
     __mmask64 is_indirect[2];
     __m512i register_mask[2];
@@ -2071,7 +2046,7 @@ int main(int argc, char** argv, char** envp)
     Arena* arena = arena_initialize_default(MB(2));
     EncodingTestOptions options = {
         .scalar = 1,
-        .vectorized = 1,
+        .wide = 1,
     };
     u8 result = encoding_test_instruction_batches(arena, dataset, options);
 
