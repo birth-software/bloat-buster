@@ -1778,6 +1778,22 @@ STRUCT(EncodingBatch)
     u8 immediate[8][64];
 };
 
+
+fn Bitset bitset_from_bit(u8 bit)
+{
+    assert(bit == 1 || bit == 0);
+    return -(u64)bit;
+}
+
+fn GPRMask register_mask_batch_from_scalar(u8 scalar_register)
+{
+    u64 reg = scalar_register & 0b1111;
+    assert(reg == scalar_register);
+    u64 value64 = (reg << 60) | (reg << 56) | (reg << 52) | (reg << 48) | (reg << 44) | (reg << 40) | (reg << 36) | (reg << 32) | (reg << 28) | (reg << 24) | (reg << 20) | (reg << 16) | (reg << 12) | (reg << 8) | (reg << 4) | reg;
+    GPRMask result = { value64, value64, value64, value64 };
+    return result;
+}
+
 STRUCT(EncodingScalar)
 {
     u64 legacy_prefixes:LEGACY_PREFIX_COUNT;
@@ -1794,21 +1810,6 @@ STRUCT(EncodingScalar)
     u8 opcode[3];
     u8 opcode_length;
 };
-
-fn Bitset bitset_from_bit(u8 bit)
-{
-    assert(bit == 1 || bit == 0);
-    return -(u64)bit;
-}
-
-fn GPRMask register_mask_batch_from_scalar(u8 scalar_register)
-{
-    u64 reg = scalar_register & 0b1111;
-    assert(reg == scalar_register);
-    u64 value64 = (reg << 60) | (reg << 56) | (reg << 52) | (reg << 48) | (reg << 44) | (reg << 40) | (reg << 36) | (reg << 32) | (reg << 28) | (reg << 24) | (reg << 20) | (reg << 16) | (reg << 12) | (reg << 8) | (reg << 4) | reg;
-    GPRMask result = { value64, value64, value64, value64 };
-    return result;
-}
 
 fn EncodingBatch encoding_batch_from_scalar(EncodingScalar scalar)
 {
@@ -1848,10 +1849,18 @@ fn EncodingBatch encoding_batch_from_scalar(EncodingScalar scalar)
         };
     }
 
+    for (u32 immediate_index = 0; immediate_index < array_length(scalar.immediate_bytes); immediate_index += 1)
+    {
+        for (u32 batch_index = 0; batch_index < batch_element_count; batch_index += 1)
+        {
+            batch.immediate[immediate_index][batch_index] = scalar.immediate_bytes[immediate_index];
+        }
+    }
+
     return batch;
 }
 
-u32 encode(u8* restrict buffer, EncodingBatch* restrict batch)
+fn u32 encode(u8* restrict buffer, const EncodingBatch* const restrict batch)
 {
     __m512i prefix_f0 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_F0]), _mm512_set1_epi8(0xf0));
     __m512i prefix_f2 = _mm512_maskz_mov_epi8(_cvtu64_mask64(batch->legacy_prefixes[LEGACY_PREFIX_F2]), _mm512_set1_epi8(0xf2));
@@ -1882,6 +1891,7 @@ u32 encode(u8* restrict buffer, EncodingBatch* restrict batch)
     __mmask64 is_register[2];
     __mmask64 is_indirect[2];
     __m512i register_mask[2];
+
     for (u32 i = 0; i < array_length(batch->register_mask); i += 1)
     {
         __m256i register_mask_256 = _mm256_loadu_epi8(&batch->register_mask[i]);
@@ -1905,7 +1915,7 @@ u32 encode(u8* restrict buffer, EncodingBatch* restrict batch)
     __m512i rex_byte = _mm512_or_epi32(_mm512_set1_epi32(0x40), _mm512_or_epi32(_mm512_or_epi32(rex_b, rex_x), _mm512_or_epi32(rex_r, rex_w)));
     __mmask64 rex_mask = _mm512_test_epi8_mask(rex_byte, _mm512_set1_epi8(0x0f));
     __m512i rex_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), rex_mask, instruction_length);
-    instruction_length = _mm512_maskz_add_epi8(rex_mask, instruction_length, _mm512_set1_epi8(0x01));
+    instruction_length = _mm512_add_epi8(instruction_length, _mm512_maskz_set1_epi8(rex_mask, 0x01));
 
     u8 rex_bytes[64];
     u8 rex_positions[64];
@@ -1932,7 +1942,7 @@ u32 encode(u8* restrict buffer, EncodingBatch* restrict batch)
     __m512i opcode2 = _mm512_loadu_epi8(&batch->opcode.values[1]);
     __mmask64 opcode2_mask = _mm512_test_epi8_mask(opcode_lengths_512, _mm512_set1_epi8(0b10));
     __m512i opcode2_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), opcode2_mask, instruction_length);
-    instruction_length = _mm512_maskz_add_epi8(opcode2_mask, instruction_length, _mm512_set1_epi8(0x01));
+    instruction_length = _mm512_add_epi8(instruction_length, _mm512_maskz_set1_epi8(opcode2_mask, 0x01));
 
     u8 opcode2_bytes[64];
     u8 opcode2_positions[64];
@@ -1942,7 +1952,7 @@ u32 encode(u8* restrict buffer, EncodingBatch* restrict batch)
     __m512i opcode3 = _mm512_loadu_epi8(&batch->opcode.values[2]);
     __mmask64 opcode3_mask = _mm512_cmpeq_epi8_mask(opcode_lengths_512, _mm512_set1_epi8(0b11));
     __m512i opcode3_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), opcode3_mask, instruction_length);
-    instruction_length = _mm512_maskz_add_epi8(opcode3_mask, instruction_length, _mm512_set1_epi8(0x01));
+    instruction_length = _mm512_add_epi8(instruction_length, _mm512_maskz_set1_epi8(opcode3_mask, 0x01));
 
     u8 opcode3_bytes[64];
     u8 opcode3_positions[64];
@@ -1956,7 +1966,7 @@ u32 encode(u8* restrict buffer, EncodingBatch* restrict batch)
     __m512i reg = _mm512_and_si512(reg_register, _mm512_set1_epi8(0b111));
     __m512i mod_rm = _mm512_or_epi32(_mm512_or_epi32(rm, _mm512_slli_epi32(reg, 3)), _mm512_slli_epi32(mod, 6));
     __m512i mod_rm_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), mod_rm_mask, instruction_length);
-    instruction_length = _mm512_maskz_add_epi8(mod_rm_mask, instruction_length, _mm512_set1_epi8(0x01));
+    instruction_length = _mm512_add_epi8(instruction_length, _mm512_maskz_set1_epi8(mod_rm_mask, 0x01));
 
     u8 mod_rm_bytes[64];
     u8 mod_rm_positions[64];
@@ -1970,7 +1980,7 @@ u32 encode(u8* restrict buffer, EncodingBatch* restrict batch)
     __m512i sib_base = indirect_register_low3;
     __m512i sib = _mm512_or_epi32(_mm512_or_epi32(sib_index, sib_base), sib_scale);
     __m512i sib_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), sib_mask, instruction_length);
-    instruction_length = _mm512_maskz_add_epi8(sib_mask, instruction_length, _mm512_set1_epi8(0x01));
+    instruction_length = _mm512_add_epi8(instruction_length, _mm512_maskz_set1_epi8(sib_mask, 0x01));
 
     u8 sib_bytes[64];
     u8 sib_positions[64];
@@ -1982,7 +1992,7 @@ u32 encode(u8* restrict buffer, EncodingBatch* restrict batch)
     {
         __mmask64 immediate_mask = _cvtu64_mask64(batch->is_immediate[i]);
         __m512i immediate_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), immediate_mask, instruction_length);
-        instruction_length = _mm512_maskz_add_epi8(immediate_mask, instruction_length, _mm512_set1_epi8(1 << i));
+        instruction_length = _mm512_add_epi8(instruction_length, _mm512_maskz_set1_epi8(immediate_mask, 1 << i));
         _mm512_storeu_epi8(immediate_positions[i], immediate_position);
     }
 
@@ -2015,7 +2025,7 @@ u32 encode(u8* restrict buffer, EncodingBatch* restrict batch)
 
     u32 buffer_i = 0;
 
-    for (u32 i = 0; array_length(instruction_length); i += 1)
+    for (u32 i = 0; i < array_length(separate_lengths); i += 1)
     {
         let(separate_length, separate_lengths[i]);
         if (separate_length >= 1 && separate_length <= 15)
@@ -2042,5 +2052,40 @@ int main(int argc, char** argv, char** envp)
     TestDataset dataset = construct_test_cases();
     Arena* arena = arena_initialize_default(MB(2));
     u8 result = encoding_test_instruction_batches(arena, dataset);
+
+    {
+        u8 buffer[batch_element_count * max_instruction_byte_count];
+// STRUCT(EncodingScalar)
+// {
+//     u64 legacy_prefixes:LEGACY_PREFIX_COUNT;
+//     u64 register1:4;
+//     u64 register2:4;
+//     u64 is_indirect1:1;
+//     u64 is_indirect2:1;
+//     u64 is_register1:1;
+//     u64 is_register2:2;
+//     u64 is_immediate:4;
+//     u64 is_displacement8:1;
+//     u64 is_displacement32:1;
+//     u8 immediate_bytes[8];
+//     u8 opcode[3];
+//     u8 opcode_length;
+// };
+        EncodingScalar scalar = {
+            .is_immediate = 1 << 0,
+            .immediate_bytes = { 10 },
+            .opcode = { 0x04 },
+            .opcode_length = 1,
+        };
+        EncodingBatch batch = encoding_batch_from_scalar(scalar);
+        u32 byte_count = encode(buffer, &batch);
+        assert(byte_count % batch_element_count == 0);
+        u32 scalar_byte_count = byte_count / batch_element_count;
+        for (u32 i = 0; i < scalar_byte_count; i += 1)
+        {
+            print("[{u32}] = 0x{u32:x,w=2}\n", i, buffer[i]);
+        }
+    }
+
     return result;
 }
