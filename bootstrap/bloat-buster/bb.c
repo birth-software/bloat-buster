@@ -140,7 +140,7 @@ STRUCT(InstructionEncoding)
 #define batch_element_count (64)
 #define max_instruction_byte_count (16)
 
-fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* const restrict encodings, u64 encoding_count)
+fn u32 encode_instruction_batch(u8* restrict output, const InstructionEncoding* const restrict encodings, u64 encoding_count)
 {
     assert(encoding_count);
     u8 buffers[batch_element_count][max_instruction_byte_count];
@@ -257,7 +257,7 @@ fn u16 encode_instruction_batch(u8* restrict output, const InstructionEncoding* 
         it += instruction_length;
     }
 
-    let(length, (u16)(it - output));
+    let(length, (u32)(it - output));
     assert(it - output != 0);
     assert(length);
     return length;
@@ -902,7 +902,13 @@ fn u64 check_instruction(Arena* arena, CheckInstructionArguments arguments)
     return error_buffer.index;
 }
 
-fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
+STRUCT(EncodingTestOptions)
+{
+    u64 scalar:1;
+    u64 vectorized:1;
+};
+
+fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, EncodingTestOptions options)
 {
     u8 result = 0;
     u8 instruction_binary_buffer[256];
@@ -914,8 +920,8 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
     vb_ensure_capacity(&clang_pipe_buffer, 1024*1024);
     llvm_initialize_macro(X86, _null_prefix_());
     let(disassembler, LLVMCreateDisasmCPU("x86_64-freestanding", "znver5", 0, 0, 0, 0));
-    u64 options = LLVMDisassembler_Option_AsmPrinterVariant | LLVMDisassembler_Option_PrintImmHex;
-    if (!LLVMSetDisasmOptions(disassembler, options))
+    u64 disassembly_options = LLVMDisassembler_Option_AsmPrinterVariant | LLVMDisassembler_Option_PrintImmHex;
+    if (!LLVMSetDisasmOptions(disassembler, disassembly_options))
     {
         failed_execution();
     }
@@ -977,17 +983,6 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                 }
                 memcpy(&encoding_buffer[encoding_buffer_i], "... ", 4);
                 encoding_buffer_i += 4;
-
-                // let(current_length, encoding_buffer_i);
-
-                // encoding_buffer[encoding_buffer_i] = '\n';
-                // encoding_buffer_i += 1;
-                //
-                // for (u64 ei = 0; ei < current_length; ei += 1)
-                // {
-                //     encoding_buffer[encoding_buffer_i] = '-';
-                //     encoding_buffer_i += 1;
-                // }
 
                 encoding_buffer[encoding_buffer_i] = 0;
 
@@ -1052,27 +1047,31 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                 .sib_index = 0,
                                 .sib_base = 0,
                             };
-                            u16 length = encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1);
-                            String instruction_bytes = {
-                                .pointer = instruction_binary_buffer,
-                                .length = length,
-                            };
-                            CheckInstructionArguments check_args = {
-                                .clang_path = clang_path,
-                                .text = instruction_string,
-                                .binary = instruction_bytes,
-                                .error_buffer = error_buffer_slice,
-                                .clang_pipe_buffer = &clang_pipe_buffer,
-                                .disassembler = disassembler,
-                            };
-                            u64 error_buffer_length = check_instruction(arena, check_args);
-                            instance_index += 1;
-                            let(first_failure, failure_count == 0);
-                            failure_count += error_buffer_length != 0;
-                            String error_string = { .pointer = error_buffer, .length = error_buffer_length };
-                            if (error_buffer_length != 0)
+
+                            if (options.scalar)
                             {
-                                print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                let(length, encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1));
+                                String instruction_bytes = {
+                                    .pointer = instruction_binary_buffer,
+                                    .length = length,
+                                };
+                                CheckInstructionArguments check_args = {
+                                    .clang_path = clang_path,
+                                    .text = instruction_string,
+                                    .binary = instruction_bytes,
+                                    .error_buffer = error_buffer_slice,
+                                    .clang_pipe_buffer = &clang_pipe_buffer,
+                                    .disassembler = disassembler,
+                                };
+                                u64 error_buffer_length = check_instruction(arena, check_args);
+                                instance_index += 1;
+                                let(first_failure, failure_count == 0);
+                                failure_count += error_buffer_length != 0;
+                                String error_string = { .pointer = error_buffer, .length = error_buffer_length };
+                                if (error_buffer_length != 0)
+                                {
+                                    print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                }
                             }
                         } break;
                     case 3:
@@ -1132,28 +1131,32 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                         .sib_index = 0,
                                         .sib_base = 0,
                                     };
-                                    u16 length = encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1);
-                                    String instruction_bytes = {
-                                        .pointer = instruction_binary_buffer,
-                                        .length = length,
-                                    };
-                                    CheckInstructionArguments check_args = {
-                                        .clang_path = clang_path,
-                                        .text = instruction_string,
-                                        .binary = instruction_bytes,
-                                        .error_buffer = error_buffer_slice,
-                                        // .check_text = !first_is_rm && second_is_rm,
-                                        .clang_pipe_buffer = &clang_pipe_buffer,
-                                        .disassembler = disassembler,
-                                    };
-                                    u64 error_buffer_length = check_instruction(arena, check_args);
-                                    instance_index += 1;
-                                    let(first_failure, failure_count == 0);
-                                    failure_count = error_buffer_length != 0;
-                                    String error_string = { .pointer = error_buffer, .length = error_buffer_length };
-                                    if (error_buffer_length != 0)
+
+                                    if (options.scalar)
                                     {
-                                        print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                        let(length, encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1));
+                                        String instruction_bytes = {
+                                            .pointer = instruction_binary_buffer,
+                                            .length = length,
+                                        };
+                                        CheckInstructionArguments check_args = {
+                                            .clang_path = clang_path,
+                                            .text = instruction_string,
+                                            .binary = instruction_bytes,
+                                            .error_buffer = error_buffer_slice,
+                                            // .check_text = !first_is_rm && second_is_rm,
+                                            .clang_pipe_buffer = &clang_pipe_buffer,
+                                            .disassembler = disassembler,
+                                        };
+                                        u64 error_buffer_length = check_instruction(arena, check_args);
+                                        instance_index += 1;
+                                        let(first_failure, failure_count == 0);
+                                        failure_count = error_buffer_length != 0;
+                                        String error_string = { .pointer = error_buffer, .length = error_buffer_length };
+                                        if (error_buffer_length != 0)
+                                        {
+                                            print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                        }
                                     }
                                 }
 
@@ -1251,28 +1254,32 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                     .sib_index = 0,
                                                     .sib_base = 0,
                                                 };
-                                                u16 length = encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1);
-                                                String instruction_bytes = {
-                                                    .pointer = instruction_binary_buffer,
-                                                    .length = length,
-                                                };
-                                                CheckInstructionArguments check_args = {
-                                                    .clang_path = clang_path,
-                                                    .text = instruction_string,
-                                                    .binary = instruction_bytes,
-                                                    .error_buffer = error_buffer_slice,
-                                                    // .check_text = !first_is_rm && second_is_rm,
-                                                    .clang_pipe_buffer = &clang_pipe_buffer,
-                                                    .disassembler = disassembler,
-                                                };
-                                                u64 error_buffer_length = check_instruction(arena, check_args);
-                                                instance_index += 1;
-                                                let(first_failure, failure_count == 0);
-                                                failure_count = error_buffer_length != 0;
-                                                String error_string = { .pointer = error_buffer, .length = error_buffer_length };
-                                                if (error_buffer_length != 0)
+
+                                                if (options.scalar)
                                                 {
-                                                    print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                                    let(length, encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1));
+                                                    String instruction_bytes = {
+                                                        .pointer = instruction_binary_buffer,
+                                                        .length = length,
+                                                    };
+                                                    CheckInstructionArguments check_args = {
+                                                        .clang_path = clang_path,
+                                                        .text = instruction_string,
+                                                        .binary = instruction_bytes,
+                                                        .error_buffer = error_buffer_slice,
+                                                        // .check_text = !first_is_rm && second_is_rm,
+                                                        .clang_pipe_buffer = &clang_pipe_buffer,
+                                                        .disassembler = disassembler,
+                                                    };
+                                                    u64 error_buffer_length = check_instruction(arena, check_args);
+                                                    instance_index += 1;
+                                                    let(first_failure, failure_count == 0);
+                                                    failure_count = error_buffer_length != 0;
+                                                    String error_string = { .pointer = error_buffer, .length = error_buffer_length };
+                                                    if (error_buffer_length != 0)
+                                                    {
+                                                        print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                                    }
                                                 }
                                             }
                                         }
@@ -1311,28 +1318,32 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                         .sib_index = 0b100,
                                                         .sib_base = (first_gpr & 0b111) == REGISTER_X86_64_SP ? first_gpr : 0,
                                                     };
-                                                    u16 length = encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1);
-                                                    String instruction_bytes = {
-                                                        .pointer = instruction_binary_buffer,
-                                                        .length = length,
-                                                    };
-                                                    CheckInstructionArguments check_args = {
-                                                        .clang_path = clang_path,
-                                                        .text = instruction_string,
-                                                        .binary = instruction_bytes,
-                                                        .error_buffer = error_buffer_slice,
-                                                        // .check_text = !first_is_rm && second_is_rm,
-                                                        .clang_pipe_buffer = &clang_pipe_buffer,
-                                                        .disassembler = disassembler,
-                                                    };
-                                                    u64 error_buffer_length = check_instruction(arena, check_args);
-                                                    instance_index += 1;
-                                                    let(first_failure, failure_count == 0);
-                                                    failure_count = error_buffer_length != 0;
-                                                    String error_string = { .pointer = error_buffer, .length = error_buffer_length };
-                                                    if (error_buffer_length != 0)
+
+                                                    if (options.scalar)
                                                     {
-                                                        print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                                        let(length, encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1));
+                                                        String instruction_bytes = {
+                                                            .pointer = instruction_binary_buffer,
+                                                            .length = length,
+                                                        };
+                                                        CheckInstructionArguments check_args = {
+                                                            .clang_path = clang_path,
+                                                            .text = instruction_string,
+                                                            .binary = instruction_bytes,
+                                                            .error_buffer = error_buffer_slice,
+                                                            // .check_text = !first_is_rm && second_is_rm,
+                                                            .clang_pipe_buffer = &clang_pipe_buffer,
+                                                            .disassembler = disassembler,
+                                                        };
+                                                        u64 error_buffer_length = check_instruction(arena, check_args);
+                                                        instance_index += 1;
+                                                        let(first_failure, failure_count == 0);
+                                                        failure_count = error_buffer_length != 0;
+                                                        String error_string = { .pointer = error_buffer, .length = error_buffer_length };
+                                                        if (error_buffer_length != 0)
+                                                        {
+                                                            print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                                        }
                                                     }
                                                 }
                                             }
@@ -1372,28 +1383,32 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                         .sib_index = 0b100,
                                                         .sib_base = (second_gpr & 0b111) == REGISTER_X86_64_SP ? second_gpr : 0,
                                                     };
-                                                    u16 length = encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1);
-                                                    String instruction_bytes = {
-                                                        .pointer = instruction_binary_buffer,
-                                                        .length = length,
-                                                    };
-                                                    CheckInstructionArguments check_args = {
-                                                        .clang_path = clang_path,
-                                                        .text = instruction_string,
-                                                        .binary = instruction_bytes,
-                                                        .error_buffer = error_buffer_slice,
-                                                        // .check_text = !first_is_rm && second_is_rm,
-                                                        .clang_pipe_buffer = &clang_pipe_buffer,
-                                                        .disassembler = disassembler,
-                                                    };
-                                                    u64 error_buffer_length = check_instruction(arena, check_args);
-                                                    instance_index += 1;
-                                                    let(first_failure, failure_count == 0);
-                                                    failure_count = error_buffer_length != 0;
-                                                    String error_string = { .pointer = error_buffer, .length = error_buffer_length };
-                                                    if (error_buffer_length != 0)
+
+                                                    if (options.scalar)
                                                     {
-                                                        print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                                        u16 length = encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1);
+                                                        String instruction_bytes = {
+                                                            .pointer = instruction_binary_buffer,
+                                                            .length = length,
+                                                        };
+                                                        CheckInstructionArguments check_args = {
+                                                            .clang_path = clang_path,
+                                                            .text = instruction_string,
+                                                            .binary = instruction_bytes,
+                                                            .error_buffer = error_buffer_slice,
+                                                            // .check_text = !first_is_rm && second_is_rm,
+                                                            .clang_pipe_buffer = &clang_pipe_buffer,
+                                                            .disassembler = disassembler,
+                                                        };
+                                                        u64 error_buffer_length = check_instruction(arena, check_args);
+                                                        instance_index += 1;
+                                                        let(first_failure, failure_count == 0);
+                                                        failure_count = error_buffer_length != 0;
+                                                        String error_string = { .pointer = error_buffer, .length = error_buffer_length };
+                                                        if (error_buffer_length != 0)
+                                                        {
+                                                            print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                                        }
                                                     }
                                                 }
                                             }
@@ -1431,32 +1446,31 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                             .sib_index = 0,
                                             .sib_base = 0,
                                         };
-                                        // if (batch->mnemonic == MNEMONIC_x86_64_adc)
-                                        // {
-                                        //     assert(encoding->opcode.extension != 0);
-                                        //     if (batch_encoding.opcode_extension != 0) breakpoint();
-                                        // }
-                                        u16 length = encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1);
-                                        String instruction_bytes = {
-                                            .pointer = instruction_binary_buffer,
-                                            .length = length,
-                                        };
-                                        CheckInstructionArguments check_args = {
-                                            .clang_path = clang_path,
-                                            .text = instruction_string,
-                                            .binary = instruction_bytes,
-                                            .error_buffer = error_buffer_slice,
-                                            .clang_pipe_buffer = &clang_pipe_buffer,
-                                            .disassembler = disassembler,
-                                        };
-                                        u64 error_buffer_length = check_instruction(arena, check_args);
-                                        instance_index += 1;
-                                        let(first_failure, failure_count == 0);
-                                        failure_count += error_buffer_length != 0;
-                                        String error_string = { .pointer = error_buffer, .length = error_buffer_length };
-                                        if (error_buffer_length != 0)
+
+                                        if (options.scalar)
                                         {
-                                            print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                            let(length, encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1));
+                                            String instruction_bytes = {
+                                                .pointer = instruction_binary_buffer,
+                                                .length = length,
+                                            };
+                                            CheckInstructionArguments check_args = {
+                                                .clang_path = clang_path,
+                                                .text = instruction_string,
+                                                .binary = instruction_bytes,
+                                                .error_buffer = error_buffer_slice,
+                                                .clang_pipe_buffer = &clang_pipe_buffer,
+                                                .disassembler = disassembler,
+                                            };
+                                            u64 error_buffer_length = check_instruction(arena, check_args);
+                                            instance_index += 1;
+                                            let(first_failure, failure_count == 0);
+                                            failure_count += error_buffer_length != 0;
+                                            String error_string = { .pointer = error_buffer, .length = error_buffer_length };
+                                            if (error_buffer_length != 0)
+                                            {
+                                                print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                            }
                                         }
                                     }
 
@@ -1489,27 +1503,31 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset)
                                                     .sib_index = 0b100,
                                                     .sib_base = (first_gpr & 0b111) == REGISTER_X86_64_SP ? first_gpr : 0,
                                                 };
-                                                u16 length = encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1);
-                                                String instruction_bytes = {
-                                                    .pointer = instruction_binary_buffer,
-                                                    .length = length,
-                                                };
-                                                CheckInstructionArguments check_args = {
-                                                    .clang_path = clang_path,
-                                                    .text = instruction_string,
-                                                    .binary = instruction_bytes,
-                                                    .error_buffer = error_buffer_slice,
-                                                    .clang_pipe_buffer = &clang_pipe_buffer,
-                                                    .disassembler = disassembler,
-                                                };
-                                                u64 error_buffer_length = check_instruction(arena, check_args);
-                                                instance_index += 1;
-                                                let(first_failure, failure_count == 0);
-                                                failure_count += error_buffer_length != 0;
-                                                String error_string = { .pointer = error_buffer, .length = error_buffer_length };
-                                                if (error_buffer_length != 0)
+
+                                                if (options.scalar)
                                                 {
-                                                    print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                                    let(length, encode_instruction_batch(instruction_binary_buffer, &batch_encoding, 1));
+                                                    String instruction_bytes = {
+                                                        .pointer = instruction_binary_buffer,
+                                                        .length = length,
+                                                    };
+                                                    CheckInstructionArguments check_args = {
+                                                        .clang_path = clang_path,
+                                                        .text = instruction_string,
+                                                        .binary = instruction_bytes,
+                                                        .error_buffer = error_buffer_slice,
+                                                        .clang_pipe_buffer = &clang_pipe_buffer,
+                                                        .disassembler = disassembler,
+                                                    };
+                                                    u64 error_buffer_length = check_instruction(arena, check_args);
+                                                    instance_index += 1;
+                                                    let(first_failure, failure_count == 0);
+                                                    failure_count += error_buffer_length != 0;
+                                                    String error_string = { .pointer = error_buffer, .length = error_buffer_length };
+                                                    if (error_buffer_length != 0)
+                                                    {
+                                                        print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", instance_index, instruction_string, error_string);
+                                                    }
                                                 }
                                             }
                                         }
@@ -2051,41 +2069,11 @@ int main(int argc, char** argv, char** envp)
 
     TestDataset dataset = construct_test_cases();
     Arena* arena = arena_initialize_default(MB(2));
-    u8 result = encoding_test_instruction_batches(arena, dataset);
-
-    {
-        u8 buffer[batch_element_count * max_instruction_byte_count];
-// STRUCT(EncodingScalar)
-// {
-//     u64 legacy_prefixes:LEGACY_PREFIX_COUNT;
-//     u64 register1:4;
-//     u64 register2:4;
-//     u64 is_indirect1:1;
-//     u64 is_indirect2:1;
-//     u64 is_register1:1;
-//     u64 is_register2:2;
-//     u64 is_immediate:4;
-//     u64 is_displacement8:1;
-//     u64 is_displacement32:1;
-//     u8 immediate_bytes[8];
-//     u8 opcode[3];
-//     u8 opcode_length;
-// };
-        EncodingScalar scalar = {
-            .is_immediate = 1 << 0,
-            .immediate_bytes = { 10 },
-            .opcode = { 0x04 },
-            .opcode_length = 1,
-        };
-        EncodingBatch batch = encoding_batch_from_scalar(scalar);
-        u32 byte_count = encode(buffer, &batch);
-        assert(byte_count % batch_element_count == 0);
-        u32 scalar_byte_count = byte_count / batch_element_count;
-        for (u32 i = 0; i < scalar_byte_count; i += 1)
-        {
-            print("[{u32}] = 0x{u32:x,w=2}\n", i, buffer[i]);
-        }
-    }
+    EncodingTestOptions options = {
+        .scalar = 1,
+        .vectorized = 1,
+    };
+    u8 result = encoding_test_instruction_batches(arena, dataset, options);
 
     return result;
 }
