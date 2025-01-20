@@ -1163,6 +1163,7 @@ STRUCT(EncodingBatch)
     Bitset rex_w;
     Bitset is_immediate[4];
     u8 immediate[8][64];
+    u8 displacement[4][64];
 };
 
 fn Bitset bitset_from_bit(u8 bit)
@@ -1226,6 +1227,14 @@ fn EncodingBatch encoding_batch_from_scalar(EncodingScalar scalar)
         }
     }
 
+    for (u32 displacement_index = 0; displacement_index < array_length(scalar.displacement.bytes); displacement_index += 1)
+    {
+        for (u32 batch_index = 0; batch_index < batch_element_count; batch_index += 1)
+        {
+            batch.displacement[displacement_index][batch_index] = scalar.displacement.bytes[displacement_index];
+        }
+    }
+
     return batch;
 }
 
@@ -1250,8 +1259,6 @@ fn u32 encode(u8* restrict buffer, const EncodingBatch* const restrict batch)
     _mm512_storeu_epi8(legacy_prefixes, legacy_prefix);
     _mm512_storeu_epi8(legacy_prefix_positions, legacy_prefix_position);
 
-    __mmask64 is_displacement8 = _cvtu64_mask64(batch->is_displacement8);
-    __mmask64 is_displacement32 = _cvtu64_mask64(batch->is_displacement32);
 
     __mmask64 is_register[2];
     __mmask64 is_indirect[2];
@@ -1261,9 +1268,11 @@ fn u32 encode(u8* restrict buffer, const EncodingBatch* const restrict batch)
     {
         __m256i register_mask_256 = _mm256_loadu_epi8(&batch->register_mask[i]);
         __m256i selecting_mask = _mm256_set1_epi8(0x0f);
-        __m256i low_nibbles = _mm256_and_si256(register_mask_256, selecting_mask);
-        __m256i high_nibbles = _mm256_and_si256(_mm256_srli_epi64(register_mask_256, 4), selecting_mask);
-        register_mask[i] = _mm512_unpacklo_epi8(_mm512_castsi256_si512(low_nibbles), _mm512_castsi256_si512(high_nibbles));
+        __m256i low_bits = _mm256_and_si256(register_mask_256, selecting_mask);
+        __m256i high_bits = _mm256_and_si256(_mm256_srli_epi64(register_mask_256, 4), selecting_mask);
+        __m256i low_bytes = _mm256_unpacklo_epi8(low_bits, high_bits);
+        __m256i high_bytes = _mm256_unpackhi_epi8(low_bits, high_bits);
+        register_mask[i] = _mm512_inserti64x4(_mm512_castsi256_si512(low_bytes), high_bytes, 1);
         is_register[i] = _cvtu64_mask64(batch->is_register[i]);
         is_indirect[i] = _cvtu64_mask64(batch->is_indirect[i]);
     }
@@ -1272,6 +1281,8 @@ fn u32 encode(u8* restrict buffer, const EncodingBatch* const restrict batch)
     __mmask64 is_reg_direct_addressing_mode = _knot_mask64(_kor_mask64(is_indirect[0], is_indirect[1]));
     __m512i rm_register = _mm512_mask_mov_epi8(_mm512_mask_mov_epi8(register_mask[1], is_indirect[0], register_mask[0]), is_reg_direct_addressing_mode, register_mask[0]);
     __m512i reg_register = _mm512_mask_mov_epi8(_mm512_mask_mov_epi8(register_mask[0], is_indirect[0], register_mask[1]), is_reg_direct_addressing_mode, register_mask[1]);
+    __mmask64 is_displacement32 = _cvtu64_mask64(batch->is_displacement32);
+    __mmask64 is_displacement8 = _kor_mask64(_cvtu64_mask64(batch->is_displacement8), _kand_mask64(_kand_mask64(_kor_mask64(is_indirect[0], is_indirect[1]), _knot_mask64(is_displacement32)), _mm512_cmpeq_epi8_mask(_mm512_and_si512(indirect_register, _mm512_set1_epi8(0b111)), _mm512_set1_epi8(REGISTER_X86_64_BP))));
 
     __m512i rex_b = _mm512_maskz_set1_epi8(_mm512_test_epi8_mask(rm_register, _mm512_set1_epi8(0b1000)), 1 << 0);
     __m512i rex_x = _mm512_set1_epi8(0); // TODO
@@ -1293,7 +1304,8 @@ fn u32 encode(u8* restrict buffer, const EncodingBatch* const restrict batch)
     __m128i opcode_length_nibbles_1 = _mm_and_si128(_mm_srli_epi64(opcode_lengths_128, 2 * 1), selecting_mask);
     __m128i opcode_length_nibbles_2 = _mm_and_si128(_mm_srli_epi64(opcode_lengths_128, 2 * 2), selecting_mask);
     __m128i opcode_length_nibbles_3 = _mm_and_si128(_mm_srli_epi64(opcode_lengths_128, 2 * 3), selecting_mask);
-    __m512i opcode_lengths_512 = _mm512_unpacklo_epi8(_mm512_castsi256_si512(_mm256_unpacklo_epi8(_mm256_castsi128_si256(opcode_length_nibbles_0), _mm256_castsi128_si256(opcode_length_nibbles_1))), _mm512_castsi256_si512(_mm256_unpacklo_epi8(_mm256_castsi128_si256(opcode_length_nibbles_2), _mm256_castsi128_si256(opcode_length_nibbles_3))));
+
+    __m512i opcode_lengths_512 = _mm512_inserti64x4(_mm512_castsi256_si512(_mm256_inserti32x4(_mm256_castsi128_si256(_mm_unpacklo_epi8(opcode_length_nibbles_0, opcode_length_nibbles_1)), _mm_unpackhi_epi8(opcode_length_nibbles_0, opcode_length_nibbles_1), 1)), _mm256_inserti32x4(_mm256_castsi128_si256(_mm_unpacklo_epi8(opcode_length_nibbles_2, opcode_length_nibbles_3)), _mm_unpackhi_epi8(opcode_length_nibbles_2, opcode_length_nibbles_3), 1), 1);
 
     __m512i opcode1 = _mm512_loadu_epi8(&batch->opcode.values[0]);
     __m512i opcode1_position = instruction_length;
@@ -1361,7 +1373,15 @@ fn u32 encode(u8* restrict buffer, const EncodingBatch* const restrict batch)
         _mm512_storeu_epi8(immediate_positions[i], immediate_position);
     }
 
-    // TODO: displacement
+    __m512i displacement8_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), is_displacement8, instruction_length);
+    instruction_length = _mm512_add_epi8(instruction_length, _mm512_maskz_set1_epi8(is_displacement8, sizeof(s8)));
+    u8 displacement8_positions[64];
+    _mm512_storeu_epi8(displacement8_positions, displacement8_position);
+
+    __m512i displacement32_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), is_displacement32, instruction_length);
+    instruction_length = _mm512_add_epi8(instruction_length, _mm512_maskz_set1_epi8(is_displacement32, sizeof(s32)));
+    u8 displacement32_positions[64];
+    _mm512_storeu_epi8(displacement32_positions, displacement32_position);
 
     u8 separate_buffers[64][max_instruction_byte_count];
     u8 separate_lengths[64];
@@ -1385,6 +1405,15 @@ fn u32 encode(u8* restrict buffer, const EncodingBatch* const restrict batch)
                 u8 destination_index = start_position + byte * (start_position != 0xf);
                 separate_buffers[i][destination_index] = batch->immediate[byte][i];
             }
+        }
+
+        separate_buffers[i][displacement8_positions[i]] = batch->displacement[0][i];
+
+        u8 displacement32_start = displacement32_positions[i];
+        for (u32 byte = 0; byte < 4; byte += 1)
+        {
+            u8 destination_index = displacement32_start + byte * (displacement32_start != 0xf);
+            separate_buffers[i][destination_index] = batch->displacement[byte][i];
         }
     }
 
@@ -1824,6 +1853,36 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                                         print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", scalar_instance_index, instruction_string, error_string);
                                                     }
                                                 }
+
+                                                if (options.wide)
+                                                {
+                                                    EncodingBatch batch = encoding_batch_from_scalar(batch_encoding);
+                                                    let(wide_length, encode(instruction_binary_buffer, &batch));
+                                                    assert(wide_length % batch_element_count == 0);
+                                                    let(length, wide_length / batch_element_count);
+
+                                                    String instruction_bytes = {
+                                                        .pointer = instruction_binary_buffer,
+                                                        .length = length,
+                                                    };
+                                                    CheckInstructionArguments check_args = {
+                                                        .clang_path = clang_path,
+                                                        .text = instruction_string,
+                                                        .binary = instruction_bytes,
+                                                        .error_buffer = error_buffer_slice,
+                                                        .clang_pipe_buffer = &clang_pipe_buffer,
+                                                        .disassembler = disassembler,
+                                                    };
+                                                    u64 error_buffer_length = check_instruction(arena, check_args);
+                                                    wide_instance_index += 1;
+                                                    let(first_failure, wide_failure_count == 0);
+                                                    wide_failure_count += error_buffer_length != 0;
+                                                    String error_string = { .pointer = error_buffer, .length = error_buffer_length };
+                                                    if (error_buffer_length != 0)
+                                                    {
+                                                        print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", wide_instance_index, instruction_string, error_string);
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -1881,6 +1940,36 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                                         if (error_buffer_length != 0)
                                                         {
                                                             print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", scalar_instance_index, instruction_string, error_string);
+                                                        }
+                                                    }
+
+                                                    if (options.wide)
+                                                    {
+                                                        EncodingBatch batch = encoding_batch_from_scalar(batch_encoding);
+                                                        let(wide_length, encode(instruction_binary_buffer, &batch));
+                                                        assert(wide_length % batch_element_count == 0);
+                                                        let(length, wide_length / batch_element_count);
+
+                                                        String instruction_bytes = {
+                                                            .pointer = instruction_binary_buffer,
+                                                            .length = length,
+                                                        };
+                                                        CheckInstructionArguments check_args = {
+                                                            .clang_path = clang_path,
+                                                            .text = instruction_string,
+                                                            .binary = instruction_bytes,
+                                                            .error_buffer = error_buffer_slice,
+                                                            .clang_pipe_buffer = &clang_pipe_buffer,
+                                                            .disassembler = disassembler,
+                                                        };
+                                                        u64 error_buffer_length = check_instruction(arena, check_args);
+                                                        wide_instance_index += 1;
+                                                        let(first_failure, wide_failure_count == 0);
+                                                        wide_failure_count += error_buffer_length != 0;
+                                                        String error_string = { .pointer = error_buffer, .length = error_buffer_length };
+                                                        if (error_buffer_length != 0)
+                                                        {
+                                                            print("{cstr}{u64}) {s}... [FAILED]\n{s}\n", first_failure ? "\n" : "", wide_instance_index, instruction_string, error_string);
                                                         }
                                                     }
                                                 }
