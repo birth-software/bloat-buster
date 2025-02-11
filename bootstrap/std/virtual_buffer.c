@@ -1,5 +1,4 @@
-#include <std/virtual_buffer.h>
-#include <std/os.h>
+#pragma once
 
 fn void vb_generic_ensure_capacity(VirtualBuffer(u8)* vb, u32 item_size, u32 item_count)
 {
@@ -13,8 +12,8 @@ fn void vb_generic_ensure_capacity(VirtualBuffer(u8)* vb, u32 item_size, u32 ite
             vb->pointer = os_reserve(0, item_size * UINT32_MAX, (OSReserveProtectionFlags) {}, (OSReserveMapFlags) { .priv = 1, .anon = 1, .noreserve = 1 });
         }
 
-        let_cast(u32, old_page_capacity, align_forward(old_capacity * item_size, minimum_granularity));
-        let_cast(u32, new_page_capacity, align_forward(wanted_capacity * item_size, minimum_granularity));
+        let_cast(u32, old_page_capacity, align_forward_u64(old_capacity * item_size, minimum_granularity));
+        let_cast(u32, new_page_capacity, align_forward_u64(wanted_capacity * item_size, minimum_granularity));
 
         let(commit_size, new_page_capacity - old_page_capacity);
         void* commit_pointer = vb->pointer + old_page_capacity;
@@ -49,11 +48,13 @@ fn u8* vb_append_bytes(VirtualBuffer(u8*) vb, Slice(u8) bytes)
     return pointer;
 }
 
-fn void vb_copy_string(VirtualBuffer(u8)* buffer, String string)
+fn u32 vb_copy_string(VirtualBuffer(u8)* buffer, String string)
 {
+    let(offset, buffer->length);
     let_cast(u32, length, string.length);
     let(pointer, vb_add(buffer, length));
     memcpy(pointer, string.pointer, length);
+    return offset;
 }
 
 fn u64 vb_copy_string_zero_terminated(VirtualBuffer(u8)* buffer, String string)
@@ -64,4 +65,24 @@ fn u64 vb_copy_string_zero_terminated(VirtualBuffer(u8)* buffer, String string)
     vb_copy_string(buffer, string);
 
     return string.length;
+}
+
+fn void vb_copy_byte_repeatedly(VirtualBuffer(u8)* buffer, u8 byte, u32 times)
+{
+    u8* ptr = vb_generic_add(buffer, 1, times);
+    memset(ptr, byte, times);
+}
+
+fn u64 vb_format(VirtualBuffer(u8)* vb, const char* format, ...)
+{
+    u8 buffer[4096];
+    va_list args;
+    va_start(args, format);
+    let(result, format_string_va((String)array_to_slice(buffer), format, args));
+    va_end(args);
+
+    assert(result.length <= array_length(buffer));
+    vb_copy_string(vb, result);
+
+    return result.length;
 }

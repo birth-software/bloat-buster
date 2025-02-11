@@ -1075,6 +1075,72 @@ typedef enum IntegerFormat
     INTEGER_FORMAT_BINARY,
 } IntegerFormat;
 
+STRUCT(IntegerFormatOptions)
+{
+    IntegerFormat format;
+    u32 width;
+};
+
+fn IntegerFormatOptions integer_format_options(u8** it)
+{
+    IntegerFormatOptions options = {
+        .format = INTEGER_FORMAT_DECIMAL,
+    };
+
+    if (**it == ':')
+    {
+        *it += 1;
+
+        while (**it != brace_close)
+        {
+            switch (**it)
+            {
+                case 'x':
+                    options.format = INTEGER_FORMAT_HEXADECIMAL;
+                    *it += 1;
+                    break;
+                case 'd':
+                    options.format = INTEGER_FORMAT_DECIMAL;
+                    *it += 1;
+                    break;
+                case 'o':
+                    options.format = INTEGER_FORMAT_OCTAL;
+                    *it += 1;
+                    break;
+                case 'b':
+                    options.format = INTEGER_FORMAT_BINARY;
+                    *it += 1;
+                    break;
+                case 'w':
+                    {
+                        *it += 1;
+
+                        if (**it != '=')
+                        {
+                            todo();
+                        }
+
+                        *it += 1;
+
+                        let(start, *it);
+                        while (is_decimal_digit(**it))
+                        {
+                            *it += 1;
+                        }
+                        let(end, *it);
+                        assign_cast(options.width, parse_decimal(slice_from_pointer_range(u8, start, end)));
+                    } break;
+                default:
+                    unreachable();
+            }
+
+            *it += **it == ',';
+        }
+    }
+
+    return options;
+}
+
 fn String format_string_va(String buffer, const char* format, va_list args)
 {
     u8* it = (u8*)format;
@@ -1181,31 +1247,7 @@ fn String format_string_va(String buffer, const char* format, va_list args)
                                 u8* bit_count_end = it;
                                 u64 bit_count = parse_decimal(slice_from_pointer_range(u8, (u8*)bit_count_start, (u8*)bit_count_end));
 
-                                IntegerFormat integer_format = INTEGER_FORMAT_DECIMAL;
-
-                                if (*it == ':')
-                                {
-                                    it += 1;
-                                    switch (*it)
-                                    {
-                                        case 'x':
-                                            integer_format = INTEGER_FORMAT_HEXADECIMAL;
-                                            break;
-                                        case 'd':
-                                            integer_format = INTEGER_FORMAT_DECIMAL;
-                                            break;
-                                        case 'o':
-                                            integer_format = INTEGER_FORMAT_OCTAL;
-                                            break;
-                                        case 'b':
-                                            integer_format = INTEGER_FORMAT_BINARY;
-                                            break;
-                                        default:
-                                            unreachable();
-                                    }
-
-                                    it += 1;
-                                }
+                                IntegerFormatOptions options = integer_format_options(&it);
 
                                 s64 original_value;
                                 switch (bit_count)
@@ -1224,11 +1266,21 @@ fn String format_string_va(String buffer, const char* format, va_list args)
 
                                 String buffer_slice = s_get_slice(u8, buffer, buffer_i, buffer.length);
 
-                                switch (integer_format)
+                                switch (options.format)
                                 {
                                     case INTEGER_FORMAT_HEXADECIMAL:
                                         {
+                                            u32 expected_characters = hex_digit_count(original_value);
+
+                                            if (expected_characters < options.width)
+                                            {
+                                                u32 extra_characters = options.width - expected_characters;
+                                                memset(buffer.pointer, '0', extra_characters);
+                                                buffer_i += extra_characters;
+                                            }
+
                                             let(written_characters, format_hexadecimal(buffer_slice, original_value));
+                                            assert(expected_characters == written_characters);
                                             buffer_i += written_characters;
                                         } break;
                                     case INTEGER_FORMAT_DECIMAL:
@@ -1281,39 +1333,7 @@ fn String format_string_va(String buffer, const char* format, va_list args)
                             u8* bit_count_end = it;
                             u64 bit_count = parse_decimal(slice_from_pointer_range(u8, (u8*)bit_count_start, (u8*)bit_count_end));
 
-                            typedef enum IntegerFormat
-                            {
-                                INTEGER_FORMAT_HEXADECIMAL,
-                                INTEGER_FORMAT_DECIMAL,
-                                INTEGER_FORMAT_OCTAL,
-                                INTEGER_FORMAT_BINARY,
-                            } IntegerFormat;
-
-                            IntegerFormat integer_format = INTEGER_FORMAT_DECIMAL;
-
-                            if (*it == ':')
-                            {
-                                it += 1;
-                                switch (*it)
-                                {
-                                    case 'x':
-                                        integer_format = INTEGER_FORMAT_HEXADECIMAL;
-                                        break;
-                                    case 'd':
-                                        integer_format = INTEGER_FORMAT_DECIMAL;
-                                        break;
-                                    case 'o':
-                                        integer_format = INTEGER_FORMAT_OCTAL;
-                                        break;
-                                    case 'b':
-                                        integer_format = INTEGER_FORMAT_BINARY;
-                                        break;
-                                    default:
-                                        unreachable();
-                                }
-
-                                it += 1;
-                            }
+                            IntegerFormatOptions options = integer_format_options(&it);
 
                             u64 original_value;
                             switch (bit_count)
@@ -1330,26 +1350,41 @@ fn String format_string_va(String buffer, const char* format, va_list args)
                                     unreachable();
                             }
 
-                            let(buffer_slice, s_get_slice(u8, buffer, buffer_i, buffer.length));
 
-                            switch (integer_format)
+                            switch (options.format)
                             {
                                 case INTEGER_FORMAT_HEXADECIMAL:
                                     {
+                                        u32 expected_characters = hex_digit_count(original_value);
+
+                                        if (expected_characters < options.width)
+                                        {
+                                            u32 extra_characters = options.width - expected_characters;
+                                            memset(buffer.pointer + buffer_i, '0', extra_characters);
+                                            buffer_i += extra_characters;
+                                        }
+
+                                        let(buffer_slice, s_get_slice(u8, buffer, buffer_i, buffer.length));
                                         let(written_characters, format_hexadecimal(buffer_slice, original_value));
+                                        assert(expected_characters == written_characters);
                                         buffer_i += written_characters;
                                     } break;
                                 case INTEGER_FORMAT_DECIMAL:
                                     {
+                                        let(buffer_slice, s_get_slice(u8, buffer, buffer_i, buffer.length));
                                         let(written_characters, format_decimal(buffer_slice, original_value));
                                         buffer_i += written_characters;
                                     } break;
                                 case INTEGER_FORMAT_OCTAL:
                                     {
+                                        let(buffer_slice, s_get_slice(u8, buffer, buffer_i, buffer.length));
+                                        unused(buffer_slice);
                                         todo();
                                     } break;
                                 case INTEGER_FORMAT_BINARY:
                                     {
+                                        let(buffer_slice, s_get_slice(u8, buffer, buffer_i, buffer.length));
+                                        unused(buffer_slice);
                                         todo();
                                     } break;
                             }
@@ -1380,4 +1415,28 @@ fn String format_string(String buffer, const char* format, ...)
     let(result, format_string_va(buffer, format, args));
     va_end(args);
     return result;
+}
+
+fn void formatter_append(StringFormatter* formatter, const char* format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    String buffer = s_get_slice(u8, formatter->buffer, formatter->index, formatter->buffer.length);
+    let(result, format_string_va(buffer, format, args));
+    va_end(args);
+    formatter->index += result.length;
+}
+
+fn void formatter_append_string(StringFormatter* formatter, String string)
+{
+    assert(string.length + formatter->index <= formatter->buffer.length);
+    memcpy(formatter->buffer.pointer + formatter->index, string.pointer, string.length);
+    formatter->index += string.length;
+}
+
+fn void formatter_append_character(StringFormatter* formatter, u8 ch)
+{
+    assert(formatter->index < formatter->buffer.length);
+    formatter->buffer.pointer[formatter->index] = ch;
+    formatter->index += 1;
 }

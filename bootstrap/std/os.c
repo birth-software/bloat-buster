@@ -2,9 +2,11 @@
 
 #include <std/string.h>
 #include <std/format.h>
+#include <std/virtual_buffer.h>
 
 #include <std/string.c>
 #include <std/format.c>
+#include <std/virtual_buffer.c>
 
 #if _WIN32
 global_variable u64 cpu_frequency;
@@ -774,6 +776,15 @@ fn u64 os_timer_get()
 #endif
 }
 
+FileDescriptor os_file_descriptor_invalid()
+{
+#if _WIN32
+    return INVALID_HANDLE_VALUE;
+#else
+    return -1;
+#endif
+}
+
 fn u8 os_file_descriptor_is_valid(FileDescriptor fd)
 {
 #if _WIN32
@@ -852,6 +863,8 @@ fn void os_file_write(FileDescriptor fd, String content)
     assert(result != 0);
 #else
     let(result, syscall_write(fd, content.pointer, content.length));
+    let(my_errno, strerror(errno));
+    unused(my_errno);
     assert(cast_to(u64, result) == content.length);
 #endif
 }
@@ -937,6 +950,9 @@ fn u8* os_reserve(u64 base, u64 size, OSReserveProtectionFlags protection, OSRes
 #else
     int protection_flags = (protection.read * PROT_READ) | (protection.write * PROT_WRITE) | (protection.execute * PROT_EXEC);
     int map_flags = (map.anon * MAP_ANONYMOUS) | (map.priv * MAP_PRIVATE) | (map.noreserve * MAP_NORESERVE);
+#ifdef __linux__
+    map_flags |= (map.populate * MAP_POPULATE);
+#endif
     u8* result = (u8*)posix_mmap((void*)base, size, protection_flags, map_flags, -1, 0);
     assert(result != MAP_FAILED);
     return result;
@@ -963,8 +979,36 @@ fn void os_directory_make(String path)
 #endif
 }
 
+fn u8 os_is_being_debugged()
+{
+    u8 result = 0;
+#if _WIN32
+    result = IsDebuggerPresent() != 0;
+#else
+#ifdef __APPLE__
+    let(request, PT_TRACE_ME);
+#else
+    let(request, PTRACE_TRACEME);
+#endif
+    if (ptrace(request, 0, 0, 0) == -1)
+    {
+        let(error, errno);
+        if (error == EPERM)
+        {
+            result = 1;
+        }
+    }
+#endif
+
+    return result;
+}
+
 BB_NORETURN BB_COLD fn void os_exit(u32 exit_code)
 {
+    if (exit_code != 0 && os_is_being_debugged())
+    {
+        trap();
+    }
     exit(exit_code);
 }
 
@@ -1016,12 +1060,12 @@ fn Arena* arena_initialize_default(u64 initial_size)
 
 fn u8* arena_allocate_bytes(Arena* arena, u64 size, u64 alignment)
 {
-    u64 aligned_offset = align_forward(arena->position, alignment);
+    u64 aligned_offset = align_forward_u64(arena->position, alignment);
     u64 aligned_size_after = aligned_offset + size;
 
     if (aligned_size_after > arena->os_position)
     {
-        u64 committed_size = align_forward(aligned_size_after, arena->granularity);
+        u64 committed_size = align_forward_u64(aligned_size_after, arena->granularity);
         u64 size_to_commit = committed_size - arena->os_position;
         void* commit_pointer = (u8*)arena + arena->os_position;
         os_commit(commit_pointer, size_to_commit);
@@ -1055,6 +1099,18 @@ fn String arena_join_string(Arena* arena, Slice(String) pieces)
     *it = 0;
 
     return (String) { .pointer = pointer, .length = size };
+}
+
+fn String arena_duplicate_string(Arena* arena, String string)
+{
+    u8* result = arena_allocate(arena, u8, string.length + 1);
+    memcpy(result, string.pointer, string.length);
+    result[string.length] = 0;
+
+    return (String) {
+        .pointer = result,
+        .length = string.length,
+    };
 }
 
 fn void arena_reset(Arena* arena)
@@ -1105,7 +1161,6 @@ fn String file_read(Arena* arena, String path)
 
 fn void file_write(FileWriteOptions options)
 {
-    print("Writing file \"{s}\"...\n", options.path);
     let(fd, os_file_open(options.path, (OSFileOpenFlags) {
         .write = 1,
         .truncate = 1,
@@ -1122,10 +1177,17 @@ fn void file_write(FileWriteOptions options)
     os_file_close(fd);
 }
 
-fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunCommandOptions run_options)
+fn RunCommandResult run_command(Arena* arena, CStringSlice arguments, char* envp[], RunCommandOptions run_options)
 {
+    unused(arena);
     assert(arguments.length > 0);
     assert(arguments.pointer[arguments.length - 1] == 0);
+
+    RunCommandResult result = {};
+    Timestamp start_timestamp = {};
+    Timestamp end_timestamp = {};
+    f64 ms = 0.0;
+    u64 measure_time = run_options.debug;
 
     if (run_options.debug)
     {
@@ -1139,8 +1201,6 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
     }
 
 #if _WIN32
-    let(start_timestamp, os_timestamp());
-
     u32 length = 0;
     for (u32 i = 0; i < arguments.length; i += 1)
     {
@@ -1167,7 +1227,6 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
         }
     }
     bytes[byte_i - 1] = 0;
-    let(end_timestamp, os_timestamp());
 
     PROCESS_INFORMATION process_information = {};
     STARTUPINFOA startup_info = {};
@@ -1175,14 +1234,22 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
     startup_info.dwFlags |= STARTF_USESTDHANDLES;
     startup_info.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
     startup_info.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-
     let(handle_inheritance, 1);
-    let(start, os_timestamp());
+
+    if (measure_time)
+    {
+        start_timestamp = os_timestamp();
+    }
+
     if (CreateProcessA(0, bytes, 0, 0, handle_inheritance, 0, 0, 0, &startup_info, &process_information))
     {
         WaitForSingleObject(process_information.hProcess, INFINITE);
-        let(end, os_timestamp());
-        let(ms, os_resolve_timestamps(start, end, TIME_UNIT_MILLISECONDS));
+        if (measure_time)
+        {
+            end_timestamp = os_timestamp();
+            ms = os_resolve_timestamps(start_timestamp, end_timestamp, TIME_UNIT_MILLISECONDS);
+        }
+
 
         if (run_options.debug)
         {
@@ -1227,74 +1294,179 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
         print("CreateProcessA call failed: {cstr}\n", lpMsgBuf);
         todo();
     }
-
-    unused(start_timestamp);
-    unused(end_timestamp);
-    unused(envp);
 #else
-    unused(arena);
-    pid_t pid = syscall_fork();
+    int null_fd;
 
+    if (run_options.use_null_file_descriptor)
+    {
+        null_fd = run_options.null_file_descriptor;
+        assert(os_file_descriptor_is_valid(null_fd));
+    }
+    else if (run_options.stdout_stream.policy == CHILD_PROCESS_STREAM_IGNORE || run_options.stderr_stream.policy == CHILD_PROCESS_STREAM_IGNORE)
+    {
+        null_fd = open("/dev/null", O_WRONLY);
+        assert(os_file_descriptor_is_valid(null_fd));
+    }
+
+    int stdout_pipe[2];
+    int stderr_pipe[2];
+
+    if (run_options.stdout_stream.policy == CHILD_PROCESS_STREAM_PIPE && pipe(stdout_pipe) == -1)
+    {
+        todo();
+    }
+
+    if (run_options.stderr_stream.policy == CHILD_PROCESS_STREAM_PIPE && pipe(stderr_pipe) == -1)
+    {
+        todo();
+    }
+
+    pid_t pid = syscall_fork();
     if (pid == -1)
     {
         todo();
     }
 
-    let(start_timestamp, os_timestamp());
+    if (measure_time)
+    {
+        start_timestamp = os_timestamp();
+    }
 
     if (pid == 0)
     {
-        // close(pipes[0]);
+        switch (run_options.stdout_stream.policy)
+        {
+            case CHILD_PROCESS_STREAM_PIPE:
+                {
+                    close(stdout_pipe[0]);
+                    dup2(stdout_pipe[1], STDOUT_FILENO);
+                    close(stdout_pipe[1]);
+                } break;
+            case CHILD_PROCESS_STREAM_IGNORE:
+                {
+                    dup2(null_fd, STDOUT_FILENO);
+                    close(null_fd);
+                } break;
+            case CHILD_PROCESS_STREAM_INHERIT:
+                {
+                } break;
+        }
+
+        switch (run_options.stderr_stream.policy)
+        {
+            case CHILD_PROCESS_STREAM_PIPE:
+                {
+                    close(stderr_pipe[0]);
+                    dup2(stderr_pipe[1], STDERR_FILENO);
+                    close(stderr_pipe[1]);
+                } break;
+            case CHILD_PROCESS_STREAM_IGNORE:
+                {
+                    dup2(null_fd, STDERR_FILENO);
+                    close(null_fd);
+                } break;
+            case CHILD_PROCESS_STREAM_INHERIT:
+                {
+                } break;
+        }
+
         // fcntl(pipes[1], F_SETFD, FD_CLOEXEC);
         let(result, syscall_execve(arguments.pointer[0], arguments.pointer, envp));
         unused(result);
-#if LINK_LIBC
         panic("Execve failed! Error: {cstr}\n", strerror(errno));
-#else
-        todo();
-#endif
     }
     else
     {
+        if (run_options.stdout_stream.policy == CHILD_PROCESS_STREAM_PIPE)
+        {
+            close(stdout_pipe[1]);
+        }
+
+        if (run_options.stderr_stream.policy == CHILD_PROCESS_STREAM_PIPE)
+        {
+            close(stderr_pipe[1]);
+        }
+
+        if (run_options.stdout_stream.policy == CHILD_PROCESS_STREAM_PIPE)
+        {
+            assert(run_options.stdout_stream.capacity);
+            ssize_t byte_count = read(stdout_pipe[0], run_options.stdout_stream.buffer, run_options.stdout_stream.capacity);
+            assert(byte_count >= 0);
+            *run_options.stdout_stream.length = byte_count;
+
+            close(stdout_pipe[0]);
+        }
+
+        if (run_options.stderr_stream.policy == CHILD_PROCESS_STREAM_PIPE)
+        {
+            assert(run_options.stderr_stream.capacity);
+            ssize_t byte_count = read(stderr_pipe[0], run_options.stderr_stream.buffer, run_options.stderr_stream.capacity);
+            assert(byte_count >= 0);
+            *run_options.stderr_stream.length = byte_count;
+
+            close(stderr_pipe[0]);
+        }
+
         int status = 0;
         int options = 0;
-        pid_t result = syscall_waitpid(pid, &status, options);
-        let(end_timestamp, os_timestamp());
-        int success = 0;
-        if (result == pid)
+        pid_t waitpid_result = syscall_waitpid(pid, &status, options);
+
+        if (measure_time)
+        {
+            end_timestamp = os_timestamp();
+        }
+
+        if (waitpid_result == pid)
         {
             if (run_options.debug)
             {
                 print("{cstr} ", arguments.pointer[0]);
-
-                if (WIFEXITED(status))
-                {
-                    let(exit_code, WEXITSTATUS(status));
-                    print("exited with code {u32}\n", exit_code);
-                }
-                else if (WIFSIGNALED(status))
-                {
-                    let(signal_code, WTERMSIG(status));
-                    print("was signaled: {u32}\n", signal_code);
-                }
-                else if (WIFSTOPPED(status))
-                {
-                    let(stopped_code, WSTOPSIG(status));
-                    print("was stopped: {u32}\n", stopped_code);
-                }
-                else
-                {
-                    print("terminated unexpectedly with status {u32}\n", status);
-                }
             }
 
             if (WIFEXITED(status))
             {
                 let(exit_code, WEXITSTATUS(status));
-                success = exit_code == 0;
+                result.termination_code = exit_code;
+                result.termination_kind = PROCESS_TERMINATION_EXIT;
+
+                if (run_options.debug)
+                {
+                    print("exited with code {u32}\n", exit_code);
+                }
+            }
+            else if (WIFSIGNALED(status))
+            {
+                let(signal_code, WTERMSIG(status));
+                result.termination_code = signal_code;
+                result.termination_kind = PROCESS_TERMINATION_SIGNAL;
+
+                if (run_options.debug)
+                {
+                    print("was signaled: {u32}\n", signal_code);
+                }
+            }
+            else if (WIFSTOPPED(status))
+            {
+                let(stop_code, WSTOPSIG(status));
+                result.termination_code = stop_code;
+                result.termination_kind = PROCESS_TERMINATION_STOP;
+
+                if (run_options.debug)
+                {
+                    print("was stopped: {u32}\n", stop_code);
+                }
+            }
+            else
+            {
+                result.termination_kind = PROCESS_TERMINATION_UNKNOWN;
+
+                if (run_options.debug)
+                {
+                    print("terminated unexpectedly with status {u32}\n", status);
+                }
             }
         }
-        else if (result == -1)
+        else if (waitpid_result == -1)
         {
             let(waitpid_error, errno);
             print("Error waiting for process termination: {u32}\n", waitpid_error);
@@ -1305,42 +1477,25 @@ fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunComma
             todo();
         }
 
-        if (!success)
+        let(success, result.termination_kind == PROCESS_TERMINATION_EXIT && result.termination_code == 0);
+        if (run_options.debug && !success)
         {
-            print("Program failed to run successfully!\n");
-            failed_execution();
+            print("{cstr} failed to run successfully!\n", arguments.pointer[0]);
         }
 
         if (run_options.debug)
         {
-            let(ms, os_resolve_timestamps(start_timestamp, end_timestamp, TIME_UNIT_MILLISECONDS));
+            ms = os_resolve_timestamps(start_timestamp, end_timestamp, TIME_UNIT_MILLISECONDS);
             u32 ticks = 0;
 #if LINK_LIBC == 0
             ticks = cpu_frequency != 0;
 #endif
-            print("Command run successfully in {f64} {cstr}\n", ms, ticks ? "ticks" : "ms");
+            print("Command run {cstr} in {f64} {cstr}\n", success ? "successfully" : "with errors", ms, ticks ? "ticks" : "ms");
         }
-    }
-#endif
-}
 
-fn u8 os_is_being_debugged()
-{
-    u8 result = 0;
-#if _WIN32
-    result = IsDebuggerPresent() != 0;
-#else
-#ifdef __APPLE__
-    let(request, PT_TRACE_ME);
-#else
-    let(request, PTRACE_TRACEME);
-#endif
-    if (ptrace(request, 0, 0, 0) == -1)
-    {
-        let(error, errno);
-        if (error == EPERM)
+        if (!run_options.use_null_file_descriptor && os_file_descriptor_is_valid(null_fd))
         {
-            result = 1;
+            close(null_fd);
         }
     }
 #endif
@@ -1462,3 +1617,85 @@ fn u8 os_library_is_valid(OSLibrary library)
 {
     return library.handle != 0;
 }
+
+fn String file_find_in_path(Arena* arena, String file, String path_env, String extension)
+{
+    String result = {};
+    assert(path_env.pointer);
+
+    String path_it = path_env;
+    u8 buffer[4096];
+
+#if _WIN32
+    u8 env_path_separator = ';';
+    u8 path_separator = '\\';
+#else
+    u8 env_path_separator = ':';
+    u8 path_separator = '/';
+#endif
+
+    while (path_it.length)
+    {
+        let(index, string_first_ch(path_it, env_path_separator));
+        index = unlikely(index == STRING_NO_MATCH) ? path_it.length : index;
+        let(path_chunk, s_get_slice(u8, path_it, 0, index));
+
+        u64 i = 0;
+
+        memcpy(&buffer[i], path_chunk.pointer, path_chunk.length);
+        i += path_chunk.length;
+
+        buffer[i] = path_separator;
+        i += 1;
+
+        memcpy(&buffer[i], file.pointer, file.length);
+        i += file.length;
+
+        if (extension.length)
+        {
+            memcpy(&buffer[i], extension.pointer, extension.length);
+            i += extension.length;
+        }
+
+        buffer[i] = 0;
+        i += 1;
+
+        let(total_length, i - 1);
+        OSFileOpenFlags flags = {
+            .read = 1,
+        };
+        OSFilePermissions permissions = {
+            .readable = 1,
+            .writable = 1,
+        };
+
+        String path = { .pointer = buffer, .length = total_length };
+
+        FileDescriptor fd = os_file_open(path, flags, permissions);
+
+        if (os_file_descriptor_is_valid(fd))
+        {
+            os_file_close(fd);
+            result.pointer = arena_allocate(arena, u8, total_length + 1);
+            memcpy(result.pointer, buffer, total_length + 1);
+            result.length = total_length;
+            break;
+        }
+
+        String new_path = s_get_slice(u8, path_it, index + (index != path_it.length), path_it.length);
+        assert(new_path.length < path_env.length);
+        path_it = new_path;
+    }
+
+    return result;
+}
+
+fn String executable_find_in_path(Arena* arena, String executable, String path_env)
+{
+    String extension = {};
+#if _WIN32
+    extension = strlit(".exe");
+#endif
+    return file_find_in_path(arena, executable, path_env, extension);
+}
+

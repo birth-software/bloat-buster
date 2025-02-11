@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -eu
 
+MY_CWD=$PWD
+
 if [[ -z "${BB_CI-}" ]]; then
     BB_CI=0
 fi
@@ -17,10 +19,19 @@ if [[ -z "${BB_ERROR_LIMIT-}" ]]; then
     BB_ERROR_LIMIT=$((1 - BB_CI))
 fi
 
+BB_COMPILE_SHADERS=0
+
 BUILD_DIR=cache
+LARGE_ASSET_BASE_URL=https://github.com/birth-software/bloat-buster/releases/download/large-assets
 mkdir -p $BUILD_DIR
 
-if [[ "${BB_CI}" == "0" ]]; then
+if [[ ! -f "$BUILD_DIR/large_assembly.s" ]]; then
+    cd $BUILD_DIR
+    wget $LARGE_ASSET_BASE_URL/large_assembly.s -o large_assembly.s
+    cd $MY_CWD
+fi
+
+if [[ "${BB_COMPILE_SHADERS}" == "1" ]]; then
     glslangValidator -V bootstrap/std/shaders/rect.vert -o $BUILD_DIR/rect.vert.spv --quiet
     glslangValidator -V bootstrap/std/shaders/rect.frag -o $BUILD_DIR/rect.frag.spv --quiet
 fi

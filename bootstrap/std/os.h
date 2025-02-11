@@ -27,9 +27,43 @@ typedef enum TimeUnit
     TIME_UNIT_SECONDS,
 } TimeUnit;
 
+ENUM(ProcessTerminationKind, u8,
+    PROCESS_TERMINATION_UNKNOWN,
+    PROCESS_TERMINATION_EXIT,
+    PROCESS_TERMINATION_SIGNAL,
+    PROCESS_TERMINATION_STOP,
+);
+
+STRUCT(RunCommandResult)
+{
+    u32 termination_code;
+    ProcessTerminationKind termination_kind;
+    u8 reserved[3];
+};
+
+typedef enum ChildProcessStreamPolicy
+{
+    CHILD_PROCESS_STREAM_INHERIT,
+    CHILD_PROCESS_STREAM_PIPE,
+    CHILD_PROCESS_STREAM_IGNORE,
+} ChildProcessStreamPolicy;
+
+STRUCT(ChildProcessStream)
+{
+    u8* buffer;
+    u32* length;
+    u32 capacity;
+    ChildProcessStreamPolicy policy;
+};
+
 STRUCT(RunCommandOptions)
 {
+    ChildProcessStream stdout_stream;
+    ChildProcessStream stderr_stream;
+    FileDescriptor null_file_descriptor;
+    u64 use_null_file_descriptor:1;
     u64 debug:1;
+    u64 reserved:62;
 };
 
 STRUCT(Timestamp)
@@ -66,6 +100,7 @@ STRUCT(OSReserveMapFlags)
 {
     u32 priv:1;
     u32 anon:1;
+    u32 populate:1;
     u32 noreserve:1;
     u32 reserved:29;
 };
@@ -99,7 +134,7 @@ global_variable u64 default_size = GB(4);
 
 fn void vprint(const char* format, va_list args);
 fn void print(const char* format, ...);
-fn void run_command(Arena* arena, CStringSlice arguments, char* envp[], RunCommandOptions options);
+fn RunCommandResult run_command(Arena* arena, CStringSlice arguments, char* envp[], RunCommandOptions options);
 fn String file_read(Arena* arena, String path);
 fn void file_write(FileWriteOptions options);
 

@@ -8,3 +8,5 @@ project
 imgui.ini
 /cache/
 .DS_Store
+/*.perf
+/.gdb_history
