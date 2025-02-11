@@ -26,7 +26,7 @@ if [[ "${BB_CI}" == "0" ]]; then
 fi
 
 BUILD_OUT=$BUILD_DIR/build
-C_COMPILER=cc
+C_COMPILER=clang
 TIME_TRACE=1
 BB_TIMETRACE=0
 GCC_ARGS=

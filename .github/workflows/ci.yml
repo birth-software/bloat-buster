@@ -55,26 +55,10 @@ jobs:
     needs: generate-config
     permissions: write-all
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
-        os: ${{ fromJSON(needs.generate-config.outputs.BIRTH_GITHUB_TARGETS) }}
-        C_COMPILER: ${{ fromJSON(needs.generate-config.outputs.BIRTH_COMPILERS) }}
+        os: [ x86_64-linux-znver4 ]
         BIRTH_BUILD_TYPE: ${{ fromJSON(needs.generate-config.outputs.BIRTH_BUILD_TYPES) }}
-        exclude:
-          - C_COMPILER: gcc
-            os: ${{ needs.generate-config.outputs.BIRTH_MACOS_IMAGE }}
-          - C_COMPILER: gcc
-            os: ${{ needs.generate-config.outputs.BIRTH_WINDOWS_IMAGE }}
-          - C_COMPILER: cl
-            os: ${{ needs.generate-config.outputs.BIRTH_MACOS_IMAGE }}
-          - C_COMPILER: cl
-            os: ${{ needs.generate-config.outputs.BIRTH_LINUX_IMAGE }}
-          - C_COMPILER: tcc
-            BIRTH_BUILD_TYPE: release_safe
-          - C_COMPILER: tcc
-            BIRTH_BUILD_TYPE: release_fast
-          - C_COMPILER: tcc
-            BIRTH_BUILD_TYPE: release_small
     runs-on: ${{ matrix.os }}
     env:
       BIRTH_LINUX_IMAGE: ${{ needs.generate-config.outputs.BIRTH_LINUX_IMAGE }}
@@ -83,47 +67,10 @@ jobs:
       RELEASE_TAG_NAME: ${{ needs.generate-config.outputs.RELEASE_TAG_NAME }}
     steps:
       - uses: actions/checkout@v4
-      - name: Fetch dependencies
-        if: matrix.os == env.BIRTH_LINUX_IMAGE
-        run: |
-          if [[ "${{matrix.C_COMPILER}}" == "tcc" ]]; then
-              wget https://github.com/birth-software/tinycc/releases/download/dev/tcc-x86_64-linux.7z
-              7z x tcc-x86_64-linux.7z
-              echo $PWD/tinycc/bin >> $GITHUB_PATH
-          fi
-      - name: Fetch dependencies
-        if: matrix.os == env.BIRTH_MACOS_IMAGE
-        run: |
-          if [[ "${{matrix.C_COMPILER}}" == "tcc" ]]; then
-              wget https://github.com/birth-software/tinycc/releases/download/dev/tcc-aarch64-macos.7z
-              7z x tcc-aarch64-macos.7z
-              echo $PWD/tinycc/bin >> $GITHUB_PATH
-          fi
-      - name: Fetch dependencies
-        if: matrix.os == env.BIRTH_WINDOWS_IMAGE
-        shell: bash
-        run: |
-          set -eux
-          if [[ "${{matrix.C_COMPILER}}" == "tcc" ]]; then
-              curl -L https://github.com/birth-software/tinycc/releases/download/dev/tcc-x86_64-windows.7z --output tcc-x86_64-windows.7z
-              7z x tcc-x86_64-windows.7z
-              TCC_PATH=$(cygpath -w "$PWD/tinycc")
-              echo $TCC_PATH >> $GITHUB_PATH
-          fi
       - name: Build
-        if: matrix.os != env.BIRTH_WINDOWS_IMAGE
         env:
-          CC: ${{matrix.C_COMPILER}}
+          CC: clang
           BB_BUILD_TYPE: ${{matrix.BIRTH_BUILD_TYPE}}
         run: ./build.sh
-      - name: Build
-        if: matrix.os == env.BIRTH_WINDOWS_IMAGE
-        shell: cmd
-        env:
-          CC: ${{matrix.C_COMPILER}}
-          BB_BUILD_TYPE: ${{matrix.BIRTH_BUILD_TYPE}}
-        run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64 || exit /b 1
-          call build.bat || exit /b 1
       - name: Run
         run: ./cache/bb
