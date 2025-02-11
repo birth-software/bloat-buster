@@ -1,5 +1,10 @@
 #pragma once 
 
+#define STRINGIFY(x) #x
+#define TOSTRING(x) STRINGIFY(x)
+
+#define USE_MEMCPY 1
+
 #if _WIN32
 #define _CRT_SECURE_NO_WARNINGS
 #endif
@@ -10,16 +15,6 @@
 #define BB_DEBUG 1
 #endif
 
-#define BB_INCLUDE_INTRINSIC 0
-#if BB_DEBUG == 0
-#undef BB_INCLUDE_INTRINSIC
-#define BB_INCLUDE_INTRINSIC 1
-#endif
-#if BB_INCLUDE_INTRINSIC
-#if defined(__x86_64__)
-#include <immintrin.h>
-#endif
-#endif
 #include <stdint.h>
 #include <stddef.h>
 #include <stdarg.h>
@@ -140,6 +135,7 @@ declare_slice(s32);
 declare_slice(s64);
 
 declare_slice_p(char);
+declare_slice_p(u8);
 declare_slice_p(void);
 
 typedef Slice(u8) String;
@@ -194,7 +190,7 @@ declare_slice(String);
 #define unlikely(x) expect(x, 0)
 #define breakpoint() __builtin_debugtrap()
 #define failed_execution() panic("Failed execution at {cstr}:{u32}\n", __FILE__, __LINE__)
-#define todo() panic("TODO at {cstr}:{u32}\n", __FILE__, __LINE__); fix_unreachable()
+#define todo() os_is_being_debugged() ? trap() : panic("TODO at {cstr}:{u32}\n", __FILE__, __LINE__); fix_unreachable()
 
 fn void print(const char* format, ...);
 BB_NORETURN BB_COLD fn void os_exit(u32 exit_code);
@@ -216,7 +212,8 @@ fn BB_NORETURN BB_COLD void trap_ext()
 #define trap() (trap_ext(), __builtin_unreachable())
 #endif
 
-#define panic(format, ...) (print(format, __VA_ARGS__), os_exit(1))
+fn u8 os_is_being_debugged();
+#define panic(format, ...) (!os_is_being_debugged() ? print(format, __VA_ARGS__), os_exit(1) : os_exit(1))
 
 #define let_pointer_cast(PointerChildType, var_name, value) PointerChildType* var_name = (PointerChildType*)(value)
 #if defined(__TINYC__) || defined(_MSC_VER)
@@ -323,12 +320,12 @@ global_variable const u8 bracket_close = ']';
 #define s_get_slice(T, s, start, end) (Slice(T)){ .pointer = ((s).pointer) + (start), .length = (end) - (start) }
 #define s_equal(a, b) ((a).length == (b).length && memcmp((a).pointer, (b).pointer, sizeof(*((a).pointer)) * (a).length) == 0)
 
-fn u64 align_forward(u64 value, u64 alignment);
-fn u64 align_backward(u64 value, u64 alignment);
-fn u8 log2_alignment(u64 alignment);
-fn u8 is_power_of_two(u64 value);
-fn u8 first_bit_set_32(u32 value);
-fn u64 first_bit_set_64(u64 value);
+fn u64 align_forward_u64(u64 value, u64 alignment);
+fn u64 align_backward_u64(u64 value, u64 alignment);
+fn u8 log2_alignment_u64(u64 alignment);
+fn u8 is_power_of_two_u64(u64 value);
+fn u8 first_bit_set_u32(u32 value);
+fn u64 first_bit_set_u64(u64 value);
 
 fn u32 format_decimal(String buffer, u64 decimal);
 fn u32 format_hexadecimal(String buffer, u64 hexadecimal);
@@ -340,6 +337,7 @@ fn u8 get_next_ch_safe(String string, u64 index);
 fn u64 is_identifier_start(u8 ch);
 fn u64 is_identifier_ch(u8 ch);
 fn u64 is_alphabetic(u8 ch);
+fn u64 is_alphanumeric(u8 ch);
 
 fn u64 parse_decimal(String string);
 

@@ -312,7 +312,6 @@ fn void buffer_copy_to_host(VulkanBuffer buffer, Slice(HostBufferCopy) regions)
         let(region, regions.pointer[i]);
         let(destination, buffer_pointer + region.destination_offset);
         assert(destination + region.source.length <= (u8*)buffer.address + buffer.size);
-#define USE_MEMCPY 1
 #if USE_MEMCPY
         memcpy(destination, region.source.pointer, region.source.length);
 #else

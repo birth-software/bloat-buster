@@ -1,21 +1,60 @@
 #pragma once
 
 #if _MSC_VER
+extern u32 _lzcnt_u32(u32);
+extern u32 _tzcnt_u32(u32);
 extern u64 _lzcnt_u64(u64);
 extern u64 _tzcnt_u64(u64);
 #endif
+
+fn u8 leading_zeroes_u32(u32 value)
+{
+#if _MSC_VER
+    return (u8)_lzcnt_u32(value);
+#else
+    return __builtin_clz(value);
+#endif
+}
+
+fn u8 leading_zeroes_u64(u64 value)
+{
+#if _MSC_VER
+    return (u8)_lzcnt_u64(value);
+#else
+    return __builtin_clzll(value);
+#endif
+}
 
 fn u8 log2_alignment(u64 alignment)
 {
     assert(alignment != 0);
     assert((alignment & (alignment - 1)) == 0);
-    u64 left = (sizeof(alignment) * 8) - 1;
-#if _MSC_VER
-    let_cast(u64, right, _lzcnt_u64(alignment));
-#else
-    let_cast(u64, right, __builtin_clzll(alignment));
-#endif
+    u8 left = (sizeof(alignment) * 8) - 1;
+    u8 right = leading_zeroes_u64(alignment);
     let_cast(u8, result, left - right);
+    return result;
+}
+
+fn u8 log2_u64(u64 v)
+{
+    assert(v != 0);
+    return (sizeof(u64) * 8 - 1) - leading_zeroes_u64(v);
+}
+
+fn u8 log2_u32(u32 v)
+{
+    assert(v != 0);
+    return (sizeof(u32) * 8 - 1) - leading_zeroes_u32(v);
+}
+
+fn u8 hex_digit_count(u64 v)
+{
+    u8 result = 1;
+    if (v)
+    {
+        result = log2_u64(v) / log2_u64(16) + 1;
+    }
+
     return result;
 }
 
@@ -237,9 +276,49 @@ fn u64 is_decimal_digit(u8 ch)
     return (ch >= '0') & (ch <= '9');
 }
 
+fn u64 is_alphanumeric(u8 ch)
+{
+    return is_alphabetic(ch) | is_decimal_digit(ch);
+}
+
+fn u64 is_hex_digit_alpha_lower(u8 ch)
+{
+    return (ch >= 'a') & (ch <= 'f');
+}
+
+fn u64 is_hex_digit_alpha_upper(u8 ch)
+{
+    return (ch >= 'A') & (ch <= 'F');
+}
+
+fn u64 is_hex_digit_alpha(u8 ch)
+{
+    return is_hex_digit_alpha_lower(ch) | is_hex_digit_alpha_upper(ch);
+}
+
 fn u64 is_hex_digit(u8 ch)
 {
-    return (is_decimal_digit(ch) | (((ch == 'a') | (ch == 'A')) | ((ch == 'b') | (ch == 'B')))) | ((((ch == 'c') | (ch == 'C')) | ((ch == 'd') | (ch == 'D'))) | (((ch == 'e') | (ch == 'E')) | ((ch == 'f') | (ch == 'F'))));
+    return is_decimal_digit(ch) | is_hex_digit_alpha(ch);
+}
+
+fn u8 hex_ch_to_int(u8 ch)
+{
+    if ((ch >= '0') & (ch <= '9'))
+    {
+        return ch - '0';
+    }
+    else if ((ch >= 'a') & (ch <= 'f'))
+    {
+        return ch - 'a' + 10;
+    }
+    else if ((ch >= 'A') & (ch <= 'F'))
+    {
+        return ch - 'A' + 10;
+    }
+    else
+    {
+        unreachable();
+    }
 }
 
 fn u64 is_identifier_start(u8 ch)
@@ -282,25 +361,38 @@ fn Hash32 hash64_to_hash32(Hash64 hash64)
     return result;
 }
 
-fn u64 align_forward(u64 value, u64 alignment)
+fn u64 align_forward_u32(u32 value, u32 alignment)
+{
+    u32 mask = alignment - 1;
+    u32 result = (value + mask) & ~mask;
+    return result;
+}
+
+fn u32 align_backward_u32(u32 value, u32 alignment)
+{
+    u32 result = value & ~(alignment - 1);
+    return result;
+}
+
+fn u64 align_forward_u64(u64 value, u64 alignment)
 {
     u64 mask = alignment - 1;
     u64 result = (value + mask) & ~mask;
     return result;
 }
 
-fn u64 align_backward(u64 value, u64 alignment)
+fn u64 align_backward_u64(u64 value, u64 alignment)
 {
     u64 result = value & ~(alignment - 1);
     return result;
 }
 
-fn u8 is_power_of_two(u64 value)
+fn u8 is_power_of_two_u64(u64 value)
 {
     return (value & (value - 1)) == 0;
 }
 
-fn u8 first_bit_set_32(u32 value)
+fn u8 first_bit_set_u32(u32 value)
 {
 #if _MSC_VER
     DWORD result_dword;
@@ -314,7 +406,7 @@ fn u8 first_bit_set_32(u32 value)
     return result;
 }
 
-fn u64 first_bit_set_64(u64 value)
+fn u64 first_bit_set_u64(u64 value)
 {
 #if _MSC_VER
     DWORD result_dword;
@@ -337,5 +429,35 @@ fn Hash32 hash32_fib_end(Hash32 hash)
 fn Hash32 hash64_fib_end(Hash64 hash)
 {
     let(result, TRUNCATE(Hash32, ((hash + 1) * 11400714819323198485ull) >> 32));
+    return result;
+}
+
+fn u64 parse_hexadecimal(String string, u8* error)
+{
+    u8* it = &string.pointer[string.length - 1];
+    u8 is_error = 0;
+
+    u64 result = 0;
+
+    while (it >= string.pointer)
+    {
+        u8 ch = *it;
+
+        u8 is_error_it = !is_hex_digit(ch);
+        is_error |= is_error_it;
+        if (is_error_it)
+        {
+            break;
+        }
+
+        u8 sub = is_decimal_digit(ch) ? '0' : (is_hex_digit_alpha_lower(ch) ? 'a' : 'A');
+        u8 hex_value = ch - sub + 10 * is_hex_digit_alpha(ch);
+        assert((hex_value & 0xf) == hex_value);
+        result = (result << 4) | hex_value;
+
+        it -= 1;
+    }
+
+    *error = is_error;
     return result;
 }

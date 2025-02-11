@@ -49,5 +49,6 @@ fn void vb_generic_ensure_capacity(VirtualBuffer(u8)* vb, u32 item_size, u32 ite
 fn u8* vb_generic_add_assume_capacity(VirtualBuffer(u8)* vb, u32 item_size, u32 item_count);
 fn u8* vb_generic_add(VirtualBuffer(u8)* vb, u32 item_size, u32 item_count);
 fn u8* vb_append_bytes(VirtualBuffer(u8*) vb, Slice(u8) bytes);
-fn void vb_copy_string(VirtualBuffer(u8)* buffer, String string);
+fn u32 vb_copy_string(VirtualBuffer(u8)* buffer, String string);
 fn u64 vb_copy_string_zero_terminated(VirtualBuffer(u8)* buffer, String string);
+fn u64 vb_format(VirtualBuffer(u8)* vb, const char* format, ...);
