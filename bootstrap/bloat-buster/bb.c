@@ -1451,7 +1451,7 @@ fn EncodingBatch encoding_batch_from_scalar(EncodingScalar scalar)
         batch.opcode.values[1][i] = scalar.opcode.bytes[1];
         batch.opcode.values[2][i] = scalar.opcode.bytes[2];
         batch.opcode.extension[i] = scalar.opcode.extension;
-        batch.opcode.plus_register |= scalar.opcode.plus_register << i;
+        batch.opcode.plus_register |= (u64)scalar.opcode.plus_register << i;
     }
 
     for (u64 i = 0; i < array_length(batch.opcode.lengths); i += 1)
@@ -1889,7 +1889,7 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
     VirtualBuffer(u8) clang_pipe_buffer = {};
     vb_ensure_capacity(&clang_pipe_buffer, 1024*1024);
     llvm_initialize_macro(X86, _null_prefix_());
-    let(disassembler, LLVMCreateDisasmCPU("x86_64-freestanding", "znver5", 0, 0, 0, 0));
+    let(disassembler, LLVMCreateDisasmCPU("x86_64-freestanding", "znver4", 0, 0, 0, 0));
     u64 disassembly_options = LLVMDisassembler_Option_AsmPrinterVariant | LLVMDisassembler_Option_PrintImmHex;
     if (!LLVMSetDisasmOptions(disassembler, disassembly_options))
     {
@@ -4917,12 +4917,17 @@ int main(int argc, char** argv, char** envp)
     Arena* arena = arena_initialize_default(MB(2));
     assemble_file(arena, strlit("large_assembly.s"));
 
-    // TestDataset dataset = construct_test_cases();
-    // EncodingTestOptions options = {
-    //     .scalar = 1,
-    //     .wide = 1,
-    // };
-    // u8 result = encoding_test_instruction_batches(arena, dataset, options);
+    int result = 0;
 
-    return 0;
+    if (BB_CI)
+    {
+        TestDataset dataset = construct_test_cases();
+        EncodingTestOptions options = {
+            .scalar = 1,
+            .wide = 1,
+        };
+        result = encoding_test_instruction_batches(arena, dataset, options);
+    }
+
+    return result;
 }
