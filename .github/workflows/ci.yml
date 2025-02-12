@@ -55,7 +55,7 @@ jobs:
     needs: generate-config
     permissions: write-all
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         os: [ x86_64-linux-znver4 ]
         BIRTH_BUILD_TYPE: ${{ fromJSON(needs.generate-config.outputs.BIRTH_BUILD_TYPES) }}

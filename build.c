@@ -523,6 +523,15 @@ fn void compile_program(Arena* arena, CompileOptions options)
         } break;
     }
 
+    if (BB_CI)
+    {
+        add_arg("-DBB_CI=1");
+    }
+    else
+    {
+        add_arg("-DBB_CI=0");
+    }
+
     // TODO: careful. If handing binaries built by CI to people, we need to be specially careful about this
     if (c_compiler == C_COMPILER_MSVC)
     {
@@ -707,7 +716,7 @@ fn void compile_program(Arena* arena, CompileOptions options)
         char* argv_buffer[4096];
         argv_buffer[0] = llvm_config_c;
         argv_buffer[1] = "--libs";
-        u32 arg_i = 2;
+        u32 local_arg_i = 2;
 
         String llvm_components = { .pointer = buffer, .length = length };
         u32 i = 0;
@@ -719,14 +728,14 @@ fn void compile_program(Arena* arena, CompileOptions options)
             u64 argument_length = unlikely(there_is_space) ? space_index : slice.length;
 
             String argument_slice = s_get_slice(u8, slice, 0, argument_length - !there_is_space);
-            argv_buffer[arg_i] = string_to_c(arena_duplicate_string(arena, argument_slice));
-            arg_i += 1;
+            argv_buffer[local_arg_i] = string_to_c(arena_duplicate_string(arena, argument_slice));
+            local_arg_i += 1;
 
             i += argument_length + there_is_space;
         }
 
-        argv_buffer[arg_i] = 0;
-        arg_i += 1;
+        argv_buffer[local_arg_i] = 0;
+        local_arg_i += 1;
 
         length = 0;
 
@@ -739,7 +748,7 @@ fn void compile_program(Arena* arena, CompileOptions options)
             },
             .debug = options.flags.debug,
         };
-        CStringSlice arguments = { .pointer = argv_buffer, .length = arg_i };
+        CStringSlice arguments = { .pointer = argv_buffer, .length = local_arg_i };
         RunCommandResult result = run_command(arena, arguments, environment_pointer, run_options);
         let(success, result.termination_kind == PROCESS_TERMINATION_EXIT && result.termination_code == 0); 
         if (!success)
@@ -749,9 +758,10 @@ fn void compile_program(Arena* arena, CompileOptions options)
 
         i = 0;
 
+        String llvm_libraries = { .pointer = buffer, .length = length };
         while (i < length)
         {
-            String slice = s_get_slice(u8, llvm_components, i, llvm_components.length);
+            String slice = s_get_slice(u8, llvm_libraries, i, llvm_libraries.length);
             u64 space_index = string_first_ch(slice, ' ');
             u8 there_is_space = space_index != STRING_NO_MATCH;
             u64 argument_length = unlikely(there_is_space) ? space_index : slice.length;
