@@ -2358,6 +2358,9 @@ fn void parse_instruction_table(Arena* arena)
     };
     Parser* parser = &parser_memory;
 
+    VirtualBuffer(u8) file_memory = {};
+    VirtualBuffer(u8)* f = &file_memory;
+
     let_cast(u32, file_length, file.length);
     while (parser->i < file_length)
     {

@@ -193,8 +193,6 @@ STRUCT(EncodingScalar)
     u64 is_immediate:4;
     u64 is_displacement8:1;
     u64 is_displacement32:1;
-    u64 is_relative8:1;
-    u64 is_relative32:1;
     u64 rex_w:1;
     u64 legacy_prefixes:LEGACY_PREFIX_COUNT;
     union
@@ -319,11 +317,11 @@ u32 encode_instruction_batch(u8* restrict output, const EncodingScalar* const re
         *(u64*) it = encoding.immediate.value;
         it += ((encoding.is_immediate & (1 << 3)) >> 3) * sizeof(u64);
 
-        *(s8*)it = encoding.relative.bytes[0];
-        it += encoding.is_relative8 * sizeof(s8);
-
-        *(s32*)it = encoding.relative.value;
-        it += encoding.is_relative32 * sizeof(s32);
+        // *(s8*)it = encoding.relative.bytes[0];
+        // it += encoding.is_relative8 * sizeof(s8);
+        //
+        // *(s32*)it = encoding.relative.value;
+        // it += encoding.is_relative32 * sizeof(s32);
 
         let_cast(u8, instruction_length, it - start);
         instruction_lengths[encoding_index] = instruction_length;
@@ -1428,8 +1426,8 @@ fn EncodingBatch encoding_batch_from_scalar(EncodingScalar scalar)
         .is_reg_register = bitset_from_bit(scalar.is_reg_register),
         .is_displacement8 = bitset_from_bit(scalar.is_displacement8),
         .is_displacement32 = bitset_from_bit(scalar.is_displacement32),
-        .is_relative8 = bitset_from_bit(scalar.is_relative8),
-        .is_relative32 = bitset_from_bit(scalar.is_relative32),
+        // .is_relative8 = bitset_from_bit(scalar.is_relative8),
+        // .is_relative32 = bitset_from_bit(scalar.is_relative32),
         .rex_w = bitset_from_bit(scalar.rex_w),
         .implicit_register = bitset_from_bit(scalar.implicit_register),
         .is_immediate = {
@@ -1586,8 +1584,8 @@ u32 encode(u8* restrict buffer, const EncodingBatch* const restrict batch)
     __mmask64 is_reg_direct_addressing_mode = _knot_mask64(_kor_mask64(is_displacement8, is_displacement32));
     __mmask64 has_base_register = _kor_mask64(_kor_mask64(is_rm_register, is_reg_register), is_implicit_register);
 
-    __mmask64 is_relative8 = _cvtu64_mask64(batch->is_relative8);
-    __mmask64 is_relative32 = _cvtu64_mask64(batch->is_relative32);
+    // __mmask64 is_relative8 = _cvtu64_mask64(batch->is_relative8);
+    // __mmask64 is_relative32 = _cvtu64_mask64(batch->is_relative32);
 
     __m512i rex_b = _mm512_maskz_set1_epi8(_mm512_test_epi8_mask(rm_register, _mm512_set1_epi8(0b1000)), 1 << 0);
     __m512i rex_x = _mm512_set1_epi8(0); // TODO
@@ -1689,15 +1687,15 @@ u32 encode(u8* restrict buffer, const EncodingBatch* const restrict batch)
     u8 displacement32_positions[64];
     _mm512_storeu_epi8(displacement32_positions, displacement32_position);
 
-    __m512i relative8_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), is_relative8, instruction_length);
-    instruction_length = _mm512_add_epi8(instruction_length, _mm512_maskz_set1_epi8(is_relative8, sizeof(s8)));
-    u8 relative8_positions[64];
-    _mm512_storeu_epi8(relative8_positions, relative8_position);
-
-    __m512i relative32_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), is_relative32, instruction_length);
-    instruction_length = _mm512_add_epi8(instruction_length, _mm512_maskz_set1_epi8(is_relative32, sizeof(s32)));
-    u8 relative32_positions[64];
-    _mm512_storeu_epi8(relative32_positions, relative32_position);
+    // __m512i relative8_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), is_relative8, instruction_length);
+    // instruction_length = _mm512_add_epi8(instruction_length, _mm512_maskz_set1_epi8(is_relative8, sizeof(s8)));
+    // u8 relative8_positions[64];
+    // _mm512_storeu_epi8(relative8_positions, relative8_position);
+    //
+    // __m512i relative32_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), is_relative32, instruction_length);
+    // instruction_length = _mm512_add_epi8(instruction_length, _mm512_maskz_set1_epi8(is_relative32, sizeof(s32)));
+    // u8 relative32_positions[64];
+    // _mm512_storeu_epi8(relative32_positions, relative32_position);
 
     u8 immediate_positions[array_length(batch->is_immediate)][64];
     for (u32 i = 0; i < array_length(immediate_positions); i += 1)
@@ -1748,14 +1746,14 @@ u32 encode(u8* restrict buffer, const EncodingBatch* const restrict batch)
             separate_buffers[i][destination_index] = batch->displacement[byte][i];
         }
 
-        separate_buffers[i][relative8_positions[i]] = batch->relative[0][i];
-        
-        u8 relative32_start = relative32_positions[i];
-        for (u32 byte = 0; byte < 4; byte += 1)
-        {
-            u8 destination_index = relative32_start + byte * (relative32_start != 0xf);
-            separate_buffers[i][destination_index] = batch->relative[byte][i];
-        }
+        // separate_buffers[i][relative8_positions[i]] = batch->relative[0][i];
+        // 
+        // u8 relative32_start = relative32_positions[i];
+        // for (u32 byte = 0; byte < 4; byte += 1)
+        // {
+        //     u8 destination_index = relative32_start + byte * (relative32_start != 0xf);
+        //     separate_buffers[i][destination_index] = batch->relative[byte][i];
+        // }
     }
 
     u32 buffer_i = 0;
@@ -2269,8 +2267,8 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                 TestInstruction instruction = {
                                     .encoding = {
                                         .rex_w = encoding->rex_w,
-                                        .is_relative8 = first_operand == op_rel8,
-                                        .is_relative32 = first_operand == op_rel32,
+                                        .is_displacement8 = first_operand == op_rel8,
+                                        .is_displacement32 = first_operand == op_rel32,
                                         .legacy_prefixes = batch->legacy_prefixes | (encoding->operand_size_override << LEGACY_PREFIX_66),
                                         .opcode = encoding->opcode,
                                         .relative = { .value = 0xffffffff },
