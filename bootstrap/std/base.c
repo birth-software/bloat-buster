@@ -202,7 +202,7 @@ fn u64 generate_random_number()
     return u128_shift_right_by_64(rn_state);
 }
 
-fn u64 round_up_to_next_power_of_2(u64 n)
+fn u64 next_power_of_two(u64 n)
 {
     n -= 1;
     n |= n >> 1;

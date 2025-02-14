@@ -19,7 +19,7 @@ btc: class bittest(/7, bb)
 btr: class bittest(/6, b3)
 bts: class bittest(/5, ab)
 call:
-    imm [d: e8 rel32]
+    rel [d: e8 rel32]
     rm64 [m: ff /2]
 cbw: [zo: rex.r 98]
 cwde: [zo: 98]
@@ -104,11 +104,11 @@ iret: [zo: 66 cf]
 iretd: [zo: cf]
 iretq: [zo: rex.w cf]
 jmp:
-    imm [d: eb rel8]
-    imm [d: e9 rel32]
+    rel [d: eb rel8]
+    rel [d: e9 rel32]
     rm64 [m: ff /4]
 jcc: class jcc
-jrcxz: imm [d: e3 rel8]
+jrcxz: rel [d: e3 rel8]
 lahf: [zo: 9f]
 lea:
     r16, m16 [rm: 8d /r]
@@ -118,9 +118,9 @@ lodsb: [zo: ac]
 lodsw: [zo: ad]
 lodsd: [zo: ad]
 lodsq: [zo: ad]
-loop: imm [d: e2 rel8]
-loope: imm [d: e1 rel8]
-loopne: imm [d: e0 rel8]
+loop: rel [d: e2 rel8]
+loope: rel [d: e1 rel8]
+loopne: rel [d: e0 rel8]
 monitor: [zo: 0f 01 c8]
 mov:
     rm8, r8 [mr: 88 /r]
