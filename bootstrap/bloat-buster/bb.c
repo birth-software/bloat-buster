@@ -4753,6 +4753,7 @@ String assemble(String text)
         //     }
         // }
 
+#if 0
         // =================================
         // TODO: START
         // =================================
@@ -5039,6 +5040,9 @@ String assemble(String text)
             memcpy(destination, &separate_buffers[i], separate_length);
             destination += separate_length;
         }
+#else
+        unused(destination);
+#endif
     }
 
     String result = {};
