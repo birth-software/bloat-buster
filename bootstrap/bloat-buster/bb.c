@@ -107,13 +107,20 @@ fn u8 gpr_is_extended(GPR_x86_64 gpr)
 
 #define X86_64_GPR_COUNT (16)
 
+typedef enum OpcodeLength
+{
+    OPCODE_LENGTH_1 = 0,
+    OPCODE_LENGTH_2 = 1, // 0f xx
+    OPCODE_LENGTH_3 = 2, // 0f yy xx
+} OpcodeLength;
+
 STRUCT(Opcode)
 {
-    u8 length:2;
     u8 plus_register:1;
+    u8 prefix_0f:1;
+    u8 extension:3;
     u8 reserved:2;
-    u8 bytes[3];
-    u8 extension;
+    u8 bytes[2];
 };
 
 typedef enum LegacyPrefix
@@ -185,18 +192,10 @@ static_assert(array_length(legacy_prefixes) == LEGACY_PREFIX_COUNT);
 
 STRUCT(EncodingScalar)
 {
+    EncodingInvariantData invariant;
+    u64 legacy_prefixes:LEGACY_PREFIX_COUNT;
     u64 rm_register:4;
     u64 reg_register:4;
-    u64 is_rm_register:1;
-    u64 is_reg_register:1;
-    u64 implicit_register:1;
-    u64 is_immediate:4;
-    u64 is_displacement8:1;
-    u64 is_displacement32:1;
-    u64 is_relative8:1;
-    u64 is_relative32:1;
-    u64 rex_w:1;
-    u64 legacy_prefixes:LEGACY_PREFIX_COUNT;
     union
     {
         u8 bytes[8];
@@ -207,18 +206,13 @@ STRUCT(EncodingScalar)
         s32 value;
         s8 bytes[4];
     } displacement;
-    union
-    {
-        s32 value;
-        s8 bytes[4];
-    } relative;
     Opcode opcode;
 };
 
 #define batch_element_count (64)
 #define max_instruction_byte_count (16)
 
-u32 encode_instruction_batch(u8* restrict output, const EncodingScalar* const restrict encodings, u64 encoding_count)
+u32 encode_scalar(u8* restrict output, const EncodingScalar* const restrict encodings, u64 encoding_count)
 {
     assert(encoding_count);
     u8 buffers[batch_element_count][max_instruction_byte_count];
@@ -240,7 +234,7 @@ u32 encode_instruction_batch(u8* restrict output, const EncodingScalar* const re
             it += is_prefix;
         }
 
-        u8 has_base_register = encoding.is_rm_register | encoding.is_reg_register | encoding.implicit_register;
+        u8 has_base_register = encoding.invariant.is_rm_register | encoding.invariant.is_reg_register | encoding.invariant.implicit_register;
 
         u8 rex_base = 0x40;
         u8 rex_b = 0x01;
@@ -248,29 +242,31 @@ u32 encode_instruction_batch(u8* restrict output, const EncodingScalar* const re
         unused(rex_x);
         u8 rex_r = 0x04;
         u8 rex_w = 0x08;
-        u8 is_reg_direct_addressing_mode = !(encoding.is_displacement8 | encoding.is_displacement32);
+        u8 is_reg_direct_addressing_mode = !encoding.invariant.is_displacement;
         u8 reg_register = encoding.reg_register;
         u8 rm_register = encoding.rm_register;
         u8 byte_rex_b = rex_b * gpr_is_extended(rm_register);
         u8 byte_rex_x = 0; // TODO: rex_x * encoding.scaled_index_register;
         u8 byte_rex_r = rex_r * gpr_is_extended(reg_register); 
-        u8 byte_rex_w = rex_w * encoding.rex_w;
+        u8 byte_rex_w = rex_w * encoding.invariant.rex_w;
         u8 byte_rex = (byte_rex_b | byte_rex_x) | (byte_rex_r | byte_rex_w);
         u8 rex = (rex_base | byte_rex);
         u8 encode_rex = byte_rex != 0;
         *it = rex;
         it += encode_rex;
+        
+        u8 encode_prefix_0f = encoding.opcode.prefix_0f;
+        *it = 0x0f * encode_prefix_0f;
+        it += encode_prefix_0f;
 
-        *it = encoding.opcode.bytes[0] | ((encoding.rm_register & 0b111) * encoding.opcode.plus_register * (encoding.opcode.length == 1));
+        u8 encode_three_byte_opcode = encoding.opcode.bytes[1] != 0;
+        *it = encoding.opcode.bytes[1] * encode_three_byte_opcode;
+        it += encode_three_byte_opcode;
+
+        *it = encoding.opcode.bytes[0] | ((encoding.rm_register & 0b111) * encoding.opcode.plus_register);        // *it = encoding.opcode.bytes[0] | 
         it += 1;
-
-        *it = encoding.opcode.bytes[1] | ((encoding.rm_register & 0b111) * encoding.opcode.plus_register * (encoding.opcode.length == 2));
-        it += encoding.opcode.length > 1;
-
-        *it = encoding.opcode.bytes[2] | ((encoding.rm_register & 0b111) * encoding.opcode.plus_register * (encoding.opcode.length == 3));
-        it += encoding.opcode.length > 2;
-
-        u8 encode_mod_rm = ((encoding.is_rm_register | encoding.is_reg_register) & (!encoding.opcode.plus_register)) | encoding.is_displacement8 | encoding.is_displacement32;
+        
+        u8 encode_mod_rm = ((encoding.invariant.is_rm_register | encoding.invariant.is_reg_register) & (!encoding.opcode.plus_register)) | encoding.invariant.is_displacement;
 
         // Mod:
         // 00: No displacement (except when R/M = 101, where a 32-bit displacement follows).
@@ -278,8 +274,8 @@ u32 encode_instruction_batch(u8* restrict output, const EncodingScalar* const re
         // 10: 32-bit signed displacement follows.
         // 11: Register addressing (no memory access).
         
-        u8 mod_is_displacement32 = encoding.is_displacement32;
-        u8 mod_is_displacement8 = encoding.is_displacement8 & ((encoding.displacement.bytes[0] != 0) | (encoding.is_rm_register & ((encoding.rm_register & 0b111) == REGISTER_X86_64_RBP)));
+        u8 mod_is_displacement32 = encoding.invariant.is_displacement & encoding.invariant.displacement_size;
+        u8 mod_is_displacement8 = (encoding.invariant.is_displacement & !(encoding.invariant.displacement_size)) & ((encoding.displacement.bytes[0] != 0) | (encoding.invariant.is_rm_register & ((encoding.rm_register & 0b111) == REGISTER_X86_64_RBP)));
         // TODO: fix if necessary
         u8 mod = (((mod_is_displacement32 * has_base_register) << 1) | (mod_is_displacement8 * has_base_register)) | ((is_reg_direct_addressing_mode << 1) | is_reg_direct_addressing_mode);
         // A register operand.
@@ -296,7 +292,7 @@ u32 encode_instruction_batch(u8* restrict output, const EncodingScalar* const re
         u8 encode_sib = (mod != 0b11) & (rm == 0b100);
         u8 sib_scale = 0;
         u8 sib_index = 0b100;
-        u8 sib_base = ((rm_register & 0b111) * encoding.is_rm_register) | (!encoding.is_rm_register * 0b101);
+        u8 sib_base = ((rm_register & 0b111) * encoding.invariant.is_rm_register) | (!encoding.invariant.is_rm_register * 0b101);
         u8 sib_byte = sib_scale << 6 | sib_index << 3 | sib_base;
         *it = sib_byte;
         it += encode_sib;
@@ -308,22 +304,22 @@ u32 encode_instruction_batch(u8* restrict output, const EncodingScalar* const re
         it += mod_is_displacement32 * sizeof(s32);
 
         *(u8*) it = encoding.immediate.bytes[0];
-        it += ((encoding.is_immediate & (1 << 0)) >> 0) * sizeof(u8);
+        it += (encoding.invariant.is_immediate & (encoding.invariant.immediate_size == 0)) * sizeof(u8);
 
         *(u16*) it = *(u16*)(&encoding.immediate.bytes[0]);
-        it += ((encoding.is_immediate & (1 << 1)) >> 1) * sizeof(u16);
+        it += (encoding.invariant.is_immediate & (encoding.invariant.immediate_size == 1)) * sizeof(u16);
 
         *(u32*) it = *(u32*)(&encoding.immediate.bytes[0]);
-        it += ((encoding.is_immediate & (1 << 2)) >> 2) * sizeof(u32);
+        it += (encoding.invariant.is_immediate & (encoding.invariant.immediate_size == 2)) * sizeof(u32);
 
         *(u64*) it = encoding.immediate.value;
-        it += ((encoding.is_immediate & (1 << 3)) >> 3) * sizeof(u64);
+        it += (encoding.invariant.is_immediate & (encoding.invariant.immediate_size == 3)) * sizeof(u64);
 
-        *(s8*)it = encoding.relative.bytes[0];
-        it += encoding.is_relative8 * sizeof(s8);
+        *(s8*)it = encoding.displacement.bytes[0];
+        it += (encoding.invariant.is_relative & !encoding.invariant.displacement_size) * sizeof(s8);
 
-        *(s32*)it = encoding.relative.value;
-        it += encoding.is_relative32 * sizeof(s32);
+        *(s32*)it = encoding.displacement.value;
+        it += (encoding.invariant.is_relative & encoding.invariant.displacement_size) * sizeof(s32);
 
         let_cast(u8, instruction_length, it - start);
         instruction_lengths[encoding_index] = instruction_length;
@@ -518,42 +514,6 @@ STRUCT(Encoding)
     u8 operand_size_override:1;
 };
 decl_vb(Encoding);
-
-STRUCT(Encoding2)
-{
-    // Values
-    union
-    {
-        union
-        {
-            s8 cb;
-            s16 cw;
-            s32 cd;
-            s32 cp_offset;
-            s64 co;
-            s64 ct_offset;
-        } code_offset;
-        union
-        {
-            u8 ib;
-            u16 iw;
-            u32 id;
-            u64 io;
-        } immediate;
-    };
-    u16 segment_selector;
-    u32 digit:3;
-
-    // Encoding description
-    u32 np:1;
-    u32 nfx:1;
-    u32 rex_w:1;
-    u32 is_digit:1;
-    u32 reg:1;
-    u32 is_code_offset:6;
-    u32 is_immediate:4;
-    u32 is_plus_reg:4;
-};
 
 STRUCT(Batch)
 {
@@ -1368,20 +1328,12 @@ STRUCT(GPR)
     Bitset mask[4];
 };
 
-STRUCT(OpcodeLen)
-{
-    u8 length0:2;
-    u8 length1:2;
-    u8 length2:2;
-    u8 length3:2;
-};
-
 STRUCT(VectorOpcode)
 {
-    u8 values[3][64];
-    OpcodeLen lengths[64/4];
-    u8 extension[64];
+    Bitset prefix_0f;
     Bitset plus_register;
+    u8 values[2][64];
+    u8 extension[64];
 };
 
 STRUCT(EncodingBatch)
@@ -1391,18 +1343,17 @@ STRUCT(EncodingBatch)
     Bitset is_reg_register;
     GPR rm_register;
     GPR reg_register;
-    Bitset is_relative8;
-    Bitset is_relative32;
     Bitset implicit_register;
     VectorOpcode opcode;
-    Bitset is_displacement8;
-    Bitset is_displacement32;
+    Bitset is_relative;
+    Bitset is_displacement;
+    Bitset displacement_size;
     Bitset rex_w;
     u8 segment_register_override[64];
-    Bitset is_immediate[4];
+    Bitset is_immediate;
+    Bitset immediate_size[2];
     u8 immediate[8][64];
     u8 displacement[4][64];
-    u8 relative[4][64];
 };
 
 fn Bitset bitset_from_bit(u8 bit)
@@ -1424,21 +1375,24 @@ fn EncodingBatch encoding_batch_from_scalar(EncodingScalar scalar)
     EncodingBatch batch = {
         .rm_register = register_mask_batch_from_scalar(scalar.rm_register),
         .reg_register = register_mask_batch_from_scalar(scalar.reg_register),
-        .is_rm_register = bitset_from_bit(scalar.is_rm_register),
-        .is_reg_register = bitset_from_bit(scalar.is_reg_register),
-        .is_displacement8 = bitset_from_bit(scalar.is_displacement8),
-        .is_displacement32 = bitset_from_bit(scalar.is_displacement32),
-        .is_relative8 = bitset_from_bit(scalar.is_relative8),
-        .is_relative32 = bitset_from_bit(scalar.is_relative32),
-        .rex_w = bitset_from_bit(scalar.rex_w),
-        .implicit_register = bitset_from_bit(scalar.implicit_register),
-        .is_immediate = {
-            bitset_from_bit(scalar.is_immediate & (1 << 0)),
-            bitset_from_bit(scalar.is_immediate & (1 << 1)),
-            bitset_from_bit(scalar.is_immediate & (1 << 2)),
-            bitset_from_bit(scalar.is_immediate & (1 << 3)),
+        .is_rm_register = bitset_from_bit(scalar.invariant.is_rm_register),
+        .is_reg_register = bitset_from_bit(scalar.invariant.is_reg_register),
+        .is_displacement = bitset_from_bit(scalar.invariant.is_displacement),
+        .is_relative = bitset_from_bit(scalar.invariant.is_relative),
+        .displacement_size = bitset_from_bit(scalar.invariant.displacement_size),
+        .rex_w = bitset_from_bit(scalar.invariant.rex_w),
+        .implicit_register = bitset_from_bit(scalar.invariant.implicit_register),
+        .is_immediate = bitset_from_bit(scalar.invariant.is_immediate),
+        .opcode = {
+            .plus_register = bitset_from_bit(scalar.opcode.plus_register),
+            .prefix_0f = bitset_from_bit(scalar.opcode.prefix_0f),
         },
     };
+
+    for (u64 i = 0; i < array_length(batch.immediate_size); i += 1)
+    {
+        batch.immediate_size[i] = bitset_from_bit(scalar.invariant.immediate_size & (1 << i));
+    }
 
     for (LegacyPrefix legacy_prefix = 0; legacy_prefix < LEGACY_PREFIX_COUNT; legacy_prefix += 1)
     {
@@ -1449,19 +1403,7 @@ fn EncodingBatch encoding_batch_from_scalar(EncodingScalar scalar)
     {
         batch.opcode.values[0][i] = scalar.opcode.bytes[0];
         batch.opcode.values[1][i] = scalar.opcode.bytes[1];
-        batch.opcode.values[2][i] = scalar.opcode.bytes[2];
         batch.opcode.extension[i] = scalar.opcode.extension;
-        batch.opcode.plus_register |= (u64)scalar.opcode.plus_register << i;
-    }
-
-    for (u64 i = 0; i < array_length(batch.opcode.lengths); i += 1)
-    {
-        batch.opcode.lengths[i] = (OpcodeLen){
-            .length0 = scalar.opcode.length,
-            .length1 = scalar.opcode.length,
-            .length2 = scalar.opcode.length,
-            .length3 = scalar.opcode.length,
-        };
     }
 
     for (u32 immediate_index = 0; immediate_index < array_length(scalar.immediate.bytes); immediate_index += 1)
@@ -1480,18 +1422,10 @@ fn EncodingBatch encoding_batch_from_scalar(EncodingScalar scalar)
         }
     }
 
-    for (u32 relative_index = 0; relative_index < array_length(scalar.relative.bytes); relative_index += 1)
-    {
-        for (u32 batch_index = 0; batch_index < batch_element_count; batch_index += 1)
-        {
-            batch.relative[relative_index][batch_index] = scalar.relative.bytes[relative_index];
-        }
-    }
-
     return batch;
 }
 
-u32 encode(u8* restrict buffer, const EncodingBatch* const restrict batch)
+u32 encode_wide(u8* restrict buffer, const EncodingBatch* const restrict batch)
 {
     __m512i prefixes[LEGACY_PREFIX_COUNT];
     __mmask64 prefix_masks[LEGACY_PREFIX_COUNT];
@@ -1554,8 +1488,11 @@ u32 encode(u8* restrict buffer, const EncodingBatch* const restrict batch)
     __mmask64 is_plus_register = _cvtu64_mask64(batch->opcode.plus_register);
     __mmask64 is_implicit_register = _cvtu64_mask64(batch->implicit_register);
 
-    __mmask64 is_displacement8 = _cvtu64_mask64(batch->is_displacement8);
-    __mmask64 is_displacement32 = _cvtu64_mask64(batch->is_displacement32);
+    __mmask64 is_displacement8 = _kand_mask64(_cvtu64_mask64(batch->is_displacement), _knot_mask64(_cvtu64_mask64(batch->displacement_size)));
+    __mmask64 is_displacement32 = _kand_mask64(_cvtu64_mask64(batch->is_displacement), _cvtu64_mask64(batch->displacement_size));
+
+    __mmask64 is_relative8 = _kand_mask64(_cvtu64_mask64(batch->is_relative), _knot_mask64(_cvtu64_mask64(batch->displacement_size)));
+    __mmask64 is_relative32 = _kand_mask64(_cvtu64_mask64(batch->is_relative), _cvtu64_mask64(batch->displacement_size));
 
     __mmask64 is_rm_register;
     __m512i rm_register;
@@ -1586,9 +1523,6 @@ u32 encode(u8* restrict buffer, const EncodingBatch* const restrict batch)
     __mmask64 is_reg_direct_addressing_mode = _knot_mask64(_kor_mask64(is_displacement8, is_displacement32));
     __mmask64 has_base_register = _kor_mask64(_kor_mask64(is_rm_register, is_reg_register), is_implicit_register);
 
-    __mmask64 is_relative8 = _cvtu64_mask64(batch->is_relative8);
-    __mmask64 is_relative32 = _cvtu64_mask64(batch->is_relative32);
-
     __m512i rex_b = _mm512_maskz_set1_epi8(_mm512_test_epi8_mask(rm_register, _mm512_set1_epi8(0b1000)), 1 << 0);
     __m512i rex_x = _mm512_set1_epi8(0); // TODO
     __m512i rex_r = _mm512_maskz_set1_epi8(_mm512_test_epi8_mask(reg_register, _mm512_set1_epi8(0b1000)), 1 << 2);
@@ -1603,50 +1537,37 @@ u32 encode(u8* restrict buffer, const EncodingBatch* const restrict batch)
     _mm512_storeu_epi8(rex_bytes, rex_byte);
     _mm512_storeu_epi8(rex_positions, rex_position);
 
-    __m128i opcode_lengths_128 = _mm_loadu_epi8(&batch->opcode.lengths);
-    __m128i selecting_mask = _mm_set1_epi8(0x03);
-    __m128i opcode_length_nibbles_0 = _mm_and_si128(opcode_lengths_128, selecting_mask);
-    __m128i opcode_length_nibbles_1 = _mm_and_si128(_mm_srli_epi64(opcode_lengths_128, 2 * 1), selecting_mask);
-    __m128i opcode_length_nibbles_2 = _mm_and_si128(_mm_srli_epi64(opcode_lengths_128, 2 * 2), selecting_mask);
-    __m128i opcode_length_nibbles_3 = _mm_and_si128(_mm_srli_epi64(opcode_lengths_128, 2 * 3), selecting_mask);
-
-    __m512i opcode_lengths_512 = _mm512_inserti64x4(_mm512_castsi256_si512(_mm256_inserti32x4(_mm256_castsi128_si256(_mm_unpacklo_epi8(opcode_length_nibbles_0, opcode_length_nibbles_1)), _mm_unpackhi_epi8(opcode_length_nibbles_0, opcode_length_nibbles_1), 1)), _mm256_inserti32x4(_mm256_castsi128_si256(_mm_unpacklo_epi8(opcode_length_nibbles_2, opcode_length_nibbles_3)), _mm_unpackhi_epi8(opcode_length_nibbles_2, opcode_length_nibbles_3), 1), 1);
-
-    __mmask64 opcode_length1 = _mm512_cmpeq_epi8_mask(opcode_lengths_512, _mm512_set1_epi8(1));
-    __mmask64 opcode_length2 = _mm512_cmpeq_epi8_mask(opcode_lengths_512, _mm512_set1_epi8(2));
-    __mmask64 opcode_length3 = _mm512_cmpeq_epi8_mask(opcode_lengths_512, _mm512_set1_epi8(3));
-
     __m512i plus_register = _mm512_and_si512(rm_register, _mm512_set1_epi8(0b111));
-
     __m512i opcode_extension = _mm512_loadu_epi8(&batch->opcode.extension[0]);
-    __m512i opcode1 = _mm512_or_epi32(_mm512_loadu_epi8(&batch->opcode.values[0]), _mm512_maskz_mov_epi8(_kand_mask64(is_plus_register, opcode_length1), plus_register));
-    __m512i opcode1_position = instruction_length;
+
+    __mmask64 prefix_0f_mask = _cvtu64_mask64(batch->opcode.prefix_0f);
+    __m512i prefix_0f = _mm512_maskz_set1_epi8(prefix_0f_mask, 0x0f);
+    __m512i prefix_0f_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), prefix_0f_mask, instruction_length);
+    instruction_length = _mm512_add_epi8(instruction_length, _mm512_maskz_set1_epi8(prefix_0f_mask, 0x01));
+
+    u8 prefix_0f_bytes[64];
+    u8 prefix_0f_positions[64];
+    _mm512_storeu_epi8(prefix_0f_bytes, prefix_0f);
+    _mm512_storeu_epi8(prefix_0f_positions, prefix_0f_position);
+
+    __m512i three_byte_opcode = _mm512_loadu_epi8(&batch->opcode.values[1]);
+    __mmask64 three_byte_opcode_mask = _mm512_test_epi8_mask(three_byte_opcode, _mm512_set1_epi8(0xff));
+    __m512i three_byte_opcode_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), three_byte_opcode_mask, instruction_length);
+    instruction_length = _mm512_add_epi8(instruction_length, _mm512_maskz_set1_epi8(three_byte_opcode_mask, 0x01));
+
+    u8 three_byte_opcode_bytes[64];
+    u8 three_byte_opcode_positions[64];
+    _mm512_storeu_epi8(three_byte_opcode_bytes, three_byte_opcode);
+    _mm512_storeu_epi8(three_byte_opcode_positions, three_byte_opcode_position);
+    
+    __m512i base_opcode = _mm512_or_epi32(_mm512_loadu_epi8(&batch->opcode.values[0]), _mm512_maskz_mov_epi8(is_plus_register, plus_register));
+    __m512i base_opcode_position = instruction_length;
     instruction_length = _mm512_add_epi8(instruction_length, _mm512_set1_epi8(0x01));
 
-    u8 opcode1_bytes[64];
-    u8 opcode1_positions[64];
-    _mm512_storeu_epi8(opcode1_bytes, opcode1);
-    _mm512_storeu_epi8(opcode1_positions, opcode1_position);
-
-    __m512i opcode2 = _mm512_or_epi32(_mm512_loadu_epi8(&batch->opcode.values[1]), _mm512_maskz_mov_epi8(_kand_mask64(is_plus_register, opcode_length2), plus_register));
-    __mmask64 opcode2_mask = _mm512_test_epi8_mask(opcode_lengths_512, _mm512_set1_epi8(0b10));
-    __m512i opcode2_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), opcode2_mask, instruction_length);
-    instruction_length = _mm512_add_epi8(instruction_length, _mm512_maskz_set1_epi8(opcode2_mask, 0x01));
-
-    u8 opcode2_bytes[64];
-    u8 opcode2_positions[64];
-    _mm512_storeu_epi8(opcode2_bytes, opcode2);
-    _mm512_storeu_epi8(opcode2_positions, opcode2_position);
-
-    __m512i opcode3 = _mm512_or_epi32(_mm512_loadu_epi8(&batch->opcode.values[2]), _mm512_maskz_mov_epi8(_kand_mask64(is_plus_register, opcode_length3), plus_register));
-    __mmask64 opcode3_mask = _mm512_cmpeq_epi8_mask(opcode_lengths_512, _mm512_set1_epi8(0b11));
-    __m512i opcode3_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), opcode3_mask, instruction_length);
-    instruction_length = _mm512_add_epi8(instruction_length, _mm512_maskz_set1_epi8(opcode3_mask, 0x01));
-
-    u8 opcode3_bytes[64];
-    u8 opcode3_positions[64];
-    _mm512_storeu_epi8(opcode3_bytes, opcode3);
-    _mm512_storeu_epi8(opcode3_positions, opcode3_position);
+    u8 base_opcode_bytes[64];
+    u8 base_opcode_positions[64];
+    _mm512_storeu_epi8(base_opcode_bytes, base_opcode);
+    _mm512_storeu_epi8(base_opcode_positions, base_opcode_position);
 
     __m512i displacement8 = _mm512_loadu_epi8(batch->displacement[0]);
     __mmask64 mod_is_displacement32 = is_displacement32;
@@ -1699,10 +1620,17 @@ u32 encode(u8* restrict buffer, const EncodingBatch* const restrict batch)
     u8 relative32_positions[64];
     _mm512_storeu_epi8(relative32_positions, relative32_position);
 
-    u8 immediate_positions[array_length(batch->is_immediate)][64];
-    for (u32 i = 0; i < array_length(immediate_positions); i += 1)
+    __mmask64 is_immediate_mask = _cvtu64_mask64(batch->is_immediate);
+    __mmask64 mask0 = _cvtu64_mask64(batch->immediate_size[0]);
+    __m512i mask_v0 = _mm512_maskz_set1_epi8(_kand_mask64(is_immediate_mask, mask0), 1 << 0);
+    __mmask64 mask1 = _cvtu64_mask64(batch->immediate_size[1]);
+    __m512i mask_v1 = _mm512_maskz_set1_epi8(_kand_mask64(is_immediate_mask, mask1), 1 << 1);
+    __m512i immediate_size = _mm512_or_si512(mask_v0, mask_v1);
+    __mmask64 is_immediate[4];
+    u8 immediate_positions[array_length(is_immediate)][64];
+    for (u64 i = 0; i < array_length(is_immediate); i += 1)
     {
-        __mmask64 immediate_mask = _cvtu64_mask64(batch->is_immediate[i]);
+        __mmask64 immediate_mask = _mm512_cmpeq_epi8_mask(immediate_size, _mm512_set1_epi8(i));
         __m512i immediate_position = _mm512_mask_mov_epi8(_mm512_set1_epi8(0x0f), immediate_mask, instruction_length);
         instruction_length = _mm512_add_epi8(instruction_length, _mm512_maskz_set1_epi8(immediate_mask, 1 << i));
         _mm512_storeu_epi8(immediate_positions[i], immediate_position);
@@ -1721,9 +1649,9 @@ u32 encode(u8* restrict buffer, const EncodingBatch* const restrict batch)
 
         separate_buffers[i][rex_positions[i]] = rex_bytes[i];
 
-        separate_buffers[i][opcode1_positions[i]] = opcode1_bytes[i];
-        separate_buffers[i][opcode2_positions[i]] = opcode2_bytes[i];
-        separate_buffers[i][opcode3_positions[i]] = opcode3_bytes[i];
+        separate_buffers[i][prefix_0f_positions[i]] = prefix_0f_bytes[i];
+        separate_buffers[i][three_byte_opcode_positions[i]] = three_byte_opcode_bytes[i];
+        separate_buffers[i][base_opcode_positions[i]] = base_opcode_bytes[i];
 
         separate_buffers[i][mod_rm_positions[i]] = mod_rm_bytes[i];
 
@@ -1748,13 +1676,13 @@ u32 encode(u8* restrict buffer, const EncodingBatch* const restrict batch)
             separate_buffers[i][destination_index] = batch->displacement[byte][i];
         }
 
-        separate_buffers[i][relative8_positions[i]] = batch->relative[0][i];
+        separate_buffers[i][relative8_positions[i]] = batch->displacement[0][i];
         
         u8 relative32_start = relative32_positions[i];
         for (u32 byte = 0; byte < 4; byte += 1)
         {
             u8 destination_index = relative32_start + byte * (relative32_start != 0xf);
-            separate_buffers[i][destination_index] = batch->relative[byte][i];
+            separate_buffers[i][destination_index] = batch->displacement[byte][i];
         }
     }
 
@@ -1822,7 +1750,7 @@ fn void test_instruction(TestSetup* setup, TestInstruction* instruction)
 {
     if (setup->options.scalar)
     {
-        let(length, encode_instruction_batch(setup->instruction_binary_buffer.pointer, &instruction->encoding, 1));
+        let(length, encode_scalar(setup->instruction_binary_buffer.pointer, &instruction->encoding, 1));
         assert(length <= setup->instruction_binary_buffer.length);
         String instruction_bytes = {
             .pointer = setup->instruction_binary_buffer.pointer,
@@ -1851,7 +1779,7 @@ fn void test_instruction(TestSetup* setup, TestInstruction* instruction)
     if (setup->options.wide)
     {
         EncodingBatch batch = encoding_batch_from_scalar(instruction->encoding);
-        let(wide_length, encode(setup->instruction_binary_buffer.pointer, &batch));
+        let(wide_length, encode_wide(setup->instruction_binary_buffer.pointer, &batch));
         assert(wide_length % batch_element_count == 0);
         let(length, wide_length / batch_element_count);
 
@@ -1983,7 +1911,9 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
             {
                 TestInstruction instruction = {
                     .encoding = {
-                        .rex_w = encoding->rex_w,
+                        .invariant = {
+                            .rex_w = encoding->rex_w,
+                        },
                         .legacy_prefixes = batch->legacy_prefixes | (encoding->operand_size_override << LEGACY_PREFIX_66),
                         .opcode = encoding->opcode,
                     },
@@ -2012,8 +1942,10 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                             {
                                 TestInstruction instruction = {
                                     .encoding = {
-                                        .rex_w = encoding->rex_w || (first_operand_index == 3),
-                                        .implicit_register = 1,
+                                        .invariant = {
+                                            .rex_w = encoding->rex_w || (first_operand_index == 3),
+                                            .implicit_register = 1,
+                                        },
                                         .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                         .opcode = encoding->opcode,
                                     },
@@ -2055,9 +1987,11 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                     String second_operand_string = gpr_to_string(second_gpr, second_operand_index, 0);
                                     TestInstruction instruction = {
                                         .encoding = {
-                                            .rex_w = encoding->rex_w || second_operand_index == 3,
+                                            .invariant = {
+                                                .rex_w = encoding->rex_w || second_operand_index == 3,
+                                                .is_rm_register = 1,
+                                            },
                                             .rm_register = second_gpr,
-                                            .is_rm_register = 1,
                                             .legacy_prefixes = batch->legacy_prefixes | ((second_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                             .opcode = encoding->opcode,
                                         },
@@ -2077,13 +2011,15 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
 
                                             TestInstruction instruction = {
                                                 .encoding = {
-                                                    .rex_w = encoding->rex_w || second_operand_index == 3,
+                                                    .invariant = {
+                                                        .rex_w = encoding->rex_w || second_operand_index == 3,
+                                                        .is_rm_register = 1,
+                                                        .is_displacement = 1,
+                                                        .displacement_size = displacement_index == 2,
+                                                    },
                                                     .rm_register = second_gpr,
-                                                    .is_rm_register = 1,
                                                     .legacy_prefixes = batch->legacy_prefixes | ((second_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                                     .displacement = { .value = displacements[displacement_index] },
-                                                    .is_displacement8 = displacement_index != 2,
-                                                    .is_displacement32 = displacement_index == 2,
                                                     .opcode = encoding->opcode,
                                                 },
                                                 .text = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string),
@@ -2102,9 +2038,12 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                 u64 immediate = sample_immediate_values(second_operand_index);
                                 TestInstruction instruction = {
                                     .encoding = {
-                                        .rex_w = encoding->rex_w || first_operand_index == 3,
-                                        .implicit_register = 1,
-                                        .is_immediate = 1 << second_operand_index,
+                                        .invariant = {
+                                            .rex_w = encoding->rex_w || first_operand_index == 3,
+                                            .implicit_register = 1,
+                                            .is_immediate = 1,
+                                            .immediate_size = second_operand_index,
+                                        },
                                         .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                         .immediate = { .value = immediate, },
                                         .opcode = encoding->opcode,
@@ -2119,8 +2058,10 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                 String second_operand_string = op_gprd_to_string(second_operand);
                                 TestInstruction instruction = {
                                     .encoding = {
-                                        .rex_w = encoding->rex_w || first_operand_index == 3,
-                                        .implicit_register = 1,
+                                        .invariant = {
+                                            .rex_w = encoding->rex_w || first_operand_index == 3,
+                                            .implicit_register = 1,
+                                        },
                                         .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                         .opcode = encoding->opcode,
                                     },
@@ -2143,7 +2084,9 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
 
                                 TestInstruction instruction = {
                                     .encoding = {
-                                        .rex_w = encoding->rex_w || first_operand_index == 3,
+                                        .invariant = {
+                                            .rex_w = encoding->rex_w || first_operand_index == 3,
+                                        },
                                         .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                         .opcode = encoding->opcode,
                                     },
@@ -2167,7 +2110,9 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
 
                                 TestInstruction instruction = {
                                     .encoding = {
-                                        .rex_w = encoding->rex_w || first_operand_index == 3,
+                                        .invariant = {
+                                            .rex_w = encoding->rex_w || first_operand_index == 3,
+                                        },
                                         .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                         .opcode = encoding->opcode,
                                     },
@@ -2224,9 +2169,11 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                     String first_operand_string = gpr_to_string(first_gpr, first_operand_index, 0);
                                     TestInstruction instruction = {
                                         .encoding = {
-                                            .rex_w = encoding->rex_w || first_operand_index == 3,
+                                            .invariant = {
+                                                .rex_w = encoding->rex_w || first_operand_index == 3,
+                                                .is_rm_register = 1,
+                                            },
                                             .rm_register = first_gpr,
-                                            .is_rm_register = 1,
                                             .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                             .opcode = encoding->opcode,
                                         },
@@ -2246,13 +2193,15 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
 
                                             TestInstruction instruction = {
                                                 .encoding = {
-                                                    .rex_w = encoding->rex_w || first_operand_index == 3,
-                                                    .rm_register = first_gpr,
-                                                    .is_rm_register = 1,
+                                                    .invariant = {
+                                                        .rex_w = encoding->rex_w || first_operand_index == 3,
+                                                        .is_rm_register = 1,
+                                                        .is_displacement = 1,
+                                                        .displacement_size = displacement_index == 2,
+                                                    },
                                                     .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                                     .displacement = { .value = displacements[displacement_index] },
-                                                    .is_displacement8 = displacement_index != 2,
-                                                    .is_displacement32 = displacement_index == 2,
+                                                    .rm_register = first_gpr,
                                                     .opcode = encoding->opcode,
                                                 },
                                                 .text = format_instruction1(instruction_text_buffer_slice, mnemonic_string, first_operand_string),
@@ -2268,12 +2217,14 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                 String first_operand_string = strlit("-1");
                                 TestInstruction instruction = {
                                     .encoding = {
-                                        .rex_w = encoding->rex_w,
-                                        .is_relative8 = first_operand == op_rel8,
-                                        .is_relative32 = first_operand == op_rel32,
+                                        .invariant = {
+                                            .rex_w = encoding->rex_w,
+                                            .is_relative = 1,
+                                            .displacement_size = first_operand == op_rel32,
+                                        },
                                         .legacy_prefixes = batch->legacy_prefixes | (encoding->operand_size_override << LEGACY_PREFIX_66),
                                         .opcode = encoding->opcode,
-                                        .relative = { .value = 0xffffffff },
+                                        .displacement = { .value = 0xffffffff },
                                     },
                                     .text = format_instruction1(instruction_text_buffer_slice, mnemonic_string, first_operand_string),
                                 };
@@ -2314,8 +2265,11 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
 
                                         TestInstruction instruction = {
                                             .encoding = {
-                                                .rex_w = encoding->rex_w || first_operand_index == 4,
-                                                .is_displacement32 = 1,
+                                                .invariant = {
+                                                    .rex_w = encoding->rex_w || first_operand_index == 4,
+                                                    .is_displacement = 1,
+                                                    .displacement_size = 1,
+                                                },
                                                 .legacy_prefixes = batch->legacy_prefixes | (1 << segment_register_overrides[segment_register_override]) | (encoding->operand_size_override << LEGACY_PREFIX_66),
                                                 .displacement = { .value = memory_value, },
                                                 .opcode = encoding->opcode,
@@ -2342,8 +2296,11 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
 
                                     TestInstruction instruction = {
                                         .encoding = {
-                                            .rex_w = encoding->rex_w || first_operand_index == 4,
-                                            .is_displacement32 = 1,
+                                            .invariant = {
+                                                .rex_w = encoding->rex_w || first_operand_index == 4,
+                                                .is_displacement = 1,
+                                                .displacement_size = 1,
+                                            },
                                             .legacy_prefixes = batch->legacy_prefixes | (encoding->operand_size_override << LEGACY_PREFIX_66),
                                             .displacement = { .value = memory_value, },
                                             .opcode = encoding->opcode,
@@ -2365,13 +2322,15 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
 
                                         TestInstruction instruction = {
                                             .encoding = {
-                                                .rex_w = encoding->rex_w || first_operand_index == 4,
+                                                .invariant = {
+                                                    .is_displacement = 1,
+                                                    .displacement_size = displacement_index == 2,
+                                                    .rex_w = encoding->rex_w || first_operand_index == 4,
+                                                    .is_rm_register = 1,
+                                                },
                                                 .rm_register = first_gpr,
-                                                .is_rm_register = 1,
                                                 .legacy_prefixes = batch->legacy_prefixes | (encoding->operand_size_override << LEGACY_PREFIX_66),
                                                 .displacement = { .value = displacements[displacement_index] },
-                                                .is_displacement8 = displacement_index != 2,
-                                                .is_displacement32 = displacement_index == 2,
                                                 .opcode = encoding->opcode,
                                             },
                                             .text = format_instruction1(instruction_text_buffer_slice, mnemonic_string, first_operand_string),
@@ -2389,9 +2348,12 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
 
                                 TestInstruction instruction = {
                                     .encoding = {
-                                        .rex_w = encoding->rex_w || first_operand_index == 3,
+                                        .invariant = {
+                                            .rex_w = encoding->rex_w || first_operand_index == 3,
+                                            .is_immediate = 1,
+                                            .immediate_size = first_operand_index,
+                                        },
                                         .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
-                                        .is_immediate = 1 << first_operand_index,
                                         .immediate = { .value = immediate },
                                         .opcode = encoding->opcode,
                                     },
@@ -2463,11 +2425,13 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
 
                                                 TestInstruction instruction = {
                                                     .encoding = {
-                                                        .rex_w = encoding->rex_w || first_operand_index == 3,
+                                                        .invariant = {
+                                                            .rex_w = encoding->rex_w || first_operand_index == 3,
+                                                            .is_rm_register = 1,
+                                                            .is_reg_register = 1,
+                                                        },
                                                         .rm_register = first_gpr,
-                                                        .is_rm_register = 1,
                                                         .reg_register = second_gpr,
-                                                        .is_reg_register = 1,
                                                         .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || second_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                                         .opcode = encoding->opcode,
                                                     },
@@ -2493,15 +2457,17 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
 
                                                     TestInstruction instruction = {
                                                         .encoding = {
-                                                            .rex_w = encoding->rex_w || first_operand_index == 3,
+                                                            .invariant = {
+                                                                .rex_w = encoding->rex_w || first_operand_index == 3,
+                                                                .is_rm_register = 1,
+                                                                .is_reg_register = 1,
+                                                                .is_displacement = 1,
+                                                                .displacement_size = displacement_index == 2,
+                                                            },
+                                                            .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || second_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                                             .rm_register = first_gpr,
                                                             .reg_register = second_gpr,
-                                                            .is_rm_register = 1,
-                                                            .is_reg_register = 1,
-                                                            .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || second_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                                             .displacement = { .value = displacements[displacement_index] },
-                                                            .is_displacement8 = displacement_index != 2,
-                                                            .is_displacement32 = displacement_index == 2,
                                                             .opcode = encoding->opcode,
                                                         },
                                                         .text = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string),
@@ -2527,15 +2493,17 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
 
                                                     TestInstruction instruction = {
                                                         .encoding = {
-                                                            .rex_w = encoding->rex_w || first_operand_index == 3,
-                                                            .rm_register = second_gpr,
-                                                            .reg_register = first_gpr,
-                                                            .is_rm_register = 1,
-                                                            .is_reg_register = 1,
+                                                            .invariant = {
+                                                                .rex_w = encoding->rex_w || first_operand_index == 3,
+                                                                .is_rm_register = 1,
+                                                                .is_reg_register = 1,
+                                                                .is_displacement = 1,
+                                                                .displacement_size = displacement_index == 2,
+                                                            },
                                                             .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                                             .displacement = { .value = displacements[displacement_index] },
-                                                            .is_displacement8 = displacement_index != 2,
-                                                            .is_displacement32 = displacement_index == 2,
+                                                            .rm_register = second_gpr,
+                                                            .reg_register = first_gpr,
                                                             .opcode = encoding->opcode,
                                                         },
                                                         .text = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string),
@@ -2555,9 +2523,11 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                         String first_operand_string = gpr_to_string(first_gpr, first_operand_index, 0);
                                         TestInstruction instruction = {
                                             .encoding = {
-                                                .rex_w = encoding->rex_w || first_operand_index == 3,
+                                                .invariant = {
+                                                    .rex_w = encoding->rex_w || first_operand_index == 3,
+                                                    .is_rm_register = 1,
+                                                },
                                                 .rm_register = first_gpr,
-                                                .is_rm_register = 1,
                                                 .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                                 .opcode = encoding->opcode,
                                             },
@@ -2578,10 +2548,13 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                         String first_operand_string = gpr_to_string(first_gpr, first_operand_index, 0);
                                         TestInstruction instruction = {
                                             .encoding = {
-                                                .rex_w = encoding->rex_w || first_operand_index == 3,
+                                                .invariant = {
+                                                    .rex_w = encoding->rex_w || first_operand_index == 3,
+                                                    .is_rm_register = 1,
+                                                    .is_immediate = 1,
+                                                    .immediate_size = second_operand_index,
+                                                },
                                                 .rm_register = first_gpr,
-                                                .is_rm_register = 1,
-                                                .is_immediate = 1 << second_operand_index,
                                                 .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                                 .immediate = { .value = immediate },
                                                 .opcode = encoding->opcode,
@@ -2602,15 +2575,18 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
 
                                                 TestInstruction instruction = {
                                                     .encoding = {
-                                                        .rex_w = encoding->rex_w || first_operand_index == 3,
-                                                        .rm_register = first_gpr,
-                                                        .is_rm_register = 1,
-                                                        .is_immediate = 1 << second_operand_index,
+                                                        .invariant = {
+                                                            .rex_w = encoding->rex_w || first_operand_index == 3,
+                                                            .is_rm_register = 1,
+                                                            .is_immediate = 1,
+                                                            .immediate_size = second_operand_index,
+                                                            .is_displacement = 1,
+                                                            .displacement_size = displacement_index == 2,
+                                                        },
                                                         .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                                         .immediate = { .value = immediate },
                                                         .displacement = { .value = displacements[displacement_index] },
-                                                        .is_displacement8 = displacement_index != 2,
-                                                        .is_displacement32 = displacement_index == 2,
+                                                        .rm_register = first_gpr,
                                                         .opcode = encoding->opcode,
                                                     },
                                                     .text = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string),
@@ -2650,13 +2626,15 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                         let_cast(u32, memory_value, sample_immediate_values(2));
                                         TestInstruction instruction = {
                                             .encoding = {
-                                                .rex_w = encoding->rex_w || first_operand_index == 3 || second_operand_index == 3,
-                                                .reg_register = first_gpr,
-                                                .is_reg_register = 0,
+                                                .invariant = {
+                                                    .rex_w = encoding->rex_w || first_operand_index == 3 || second_operand_index == 3,
+                                                    .is_reg_register = 0,
+                                                    .is_displacement = 1,
+                                                    .displacement_size = 1,
+                                                },
                                                 .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || second_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                                 .displacement = { .value = memory_value, },
-                                                .is_displacement8 = 0,
-                                                .is_displacement32 = 1,
+                                                .reg_register = first_gpr,
                                                 .opcode = encoding->opcode,
                                             },
                                             .text = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string),
@@ -2674,9 +2652,11 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
 
                                         TestInstruction instruction = {
                                             .encoding = {
-                                                .rex_w = encoding->rex_w || first_operand_index == 3,
+                                                .invariant = {
+                                                    .rex_w = encoding->rex_w || first_operand_index == 3,
+                                                    .is_rm_register = 1,
+                                                },
                                                 .rm_register = first_gpr,
-                                                .is_rm_register = 1,
                                                 .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                                 .opcode = encoding->opcode,
                                             },
@@ -2696,9 +2676,11 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
 
                                         TestInstruction instruction = {
                                             .encoding = {
-                                                .rex_w = encoding->rex_w || first_operand_index == 3,
+                                                .invariant = {
+                                                    .rex_w = encoding->rex_w || first_operand_index == 3,
+                                                    .is_rm_register = 1,
+                                                },
                                                 .rm_register = first_gpr,
-                                                .is_rm_register = 1,
                                                 .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                                 .opcode = encoding->opcode,
                                             },
@@ -2740,7 +2722,9 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
 
                                     TestInstruction instruction = {
                                         .encoding = {
-                                            .rex_w = encoding->rex_w || first_operand_index == 3,
+                                            .invariant = {
+                                                .rex_w = encoding->rex_w || first_operand_index == 3,
+                                            },
                                             .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                             .opcode = encoding->opcode,
                                         },
@@ -2781,7 +2765,9 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                     }
                                     TestInstruction instruction = {
                                         .encoding = {
-                                            .rex_w = encoding->rex_w,
+                                            .invariant = {
+                                                .rex_w = encoding->rex_w,
+                                            },
                                             .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || second_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                             .opcode = encoding->opcode,
                                         },
@@ -2797,7 +2783,9 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                     
                                     TestInstruction instruction = {
                                         .encoding = {
-                                            .rex_w = encoding->rex_w || second_operand_index == 3,
+                                            .invariant = {
+                                                .rex_w = encoding->rex_w || second_operand_index == 3,
+                                            },
                                             .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                             .opcode = encoding->opcode,
                                         },
@@ -2812,7 +2800,9 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                     
                                     TestInstruction instruction = {
                                         .encoding = {
-                                            .rex_w = encoding->rex_w,
+                                            .invariant = {
+                                                .rex_w = encoding->rex_w,
+                                            },
                                             .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                             .opcode = encoding->opcode,
                                         },
@@ -2838,11 +2828,14 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                     String second_operand_string = op_gpra_to_string(second_operand);
                                     TestInstruction instruction = {
                                         .encoding = {
-                                            .rex_w = encoding->rex_w,
+                                            .invariant = {
+                                                .rex_w = encoding->rex_w,
+                                                .is_immediate = 1,
+                                                .immediate_size = first_operand_index,
+                                            },
                                             .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || second_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                             .opcode = encoding->opcode,
                                             .immediate = { .value = first_operand_value },
-                                            .is_immediate = 1 << first_operand_index,
                                         },
                                         .text = format_instruction2(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string),
                                     };
@@ -2865,7 +2858,9 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
 
                                     TestInstruction instruction = {
                                         .encoding = {
-                                            .rex_w = encoding->rex_w,
+                                            .invariant = {
+                                                .rex_w = encoding->rex_w,
+                                            },
                                             .legacy_prefixes = batch->legacy_prefixes | ((encoding->operand_size_override || second_operand_index == 1) << LEGACY_PREFIX_66),
                                             .opcode = encoding->opcode,
                                         },
@@ -2946,12 +2941,15 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                                 
                                                 TestInstruction instruction = {
                                                     .encoding = {
-                                                        .rex_w = encoding->rex_w || first_operand_index == 3,
+                                                        .invariant = {
+                                                            .rex_w = encoding->rex_w || first_operand_index == 3,
+                                                            .is_rm_register = 1,
+                                                            .is_reg_register = 1,
+                                                            .is_immediate = 1,
+                                                            .immediate_size = third_operand_index,
+                                                        },
                                                         .rm_register = first_is_rm ? first_gpr : second_gpr,
                                                         .reg_register = first_is_rm ? second_gpr : first_gpr,
-                                                        .is_rm_register = 1,
-                                                        .is_reg_register = 1,
-                                                        .is_immediate = 1 << third_operand_index,
                                                         .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || second_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                                         .immediate = { .value = third_operand_value, },
                                                         .opcode = encoding->opcode,
@@ -2994,17 +2992,20 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
                                                         String second_operand_string = second_rm_strings[second_gpr][displacement_index];
                                                         TestInstruction instruction = {
                                                             .encoding = {
-                                                                .rex_w = encoding->rex_w || first_operand_index == 3,
+                                                                .invariant = {
+                                                                    .rex_w = encoding->rex_w || first_operand_index == 3,
+                                                                    .is_rm_register = 1,
+                                                                    .is_reg_register = 1,
+                                                                    .is_immediate = 1,
+                                                                    .immediate_size = third_operand_index,
+                                                                    .is_displacement = 1,
+                                                                    .displacement_size = displacement_index == 2,
+                                                                },
                                                                 .rm_register = first_is_rm ? first_gpr : second_gpr,
                                                                 .reg_register = first_is_rm ? second_gpr : first_gpr,
-                                                                .is_rm_register = 1,
-                                                                .is_reg_register = 1,
-                                                                .is_immediate = 1 << third_operand_index,
                                                                 .legacy_prefixes = batch->legacy_prefixes | ((first_operand_index == 1 || second_operand_index == 1 || encoding->operand_size_override) << LEGACY_PREFIX_66),
                                                                 .immediate = { .value = third_operand_value, },
                                                                 .displacement = { .value = displacements[displacement_index] },
-                                                                .is_displacement8 = displacement_index != 2,
-                                                                .is_displacement32 = displacement_index == 2,
                                                                 .opcode = encoding->opcode,
                                                             },
                                                             .text = format_instruction3(instruction_text_buffer_slice, mnemonic_string, first_operand_string, second_operand_string, third_operand_string),
@@ -3078,7 +3079,9 @@ fn u8 encoding_test_instruction_batches(Arena* arena, TestDataset dataset, Encod
 #define ops(...) ((Operands){ .values = { __VA_ARGS__ }, .count = array_length(((OperandId[]){ __VA_ARGS__ })), })
 #define ops_implicit_operands(...) ((Operands){ .values = { __VA_ARGS__ }, .count = array_length(((OperandId[]){ __VA_ARGS__ })), .implicit_operands = 1 })
 #define extension_and_opcode(_opcode_extension, ...) ((Opcode) { .length = array_length(((u8[]){__VA_ARGS__})), .bytes = { __VA_ARGS__ }, _opcode_extension })
-#define opcode(...) ((Opcode) { .length = array_length(((u8[]){__VA_ARGS__})), .bytes = { __VA_ARGS__ } })
+#define opcode3(y, x, ...) ((Opcode) { .prefix_0f = 1, .bytes = { (x), (y) }, __VA_ARGS__ })
+#define opcode2(b, ...) ((Opcode) { .prefix_0f = 1, .bytes = { (b) }, __VA_ARGS__ })
+#define opcode1(b, ...) ((Opcode) { .bytes = { (b) }, __VA_ARGS__ })
 
 #define imm8_l  0x10
 #define imm16_l 0x1000
@@ -3103,19 +3106,11 @@ STRUCT(TestBuilder)
 
 STRUCT(ArithmeticOptions)
 {
-    Opcode ra_imm;
-    Opcode rm_imm;
-    Opcode rm_imm8;
-    Opcode rm_r;
-    Opcode r_rm;
+    u8 ra_imm;
+    u8 rm_imm_extension;
+    u8 rm_r;
+    u8 r_rm;
 };
-
-fn Opcode decrement_opcode(Opcode opcode)
-{
-    Opcode result = opcode;
-    result.bytes[0] -= 1;
-    return result;
-}
 
 fn Batch batch_start(TestBuilder* builder, Mnemonic_x86_64 mnemonic)
 {
@@ -3148,33 +3143,38 @@ fn void encode_arithmetic_ex(TestBuilder* builder, Mnemonic_x86_64 mnemonic, Ari
 {
     Batch batch = batch_start(builder, mnemonic);
 
-    Opcode ra_imm8 = decrement_opcode(options.ra_imm);
-    encode_instruction(ra_imm8,         ops(op_al,  op_imm8));
-    encode_instruction(options.ra_imm,  ops(op_ax, op_imm16));
-    encode_instruction(options.ra_imm,  ops(op_eax, op_imm32));
-    encode_instruction(options.ra_imm,  ops(op_rax, op_imm32));
+    let(ra_imm, opcode1(options.ra_imm - 1));
+    encode_instruction(ra_imm,         ops(op_al,  op_imm8));
+    ra_imm.bytes[0] += 1;
+    encode_instruction(ra_imm,  ops(op_ax, op_imm16));
+    encode_instruction(ra_imm,  ops(op_eax, op_imm32));
+    encode_instruction(ra_imm,  ops(op_rax, op_imm32));
 
-    Opcode rm_imm_8 = decrement_opcode(options.rm_imm);
-    encode_instruction(rm_imm_8,        ops(op_rm8,  op_imm8));
-    encode_instruction(options.rm_imm,  ops(op_rm16, op_imm16));
-    encode_instruction(options.rm_imm,  ops(op_rm32, op_imm32));
-    encode_instruction(options.rm_imm,  ops(op_rm64, op_imm32));
+    let(rm_imm, opcode1(0x80, .extension = options.rm_imm_extension));
+    encode_instruction(rm_imm,        ops(op_rm8,  op_imm8));
+    rm_imm.bytes[0] += 1;
+    encode_instruction(rm_imm,  ops(op_rm16, op_imm16));
+    encode_instruction(rm_imm,  ops(op_rm32, op_imm32));
+    encode_instruction(rm_imm,  ops(op_rm64, op_imm32));
 
-    encode_instruction(options.rm_imm8, ops(op_rm16, op_imm8));
-    encode_instruction(options.rm_imm8, ops(op_rm32, op_imm8));
-    encode_instruction(options.rm_imm8, ops(op_rm64, op_imm8));
+    let(rm_imm8, opcode1(0x83, .extension = options.rm_imm_extension));
+    encode_instruction(rm_imm8, ops(op_rm16, op_imm8));
+    encode_instruction(rm_imm8, ops(op_rm32, op_imm8));
+    encode_instruction(rm_imm8, ops(op_rm64, op_imm8));
 
-    Opcode rm_r8 = decrement_opcode(options.rm_r);
-    encode_instruction(rm_r8,           ops(op_rm8,  op_r8));
-    encode_instruction(options.rm_r,    ops(op_rm16, op_r16));
-    encode_instruction(options.rm_r,    ops(op_rm32, op_r32));
-    encode_instruction(options.rm_r,    ops(op_rm64, op_r64));
+    let(rm_r, opcode1(options.rm_r - 1));
+    encode_instruction(rm_r,           ops(op_rm8,  op_r8));
+    rm_r.bytes[0] += 1;
+    encode_instruction(rm_r,    ops(op_rm16, op_r16));
+    encode_instruction(rm_r,    ops(op_rm32, op_r32));
+    encode_instruction(rm_r,    ops(op_rm64, op_r64));
 
-    Opcode r_rm8 = decrement_opcode(options.r_rm);
-    encode_instruction(r_rm8,           ops(op_r8,  op_rm8));
-    encode_instruction(options.r_rm,    ops(op_r16, op_rm16));
-    encode_instruction(options.r_rm,    ops(op_r32, op_rm32));
-    encode_instruction(options.r_rm,    ops(op_r64, op_rm64));
+    let(r_rm, opcode1(options.r_rm - 1));
+    encode_instruction(r_rm,           ops(op_r8,  op_rm8));
+    r_rm.bytes[0] += 1;
+    encode_instruction(r_rm,    ops(op_r16, op_rm16));
+    encode_instruction(r_rm,    ops(op_r32, op_rm32));
+    encode_instruction(r_rm,    ops(op_r64, op_rm64));
 
     batch_end(builder, batch);
 }
@@ -3188,19 +3188,7 @@ fn void encode_unsigned_add_flag(TestBuilder* builder, Mnemonic_x86_64 mnemonic)
 
     Batch batch = batch_start_legacy_prefixes(builder, mnemonic, legacy_prefixes);
 
-    encode_instruction(opcode(0x0f, 0x38, 0xf6), ops(op_r32, op_rm32));
-    encode_instruction(opcode(0x0f, 0x38, 0xf6), ops(op_r64, op_rm64));
-
-    batch_end(builder, batch);
-}
-
-// TODO: undo abstraction?
-fn void encode_bit_instruction(TestBuilder* builder, Mnemonic_x86_64 mnemonic, u8 opcode_byte)
-{
-    Batch batch = batch_start(builder, mnemonic);
-
-    let(opcode, opcode(0x0f, opcode_byte));
-    encode_instruction(opcode, ops(op_r16, op_rm16));
+    let(opcode, opcode3(0x38, 0xf6));
     encode_instruction(opcode, ops(op_r32, op_rm32));
     encode_instruction(opcode, ops(op_r64, op_rm64));
 
@@ -3217,7 +3205,14 @@ fn void encode_bit_scan(TestBuilder* builder, BitScanKind bit_scan_kind)
 {
     let(mnemonic, MNEMONIC_x86_64_bsf + bit_scan_kind);
     let(opcode_byte, 0xbc | bit_scan_kind);
-    encode_bit_instruction(builder, mnemonic, opcode_byte);
+    Batch batch = batch_start(builder, mnemonic);
+
+    let(opcode, opcode2(opcode_byte));
+    encode_instruction(opcode, ops(op_r16, op_rm16));
+    encode_instruction(opcode, ops(op_r32, op_rm32));
+    encode_instruction(opcode, ops(op_r64, op_rm64));
+
+    batch_end(builder, batch);
 }
 
 fn void encode_bswap(TestBuilder* builder)
@@ -3225,12 +3220,7 @@ fn void encode_bswap(TestBuilder* builder)
     let(mnemonic, MNEMONIC_x86_64_bswap);
     Batch batch = batch_start(builder, mnemonic);
 
-    u8 opcode_bytes[] = { 0x0f, 0xc8 };
-    Opcode opcode = {
-        .length = array_length(opcode_bytes),
-        .plus_register = 1,
-        .bytes = { opcode_bytes[0], opcode_bytes[1] },
-    };
+    let(opcode, opcode2(0xc8, .plus_register = 1));
 
     encode_instruction(opcode, ops(op_r32));
     encode_instruction(opcode, ops(op_r64));
@@ -3243,7 +3233,7 @@ fn void encode_bit_test(TestBuilder* builder, Mnemonic_x86_64 mnemonic, u8 opcod
     Batch batch = batch_start(builder, mnemonic);
 
     {
-        let(opcode, opcode(0x0f, opcode_last));
+        let(opcode, opcode2(opcode_last));
 
         encode_instruction(opcode,    ops(op_rm16, op_r16));
         encode_instruction(opcode,    ops(op_rm32, op_r32));
@@ -3251,12 +3241,7 @@ fn void encode_bit_test(TestBuilder* builder, Mnemonic_x86_64 mnemonic, u8 opcod
     }
 
     {
-        u8 opcode_bytes[] = { 0x0f, 0xba };
-        Opcode opcode = {
-            .length = array_length(opcode_bytes),
-            .extension = opcode_extension,
-            .bytes = { opcode_bytes[0], opcode_bytes[1] },
-        };
+        let(opcode, opcode2(0xba, .extension = opcode_extension));
 
         encode_instruction(opcode,    ops(op_rm16, op_imm8));
         encode_instruction(opcode,    ops(op_rm32, op_imm8));
@@ -3269,9 +3254,15 @@ fn void encode_bit_test(TestBuilder* builder, Mnemonic_x86_64 mnemonic, u8 opcod
 fn void encode_call(TestBuilder* builder)
 {
     Batch batch = batch_start(builder, MNEMONIC_x86_64_call);
-    encode_instruction(opcode(0xe8), ops(op_rel32));
+    {
+        let(opcode, opcode1(0xe8));
+        encode_instruction(opcode, ops(op_rel32));
+    }
 
-    encode_instruction(extension_and_opcode(0x02, 0xff), ops(op_rm64));
+    {
+        let(opcode, opcode1(0xff, .extension = 2));
+        encode_instruction(opcode, ops(op_rm64));
+    }
 
     // TODO: Figure out memory offset
 
@@ -3296,15 +3287,16 @@ fn void encode_convert(TestBuilder* builder)
             Batch batch = batch_start(builder, mnemonics[category][i]);
             let(implicit_operand, ops(operands[i]));
             implicit_operand.implicit_operands = 1;
-            encode_instruction(opcode(base_opcode + category), implicit_operand);
+            let(opcode, opcode1(base_opcode + category));
+            encode_instruction(opcode, implicit_operand);
             batch_end(builder, batch);
         }
     }
 }
 
-fn void encode_no_operand_instruction(TestBuilder* builder, Mnemonic_x86_64 mnemonic, Opcode opcode)
+fn void encode_no_operand_instruction(TestBuilder* builder, Mnemonic_x86_64 mnemonic, Opcode opcode, u64 legacy_prefixes)
 {
-    Batch batch = batch_start(builder, mnemonic);
+    Batch batch = batch_start_legacy_prefixes(builder, mnemonic, legacy_prefixes);
     Operands operands = {};
     encode_instruction(opcode, operands);
     batch_end(builder, batch);
@@ -3313,14 +3305,16 @@ fn void encode_no_operand_instruction(TestBuilder* builder, Mnemonic_x86_64 mnem
 fn void encode_clflush(TestBuilder* builder)
 {
     Batch batch = batch_start(builder, MNEMONIC_x86_64_clflush);
-    encode_instruction(extension_and_opcode(0x07, 0x0f, 0xae), ops(op_m8));
+    let(opcode, opcode2(0xae, .extension = 7));
+    encode_instruction(opcode, ops(op_m8));
     batch_end(builder, batch);
 }
 
 fn void encode_clflushopt(TestBuilder* builder)
 {
     Batch batch = batch_start_legacy_prefixes(builder, MNEMONIC_x86_64_clflushopt, 1 << LEGACY_PREFIX_66);
-    encode_instruction(extension_and_opcode(0x07, 0x0f, 0xae), ops(op_m8));
+    let(opcode, opcode2(0xae, .extension = 7));
+    encode_instruction(opcode, ops(op_m8));
     batch_end(builder, batch);
 }
 
@@ -3330,10 +3324,10 @@ fn void encode_cmov_instructions(TestBuilder* builder)
     {
         Mnemonic_x86_64 mnemonic = MNEMONIC_x86_64_cmova + cmov_index;
         Batch batch = batch_start(builder, mnemonic);
-        u8 opcode = 0x40 | cc_opcodes_low[cmov_index];
-        encode_instruction(opcode(0x0f, opcode), ops(op_r16, op_rm16));
-        encode_instruction(opcode(0x0f, opcode), ops(op_r32, op_rm32));
-        encode_instruction(opcode(0x0f, opcode), ops(op_r64, op_rm64));
+        let(opcode, opcode2(0x40 | cc_opcodes_low[cmov_index]));
+        encode_instruction(opcode, ops(op_r16, op_rm16));
+        encode_instruction(opcode, ops(op_r32, op_rm32));
+        encode_instruction(opcode, ops(op_r64, op_rm64));
         batch_end(builder, batch);
     }
 }
@@ -3348,8 +3342,8 @@ fn void encode_cmps(TestBuilder* builder)
             .count = 2,
             .implicit_operands = 1,
         };
-        u8 cmps_opcode = 0xa7 - (i == 0);
-        encode_instruction(opcode(cmps_opcode), operands);
+        let(opcode, opcode1(0xa7 - (i == 0)));
+        encode_instruction(opcode, operands);
         batch_end(builder, batch);
     }
 }
@@ -3357,23 +3351,28 @@ fn void encode_cmps(TestBuilder* builder)
 fn void encode_cmpxchg(TestBuilder* builder)
 {
     Batch batch = batch_start(builder, MNEMONIC_x86_64_cmpxchg);
-    encode_instruction(opcode(0x0f, 0xb0), ops(op_rm8, op_r8));
-    encode_instruction(opcode(0x0f, 0xb1), ops(op_rm16, op_r16));
-    encode_instruction(opcode(0x0f, 0xb1), ops(op_rm32, op_r32));
-    encode_instruction(opcode(0x0f, 0xb1), ops(op_rm64, op_r64));
+    let(opcode, opcode2(0xb0));
+    encode_instruction(opcode, ops(op_rm8, op_r8));
+
+    opcode.bytes[0] += 1;
+
+    encode_instruction(opcode, ops(op_rm16, op_r16));
+    encode_instruction(opcode, ops(op_rm32, op_r32));
+    encode_instruction(opcode, ops(op_rm64, op_r64));
     batch_end(builder, batch);
 }
 
 fn void encode_cmpxchg_bytes(TestBuilder* builder)
 {
+    let(opcode, opcode2(0xc7, .extension = 1));
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_cmpxchg8b);
-        encode_instruction(extension_and_opcode(1, 0x0f, 0xc7), ops(op_m64));
+        encode_instruction(opcode, ops(op_m64));
         batch_end(builder, batch);
     }
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_cmpxchg16b);
-        encode_instruction(extension_and_opcode(1, 0x0f, 0xc7), ops(op_m128));
+        encode_instruction(opcode, ops(op_m128));
         batch_end(builder, batch);
     }
 }
@@ -3381,21 +3380,33 @@ fn void encode_cmpxchg_bytes(TestBuilder* builder)
 fn void encode_crc32(TestBuilder* builder)
 {
     Batch batch = batch_start_legacy_prefixes(builder, MNEMONIC_x86_64_crc32, 1 << LEGACY_PREFIX_F2);
-    encode_instruction(opcode(0x0f, 0x38, 0xf0), ops(op_r32, op_rm8));
+    {
+        let(opcode, opcode3(0x38, 0xf0));
+        encode_instruction(opcode, ops(op_r32, op_rm8));
+    }
 
+    let(opcode, opcode3(0x38, 0xf1));
     Encoding encoding = {
-        .opcode = opcode(0x0f, 0x38, 0xf1),
+        .opcode = opcode,
         .operands = ops(op_r32, op_rm16),
         .operand_size_override = 1,
     };
     *vb_add(&builder->encodings, 1) = encoding;
 
-    encode_instruction(opcode(0x0f, 0x38, 0xf1), ops(op_r32, op_rm32));
-    encode_instruction(opcode(0x0f, 0x38, 0xf0), ops(op_r64, op_rm8));
-    encode_instruction(opcode(0x0f, 0x38, 0xf1), ops(op_r64, op_rm64));
-    batch_end(builder, batch);
+    {
+        let(opcode, opcode3(0x38, 0xf1));
+        encode_instruction(opcode, ops(op_r32, op_rm32));
+    }
+    {
+        let(opcode, opcode3(0x38, 0xf0));
+        encode_instruction(opcode, ops(op_r64, op_rm8));
+    }
+    {
+        let(opcode, opcode3(0x38, 0xf1));
+        encode_instruction(opcode, ops(op_r64, op_rm64));
+        batch_end(builder, batch);
+    }
 }
-
 
 typedef enum IncDec
 {
@@ -3406,10 +3417,12 @@ typedef enum IncDec
 fn void encode_dec_inc(TestBuilder* builder, IncDec inc_dec)
 {
     Batch batch = batch_start(builder, inc_dec == OP_DEC ? MNEMONIC_x86_64_dec : MNEMONIC_x86_64_inc);
-    encode_instruction(extension_and_opcode(inc_dec, 0xfe), ops(op_rm8));
-    encode_instruction(extension_and_opcode(inc_dec, 0xff), ops(op_rm16));
-    encode_instruction(extension_and_opcode(inc_dec, 0xff), ops(op_rm32));
-    encode_instruction(extension_and_opcode(inc_dec, 0xff), ops(op_rm64));
+    let(opcode, opcode1(0xfe, .extension = inc_dec));
+    encode_instruction(opcode, ops(op_rm8));
+    opcode.bytes[0] += 1;
+    encode_instruction(opcode, ops(op_rm16));
+    encode_instruction(opcode, ops(op_rm32));
+    encode_instruction(opcode, ops(op_rm64));
     batch_end(builder, batch);
 }
 
@@ -3424,10 +3437,12 @@ fn void encode_div(TestBuilder* builder, Signedness signedness)
     global_variable const Mnemonic_x86_64 div_mnemonics[] = { MNEMONIC_x86_64_div, MNEMONIC_x86_64_idiv };
     Batch batch = batch_start(builder, div_mnemonics[signedness]);
     u8 opcode_extension = 6 | signedness;
-    encode_instruction(extension_and_opcode(opcode_extension, 0xf6), ops(op_rm8));
-    encode_instruction(extension_and_opcode(opcode_extension, 0xf7), ops(op_rm16));
-    encode_instruction(extension_and_opcode(opcode_extension, 0xf7), ops(op_rm32));
-    encode_instruction(extension_and_opcode(opcode_extension, 0xf7), ops(op_rm64));
+    let(opcode, opcode1(0xf6, .extension = opcode_extension));
+    encode_instruction(opcode, ops(op_rm8));
+    opcode.bytes[0] += 1;
+    encode_instruction(opcode, ops(op_rm16));
+    encode_instruction(opcode, ops(op_rm32));
+    encode_instruction(opcode, ops(op_rm64));
     batch_end(builder, batch);
 }
 
@@ -3435,22 +3450,35 @@ fn void encode_imul(TestBuilder* builder)
 {
     Batch batch = batch_start(builder, MNEMONIC_x86_64_imul);
 
-    encode_instruction(extension_and_opcode(5, 0xf6), ops(op_rm8));
-    encode_instruction(extension_and_opcode(5, 0xf7), ops(op_rm16));
-    encode_instruction(extension_and_opcode(5, 0xf7), ops(op_rm32));
-    encode_instruction(extension_and_opcode(5, 0xf7), ops(op_rm64));
+    {
+        let(opcode, opcode1(0xf6, .extension = 5));
+        encode_instruction(opcode, ops(op_rm8));
+        opcode.bytes[0] += 1;
+        encode_instruction(opcode, ops(op_rm16));
+        encode_instruction(opcode, ops(op_rm32));
+        encode_instruction(opcode, ops(op_rm64));
+    }
 
-    encode_instruction(opcode(0x0f, 0xaf), ops(op_r16, op_rm16));
-    encode_instruction(opcode(0x0f, 0xaf), ops(op_r32, op_rm32));
-    encode_instruction(opcode(0x0f, 0xaf), ops(op_r64, op_rm64));
+    {
+        let(opcode, opcode2(0xaf));
+        encode_instruction(opcode, ops(op_r16, op_rm16));
+        encode_instruction(opcode, ops(op_r32, op_rm32));
+        encode_instruction(opcode, ops(op_r64, op_rm64));
+    }
 
-    encode_instruction(opcode(0x6b), ops(op_r16, op_rm16, op_imm8));
-    encode_instruction(opcode(0x6b), ops(op_r32, op_rm32, op_imm8));
-    encode_instruction(opcode(0x6b), ops(op_r64, op_rm64, op_imm8));
+    {
+        let(opcode, opcode1(0x6b));
+        encode_instruction(opcode, ops(op_r16, op_rm16, op_imm8));
+        encode_instruction(opcode, ops(op_r32, op_rm32, op_imm8));
+        encode_instruction(opcode, ops(op_r64, op_rm64, op_imm8));
+    }
 
-    encode_instruction(opcode(0x69), ops(op_r16, op_rm16, op_imm16));
-    encode_instruction(opcode(0x69), ops(op_r32, op_rm32, op_imm32));
-    encode_instruction(opcode(0x69), ops(op_r64, op_rm64, op_imm32));
+    {
+        let(opcode, opcode1(0x69));
+        encode_instruction(opcode, ops(op_r16, op_rm16, op_imm16));
+        encode_instruction(opcode, ops(op_r32, op_rm32, op_imm32));
+        encode_instruction(opcode, ops(op_r64, op_rm64, op_imm32));
+    }
 
     batch_end(builder, batch);
 }
@@ -3459,13 +3487,21 @@ fn void encode_in(TestBuilder* builder)
 {
     Batch batch = batch_start(builder, MNEMONIC_x86_64_in);
 
-    encode_instruction(opcode(0xe4), ops(op_al, op_imm8));
-    encode_instruction(opcode(0xe5), ops(op_ax, op_imm8));
-    encode_instruction(opcode(0xe5), ops(op_eax, op_imm8));
+    {
+        let(opcode, opcode1(0xe4));
+        encode_instruction(opcode, ops(op_al, op_imm8));
+        opcode.bytes[0] += 1;
+        encode_instruction(opcode, ops(op_ax, op_imm8));
+        encode_instruction(opcode, ops(op_eax, op_imm8));
+    }
 
-    encode_instruction(opcode(0xec), ops_implicit_operands(op_al, op_dx));
-    encode_instruction(opcode(0xed), ops_implicit_operands(op_ax, op_dx));
-    encode_instruction(opcode(0xed), ops_implicit_operands(op_eax, op_dx));
+    {
+        let(opcode, opcode1(0xec));
+        encode_instruction(opcode, ops_implicit_operands(op_al, op_dx));
+        opcode.bytes[0] += 1;
+        encode_instruction(opcode, ops_implicit_operands(op_ax, op_dx));
+        encode_instruction(opcode, ops_implicit_operands(op_eax, op_dx));
+    }
 
     batch_end(builder, batch);
 }
@@ -3480,8 +3516,8 @@ fn void encode_ins(TestBuilder* builder)
             .count = 2,
             .implicit_operands = 1,
         };
-        u8 ins_opcode = 0x6d - (i == 0);
-        encode_instruction(opcode(ins_opcode), operands);
+        let(opcode, opcode1(0x6d - (i == 0)));
+        encode_instruction(opcode, operands);
         batch_end(builder, batch);
     }
 }
@@ -3490,13 +3526,15 @@ fn void encode_int(TestBuilder* builder)
 {
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_int);
-        encode_instruction(opcode(0xcd), ops(op_imm8));
+        let(opcode, opcode1(0xcd));
+        encode_instruction(opcode, ops(op_imm8));
         batch_end(builder, batch);
     }
-    Operands operands = {};
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_int3);
-        encode_instruction(opcode(0xcc), operands);
+        Operands operands = {};
+        let(opcode, opcode1(0xcc));
+        encode_instruction(opcode, operands);
         batch_end(builder, batch);
     }
 }
@@ -3504,17 +3542,19 @@ fn void encode_int(TestBuilder* builder)
 fn void encode_invlpg(TestBuilder* builder)
 {
     Batch batch = batch_start(builder, MNEMONIC_x86_64_invlpg);
-    encode_instruction(extension_and_opcode(7, 0x0f, 0x01), ops(op_m8));
+    let(opcode, opcode2(0x01, .extension = 7));
+    encode_instruction(opcode, ops(op_m8));
     batch_end(builder, batch);
 }
 
 fn void encode_iret(TestBuilder* builder)
 {
     Operands operands = {};
+    let(opcode, opcode1(0xcf));
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_iret);
         Encoding encoding = {
-            .opcode = opcode(0xcf),
+            .opcode = opcode,
             .operands = operands,
             .operand_size_override = 1,
         };
@@ -3523,13 +3563,13 @@ fn void encode_iret(TestBuilder* builder)
     }
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_iretd);
-        encode_instruction(opcode(0xcf), operands);
+        encode_instruction(opcode, operands);
         batch_end(builder, batch);
     }
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_iretq);
         Encoding encoding = {
-            .opcode = opcode(0xcf),
+            .opcode = opcode,
             .operands = operands,
             .rex_w = 1,
         };
@@ -3541,10 +3581,20 @@ fn void encode_iret(TestBuilder* builder)
 fn void encode_jmp(TestBuilder* builder)
 {
     Batch batch = batch_start(builder, MNEMONIC_x86_64_jmp);
-    encode_instruction(opcode(0xeb), ops(op_rel8));
-    encode_instruction(opcode(0xe9), ops(op_rel32));
 
-    encode_instruction(extension_and_opcode(4, 0xff), ops(op_rm64));
+    {
+        let(opcode, opcode1(0xeb));
+        encode_instruction(opcode, ops(op_rel8));
+    }
+    {
+        let(opcode, opcode1(0xe9));
+        encode_instruction(opcode, ops(op_rel32));
+    }
+
+    {
+        let(opcode, opcode1(0xff, .extension = 4));
+        encode_instruction(opcode, ops(op_rm64));
+    }
 
     // TODO: (m16,m32,m64):(16,32,64)
     
@@ -3557,23 +3607,31 @@ fn void encode_jcc(TestBuilder* builder)
     {
         Mnemonic_x86_64 mnemonic = MNEMONIC_x86_64_ja + jcc_i;
         Batch batch = batch_start(builder, mnemonic);
-        encode_instruction(opcode(0x70 | cc_opcodes_low[jcc_i]), ops(op_rel8));
-        encode_instruction(opcode(0x0f, 0x80 | cc_opcodes_low[jcc_i]), ops(op_rel32));
+        {
+            let(opcode, opcode1(0x70 | cc_opcodes_low[jcc_i]));
+            encode_instruction(opcode, ops(op_rel8));
+        }
+        {
+            let(opcode, opcode2(0x80 | cc_opcodes_low[jcc_i]));
+            encode_instruction(opcode, ops(op_rel32));
+        }
         batch_end(builder, batch);
     }
 
     Mnemonic_x86_64 mnemonic = MNEMONIC_x86_64_jrcxz;
     Batch batch = batch_start(builder, mnemonic);
-    encode_instruction(opcode(0xe3), ops(op_rel8));
+    let(opcode, opcode1(0xe3));
+    encode_instruction(opcode, ops(op_rel8));
     batch_end(builder, batch);
 }
 
 fn void encode_lea(TestBuilder* builder)
 {
     Batch batch = batch_start(builder, MNEMONIC_x86_64_lea);
-    encode_instruction(opcode(0x8d), ops(op_r16, op_m16));
-    encode_instruction(opcode(0x8d), ops(op_r32, op_m32));
-    encode_instruction(opcode(0x8d), ops(op_r64, op_m64));
+    let(opcode, opcode1(0x8d));
+    encode_instruction(opcode, ops(op_r16, op_m16));
+    encode_instruction(opcode, ops(op_r32, op_m32));
+    encode_instruction(opcode, ops(op_r64, op_m64));
     batch_end(builder, batch);
 }
 
@@ -3587,8 +3645,8 @@ fn void encode_lods(TestBuilder* builder)
             .count = 2,
             .implicit_operands = 1,
         };
-        u8 lods_opcode = 0xad - (i == 0);
-        encode_instruction(opcode(lods_opcode), operands);
+        let(opcode, opcode1(0xad - (i == 0)));
+        encode_instruction(opcode, operands);
         batch_end(builder, batch);
     }
 }
@@ -3597,17 +3655,20 @@ fn void encode_loop(TestBuilder* builder)
 {
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_loop);
-        encode_instruction(opcode(0xe2), ops(op_rel8));
+        let(opcode, opcode1(0xe2));
+        encode_instruction(opcode, ops(op_rel8));
         batch_end(builder, batch);
     }
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_loope);
-        encode_instruction(opcode(0xe1), ops(op_rel8));
+        let(opcode, opcode1(0xe1));
+        encode_instruction(opcode, ops(op_rel8));
         batch_end(builder, batch);
     }
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_loopne);
-        encode_instruction(opcode(0xe0), ops(op_rel8));
+        let(opcode, opcode1(0xe0));
+        encode_instruction(opcode, ops(op_rel8));
         batch_end(builder, batch);
     }
 }
@@ -3616,33 +3677,44 @@ fn void encode_mov(TestBuilder* builder)
 {
     Batch batch = batch_start(builder, MNEMONIC_x86_64_mov);
 
-    encode_instruction(opcode(0x88), ops(op_rm8,  op_r8));
-    encode_instruction(opcode(0x89), ops(op_rm16, op_r16));
-    encode_instruction(opcode(0x89), ops(op_rm32, op_r32));
-    encode_instruction(opcode(0x89), ops(op_rm64, op_r64));
+    {
+        let(opcode, opcode1(0x88));
+        encode_instruction(opcode, ops(op_rm8,  op_r8));
+        opcode.bytes[0] += 1;
+        encode_instruction(opcode, ops(op_rm16, op_r16));
+        encode_instruction(opcode, ops(op_rm32, op_r32));
+        encode_instruction(opcode, ops(op_rm64, op_r64));
+    }
 
-    encode_instruction(opcode(0x8a), ops(op_r8,  op_rm8));
-    encode_instruction(opcode(0x8b), ops(op_r16, op_rm16));
-    encode_instruction(opcode(0x8b), ops(op_r32, op_rm32));
-    encode_instruction(opcode(0x8b), ops(op_r64, op_rm64));
+    {
+        let(opcode, opcode1(0x8a));
+        encode_instruction(opcode, ops(op_r8,  op_rm8));
+        opcode.bytes[0] += 1;
+        encode_instruction(opcode, ops(op_r16, op_rm16));
+        encode_instruction(opcode, ops(op_r32, op_rm32));
+        encode_instruction(opcode, ops(op_r64, op_rm64));
+    }
 
     // TODO: segments
 
-    Opcode opcode = {
-        .bytes = { 0xb0 },
-        .length = 1,
-        .plus_register = 1,
-    };
-    encode_instruction(opcode, ops(op_r8,  op_imm8));
-    opcode.bytes[0] |= 8;
-    encode_instruction(opcode, ops(op_r16, op_imm16));
-    encode_instruction(opcode, ops(op_r32, op_imm32));
-    encode_instruction(opcode, ops(op_r64, op_imm64));
+    {
+        let(opcode, opcode1(0xb0, .plus_register = 1));
+        encode_instruction(opcode, ops(op_r8,  op_imm8));
+        opcode.bytes[0] |= 8;
+        encode_instruction(opcode, ops(op_r16, op_imm16));
+        encode_instruction(opcode, ops(op_r32, op_imm32));
+        encode_instruction(opcode, ops(op_r64, op_imm64));
+    }
 
-    encode_instruction(extension_and_opcode(0, 0xc6), ops(op_rm8,  op_imm8));
-    encode_instruction(extension_and_opcode(0, 0xc7), ops(op_rm16, op_imm16));
-    encode_instruction(extension_and_opcode(0, 0xc7), ops(op_rm32, op_imm32));
-    encode_instruction(extension_and_opcode(0, 0xc7), ops(op_rm64, op_imm32));
+
+    {
+        let(opcode, opcode1(0xc6, .extension = 0));
+        encode_instruction(opcode, ops(op_rm8,  op_imm8));
+        opcode.bytes[0] += 1;
+        encode_instruction(opcode, ops(op_rm16, op_imm16));
+        encode_instruction(opcode, ops(op_rm32, op_imm32));
+        encode_instruction(opcode, ops(op_rm64, op_imm32));
+    }
 
     batch_end(builder, batch);
 }
@@ -3657,10 +3729,10 @@ fn void encode_movs(TestBuilder* builder)
             .count = 2,
             .implicit_operands = 1,
         };
-        u8 movs_opcode = 0xa5 - (i == 0);
+        let(opcode, opcode1(0xa5 - (i == 0)));
         Encoding encoding = {
             .operands = operands,
-            .opcode = opcode(movs_opcode),
+            .opcode = opcode,
             .rex_w = i == 3,
         };
         *vb_add(&builder->encodings, 1) = encoding;
@@ -3672,16 +3744,21 @@ fn void encode_movsx(TestBuilder* builder)
 {
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_movsx);
-        encode_instruction(opcode(0x0f, 0xbe), ops(op_r16, op_rm8));
-        encode_instruction(opcode(0x0f, 0xbe), ops(op_r32, op_rm8));
-        encode_instruction(opcode(0x0f, 0xbe), ops(op_r64, op_rm8));
-        encode_instruction(opcode(0x0f, 0xbf), ops(op_r32, op_rm16));
-        encode_instruction(opcode(0x0f, 0xbf), ops(op_r64, op_rm16));
+        {
+            let(opcode, opcode2(0xbe));
+            encode_instruction(opcode, ops(op_r16, op_rm8));
+            encode_instruction(opcode, ops(op_r32, op_rm8));
+            encode_instruction(opcode, ops(op_r64, op_rm8));
+            opcode.bytes[0] += 1;
+            encode_instruction(opcode, ops(op_r32, op_rm16));
+            encode_instruction(opcode, ops(op_r64, op_rm16));
+        }
         batch_end(builder, batch);
     }
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_movsxd);
-        encode_instruction(opcode(0x63), ops(op_r64, op_rm32));
+        let(opcode, opcode1(0x63));
+        encode_instruction(opcode, ops(op_r64, op_rm32));
         batch_end(builder, batch);
     }
 }
@@ -3690,12 +3767,15 @@ fn void encode_movzx(TestBuilder* builder)
 {
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_movzx);
-        encode_instruction(opcode(0x0f, 0xb6), ops(op_r16, op_rm8));
-        encode_instruction(opcode(0x0f, 0xb6), ops(op_r32, op_rm8));
-        encode_instruction(opcode(0x0f, 0xb6), ops(op_r64, op_rm8));
+        let(opcode, opcode2(0xb6));
+        encode_instruction(opcode, ops(op_r16, op_rm8));
+        encode_instruction(opcode, ops(op_r32, op_rm8));
+        encode_instruction(opcode, ops(op_r64, op_rm8));
 
-        encode_instruction(opcode(0x0f, 0xb7), ops(op_r32, op_rm16));
-        encode_instruction(opcode(0x0f, 0xb7), ops(op_r64, op_rm16));
+        opcode.bytes[0] += 1;
+
+        encode_instruction(opcode, ops(op_r32, op_rm16));
+        encode_instruction(opcode, ops(op_r64, op_rm16));
         batch_end(builder, batch);
     }
 }
@@ -3703,39 +3783,49 @@ fn void encode_movzx(TestBuilder* builder)
 fn void encode_mul(TestBuilder* builder)
 {
     Batch batch = batch_start(builder, MNEMONIC_x86_64_mul);
-    encode_instruction(extension_and_opcode(4, 0xf6), ops(op_rm8));
-    encode_instruction(extension_and_opcode(4, 0xf7), ops(op_rm16));
-    encode_instruction(extension_and_opcode(4, 0xf7), ops(op_rm32));
-    encode_instruction(extension_and_opcode(4, 0xf7), ops(op_rm64));
+    let(opcode, opcode1(0xf6, .extension = 4));
+    encode_instruction(opcode, ops(op_rm8));
+    opcode.bytes[0] += 1;
+    encode_instruction(opcode, ops(op_rm16));
+    encode_instruction(opcode, ops(op_rm32));
+    encode_instruction(opcode, ops(op_rm64));
     batch_end(builder, batch);
 }
 
 fn void encode_neg(TestBuilder* builder)
 {
     Batch batch = batch_start(builder, MNEMONIC_x86_64_neg);
-    encode_instruction(extension_and_opcode(3, 0xf6), ops(op_rm8));
-    encode_instruction(extension_and_opcode(3, 0xf7), ops(op_rm16));
-    encode_instruction(extension_and_opcode(3, 0xf7), ops(op_rm32));
-    encode_instruction(extension_and_opcode(3, 0xf7), ops(op_rm64));
+    let(opcode, opcode1(0xf6, .extension = 3));
+    encode_instruction(opcode, ops(op_rm8));
+    opcode.bytes[0] += 1;
+    encode_instruction(opcode, ops(op_rm16));
+    encode_instruction(opcode, ops(op_rm32));
+    encode_instruction(opcode, ops(op_rm64));
     batch_end(builder, batch);
 }
 
 fn void encode_nop(TestBuilder* builder)
 {
     Batch batch = batch_start(builder, MNEMONIC_x86_64_nop);
-    encode_instruction(opcode(0x90), (Operands){});
-    encode_instruction(extension_and_opcode(0, 0x0f, 0x1f), ops(op_rm16));
-    encode_instruction(extension_and_opcode(0, 0x0f, 0x1f), ops(op_rm32));
+    let(opcode, opcode1(0x90));
+    encode_instruction(opcode, (Operands){});
+    {
+        let(opcode, opcode2(0x1f, .extension = 0));
+        encode_instruction(opcode, ops(op_rm16));
+        encode_instruction(opcode, ops(op_rm32));
+    }
     batch_end(builder, batch);
 }
 
 fn void encode_not(TestBuilder* builder)
 {
     Batch batch = batch_start(builder, MNEMONIC_x86_64_not);
-    encode_instruction(extension_and_opcode(2, 0xf6), ops(op_rm8));
-    encode_instruction(extension_and_opcode(2, 0xf7), ops(op_rm16));
-    encode_instruction(extension_and_opcode(2, 0xf7), ops(op_rm32));
-    encode_instruction(extension_and_opcode(2, 0xf7), ops(op_rm64));
+    let(opcode, opcode1(0xf6, .extension = 2));
+    encode_instruction(opcode, ops(op_rm8));
+    opcode.bytes[0] += 1;
+    encode_instruction(opcode, ops(op_rm16));
+    encode_instruction(opcode, ops(op_rm32));
+    encode_instruction(opcode, ops(op_rm64));
     batch_end(builder, batch);
 }
 
@@ -3743,13 +3833,21 @@ fn void encode_out(TestBuilder* builder)
 {
     Batch batch = batch_start(builder, MNEMONIC_x86_64_out);
 
-    encode_instruction(opcode(0xe6), ops(op_imm8, op_al));
-    encode_instruction(opcode(0xe7), ops(op_imm8, op_ax));
-    encode_instruction(opcode(0xe7), ops(op_imm8, op_eax));
+    {
+        let(opcode, opcode1(0xe6));
+        encode_instruction(opcode, ops(op_imm8, op_al));
+        opcode.bytes[0] += 1;
+        encode_instruction(opcode, ops(op_imm8, op_ax));
+        encode_instruction(opcode, ops(op_imm8, op_eax));
+    }
 
-    encode_instruction(opcode(0xee), ops_implicit_operands(op_dx, op_al));
-    encode_instruction(opcode(0xef), ops_implicit_operands(op_dx, op_ax));
-    encode_instruction(opcode(0xef), ops_implicit_operands(op_dx, op_eax));
+    {
+        let(opcode, opcode1(0xee));
+        encode_instruction(opcode, ops_implicit_operands(op_dx, op_al));
+        opcode.bytes[0] += 1;
+        encode_instruction(opcode, ops_implicit_operands(op_dx, op_ax));
+        encode_instruction(opcode, ops_implicit_operands(op_dx, op_eax));
+    }
 
     batch_end(builder, batch);
 }
@@ -3764,8 +3862,8 @@ fn void encode_outs(TestBuilder* builder)
             .count = 2,
             .implicit_operands = 1,
         };
-        u8 outs_opcode = 0x6f - (i == 0);
-        encode_instruction(opcode(outs_opcode), operands);
+        let(opcode, opcode1(0x6f - (i == 0)));
+        encode_instruction(opcode, operands);
         batch_end(builder, batch);
     }
 }
@@ -3774,14 +3872,13 @@ fn void encode_pop(TestBuilder* builder)
 {
     Batch batch = batch_start(builder, MNEMONIC_x86_64_pop);
 
-    encode_instruction(extension_and_opcode(0, 0x8f), ops(op_rm16));
-    encode_instruction(extension_and_opcode(0, 0x8f), ops(op_rm64));
+    {
+        let(opcode, opcode1(0x8f, .extension = 0));
+        encode_instruction(opcode, ops(op_rm16));
+        encode_instruction(opcode, ops(op_rm64));
+    }
 
-    Opcode opcode = {
-        .bytes = { 0x58 },
-        .length = 1,
-        .plus_register = 1,
-    };
+    let(opcode, opcode1(0x58, .plus_register = 1));
     encode_instruction(opcode, ops(op_r16));
     encode_instruction(opcode, ops(op_r64));
 
@@ -3792,37 +3889,30 @@ fn void encode_popcnt(TestBuilder* builder)
 {
     Batch batch = batch_start_legacy_prefixes(builder, MNEMONIC_x86_64_popcnt, 1 << LEGACY_PREFIX_F3);
 
-    encode_instruction(opcode(0x0f, 0xb8), ops(op_r16, op_rm16));
-    encode_instruction(opcode(0x0f, 0xb8), ops(op_r32, op_rm32));
-    encode_instruction(opcode(0x0f, 0xb8), ops(op_r64, op_rm64));
+    let(opcode, opcode2(0xb8));
+    encode_instruction(opcode, ops(op_r16, op_rm16));
+    encode_instruction(opcode, ops(op_r32, op_rm32));
+    encode_instruction(opcode, ops(op_r64, op_rm64));
 
     batch_end(builder, batch);
 }
 
 fn void encode_popf(TestBuilder* builder)
 {
+    Encoding encoding = {
+        .opcode = opcode1(0x9d),
+        .operand_size_override = 1,
+    };
+
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_popf);
-        Encoding encoding = {
-            .opcode = {
-                .bytes = { 0x9d },
-                .length = 1,
-            },
-            .operand_size_override = 1,
-        };
         *vb_add(&builder->encodings, 1) = encoding;
         batch_end(builder, batch);
     }
 
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_popfq);
-        Encoding encoding = {
-            .opcode = {
-                .bytes = { 0x9d },
-                .length = 1,
-            },
-            .operand_size_override = 0,
-        };
+        encoding.operand_size_override = 0;
         *vb_add(&builder->encodings, 1) = encoding;
         batch_end(builder, batch);
     }
@@ -3833,12 +3923,14 @@ fn void encode_prefetch(TestBuilder* builder)
     for (u8 i = 0; i < 3; i += 1)
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_prefetcht0 + i);
-        encode_instruction(extension_and_opcode(i + 1, 0x0f, 0x18), ops(op_m8));
+        let(opcode, opcode2(0x18, .extension = i + 1));
+        encode_instruction(opcode, ops(op_m8));
         batch_end(builder, batch);
     }
 
     Batch batch = batch_start(builder, MNEMONIC_x86_64_prefetchnta);
-    encode_instruction(extension_and_opcode(0, 0x0f, 0x18), ops(op_m8));
+    let(opcode, opcode2(0x18, .extension = 0));
+    encode_instruction(opcode, ops(op_m8));
     batch_end(builder, batch);
 }
 
@@ -3846,48 +3938,45 @@ fn void encode_push(TestBuilder* builder)
 {
     Batch batch = batch_start(builder, MNEMONIC_x86_64_push);
 
-    encode_instruction(extension_and_opcode(6, 0xff), ops(op_rm16));
-    encode_instruction(extension_and_opcode(6, 0xff), ops(op_rm64));
+    {
+        let(opcode, opcode1(0xff, .extension = 6));
+        encode_instruction(opcode, ops(op_rm16));
+        encode_instruction(opcode, ops(op_rm64));
+    }
 
-    Opcode opcode = {
-        .bytes = { 0x50 },
-        .length = 1,
-        .plus_register = 1,
-    };
-    encode_instruction(opcode, ops(op_r16));
-    encode_instruction(opcode, ops(op_r64));
+    {
+        let(opcode, opcode1(0x50, .plus_register = 1));
+        encode_instruction(opcode, ops(op_r16));
+        encode_instruction(opcode, ops(op_r64));
+    }
 
-    encode_instruction(opcode(0x6a), ops(op_imm8));
-    encode_instruction(opcode(0x68), ops(op_imm16));
-    encode_instruction(opcode(0x68), ops(op_imm32));
+    let(opcode, opcode1(0x6a));
+    encode_instruction(opcode, ops(op_imm8));
+    opcode.bytes[0] -= 2;
+    encode_instruction(opcode, ops(op_imm16));
+    encode_instruction(opcode, ops(op_imm32));
 
     batch_end(builder, batch);
 }
 
 fn void encode_pushf(TestBuilder* builder)
 {
+    Encoding encoding = {
+        .opcode = {
+            .bytes = { 0x9c },
+        },
+        .operand_size_override = 1,
+    };
+
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_pushf);
-        Encoding encoding = {
-            .opcode = {
-                .bytes = { 0x9c },
-                .length = 1,
-            },
-            .operand_size_override = 1,
-        };
         *vb_add(&builder->encodings, 1) = encoding;
         batch_end(builder, batch);
     }
 
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_pushfq);
-        Encoding encoding = {
-            .opcode = {
-                .bytes = { 0x9c },
-                .length = 1,
-            },
-            .operand_size_override = 0,
-        };
+        encoding.operand_size_override = 0;
         *vb_add(&builder->encodings, 1) = encoding;
         batch_end(builder, batch);
     }
@@ -3896,25 +3985,35 @@ fn void encode_pushf(TestBuilder* builder)
 fn void encode_rotate(TestBuilder* builder)
 {
     Mnemonic_x86_64 mnemonics[] = { MNEMONIC_x86_64_rol, MNEMONIC_x86_64_ror, MNEMONIC_x86_64_rcl, MNEMONIC_x86_64_rcr };
-    for (u8 opcode_extension = 0; opcode_extension < 4; opcode_extension += 1)
+    for (u8 extension = 0; extension < 4; extension += 1)
     {
-        Batch batch = batch_start(builder, mnemonics[opcode_extension]);
+        Batch batch = batch_start(builder, mnemonics[extension]);
 
-        encode_instruction(extension_and_opcode(opcode_extension, 0xd0), ops(op_rm8, op_one_literal));
-        encode_instruction(extension_and_opcode(opcode_extension, 0xd2), ops(op_rm8, op_cl));
-        encode_instruction(extension_and_opcode(opcode_extension, 0xc0), ops(op_rm8, op_imm8));
+        Opcode opcodes[] = {
+            opcode1(0xd0, .extension = extension),
+            opcode1(0xd2, .extension = extension),
+            opcode1(0xc0, .extension = extension),
+        };
+        encode_instruction(opcodes[0], ops(op_rm8, op_one_literal));
+        encode_instruction(opcodes[1], ops(op_rm8, op_cl));
+        encode_instruction(opcodes[2], ops(op_rm8, op_imm8));
 
-        encode_instruction(extension_and_opcode(opcode_extension, 0xd1), ops(op_rm16, op_one_literal));
-        encode_instruction(extension_and_opcode(opcode_extension, 0xd3), ops(op_rm16, op_cl));
-        encode_instruction(extension_and_opcode(opcode_extension, 0xc1), ops(op_rm16, op_imm8));
+        for (u64 i = 0; i < array_length(opcodes); i += 1)
+        {
+            opcodes[i].bytes[0] += 1;
+        }
 
-        encode_instruction(extension_and_opcode(opcode_extension, 0xd1), ops(op_rm32, op_one_literal));
-        encode_instruction(extension_and_opcode(opcode_extension, 0xd3), ops(op_rm32, op_cl));
-        encode_instruction(extension_and_opcode(opcode_extension, 0xc1), ops(op_rm32, op_imm8));
+        encode_instruction(opcodes[0], ops(op_rm16, op_one_literal));
+        encode_instruction(opcodes[1], ops(op_rm16, op_cl));
+        encode_instruction(opcodes[2], ops(op_rm16, op_imm8));
 
-        encode_instruction(extension_and_opcode(opcode_extension, 0xd1), ops(op_rm64, op_one_literal));
-        encode_instruction(extension_and_opcode(opcode_extension, 0xd3), ops(op_rm64, op_cl));
-        encode_instruction(extension_and_opcode(opcode_extension, 0xc1), ops(op_rm64, op_imm8));
+        encode_instruction(opcodes[0], ops(op_rm32, op_one_literal));
+        encode_instruction(opcodes[1], ops(op_rm32, op_cl));
+        encode_instruction(opcodes[2], ops(op_rm32, op_imm8));
+
+        encode_instruction(opcodes[0], ops(op_rm64, op_one_literal));
+        encode_instruction(opcodes[1], ops(op_rm64, op_cl));
+        encode_instruction(opcodes[2], ops(op_rm64, op_imm8));
 
         batch_end(builder, batch);
     }
@@ -3932,8 +4031,15 @@ fn void encode_ret(TestBuilder* builder, ReturnType return_type)
 
     let(opcode_flag, (u8)safe_flag(0b1000, return_type == RETURN_TYPE_FAR));
 
-    encode_instruction(opcode(0xc3 | opcode_flag), (Operands) {});
-    encode_instruction(opcode(0xc2 | opcode_flag), ops(op_imm16));
+    {
+        let(opcode, opcode1(0xc3 | opcode_flag));
+        Operands ops = {};
+        encode_instruction(opcode, ops);
+    }
+    {
+        let(opcode, opcode1(0xc2 | opcode_flag));
+        encode_instruction(opcode, ops(op_imm16));
+    }
 
     batch_end(builder, batch);
 }
@@ -3946,23 +4052,34 @@ fn void encode_shift(TestBuilder* builder)
     for (u8 i = 0; i < 4; i += 1)
     {
         Batch batch = batch_start(builder, mnemonics[i]);
-        u8 opcode_extension = opcode_extensions[i];
+        u8 extension = opcode_extensions[i];
 
-        encode_instruction(extension_and_opcode(opcode_extension, 0xd0), ops(op_rm8, op_one_literal));
-        encode_instruction(extension_and_opcode(opcode_extension, 0xd2), ops(op_rm8, op_cl));
-        encode_instruction(extension_and_opcode(opcode_extension, 0xc0), ops(op_rm8, op_imm8));
+        Opcode opcodes[] = {
+            opcode1(0xd0, .extension = extension),
+            opcode1(0xd2, .extension = extension),
+            opcode1(0xc0, .extension = extension),
+        };
 
-        encode_instruction(extension_and_opcode(opcode_extension, 0xd1), ops(op_rm16, op_one_literal));
-        encode_instruction(extension_and_opcode(opcode_extension, 0xd3), ops(op_rm16, op_cl));
-        encode_instruction(extension_and_opcode(opcode_extension, 0xc1), ops(op_rm16, op_imm8));
+        encode_instruction(opcodes[0], ops(op_rm8, op_one_literal));
+        encode_instruction(opcodes[1], ops(op_rm8, op_cl));
+        encode_instruction(opcodes[2], ops(op_rm8, op_imm8));
 
-        encode_instruction(extension_and_opcode(opcode_extension, 0xd1), ops(op_rm32, op_one_literal));
-        encode_instruction(extension_and_opcode(opcode_extension, 0xd3), ops(op_rm32, op_cl));
-        encode_instruction(extension_and_opcode(opcode_extension, 0xc1), ops(op_rm32, op_imm8));
+        for (u64 i = 0; i < array_length(opcodes); i += 1)
+        {
+            opcodes[i].bytes[0] += 1;
+        }
 
-        encode_instruction(extension_and_opcode(opcode_extension, 0xd1), ops(op_rm64, op_one_literal));
-        encode_instruction(extension_and_opcode(opcode_extension, 0xd3), ops(op_rm64, op_cl));
-        encode_instruction(extension_and_opcode(opcode_extension, 0xc1), ops(op_rm64, op_imm8));
+        encode_instruction(opcodes[0], ops(op_rm16, op_one_literal));
+        encode_instruction(opcodes[1], ops(op_rm16, op_cl));
+        encode_instruction(opcodes[2], ops(op_rm16, op_imm8));
+
+        encode_instruction(opcodes[0], ops(op_rm32, op_one_literal));
+        encode_instruction(opcodes[1], ops(op_rm32, op_cl));
+        encode_instruction(opcodes[2], ops(op_rm32, op_imm8));
+
+        encode_instruction(opcodes[0], ops(op_rm64, op_one_literal));
+        encode_instruction(opcodes[1], ops(op_rm64, op_cl));
+        encode_instruction(opcodes[2], ops(op_rm64, op_imm8));
 
         batch_end(builder, batch);
     }
@@ -3978,8 +4095,8 @@ fn void encode_scas(TestBuilder* builder)
             .count = 2,
             .implicit_operands = 1,
         };
-        u8 scas_opcode = 0xaf - (i == 0);
-        encode_instruction(opcode(scas_opcode), operands);
+        let(opcode, opcode1(0xaf - (i == 0)));
+        encode_instruction(opcode, operands);
         batch_end(builder, batch);
     }
 }
@@ -3989,7 +4106,8 @@ fn void encode_setcc(TestBuilder* builder)
     for (u8 i = 0; i < setcc_count; i += 1)
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_seta + i);
-        encode_instruction(opcode(0x0f, 0x90 | cc_opcodes_low[i]), ops(op_rm8));
+        let(opcode, opcode2(0x90 | cc_opcodes_low[i]));
+        encode_instruction(opcode, ops(op_rm8));
         batch_end(builder, batch);
     }
 }
@@ -4004,8 +4122,8 @@ fn void encode_stos(TestBuilder* builder)
             .count = 2,
             .implicit_operands = 1,
         };
-        u8 stos_opcode = 0xab - (i == 0);
-        encode_instruction(opcode(stos_opcode), operands);
+        let(opcode, opcode1(0xab - (i == 0)));
+        encode_instruction(opcode, operands);
         batch_end(builder, batch);
     }
 }
@@ -4014,20 +4132,32 @@ fn void encode_test(TestBuilder* builder)
 {
     Batch batch = batch_start(builder, MNEMONIC_x86_64_test);
 
-    encode_instruction(opcode(0xa8), ops(op_al, op_imm8));
-    encode_instruction(opcode(0xa9), ops(op_ax, op_imm16));
-    encode_instruction(opcode(0xa9), ops(op_eax, op_imm32));
-    encode_instruction(opcode(0xa9), ops(op_rax, op_imm32));
+    {
+        let(opcode, opcode1(0xa8));
+        encode_instruction(opcode, ops(op_al, op_imm8));
+        opcode.bytes[0] += 1;
+        encode_instruction(opcode, ops(op_ax, op_imm16));
+        encode_instruction(opcode, ops(op_eax, op_imm32));
+        encode_instruction(opcode, ops(op_rax, op_imm32));
+    }
 
-    encode_instruction(extension_and_opcode(0, 0xf6), ops(op_rm8, op_imm8));
-    encode_instruction(extension_and_opcode(0, 0xf7), ops(op_rm16, op_imm16));
-    encode_instruction(extension_and_opcode(0, 0xf7), ops(op_rm32, op_imm32));
-    encode_instruction(extension_and_opcode(0, 0xf7), ops(op_rm64, op_imm32));
+    {
+        let(opcode, opcode1(0xf6, .extension = 0));
+        encode_instruction(opcode, ops(op_rm8, op_imm8));
+        opcode.bytes[0] += 1;
+        encode_instruction(opcode, ops(op_rm16, op_imm16));
+        encode_instruction(opcode, ops(op_rm32, op_imm32));
+        encode_instruction(opcode, ops(op_rm64, op_imm32));
+    }
 
-    encode_instruction(opcode(0x84), ops(op_rm8, op_r8));
-    encode_instruction(opcode(0x85), ops(op_rm16, op_r16));
-    encode_instruction(opcode(0x85), ops(op_rm32, op_r32));
-    encode_instruction(opcode(0x85), ops(op_rm64, op_r64));
+    {
+        let(opcode, opcode1(0x84));
+        encode_instruction(opcode, ops(op_rm8, op_r8));
+        opcode.bytes[0] += 1;
+        encode_instruction(opcode, ops(op_rm16, op_r16));
+        encode_instruction(opcode, ops(op_rm32, op_r32));
+        encode_instruction(opcode, ops(op_rm64, op_r64));
+    }
 
     batch_end(builder, batch);
 }
@@ -4036,20 +4166,23 @@ fn void encode_ud(TestBuilder* builder)
 {
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_ud0);
-        encode_instruction(opcode(0x0f, 0xff), ops(op_r32, op_rm32));
+        let(opcode, opcode2(0xff));
+        encode_instruction(opcode, ops(op_r32, op_rm32));
         batch_end(builder, batch);
     }
 
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_ud1);
-        encode_instruction(opcode(0x0f, 0xb9), ops(op_r32, op_rm32));
+        let(opcode, opcode2(0xb9));
+        encode_instruction(opcode, ops(op_r32, op_rm32));
         batch_end(builder, batch);
     }
 
     {
         Batch batch = batch_start(builder, MNEMONIC_x86_64_ud2);
         Operands operands = {};
-        encode_instruction(opcode(0x0f, 0x0b), operands);
+        let(opcode, opcode2(0x0b));
+        encode_instruction(opcode, operands);
         batch_end(builder, batch);
     }
 }
@@ -4057,10 +4190,13 @@ fn void encode_ud(TestBuilder* builder)
 fn void encode_xadd(TestBuilder* builder)
 {
     Batch batch = batch_start(builder, MNEMONIC_x86_64_xadd);
-    encode_instruction(opcode(0x0f, 0xc0), ops(op_rm8, op_r8));
-    encode_instruction(opcode(0x0f, 0xc1), ops(op_rm16, op_r16));
-    encode_instruction(opcode(0x0f, 0xc1), ops(op_rm32, op_r32));
-    encode_instruction(opcode(0x0f, 0xc1), ops(op_rm64, op_r64));
+    let(opcode, opcode2(0xc0));
+    encode_instruction(opcode, ops(op_rm8, op_r8));
+    opcode.bytes[0] += 1;
+    encode_instruction(opcode, ops(op_rm16, op_r16));
+    encode_instruction(opcode, ops(op_rm32, op_r32));
+    encode_instruction(opcode, ops(op_rm64, op_r64));
+
     batch_end(builder, batch);
 }
 
@@ -4068,11 +4204,7 @@ fn void encode_xchg(TestBuilder* builder)
 {
     Batch batch = batch_start(builder, MNEMONIC_x86_64_xchg);
 
-    Opcode opcode = {
-        .bytes = { 0x90 },
-        .length = 1,
-        .plus_register = 1,
-    };
+    let(opcode, opcode1(0x90, .plus_register = 1));
 
     encode_instruction(opcode, ops(op_ax, op_r16));
     encode_instruction(opcode, ops(op_r16, op_ax));
@@ -4081,15 +4213,21 @@ fn void encode_xchg(TestBuilder* builder)
     encode_instruction(opcode, ops(op_rax, op_r64));
     encode_instruction(opcode, ops(op_r64, op_rax));
 
-    encode_instruction(opcode(0x86), ops(op_r8,  op_rm8));
-    encode_instruction(opcode(0x87), ops(op_r16, op_rm16));
-    encode_instruction(opcode(0x87), ops(op_r32, op_rm32));
-    encode_instruction(opcode(0x87), ops(op_r64, op_rm64));
+    {
+        let(opcode, opcode1(0x86));
+        encode_instruction(opcode, ops(op_r8,  op_rm8));
+        opcode.bytes[0] += 1;
+        encode_instruction(opcode, ops(op_r16, op_rm16));
+        encode_instruction(opcode, ops(op_r32, op_rm32));
+        encode_instruction(opcode, ops(op_r64, op_rm64));
 
-    encode_instruction(opcode(0x86), ops(op_rm8,  op_r8));
-    encode_instruction(opcode(0x87), ops(op_rm16, op_r16));
-    encode_instruction(opcode(0x87), ops(op_rm32, op_r32));
-    encode_instruction(opcode(0x87), ops(op_rm64, op_r64));
+        opcode.bytes[0] -= 1;
+        encode_instruction(opcode, ops(op_rm8,  op_r8));
+        opcode.bytes[0] += 1;
+        encode_instruction(opcode, ops(op_rm16, op_r16));
+        encode_instruction(opcode, ops(op_rm32, op_r32));
+        encode_instruction(opcode, ops(op_rm64, op_r64));
+    }
 
     batch_end(builder, batch);
 }
@@ -4098,11 +4236,11 @@ fn TestDataset construct_test_cases()
 {
     TestBuilder builder = {};
 
-    encode_arithmetic(adc, .ra_imm = opcode(0x15), .rm_imm = extension_and_opcode(0x02, 0x81), .rm_imm8 = extension_and_opcode(0x02, 0x83), .rm_r = opcode(0x11), .r_rm = opcode(0x13));
+    encode_arithmetic(adc, .ra_imm = 0x15, .rm_imm_extension = 2, .rm_r = 0x11, .r_rm = 0x13);
     encode_unsigned_add_flag(&builder, MNEMONIC_x86_64_adcx);
-    encode_arithmetic(add, .ra_imm = opcode(0x05), .rm_imm = extension_and_opcode(0x00, 0x81), .rm_imm8 = extension_and_opcode(0x00, 0x83), .rm_r = opcode(0x01), .r_rm = opcode(0x03));
+    encode_arithmetic(add, .ra_imm = 0x05, .rm_imm_extension = 0, .rm_r = 0x01, .r_rm = 0x03);
     encode_unsigned_add_flag(&builder, MNEMONIC_x86_64_adox);
-    encode_arithmetic(and, .ra_imm = opcode(0x25), .rm_imm = extension_and_opcode(0x04, 0x81), .rm_imm8 = extension_and_opcode(0x04, 0x83), .rm_r = opcode(0x21), .r_rm = opcode(0x23));
+    encode_arithmetic(and, .ra_imm = 0x25, .rm_imm_extension = 4, .rm_r = 0x21, .r_rm = 0x23);
     encode_bit_scan(&builder, BIT_SCAN_FORWARD); 
     encode_bit_scan(&builder, BIT_SCAN_REVERSE); 
     encode_bswap(&builder);
@@ -4112,51 +4250,51 @@ fn TestDataset construct_test_cases()
     encode_bit_test(&builder, MNEMONIC_x86_64_bts, 0xab, 0x05);
     encode_call(&builder);
     encode_convert(&builder);
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_clc, opcode(0xf8));
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_cld, opcode(0xfc));
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_clc, opcode1(0xf8), 0);
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_cld, opcode1(0xfc), 0);
     encode_clflush(&builder);
     encode_clflushopt(&builder);
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_cli, opcode(0xfa));
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_clts, opcode(0x0f, 0x06));
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_cmc, opcode(0xf5));
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_cli, opcode1(0xfa), 0);
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_clts, opcode2(0x06), 0);
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_cmc, opcode1(0xf5), 0);
     encode_cmov_instructions(&builder);
-    encode_arithmetic(cmp, .ra_imm = opcode(0x3d), .rm_imm = extension_and_opcode(0x07, 0x81), .rm_imm8 = extension_and_opcode(0x07, 0x83), .rm_r = opcode(0x39), .r_rm = opcode(0x3b));
+    encode_arithmetic(cmp, .ra_imm = 0x3d, .rm_imm_extension = 7, .rm_r = 0x39, .r_rm = 0x3b);
     encode_cmps(&builder);
     encode_cmpxchg(&builder);
     encode_cmpxchg_bytes(&builder);
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_cpuid, opcode(0x0f, 0xa2));
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_cpuid, opcode2(0xa2), 0);
     encode_crc32(&builder);
     encode_dec_inc(&builder, OP_DEC);
     encode_div(&builder, SIGNEDNESS_UNSIGNED);
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_hlt, opcode(0xf4));
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_hlt, opcode1(0xf4), 0);
     encode_div(&builder, SIGNEDNESS_SIGNED);
     encode_imul(&builder);
     encode_in(&builder);
     encode_dec_inc(&builder, OP_INC);
     encode_ins(&builder);
     encode_int(&builder);
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_invd, opcode(0x0f, 0x08));
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_invd, opcode2(0x08), 0);
     encode_invlpg(&builder);
     encode_iret(&builder);
     encode_jmp(&builder);
     encode_jcc(&builder);
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_lahf, opcode(0x9f));
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_lahf, opcode1(0x9f), 0);
     encode_lea(&builder);
     encode_lods(&builder);
     encode_loop(&builder);
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_monitor, opcode(0x0f, 0x01, 0xc8));
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_monitor, opcode3(0x01, 0xc8), 0);
     encode_mov(&builder);
     encode_movs(&builder);
     encode_movsx(&builder);
     encode_movzx(&builder);
     encode_mul(&builder);
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_mwait, opcode(0x0f, 0x01, 0xc9));
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_mwait, opcode3(0x01, 0xc9), 0);
     encode_neg(&builder);
     encode_nop(&builder);
     encode_not(&builder);
-    encode_arithmetic(or, .ra_imm = opcode(0x0d), .rm_imm = extension_and_opcode(1, 0x81), .rm_imm8 = extension_and_opcode(1, 0x83), .rm_r = opcode(0x09), .r_rm = opcode(0x0b));
+    encode_arithmetic(or, .ra_imm = 0x0d, .rm_imm_extension = 1, .rm_r = 0x09, .r_rm = 0x0b);
     encode_out(&builder);
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_pause, opcode(0xf3, 0x90));
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_pause, opcode1(0x90), 1 << LEGACY_PREFIX_F3);
     encode_pop(&builder);
     encode_popcnt(&builder);
     encode_popf(&builder);
@@ -4164,33 +4302,33 @@ fn TestDataset construct_test_cases()
     encode_push(&builder);
     encode_pushf(&builder);
     encode_rotate(&builder);
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_rdmsr, opcode(0x0f, 0x32));
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_rdpmc, opcode(0x0f, 0x33));
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_rdtsc, opcode(0x0f, 0x31));
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_rdtscp, opcode(0x0f, 0x01, 0xf9));
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_rdmsr, opcode2(0x32), 0);
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_rdpmc, opcode2(0x33), 0);
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_rdtsc, opcode2(0x31), 0);
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_rdtscp, opcode3(0x01, 0xf9), 0);
     encode_ret(&builder, RETURN_TYPE_NEAR);
     encode_ret(&builder, RETURN_TYPE_FAR);
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_rsm, opcode(0x0f, 0xaa));
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_rsm, opcode2(0xaa), 0);
     encode_shift(&builder);
-    encode_arithmetic(sbb, .ra_imm = opcode(0x1d), .rm_imm = extension_and_opcode(3, 0x81), .rm_imm8 = extension_and_opcode(3, 0x83), .rm_r = opcode(0x19), .r_rm = opcode(0x1b));
+    encode_arithmetic(sbb, .ra_imm = 0x1d, .rm_imm_extension = 3, .rm_r = 0x19, .r_rm = 0x1b);
     encode_scas(&builder);
     encode_setcc(&builder);
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_stc, opcode(0xf9));
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_std, opcode(0xfd));
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_sti, opcode(0xfb));
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_stc, opcode1(0xf9), 0);
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_std, opcode1(0xfd), 0);
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_sti, opcode1(0xfb), 0);
     encode_stos(&builder);
-    encode_arithmetic(sub, .ra_imm = opcode(0x2d), .rm_imm = extension_and_opcode(5, 0x81), .rm_imm8 = extension_and_opcode(5, 0x83), .rm_r = opcode(0x29), .r_rm = opcode(0x2b));
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_syscall,    opcode(0x0f, 0x05));
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_sysenter,   opcode(0x0f, 0x34));
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_sysexit,    opcode(0x0f, 0x35));
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_sysret,     opcode(0x0f, 0x07));
+    encode_arithmetic(sub, .ra_imm = 0x2d, .rm_imm_extension = 5, .rm_r = 0x29, .r_rm = 0x2b);
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_syscall,    opcode2(0x05), 0);
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_sysenter,   opcode2(0x34), 0);
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_sysexit,    opcode2(0x35), 0);
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_sysret,     opcode2(0x07), 0);
     encode_test(&builder);
     encode_ud(&builder);
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_wbinvd, opcode(0x0f, 0x09));
-    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_wrmsr, opcode(0x0f, 0x30));
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_wbinvd, opcode2(0x09), 0);
+    encode_no_operand_instruction(&builder, MNEMONIC_x86_64_wrmsr, opcode2(0x30), 0);
     encode_xadd(&builder);
     encode_xchg(&builder);
-    encode_arithmetic(xor, .ra_imm = opcode(0x35), .rm_imm = extension_and_opcode(6, 0x81), .rm_imm8 = extension_and_opcode(6, 0x83), .rm_r = opcode(0x31), .r_rm = opcode(0x33));
+    encode_arithmetic(xor, .ra_imm = 0x35, .rm_imm_extension = 6, .rm_r = 0x31, .r_rm = 0x33);
 
     TestDataset result = {
         .batches = builder.batches.pointer,
@@ -4615,6 +4753,13 @@ String assemble(String text)
         //     }
         // }
 
+        // =================================
+        // TODO: START
+        // =================================
+        u8 immediate[8][64] = {}; // TODO
+        u8 displacement[4][64] = {}; // TODO
+        u8 relative[4][64] = {}; // TODO
+                                 
         __mmask64 prefix_masks[LEGACY_PREFIX_COUNT] = {}; // TODO
         __mmask64 is_immediate[4] = {}; // TODO
         __mmask64 is_plus_register = {}; // TODO
@@ -4634,11 +4779,10 @@ String assemble(String text)
         __m512i opcode0_pre = {}; // TODO
         __m512i opcode1_pre = {}; // TODO
         __m512i opcode2_pre = {}; // TODO
-        __m512i displacement8 = {}; // TODO
-                                        //
-        u8 immediate[8][64] = {}; // TODO
-        u8 displacement[4][64] = {}; // TODO
-        u8 relative[4][64] = {}; // TODO
+        __m512i displacement8 = _mm512_loadu_epi8(&displacement[0][0]);
+        // =================================
+        // TODO: END
+        // =================================
 
         __m512i prefixes[LEGACY_PREFIX_COUNT];
         for (LegacyPrefix prefix = 0; prefix < LEGACY_PREFIX_COUNT; prefix += 1)
@@ -4919,7 +5063,7 @@ int main(int argc, char** argv, char** envp)
 
     int result = 0;
 
-    if (BB_CI)
+    if (!BB_CI)
     {
         TestDataset dataset = construct_test_cases();
         EncodingTestOptions options = {

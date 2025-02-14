@@ -571,6 +571,7 @@ fn void compile_program(Arena* arena, CompileOptions options)
                 add_arg("-Wno-gnu-empty-initializer");
                 add_arg("-Wno-fixed-enum-extension");
                 add_arg("-Wno-overlength-strings");
+                add_arg("-Wno-gnu-zero-variadic-macro-arguments");
 #if BB_ERROR_ON_WARNINGS
                 add_arg("-Werror");
 #endif
@@ -1798,8 +1799,120 @@ fn void metaprogram(Arena* arena)
     vb_copy_string(&generated_c, strlit("#pragma once\n\n"));
 
     vb_copy_string(&generated_h, strlit("#if defined(__x86_64__)\n"));
-    vb_copy_string(&generated_h, strlit("#include <immintrin.h>\n\n"));
-    vb_copy_string(&generated_h, strlit("#endif\n"));
+    vb_copy_string(&generated_h, strlit("#include <immintrin.h>\n"));
+    vb_copy_string(&generated_h, strlit("#endif\n\n"));
+
+    {
+
+        STRUCT(BitsetComponent)
+        {
+            String name;
+            u64 bit_count;
+        };
+
+        STRUCT(ByteComponent)
+        {
+            String type_name;
+            String field_name;
+            u8 array_length;
+            u8 type_size;
+            u8 type_alignment;
+            u8 bit_count;
+        };
+
+        BitsetComponent bitset_components[] = {
+            { strlit("is_rm_register"), 1 },
+            { strlit("is_reg_register"), 1 },
+            { strlit("implicit_register"), 1 },
+            { strlit("is_immediate"), 1 },
+            { strlit("immediate_size"), 2 },
+            { strlit("is_displacement"), 1 },
+            { strlit("is_relative"), 1 },
+            { strlit("displacement_size"), 1 },
+            { strlit("rex_w"), 1 },
+            { strlit("opcode_plus_register"), 1 },
+            { strlit("opcode_extension"), 3 },
+            { strlit("prefix_0f"), 1 },
+        };
+
+        ByteComponent byte_components[] = {
+            // TODO: opcode, length -> 1 byte
+            { .type_name = strlit("u8"), .type_size = sizeof(u8), .type_alignment = alignof(u8), .field_name = strlit("opcode"), .array_length = 2, },
+        };
+
+        u8 bit_offsets[array_length(bitset_components)];
+
+        u64 total_bit_count = 0;
+        for (u64 i = 0; i < array_length(bitset_components); i += 1)
+        {
+            bit_offsets[i] = total_bit_count;
+            total_bit_count += bitset_components[i].bit_count;
+        }
+
+        u64 aligned_bit_count = next_power_of_two(total_bit_count);
+        if (aligned_bit_count < 8 || aligned_bit_count > 16)
+        {
+            os_exit(1);
+        }
+
+        u64 alignment = aligned_bit_count / 8;
+        u64 bit_remainder = aligned_bit_count - total_bit_count;
+
+        assert(aligned_bit_count % 8 == 0);
+        u64 total_size = aligned_bit_count / 8;
+        for (u64 i = 0; i < array_length(byte_components); i += 1)
+        {
+            alignment = MAX(byte_components[i].type_alignment, alignment);
+            total_size += byte_components[i].type_size * byte_components[i].array_length ? byte_components[i].array_length : 1;
+        }
+
+        u64 aligned_total_size = next_power_of_two(align_forward_u64(total_size, alignment));
+        u64 padding_bytes = aligned_total_size - total_size;
+        
+        vb_copy_string(&generated_h, strlit("STRUCT(EncodingInvariantData)\n{\n"));
+
+        for (u64 i = 0; i < array_length(bitset_components); i += 1)
+        {
+            BitsetComponent component = bitset_components[i];
+            vb_format(&generated_h, "    u{u64} {s}:{u32};\n", aligned_bit_count, component.name, (u32)component.bit_count);
+        }
+
+        if (bit_remainder)
+        {
+            vb_format(&generated_h, "    u{u64} bit_reserved:{u64};\n", aligned_bit_count, bit_remainder);
+        }
+
+        for (u64 i = 0; i < array_length(byte_components); i += 1)
+        {
+            ByteComponent component = byte_components[i];
+            if (component.bit_count)
+            {
+                vb_format(&generated_h, "    {s} {s}:{u32};\n", component.type_name, component.field_name, (u32)component.bit_count);
+            }
+            else if (component.array_length)
+            {
+                vb_format(&generated_h, "    {s} {s}[{u32}];\n", component.type_name, component.field_name, (u32)component.array_length);
+            }
+            else
+            {
+                vb_format(&generated_h, "    {s} {s};\n", component.type_name, component.field_name);
+            }
+        }
+
+        if (padding_bytes)
+        {
+            vb_format(&generated_h, "    u8 byte_reserved[{u64}];\n", padding_bytes);
+        }
+
+        vb_copy_string(&generated_h, strlit("};\n\nstatic_assert(sizeof(EncodingInvariantData) <= sizeof(u64));\n\n"));
+
+        for (u64 i = 0; i < array_length(bitset_components); i += 1)
+        {
+            vb_format(&generated_h, "#define {s}_bit_offset ({u64})\n", bitset_components[i].name, (u64)bit_offsets[i]);
+        }
+
+        *vb_add(&generated_h, 1) = '\n';
+    }
 
     vb_copy_string(&generated_h, strlit("typedef enum Mnemonic_x86_64\n{\n"));
     VirtualBufferP(u8) mnemonic_names_by_length_buffer[16] = {};
@@ -2357,6 +2470,9 @@ fn void parse_instruction_table(Arena* arena)
         .length = file.length,
     };
     Parser* parser = &parser_memory;
+
+    VirtualBuffer(u8) file_memory = {};
+    VirtualBuffer(u8)* f = &file_memory;
 
     let_cast(u32, file_length, file.length);
     while (parser->i < file_length)
