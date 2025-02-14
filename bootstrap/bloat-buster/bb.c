@@ -5063,7 +5063,7 @@ int main(int argc, char** argv, char** envp)
 
     int result = 0;
 
-    if (!BB_CI)
+    if (BB_CI)
     {
         TestDataset dataset = construct_test_cases();
         EncodingTestOptions options = {
