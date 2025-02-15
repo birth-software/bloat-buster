@@ -14,6 +14,8 @@ pub fn build(b: *std.Build) void {
         .name = "bloat-buster",
         .root_module = exe_mod,
     });
+    exe.linkLibC();
+    exe.linkSystemLibrary("LLVM");
 
     b.installArtifact(exe);
 
