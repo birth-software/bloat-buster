@@ -1524,7 +1524,7 @@ u32 encode_wide(u8* restrict buffer, const EncodingBatch* const restrict batch)
     __mmask64 has_base_register = _kor_mask64(_kor_mask64(is_rm_register, is_reg_register), is_implicit_register);
 
     __m512i rex_b = _mm512_maskz_set1_epi8(_mm512_test_epi8_mask(rm_register, _mm512_set1_epi8(0b1000)), 1 << 0);
-    __m512i rex_x = _mm512_set1_epi8(0); // TODO
+    __m512i rex_x = _mm512_setzero(); // TODO
     __m512i rex_r = _mm512_maskz_set1_epi8(_mm512_test_epi8_mask(reg_register, _mm512_set1_epi8(0b1000)), 1 << 2);
     __m512i rex_w = _mm512_maskz_set1_epi8(_cvtu64_mask64(batch->rex_w), 1 << 3);
     __m512i rex_byte = _mm512_or_epi32(_mm512_set1_epi32(0x40), _mm512_or_epi32(_mm512_or_epi32(rex_b, rex_x), _mm512_or_epi32(rex_r, rex_w)));
@@ -1588,7 +1588,7 @@ u32 encode_wide(u8* restrict buffer, const EncodingBatch* const restrict batch)
     _mm512_storeu_epi8(mod_rm_positions, mod_rm_position);
 
     __mmask64 sib_mask = _kand_mask64(_mm512_cmpneq_epi8_mask(mod, _mm512_set1_epi8(0b11)), _mm512_cmpeq_epi8_mask(rm, _mm512_set1_epi8(0b100)));
-    __m512i sib_scale = _mm512_set1_epi8(0);
+    __m512i sib_scale = _mm512_setzero();
     __m512i sib_index = _mm512_maskz_set1_epi8(sib_mask, 0b100 << 3);
     __m512i sib_base = _mm512_or_epi32(_mm512_and_si512(rm_register, _mm512_maskz_set1_epi8(is_rm_register, 0b111)), _mm512_maskz_set1_epi8(_knot_mask64(is_rm_register), 0b101));
     __m512i sib = _mm512_or_epi32(_mm512_or_epi32(sib_index, sib_base), sib_scale);
@@ -4865,7 +4865,7 @@ String assemble(String text)
         __mmask64 has_base_register = _kor_mask64(_kor_mask64(is_rm_register, is_reg_register), is_implicit_register);
 
         __m512i rex_b = _mm512_maskz_set1_epi8(_mm512_test_epi8_mask(rm_register, _mm512_set1_epi8(0b1000)), 1 << 0);
-        __m512i rex_x = _mm512_set1_epi8(0); // TODO
+        __m512i rex_x = _mm512_setzero(); // TODO
         __m512i rex_r = _mm512_maskz_set1_epi8(_mm512_test_epi8_mask(reg_register, _mm512_set1_epi8(0b1000)), 1 << 2);
         __m512i rex_w = _mm512_maskz_set1_epi8(is_rex_w, 1 << 3);
         __m512i rex_byte = _mm512_or_epi32(_mm512_set1_epi32(0x40), _mm512_or_epi32(_mm512_or_epi32(rex_b, rex_x), _mm512_or_epi32(rex_r, rex_w)));
@@ -4939,7 +4939,7 @@ String assemble(String text)
         _mm512_storeu_epi8(mod_rm_positions, mod_rm_position);
 
         __mmask64 sib_mask = _kand_mask64(_mm512_cmpneq_epi8_mask(mod, _mm512_set1_epi8(0b11)), _mm512_cmpeq_epi8_mask(rm, _mm512_set1_epi8(0b100)));
-        __m512i sib_scale = _mm512_set1_epi8(0);
+        __m512i sib_scale = _mm512_setzero();
         __m512i sib_index = _mm512_maskz_set1_epi8(sib_mask, 0b100 << 3);
         __m512i sib_base = _mm512_or_epi32(_mm512_and_si512(rm_register, _mm512_maskz_set1_epi8(is_rm_register, 0b111)), _mm512_maskz_set1_epi8(_knot_mask64(is_rm_register), 0b101));
         __m512i sib = _mm512_or_epi32(_mm512_or_epi32(sib_index, sib_base), sib_scale);
