@@ -4,13 +4,13 @@ add: class base_arithmetic(/0, 05, 01, 03)
 adox: class unsigned_add_flag(f3)
 and: class base_arithmetic(/4, 25, 21, 23)
 bsf:
-    r16, rm16 [rm: \66 rex.r \0f bc /r]
-    r32, rm32 [rm: \0f bc /r]
-    r64, rm64 [rm: rex.w \0f bc /r]
+    r16, rm16 [rm: rex.r 0f bc /r]
+    r32, rm32 [rm: 0f bc /r]
+    r64, rm64 [rm: rex.w 0f bc /r]
 bsr:
-    r16, rm16 [rm: \66 rex.r \0f bd /r]
-    r32, rm32 [rm: \0f bd /r]
-    r64, rm64 [rm: rex.w \0f bd /r]
+    r16, rm16 [rm: rex.r 0f bd /r]
+    r32, rm32 [rm: 0f bd /r]
+    r64, rm64 [rm: rex.w 0f bd /r]
 bswap:
     r32 [o: 0f c8+r]
     r64 [o: rex.w 0f c8+r]

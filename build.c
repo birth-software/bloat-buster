@@ -1787,44 +1787,6 @@ fn x86_64_Register define_register(RegisterSpec spec)
     return reg;
 }
 
-STRUCT(BitsetComponent)
-{
-    String name;
-    u64 bit_count;
-};
-
-STRUCT(ByteComponent)
-{
-    String type_name;
-    String field_name;
-    u8 array_length;
-    u8 type_size;
-    u8 type_alignment;
-    u8 bit_count;
-};
-
-global_variable BitsetComponent bitset_components[] = {
-    { strlit("is_rm_register"), 1 },
-    { strlit("is_reg_register"), 1 },
-    { strlit("implicit_register"), 1 },
-    { strlit("is_immediate"), 1 },
-    { strlit("immediate_size"), 2 },
-    { strlit("is_displacement"), 1 },
-    { strlit("is_relative"), 1 },
-    { strlit("displacement_size"), 1 },
-    { strlit("rex_w"), 1 },
-    { strlit("opcode_plus_register"), 1 },
-    { strlit("opcode_extension"), 3 },
-    { strlit("prefix_0f"), 1 },
-};
-
-global_variable ByteComponent byte_components[] = {
-    // TODO: opcode, length -> 1 byte
-    { .type_name = strlit("u8"), .type_size = sizeof(u8), .type_alignment = alignof(u8), .field_name = strlit("opcode"), .array_length = 2, },
-};
-
-global_variable u8 bit_offsets[array_length(bitset_components)];
-
 fn void metaprogram(Arena* arena)
 {
     let(file, file_read(arena, strlit("bootstrap/bloat-buster/data/x86_mnemonic.dat")));
@@ -1841,6 +1803,45 @@ fn void metaprogram(Arena* arena)
     vb_copy_string(&generated_h, strlit("#endif\n\n"));
 
     {
+
+        STRUCT(BitsetComponent)
+        {
+            String name;
+            u64 bit_count;
+        };
+
+        STRUCT(ByteComponent)
+        {
+            String type_name;
+            String field_name;
+            u8 array_length;
+            u8 type_size;
+            u8 type_alignment;
+            u8 bit_count;
+        };
+
+        BitsetComponent bitset_components[] = {
+            { strlit("is_rm_register"), 1 },
+            { strlit("is_reg_register"), 1 },
+            { strlit("implicit_register"), 1 },
+            { strlit("is_immediate"), 1 },
+            { strlit("immediate_size"), 2 },
+            { strlit("is_displacement"), 1 },
+            { strlit("is_relative"), 1 },
+            { strlit("displacement_size"), 1 },
+            { strlit("rex_w"), 1 },
+            { strlit("opcode_plus_register"), 1 },
+            { strlit("opcode_extension"), 3 },
+            { strlit("prefix_0f"), 1 },
+        };
+
+        ByteComponent byte_components[] = {
+            // TODO: opcode, length -> 1 byte
+            { .type_name = strlit("u8"), .type_size = sizeof(u8), .type_alignment = alignof(u8), .field_name = strlit("opcode"), .array_length = 2, },
+        };
+
+        u8 bit_offsets[array_length(bitset_components)];
+
         u64 total_bit_count = 0;
         for (u64 i = 0; i < array_length(bitset_components); i += 1)
         {
@@ -2257,14 +2258,6 @@ fn u8 expect_decimal_digit(Parser* parser)
     }
 }
 
-fn u8 ascii_couple_to_hex(u8 high_ch, u8 low_ch)
-{
-    u8 high_int = hex_ch_to_int(high_ch);
-    u8 low_int = hex_ch_to_int(low_ch);
-    u8 byte = (high_int << 4) | low_int;
-    return byte;
-}
-
 fn u8 consume_hex_byte(Parser* parser, u8* hex_byte)
 {
     u32 i = parser->i;
@@ -2279,7 +2272,10 @@ fn u8 consume_hex_byte(Parser* parser, u8* hex_byte)
     u8 result = is_hex_byte;
     if (likely(result))
     {
-        *hex_byte = ascii_couple_to_hex(high_ch, low_ch);
+        u8 high_int = hex_ch_to_int(high_ch);
+        u8 low_int = hex_ch_to_int(low_ch);
+        u8 byte = (high_int << 4) | low_int;
+        *hex_byte = byte;
     }
 
     return result;
@@ -2355,18 +2351,12 @@ fn String parse_encoding_type(Parser* parser)
     return result;
 }
 
-fn void parse_encoding_details(Parser* parser, VirtualBuffer(u8)* buffer)
+fn void parse_encoding_details(Parser* parser)
 {
     expect_character(parser, '[');
     String encoding_type = parse_encoding_type(parser);
     expect_character(parser, ':');
     expect_character(parser, ' ');
-
-    u8 plus_register = 0;
-    u8 opcode_byte = 0;
-    u8 opcode_byte_is_set = 0;
-
-    u32 atom_count = 0;
 
     while (!consume_character(parser, ']'))
     {
@@ -2374,21 +2364,12 @@ fn void parse_encoding_details(Parser* parser, VirtualBuffer(u8)* buffer)
         u8 byte;
         if (consume_hex_byte(parser, &byte))
         {
-            assert(!opcode_byte_is_set);
-            opcode_byte = byte;
-            opcode_byte_is_set = 1;
-
             u8 ch = get_ch(parser);
-            switch (ch)
+            u8 is_plus = ch == '+';
+            parser->i += is_plus;
+            if (unlikely(is_plus))
             {
-                case '+':
-                    {
-                        parser->i += 1;
-                        expect_character(parser, 'r');
-                        plus_register = 1;
-                    } break;
-                default:
-                    break;
+                expect_character(parser, 'r');
             }
         }
         else
@@ -2406,25 +2387,6 @@ fn void parse_encoding_details(Parser* parser, VirtualBuffer(u8)* buffer)
                         print("Bad immediate value\n");
                         os_exit(1);
                     }
-                }
-                else if (string_starts_with(identifier, strlit("lp")))
-                {
-                    assert(identifier.length == 6);
-                    assert(identifier.pointer[2] == '(');
-                    assert(identifier.pointer[5] == ')');
-                    u8 high_ch = identifier.pointer[3];
-                    u8 low_ch = identifier.pointer[4];
-                    u8 legacy_prefix = ascii_couple_to_hex(high_ch, low_ch);
-
-                    switch (legacy_prefix)
-                    {
-                    }
-
-                    todo();
-                }
-                else if (identifier.pointer[0] == 'p')
-                {
-                    todo();
                 }
                 else if (s_equal(identifier, strlit("rex")))
                 {
@@ -2470,14 +2432,10 @@ fn void parse_encoding_details(Parser* parser, VirtualBuffer(u8)* buffer)
         }
 
         consume_character(parser, ' ');
-
-        atom_count += 1;
     }
-
-    // TODO: serialize
 }
 
-fn void parse_encoding(Parser* parser, VirtualBuffer(u8)* buffer)
+fn void parse_encoding(Parser* parser)
 {
     u8 first_ch = get_ch(parser);
     u32 start = parser->i;
@@ -2501,7 +2459,7 @@ fn void parse_encoding(Parser* parser, VirtualBuffer(u8)* buffer)
         expect_character(parser, ' ');
     }
 
-    parse_encoding_details(parser, buffer);
+    parse_encoding_details(parser);
 }
 
 fn void parse_instruction_table(Arena* arena)
@@ -2516,31 +2474,18 @@ fn void parse_instruction_table(Arena* arena)
     VirtualBuffer(u8) file_memory = {};
     VirtualBuffer(u8)* f = &file_memory;
 
-    VirtualBuffer(u8) isel_table = {};
-    VirtualBuffer(u8) encoding_table = {};
-
-    u16 mnemonic_count = 0;
-    u32 total_encoding_count = 0;
     let_cast(u32, file_length, file.length);
-
     while (parser->i < file_length)
     {
         String mnemonic = parse_mnemonic(parser);
-        u16 mnemonic_index = mnemonic_count;
-
-        u32 encoding_offset = total_encoding_count;
-        u16 encoding_count = 0;
-
-        mnemonic_count += 1;
         expect_character(parser, ':');
 
         if (consume_character(parser, '\n'))
         {
             while (consume_tab(parser))
             {
-                parse_encoding(parser, &encoding_table);
+                parse_encoding(parser);
                 expect_character(parser, '\n');
-                encoding_count += 1;
             }
         }
         else if (consume_character(parser, ' '))
@@ -2550,8 +2495,7 @@ fn void parse_instruction_table(Arena* arena)
             {
                 case '[':
                     {
-                        parse_encoding_details(parser, &encoding_table);
-                        encoding_count += 1;
+                        parse_encoding_details(parser);
                     } break;
                 default:
                     {
@@ -2672,7 +2616,7 @@ fn void parse_instruction_table(Arena* arena)
                         else
                         {
                             parser->i -= identifier.length;
-                            parse_encoding(parser, &encoding_table);
+                            parse_encoding(parser);
                         }
                     } break;
             }
@@ -2683,8 +2627,6 @@ fn void parse_instruction_table(Arena* arena)
         {
             todo();
         }
-
-        total_encoding_count += encoding_count;
     }
 }
 
