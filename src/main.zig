@@ -11,6 +11,8 @@ pub fn panic(message: []const u8, stack_trace: ?*anyopaque, return_address: ?usi
 }
 
 pub fn main() callconv(.C) c_int {
+    const arena = lib.Arena.initialize_default(2 * lib.MB);
+    _ = arena.allocate_bytes(1024, 1);
     return 0;
 }
 
@@ -20,4 +22,8 @@ comptime {
             .name = "main",
         });
     }
+}
+
+test {
+    _ = lib;
 }
