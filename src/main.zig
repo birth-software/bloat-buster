@@ -138,12 +138,15 @@ pub fn main() callconv(.C) c_int {
     _ = arena.allocate_bytes(1024, 1);
     _ = arena.join_string(&.{ "foo", "fa" });
     arena.reset();
+    lib.file.write(".zig-cache/foo", "fafu", .{});
+    const a = lib.file.read(arena, ".zig-cache/foo");
+    lib.assert(lib.string.equal(a, "fafu"));
     return 0;
 }
 
 comptime {
     if (!@import("builtin").is_test) {
-        @export(&main, @import("std").builtin.ExportOptions{
+        @export(&main, .{
             .name = "main",
         });
     }

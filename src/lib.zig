@@ -107,8 +107,184 @@ pub const Error = enum(c_int) {
 
 pub const u64_max = ~@as(u64, 0);
 
+pub const file = struct {
+    pub const WriteOptions = packed struct {
+        executable: u1 = 0,
+    };
+    pub fn write(path: [:0]const u8, content: []const u8, options: WriteOptions) void {
+        const fd = os.File.open(path, .{
+            .write = 1,
+            .truncate = 1,
+            .create = 1,
+            .execute = options.executable,
+        }, .{
+            .read = 1,
+            .write = 1,
+            .execute = options.executable,
+        });
+        defer fd.close();
+
+        if (fd.is_valid()) {
+            fd.write(content);
+        }
+    }
+
+    pub fn read(arena: *Arena, path: [:0]const u8) []u8 {
+        const fd = os.File.open(path, .{
+            .read = 1,
+        }, .{
+            .read = 1,
+        });
+        defer fd.close();
+        var result: []u8 = undefined;
+        const ptr = @as(*[2]u64, @ptrCast(&result));
+        ptr[0] = 0;
+        ptr[1] = 0;
+
+        if (fd.is_valid()) {
+            const file_size = fd.get_size();
+            const file_buffer = arena.allocate_bytes(file_size, 1);
+            result = file_buffer[0..file_size];
+            fd.read(result, file_size);
+        }
+
+        return result;
+    }
+};
+
 pub const os = struct {
-    pub extern "c" fn exit(c_int) noreturn;
+    const system = switch (builtin.os.tag) {
+        .windows => windows,
+        .linux => linux,
+        else => @compileError("TODO"),
+    };
+    pub const posix = switch (builtin.os.tag) {
+        .windows => @compileError("TODO"),
+        .linux => linux,
+        else => @compileError("TODO"),
+    };
+
+    pub const File = struct {
+        fd: Descriptor,
+
+        const Descriptor = system.FileDescriptor;
+
+        pub fn is_valid(fd: File) bool {
+            return system.fd_is_valid(fd.fd);
+        }
+
+        pub const OpenFlags = packed struct {
+            truncate: u1 = 0,
+            execute: u1 = 0,
+            write: u1 = 0,
+            read: u1 = 0,
+            create: u1 = 0,
+            directory: u1 = 0,
+        };
+
+        pub const Permissions = packed struct {
+            read: u1 = 1,
+            write: u1 = 1,
+            execute: u1 = 0,
+        };
+
+        pub fn open(path: [*:0]const u8, flags: OpenFlags, permissions: Permissions) File {
+            switch (builtin.os.tag) {
+                .windows => @compileError("TODO"),
+                else => {
+                    const o = posix.O{
+                        .ACCMODE = if (flags.read | flags.write != 0) .RDWR else if (flags.read != 0) .RDONLY else if (flags.write != 0) .WRONLY else unreachable,
+                        .TRUNC = flags.truncate,
+                        .CREAT = flags.create,
+                        .DIRECTORY = flags.directory,
+                    };
+                    const mode: posix.mode_t = if (permissions.execute != 0) 0o755 else 0o644;
+
+                    const fd = posix.open(path, o, mode);
+                    return File{
+                        .fd = fd,
+                    };
+                },
+            }
+        }
+
+        pub fn close(fd: File) void {
+            switch (builtin.os.tag) {
+                .windows => {
+                    @compileError("TODO");
+                },
+                else => {
+                    const result = posix.close(fd.fd);
+                    assert(result == 0);
+                },
+            }
+        }
+
+        pub fn get_size(fd: File) u64 {
+            switch (builtin.os.tag) {
+                .windows => {
+                    @compileError("TODO");
+                },
+                else => {
+                    var stat: posix.Stat = undefined;
+                    const result = posix.fstat(fd.fd, &stat);
+                    assert(result == 0);
+                    return @intCast(stat.size);
+                },
+            }
+        }
+
+        pub fn write_partially(fd: File, content: []const u8) usize {
+            switch (builtin.os.tag) {
+                .windows => {
+                    @compileError("TODO");
+                },
+                else => {
+                    const syscall_result = posix.write(fd.fd, content.ptr, content.len);
+                    if (syscall_result <= 0) {
+                        abort();
+                    } else {
+                        return @intCast(syscall_result);
+                    }
+                },
+            }
+        }
+
+        pub fn write(fd: File, content: []const u8) void {
+            var it = content;
+            while (it.len != 0) {
+                const written_bytes = fd.write_partially(it);
+                it.ptr += written_bytes;
+                it.len -= written_bytes;
+            }
+        }
+
+        pub fn read_partially(fd: File, buffer: [*]u8, byte_count: usize) usize {
+            switch (builtin.os.tag) {
+                .windows => {
+                    @compileError("TODO");
+                },
+                else => {
+                    const syscall_result = posix.read(fd.fd, buffer, byte_count);
+                    if (syscall_result <= 0) {
+                        abort();
+                    } else {
+                        return @intCast(syscall_result);
+                    }
+                },
+            }
+        }
+
+        pub fn read(fd: File, buffer: []u8, byte_count: usize) void {
+            assert(byte_count <= buffer.len);
+            var it_byte_count: usize = 0;
+            while (it_byte_count < byte_count) {
+                const read_bytes = fd.read_partially(buffer.ptr + it_byte_count, byte_count - it_byte_count);
+                it_byte_count += read_bytes;
+            }
+        }
+    };
+
     pub fn is_being_debugged() bool {
         var result = false;
         switch (builtin.os.tag) {
@@ -118,13 +294,52 @@ pub const os = struct {
                 }
             },
             .windows => IsDebuggerPresent(),
-            else => {},
+            .macos => {},
+            else => @compileError("TODO"),
         }
 
         return result;
     }
 
     const linux = struct {
+        const FileDescriptor = c_int;
+
+        fn fd_is_valid(fd: FileDescriptor) bool {
+            return fd >= 0;
+        }
+
+        pub const uid_t = u32;
+        pub const gid_t = u32;
+        pub const off_t = i64;
+        pub const ino_t = u64;
+        pub const dev_t = u64;
+
+        pub const timespec = extern struct {
+            seconds: isize,
+            nanoseconds: isize,
+        };
+
+        // The `stat` definition used by the Linux kernel.
+        pub const Stat = extern struct {
+            dev: dev_t,
+            ino: ino_t,
+            nlink: usize,
+
+            mode: u32,
+            uid: uid_t,
+            gid: gid_t,
+            __pad0: u32,
+            rdev: dev_t,
+            size: off_t,
+            blksize: isize,
+            blocks: i64,
+
+            atim: timespec,
+            mtim: timespec,
+            ctim: timespec,
+            __unused: [3]isize,
+        };
+
         const PROT = packed struct(u32) {
             read: u1,
             write: u1,
@@ -161,9 +376,45 @@ pub const os = struct {
             _: u5 = 0,
         };
 
+        pub const ACCMODE = enum(u2) {
+            RDONLY = 0,
+            WRONLY = 1,
+            RDWR = 2,
+        };
+
+        const O = packed struct(u32) {
+            ACCMODE: ACCMODE,
+            _2: u4 = 0,
+            CREAT: u1 = 0,
+            EXCL: u1 = 0,
+            NOCTTY: u1 = 0,
+            TRUNC: u1 = 0,
+            APPEND: u1 = 0,
+            NONBLOCK: u1 = 0,
+            DSYNC: u1 = 0,
+            ASYNC: u1 = 0,
+            DIRECT: u1 = 0,
+            _15: u1 = 0,
+            DIRECTORY: u1 = 0,
+            NOFOLLOW: u1 = 0,
+            NOATIME: u1 = 0,
+            CLOEXEC: u1 = 0,
+            SYNC: u1 = 0,
+            PATH: u1 = 0,
+            TMPFILE: u1 = 0,
+            _: u9 = 0,
+        };
+
         extern "c" fn ptrace(c_int, c_int, usize, usize) c_long;
         extern "c" fn mmap(usize, usize, PROT, MAP, c_int, isize) *align(4096) anyopaque;
         extern "c" fn mprotect(*anyopaque, usize, PROT) c_int;
+        extern "c" fn open(path: [*:0]const u8, oflag: O, ...) c_int;
+        extern "c" fn close(fd: system.FileDescriptor) c_int;
+        extern "c" fn fstat(fd: system.FileDescriptor, stat: *Stat) c_int;
+        extern "c" fn read(fd: system.FileDescriptor, pointer: [*]u8, byte_count: usize) isize;
+        extern "c" fn write(fd: system.FileDescriptor, pointer: [*]const u8, byte_count: usize) isize;
+
+        const mode_t = usize;
 
         fn protection_flags(protection: ProtectionFlags) PROT {
             const result = PROT{
@@ -184,6 +435,10 @@ pub const os = struct {
 
             return result;
         }
+    };
+
+    const windows = struct {
+        const HANDLE = ?*anyopaque;
     };
 
     const ProtectionFlags = packed struct {
@@ -231,8 +486,23 @@ pub const os = struct {
         if (os.is_being_debugged()) {
             @trap();
         } else {
-            os.exit(1);
+            libc.exit(1);
         }
+    }
+};
+
+pub const libc = struct {
+    pub extern "c" fn exit(c_int) noreturn;
+    pub extern "c" fn memcmp(a: [*]const u8, b: [*]const u8, byte_count: usize) c_int;
+};
+
+pub const string = struct {
+    pub fn equal(a: []const u8, b: []const u8) bool {
+        var result = a.len == b.len;
+        if (result) {
+            result = libc.memcmp(a.ptr, b.ptr, a.len) == 0;
+        }
+        return result;
     }
 };
 
@@ -334,11 +604,11 @@ pub const Arena = struct {
         return pointer[0..size :0];
     }
 
-    pub fn duplicate_string(arena: *Arena, string: []const u8) [:0]u8 {
-        const memory = arena.allocate_bytes(string.len + 1, 1);
-        @memcpy(memory, string);
-        memory[string.len] = 0;
-        return memory[0..string.len :0];
+    pub fn duplicate_string(arena: *Arena, str: []const u8) [:0]u8 {
+        const memory = arena.allocate_bytes(str.len + 1, 1);
+        @memcpy(memory, str);
+        memory[str.len] = 0;
+        return memory[0..str.len :0];
     }
 
     pub fn restore(arena: *Arena, position: u64) void {
