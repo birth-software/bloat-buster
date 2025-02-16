@@ -141,6 +141,11 @@ pub fn main() callconv(.C) c_int {
     lib.file.write(".zig-cache/foo", "fafu", .{});
     const a = lib.file.read(arena, ".zig-cache/foo");
     lib.assert(lib.string.equal(a, "fafu"));
+
+    var buffer: [100]u8 = undefined;
+    const written_character_count = lib.format(&buffer, buffer.len, "fjaksdjkasd {u64}\n", @as(u64, 123123));
+    const result_str = buffer[0..written_character_count];
+    lib.assert(lib.string.equal(result_str, "fjaksdjkasd 123123\n"));
     return 0;
 }
 
