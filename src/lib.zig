@@ -41,9 +41,7 @@ const value_from_flag_kind = ValueFromFlag.sub;
 pub fn value_from_flag(value: anytype, flag: anytype) @TypeOf(value) {
     const flag_int: @TypeOf(value) = switch (@TypeOf(flag)) {
         comptime_int => b: {
-            if (flag != 1 and flag != 0) {
-                unreachable;
-            }
+            assert(flag == 1 or flag == 0);
             break :b flag;
         },
         bool => @intFromBool(flag),
@@ -127,21 +125,63 @@ pub const os = struct {
     }
 
     const linux = struct {
-        const PROT_READ: u32 = 1 << 0;
-        const PROT_WRITE: u32 = 1 << 1;
-        const PROT_EXEC: u32 = 1 << 2;
+        const PROT = packed struct(u32) {
+            read: u1,
+            write: u1,
+            exec: u1,
+            sem: u1 = 0,
+            _: u28 = 0,
+        };
+        const MAP = packed struct(u32) {
+            const Type = enum(u4) {
+                shared = 0x1,
+                private = 0x2,
+                shared_validate = 0x3,
+            };
 
-        const MAP_PRIVATE: u32 = 1 << 1;
-        const MAP_ANONYMOUS: u32 = 1 << 5;
-        const MAP_NORESERVE: u32 = 1 << 14;
-        const MAP_POPULATE: u32 = 1 << 15;
+            type: Type = .private,
+            FIXED: u1 = 0,
+            ANONYMOUS: u1 = 0,
+            @"32BIT": u1 = 0,
+            _7: u1 = 0,
+            GROWSDOWN: u1 = 0,
+            _9: u2 = 0,
+            DENYWRITE: u1 = 0,
+            EXECUTABLE: u1 = 0,
+            LOCKED: u1 = 0,
+            NORESERVE: u1 = 0,
+            POPULATE: u1 = 0,
+            NONBLOCK: u1 = 0,
+            STACK: u1 = 0,
+            HUGETLB: u1 = 0,
+            SYNC: u1 = 0,
+            FIXED_NOREPLACE: u1 = 0,
+            _21: u5 = 0,
+            UNINITIALIZED: u1 = 0,
+            _: u5 = 0,
+        };
 
         extern "c" fn ptrace(c_int, c_int, usize, usize) c_long;
-        extern "c" fn mmap(usize, usize, u32, u32, c_int, isize) *align(4096) anyopaque;
-        extern "c" fn mprotect(*anyopaque, usize, u32) c_int;
+        extern "c" fn mmap(usize, usize, PROT, MAP, c_int, isize) *align(4096) anyopaque;
+        extern "c" fn mprotect(*anyopaque, usize, PROT) c_int;
 
-        fn protection_flags(protection: ProtectionFlags) u32 {
-            const result = value_from_flag(linux.PROT_READ, protection.read) | value_from_flag(linux.PROT_WRITE, protection.write) | value_from_flag(linux.PROT_EXEC, protection.execute);
+        fn protection_flags(protection: ProtectionFlags) PROT {
+            const result = PROT{
+                .read = protection.read,
+                .write = protection.write,
+                .exec = protection.execute,
+            };
+            return result;
+        }
+
+        fn map_flags(map: MapFlags) MAP {
+            const result = MAP{
+                .type = if (map.private != 0) .private else .shared,
+                .ANONYMOUS = map.anonymous,
+                .NORESERVE = map.no_reserve,
+                .POPULATE = map.populate,
+            };
+
             return result;
         }
     };
@@ -162,11 +202,8 @@ pub const os = struct {
         switch (builtin.os.tag) {
             .windows => @compileError("TODO"),
             else => {
-                const protection_flags: u32 = value_from_flag(linux.PROT_READ, protection.read) | value_from_flag(linux.PROT_WRITE, protection.write) | value_from_flag(linux.PROT_EXEC, protection.execute);
-                const map_flags = value_from_flag(linux.MAP_ANONYMOUS, map.anonymous) | value_from_flag(linux.MAP_PRIVATE, map.private) | value_from_flag(linux.MAP_NORESERVE, map.no_reserve) | switch (builtin.os.tag) {
-                    .linux => value_from_flag(linux.MAP_POPULATE, map.populate),
-                    else => 0,
-                };
+                const protection_flags = linux.protection_flags(protection);
+                const map_flags = linux.map_flags(map);
                 const address = linux.mmap(base, size, protection_flags, map_flags, -1, 0);
                 if (@intFromPtr(address) == u64_max) {
                     @branchHint(.unlikely);
@@ -177,7 +214,7 @@ pub const os = struct {
         }
     }
 
-    fn commit(address: *anyopaque, size: u64, protection: ProtectionFlags) void {
+    pub fn commit(address: *anyopaque, size: u64, protection: ProtectionFlags) void {
         switch (builtin.os.tag) {
             .windows => @compileError("TODO"),
             else => {
@@ -187,6 +224,14 @@ pub const os = struct {
                     unreachable;
                 }
             },
+        }
+    }
+
+    pub fn abort() noreturn {
+        if (os.is_being_debugged()) {
+            @trap();
+        } else {
+            os.exit(1);
         }
     }
 };
@@ -247,7 +292,7 @@ pub const Arena = struct {
         return arena;
     }
 
-    pub fn allocate_bytes(arena: *Arena, size: u64, alignment: u64) *u8 {
+    pub fn allocate_bytes(arena: *Arena, size: u64, alignment: u64) [*]u8 {
         const aligned_offset = align_forward_u64(arena.position, alignment);
         const aligned_size_after = aligned_offset + size;
 
@@ -263,10 +308,46 @@ pub const Arena = struct {
             arena.os_position = target_committed_size;
         }
 
-        const result = @as(*u8, @ptrFromInt(@intFromPtr(arena) + aligned_offset));
+        const result = @as([*]u8, @ptrFromInt(@intFromPtr(arena) + aligned_offset));
         arena.position = aligned_size_after;
         assert(arena.position <= arena.os_position);
 
         return result;
+    }
+
+    pub fn join_string(arena: *Arena, pieces: []const []const u8) [:0]u8 {
+        var size: u64 = 0;
+        for (pieces) |piece| {
+            size += piece.len;
+        }
+
+        const pointer = arena.allocate_bytes(size + 1, 1);
+        var i: u64 = 0;
+        for (pieces) |piece| {
+            @memcpy(pointer + i, piece);
+            i += piece.len;
+        }
+
+        assert(i == size);
+        pointer[i] = 0;
+
+        return pointer[0..size :0];
+    }
+
+    pub fn duplicate_string(arena: *Arena, string: []const u8) [:0]u8 {
+        const memory = arena.allocate_bytes(string.len + 1, 1);
+        @memcpy(memory, string);
+        memory[string.len] = 0;
+        return memory[0..string.len :0];
+    }
+
+    pub fn restore(arena: *Arena, position: u64) void {
+        assert(position <= arena.position);
+        @memset(@as([*]u8, @ptrCast(arena))[position..][0 .. arena.position - position], 0);
+        arena.position = position;
+    }
+
+    pub fn reset(arena: *Arena) void {
+        arena.restore(minimum_position);
     }
 };
