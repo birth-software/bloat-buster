@@ -1,6 +1,25 @@
 const std = @import("std");
 
-pub fn build(b: *std.Build) void {
+fn run_process_and_capture_stdout(b: *std.Build, argv: []const []const u8) ![]const u8 {
+    const result = std.process.Child.run(.{
+        .allocator = b.allocator,
+        .argv = argv,
+    }) catch |err| return err;
+    switch (result.term) {
+        .Exited => |exit_code| {
+            if (exit_code != 0) {
+                return error.SpawnError;
+            }
+        },
+        else => return error.SpawnError,
+    }
+
+    return result.stdout;
+}
+
+pub fn build(b: *std.Build) !void {
+    const ci = b.option(bool, "ci", "");
+    _ = &ci;
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -10,12 +29,33 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    var llvm_libs = std.ArrayList([]const u8).init(b.allocator);
+    {
+        const llvm_components_result = try run_process_and_capture_stdout(b, &.{ "llvm-config", "--components" });
+        var it = std.mem.splitScalar(u8, llvm_components_result, ' ');
+        var args = std.ArrayList([]const u8).init(b.allocator);
+        try args.append("llvm-config");
+        try args.append("--libs");
+        while (it.next()) |component| {
+            try args.append(std.mem.trim(u8, component, "\n"));
+        }
+        const llvm_libs_result = try run_process_and_capture_stdout(b, args.items);
+        it = std.mem.splitScalar(u8, llvm_libs_result, ' ');
+
+        while (it.next()) |component| {
+            const llvm_lib = std.mem.trim(u8, std.mem.trim(u8, component, "\n"), "-l");
+            try llvm_libs.append(llvm_lib);
+        }
+    }
+
     const exe = b.addExecutable(.{
         .name = "bloat-buster",
         .root_module = exe_mod,
     });
     exe.linkLibC();
-    exe.linkSystemLibrary("LLVM");
+    for (llvm_libs.items) |llvm_lib| {
+        exe.linkSystemLibrary(llvm_lib);
+    }
 
     b.installArtifact(exe);
 
