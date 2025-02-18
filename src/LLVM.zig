@@ -158,11 +158,125 @@ pub const Target = opaque {
                 aix = 6,
                 zos = 7,
             },
-            reserved: u21 = 0,
+            reserved: PaddingType = 0,
         },
         loop_alignment: c_uint,
         binutils_version: [2]c_int,
         mc: MCTargetOptions,
+
+        const padding_bit_count = 21;
+        const PaddingType = @Type(.{
+            .int = .{
+                .signedness = .unsigned,
+                .bits = padding_bit_count,
+            },
+        });
+        comptime {
+            assert(@sizeOf(Target.Options) == 136);
+            assert(padding_bit_count == 21);
+        }
+
+        pub fn default() Target.Options {
+            return .{
+                .binutils_version = .{ 0, 0 },
+                .flags0 = .{
+                    .unsafe_fp_math = 0,
+                    .no_infs_fp_math = 0,
+                    .no_nans_fp_math = 0,
+                    .no_trapping_fp_math = 1,
+                    .no_signed_zeroes_fp_math = 0,
+                    .approx_func_fp_match = 0,
+                    .enable_aix_extended_altivec_abi = 0,
+                    .honor_sign_dependent_rounding_fp_math = 0,
+                    .no_zeroes_in_bss = 0,
+                    .guaranteed_tail_call_optimization = 0,
+                    .stack_symbol_ordering = 1,
+                    .enable_fast_isel = 0,
+                    .enable_global_isel = 0,
+                    .global_isel_abort_mode = .enable,
+                    .swift_async_frame_pointer = .always,
+                    .use_init_array = 0,
+                    .disable_integrated_assembler = 0,
+                    .function_sections = 0,
+                    .data_sections = 0,
+                    .ignore_xcoff_visibility = 0,
+                    .xcoff_traceback_table = 1,
+                    .unique_section_names = 1,
+                    .unique_basic_block_section_names = 0,
+                    .separate_named_sections = 0,
+                    .trap_unreachable = 0,
+                    .no_trap_after_noreturn = 0,
+                    .tls_size = 0,
+                    .emulated_tls = 0,
+                    .enable_tls_descriptors = 0,
+                    .enable_ipra = 0,
+                    .emit_stack_size_section = 0,
+                    .enable_machine_outliner = 0,
+                    .enable_machine_function_splitter = 0,
+                    .supports_default_outlining = 0,
+                    .emit_address_significance_table = 0,
+                    .bb_address_map = 0,
+                    .bb_sections = .none,
+                    .emit_call_site_information = 0,
+                    .supports_debug_entry_values = 0,
+                    .enable_debug_entry_values = 0,
+                    .value_tracking_variable_locations = 0,
+                    .force_dwarf_frame_section = 0,
+                    .xray_function_index = 1,
+                    .debug_strict_dwarf = 0,
+                    .hotpatch = 0,
+                    .ppc_gen_scalar_mass_entries = 0,
+                    .jmc_instrument = 0,
+                    .enable_cfi_fixup = 0,
+                    .mis_expect = 0,
+                    .xcoff_read_only_pointers = 0,
+                    .float_abi = .default,
+                    .thread_model = .posix,
+                },
+                .flags1 = .{
+                    .fp_op_fusion_mode = .standard,
+                    .eabi_version = .default,
+                    .debugger_kind = .default,
+                    .exception_handling = .none,
+                },
+                .loop_alignment = 0,
+                .mc = .{
+                    .abi_name = .{},
+                    .assembly_language = .{},
+                    .split_dwarf_file = .{},
+                    .as_secure_log_file = .{},
+                    .argv0 = null,
+                    .argv_pointer = null,
+                    .argv_count = 0,
+                    .integrated_assembler_search_path_pointer = null,
+                    .integrated_assembler_search_path_count = 0,
+                    .flags = .{
+                        .relax_all = 0,
+                        .no_exec_stack = 0,
+                        .fatal_warnings = 0,
+                        .no_warn = 0,
+                        .no_deprecated_warn = 0,
+                        .no_type_check = 0,
+                        .save_temp_labels = 0,
+                        .incremental_linker_compatible = 0,
+                        .fdpic = 0,
+                        .show_mc_encoding = 0,
+                        .show_mc_inst = 0,
+                        .asm_verbose = 0,
+                        .preserve_asm_comments = 1,
+                        .dwarf64 = 0,
+                        .crel = 0,
+                        .x86_relax_relocations = 1,
+                        .x86_sse2_avx = 0,
+                        .emit_dwarf_unwind = .default,
+                        .use_dwarf_directory = .default,
+                        .debug_compression_type = .none,
+                        .emit_compact_unwind_non_canonical = 0,
+                        .ppc_use_full_register_names = 0,
+                    },
+                },
+            };
+        }
     };
 
     pub const Machine = opaque {
@@ -176,12 +290,14 @@ pub const Target = opaque {
             relocation_model: RelocationModel,
             optimization_level: CodeGenerationOptimizationLevel,
             jit: bool,
-            reserved: u32 = 0,
-        };
+            reserved: [padding_byte_count]u8 = [1]u8{0} ** padding_byte_count,
 
-        comptime {
-            assert(@sizeOf(Create) == 192);
-        }
+            const padding_byte_count = 4;
+            comptime {
+                assert(@sizeOf(Create) == 192);
+                assert(padding_byte_count == 4);
+            }
+        };
 
         pub fn create(options: Create, error_message: *String) ?*Target.Machine {
             const target_machine = api.llvm_create_target_machine(&options, error_message);
@@ -189,6 +305,7 @@ pub const Target = opaque {
         }
     };
 };
+
 pub const MCTargetOptions = extern struct {
     abi_name: String,
     assembly_language: String,
@@ -234,13 +351,91 @@ pub const MCTargetOptions = extern struct {
         },
         emit_compact_unwind_non_canonical: u1,
         ppc_use_full_register_names: u1,
-        reserved: u7 = 0,
+        reserved: PaddingType = 0,
     },
+
+    const padding_bit_count = 7;
+    const PaddingType = @Type(.{
+        .int = .{
+            .signedness = .unsigned,
+            .bits = 7,
+        },
+    });
+    comptime {
+        assert(@sizeOf(MCTargetOptions) == 112);
+        assert(padding_bit_count == 7);
+    }
 };
 
-comptime {
-    assert(@sizeOf(MCTargetOptions) == 112);
-}
+const OptimizationLevel = enum(u3) {
+    O0 = 0,
+    O1 = 1,
+    O2 = 2,
+    O3 = 3,
+    Os = 4,
+    Oz = 5,
+
+    fn prefers_size(optimization_level: OptimizationLevel) bool {
+        return switch (optimization_level) {
+            .O0, .O1, .Os, .Oz => true,
+            .O2, .O3 => false,
+        };
+    }
+
+    fn prefers_speed(optimization_level: OptimizationLevel) bool {
+        return !prefers_size(optimization_level);
+    }
+};
+
+/// This is ABI-compatible with C++
+pub const OptimizationOptions = packed struct(u64) {
+    optimization_level: OptimizationLevel,
+    debug_info: u1,
+    loop_unrolling: u1,
+    loop_interleaving: u1,
+    loop_vectorization: u1,
+    slp_vectorization: u1,
+    merge_functions: u1,
+    call_graph_profile: u1,
+    unified_lto: u1,
+    assignment_tracking: u1,
+    verify_module: u1,
+    reserved: PaddingType = 0,
+
+    const padding_bit_count = 51;
+    const PaddingType = @Type(.{
+        .int = .{
+            .signedness = .unsigned,
+            .bits = padding_bit_count,
+        },
+    });
+
+    comptime {
+        assert(@sizeOf(OptimizationOptions) == @sizeOf(u64));
+        assert(padding_bit_count == 51);
+    }
+
+    const OptimizationOptionsCreate = packed struct {
+        optimization_level: OptimizationLevel,
+        debug_info: u1,
+    };
+    pub fn default(create: OptimizationOptionsCreate) OptimizationOptions {
+        const pref_speed = @intFromBool(create.optimization_level.prefers_speed());
+        return .{
+            .optimization_level = create.optimization_level,
+            .debug_info = create.debug_info,
+            .loop_unrolling = pref_speed,
+            .loop_interleaving = pref_speed,
+            .loop_vectorization = pref_speed,
+            .slp_vectorization = pref_speed,
+            .merge_functions = pref_speed,
+            .call_graph_profile = 0,
+            .unified_lto = 0,
+            .assignment_tracking = create.debug_info,
+            .verify_module = @intFromBool(lib.optimization_mode == .ReleaseSafe or lib.optimization_mode == .Debug),
+        };
+    }
+};
 
 pub const Architecture = enum {
     X86,
@@ -271,6 +466,8 @@ pub const BasicBlock = opaque {};
 
 pub const Module = opaque {
     pub const create_di_builder = api.LLVMCreateDIBuilder;
+    pub const set_target = api.llvm_module_set_target;
+    pub const run_optimization_pipeline = api.llvm_module_run_optimization_pipeline;
 
     pub fn to_string(module: *Module) []const u8 {
         return api.llvm_module_to_string(module).to_slice().?;
@@ -533,105 +730,7 @@ pub fn experiment() void {
 
     var error_message: String = undefined;
     const target_machine = Target.Machine.create(.{
-        .target_options = .{
-            .binutils_version = .{ 0, 0 },
-            .flags0 = .{
-                .unsafe_fp_math = 0,
-                .no_infs_fp_math = 0,
-                .no_nans_fp_math = 0,
-                .no_trapping_fp_math = 1,
-                .no_signed_zeroes_fp_math = 0,
-                .approx_func_fp_match = 0,
-                .enable_aix_extended_altivec_abi = 0,
-                .honor_sign_dependent_rounding_fp_math = 0,
-                .no_zeroes_in_bss = 0,
-                .guaranteed_tail_call_optimization = 0,
-                .stack_symbol_ordering = 1,
-                .enable_fast_isel = 0,
-                .enable_global_isel = 0,
-                .global_isel_abort_mode = .enable,
-                .swift_async_frame_pointer = .always,
-                .use_init_array = 0,
-                .disable_integrated_assembler = 0,
-                .function_sections = 0,
-                .data_sections = 0,
-                .ignore_xcoff_visibility = 0,
-                .xcoff_traceback_table = 1,
-                .unique_section_names = 1,
-                .unique_basic_block_section_names = 0,
-                .separate_named_sections = 0,
-                .trap_unreachable = 0,
-                .no_trap_after_noreturn = 0,
-                .tls_size = 0,
-                .emulated_tls = 0,
-                .enable_tls_descriptors = 0,
-                .enable_ipra = 0,
-                .emit_stack_size_section = 0,
-                .enable_machine_outliner = 0,
-                .enable_machine_function_splitter = 0,
-                .supports_default_outlining = 0,
-                .emit_address_significance_table = 0,
-                .bb_address_map = 0,
-                .bb_sections = .none,
-                .emit_call_site_information = 0,
-                .supports_debug_entry_values = 0,
-                .enable_debug_entry_values = 0,
-                .value_tracking_variable_locations = 0,
-                .force_dwarf_frame_section = 0,
-                .xray_function_index = 1,
-                .debug_strict_dwarf = 0,
-                .hotpatch = 0,
-                .ppc_gen_scalar_mass_entries = 0,
-                .jmc_instrument = 0,
-                .enable_cfi_fixup = 0,
-                .mis_expect = 0,
-                .xcoff_read_only_pointers = 0,
-                .float_abi = .default,
-                .thread_model = .posix,
-            },
-            .flags1 = .{
-                .fp_op_fusion_mode = .standard,
-                .eabi_version = .default,
-                .debugger_kind = .default,
-                .exception_handling = .none,
-            },
-            .loop_alignment = 0,
-            .mc = .{
-                .abi_name = .{},
-                .assembly_language = .{},
-                .split_dwarf_file = .{},
-                .as_secure_log_file = .{},
-                .argv0 = null,
-                .argv_pointer = null,
-                .argv_count = 0,
-                .integrated_assembler_search_path_pointer = null,
-                .integrated_assembler_search_path_count = 0,
-                .flags = .{
-                    .relax_all = 0,
-                    .no_exec_stack = 0,
-                    .fatal_warnings = 0,
-                    .no_warn = 0,
-                    .no_deprecated_warn = 0,
-                    .no_type_check = 0,
-                    .save_temp_labels = 0,
-                    .incremental_linker_compatible = 0,
-                    .fdpic = 0,
-                    .show_mc_encoding = 0,
-                    .show_mc_inst = 0,
-                    .asm_verbose = 0,
-                    .preserve_asm_comments = 1,
-                    .dwarf64 = 0,
-                    .crel = 0,
-                    .x86_relax_relocations = 1,
-                    .x86_sse2_avx = 0,
-                    .emit_dwarf_unwind = .default,
-                    .use_dwarf_directory = .default,
-                    .debug_compression_type = .none,
-                    .emit_compact_unwind_non_canonical = 0,
-                    .ppc_use_full_register_names = 0,
-                },
-            },
-        },
+        .target_options = Target.Options.default(),
         .cpu_triple = String.from_slice(global.host_triple),
         .cpu_model = String.from_slice(global.host_cpu_model),
         .cpu_features = String.from_slice(global.host_cpu_features),
@@ -642,5 +741,7 @@ pub fn experiment() void {
     }, &error_message) orelse {
         unreachable;
     };
-    _ = target_machine;
+    module.set_target(target_machine);
+
+    module.run_optimization_pipeline(target_machine, OptimizationOptions.default(.{ .optimization_level = .O3, .debug_info = 1 }));
 }

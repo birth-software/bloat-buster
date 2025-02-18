@@ -1,4 +1,5 @@
 const builtin = @import("builtin");
+pub const optimization_mode = builtin.mode;
 const VariableArguments = @import("std").builtin.VaList;
 extern "c" fn IsDebuggerPresent() bool;
 extern "c" fn __errno_location() *c_int;

@@ -3,9 +3,19 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/IR/DebugInfo.h"
+
+#include "llvm/Passes/PassBuilder.h"
+
+#include "llvm/Analysis/TargetLibraryInfo.h"
+
+#include "llvm/Frontend/Driver/CodeGenOptions.h"
+
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/SubtargetFeature.h"
+
 #include "llvm/Target/TargetMachine.h"
+
 #include "llvm/MC/TargetRegistry.h"
 
 #define EXPORT extern "C"
@@ -181,6 +191,8 @@ enum class BBLLVMDebugCompressionType : u8
     zstd = 2,
 };
 
+#define BB_LLVM_MC_TARGET_OPTIONS_PADDING_BIT_COUNT (7)
+
 struct BBLLVMMCTargetOptions
 {
     BBLLVMString abi_name;
@@ -214,9 +226,11 @@ struct BBLLVMMCTargetOptions
     u32 debug_compression_type:2;
     u32 emit_compact_unwind_non_canonical:1;
     u32 ppc_use_full_register_names:1;
-    u32 reserved:7;
+    u32 reserved:BB_LLVM_MC_TARGET_OPTIONS_PADDING_BIT_COUNT;
 };
+
 static_assert(sizeof(BBLLVMMCTargetOptions) == 112);
+static_assert(BB_LLVM_MC_TARGET_OPTIONS_PADDING_BIT_COUNT == 7);
 
 enum class BBLLVMCodeModel : u8
 {
@@ -320,6 +334,8 @@ enum class BBLLVMExceptionHandling : u8
     zos = 7,
 };
 
+#define BB_LLVM_TARGET_OPTIONS_PADDING_BIT_COUNT (21)
+
 struct BBLLVMTargetOptions
 {
     u64 unsafe_fp_math:1;
@@ -378,12 +394,17 @@ struct BBLLVMTargetOptions
     u32 eabi_version:3;
     u32 debugger_kind:3;
     u32 exception_handling:3;
-    u32 reserved:21;
+    u32 reserved:BB_LLVM_TARGET_OPTIONS_PADDING_BIT_COUNT;
     unsigned loop_alignment;
     int binutils_version[2];
 
     BBLLVMMCTargetOptions mc;
 };
+
+static_assert(sizeof(BBLLVMTargetOptions) == 136);
+static_assert(BB_LLVM_TARGET_OPTIONS_PADDING_BIT_COUNT == 21);
+
+#define BB_LLVM_TARGET_MACHINE_CREATE_PADDING_BYTE_COUNT (4)
 
 struct BBLLVMTargetMachineCreate
 {
@@ -395,10 +416,11 @@ struct BBLLVMTargetMachineCreate
     BBLLVMCodeModel code_model;
     BBLLVMCodeGenerationOptimizationLevel optimization_level;
     bool jit;
-    u32 reserved;
+    u8 reserved[BB_LLVM_TARGET_MACHINE_CREATE_PADDING_BYTE_COUNT];
 };
 
 static_assert(sizeof(BBLLVMTargetMachineCreate) == 192);
+static_assert(BB_LLVM_TARGET_MACHINE_CREATE_PADDING_BYTE_COUNT == 4);
 
 EXPORT TargetMachine* llvm_create_target_machine(const BBLLVMTargetMachineCreate& create, BBLLVMString* error_message)
 {
@@ -672,4 +694,120 @@ EXPORT TargetMachine* llvm_create_target_machine(const BBLLVMTargetMachineCreate
     }
 
     return target_machine;
+}
+
+EXPORT void llvm_module_set_target(Module& module, TargetMachine& target_machine)
+{
+    module.setDataLayout(target_machine.createDataLayout());
+    auto& triple_string = target_machine.getTargetTriple().getTriple();
+    module.setTargetTriple(StringRef(triple_string));
+}
+
+enum class BBLLVMOptimizationLevel : u8
+{
+    O0 = 0,
+    O1 = 1,
+    O2 = 2,
+    O3 = 3,
+    Os = 4,
+    Oz = 5,
+};
+
+#define BB_LLVM_OPTIMIZATION_OPTIONS_PADDING_BIT_COUNT (51)
+struct BBLLVMOptimizationOptions
+{
+    u64 optimization_level:3;
+    u64 debug_info:1;
+    u64 loop_unrolling:1;
+    u64 loop_interleaving:1;
+    u64 loop_vectorization:1;
+    u64 slp_vectorization:1;
+    u64 merge_functions:1;
+    u64 call_graph_profile:1;
+    u64 unified_lto:1;
+    u64 assignment_tracking:1;
+    u64 verify_module:1;
+    u64 reserved:BB_LLVM_OPTIMIZATION_OPTIONS_PADDING_BIT_COUNT;
+};
+
+static_assert(sizeof(BBLLVMOptimizationOptions) == sizeof(u64));
+static_assert(BB_LLVM_OPTIMIZATION_OPTIONS_PADDING_BIT_COUNT == 51);
+
+EXPORT void llvm_module_run_optimization_pipeline(Module& module, TargetMachine& target_machine, BBLLVMOptimizationOptions options)
+{
+    // TODO: PGO
+    // TODO: CS profile
+    
+    PipelineTuningOptions pipeline_tuning_options;
+    pipeline_tuning_options.LoopUnrolling = options.loop_unrolling;
+    pipeline_tuning_options.LoopInterleaving = options.loop_interleaving;
+    pipeline_tuning_options.LoopVectorization = options.loop_vectorization;
+    pipeline_tuning_options.SLPVectorization = options.slp_vectorization;
+    pipeline_tuning_options.MergeFunctions = options.merge_functions;
+    pipeline_tuning_options.CallGraphProfile = options.call_graph_profile;
+    pipeline_tuning_options.UnifiedLTO = options.unified_lto;
+    
+    // TODO: instrumentation
+
+    LoopAnalysisManager loop_analysis_manager;
+    FunctionAnalysisManager function_analysis_manager;
+    CGSCCAnalysisManager cgscc_analysis_manager;
+    ModuleAnalysisManager module_analysis_manager;
+
+    PassBuilder pass_builder(&target_machine, pipeline_tuning_options); 
+
+    if (options.assignment_tracking && options.debug_info != 0)
+    {
+        pass_builder.registerPipelineStartEPCallback([&](ModulePassManager& MPM, OptimizationLevel Level) {
+                MPM.addPass(AssignmentTrackingPass());
+            });
+    }
+    
+    Triple target_triple = target_machine.getTargetTriple(); // Need to make a copy, incoming bugfix: https://github.com/llvm/llvm-project/pull/127718
+    // TODO: add library (?)
+    std::unique_ptr<TargetLibraryInfoImpl> TLII(llvm::driver::createTLII(target_triple, driver::VectorLibrary::NoLibrary));
+    function_analysis_manager.registerPass([&] { return TargetLibraryAnalysis(*TLII); });
+
+    pass_builder.registerModuleAnalyses(module_analysis_manager);
+    pass_builder.registerCGSCCAnalyses(cgscc_analysis_manager);
+    pass_builder.registerFunctionAnalyses(function_analysis_manager);
+    pass_builder.registerLoopAnalyses(loop_analysis_manager);
+    pass_builder.crossRegisterProxies(loop_analysis_manager, function_analysis_manager, cgscc_analysis_manager, module_analysis_manager);
+
+    ModulePassManager module_pass_manager;
+
+    if (options.verify_module)
+    {
+        module_pass_manager.addPass(VerifierPass());
+    }
+
+    bool thin_lto = false;
+    bool lto = false;
+
+    OptimizationLevel optimization_level;
+    switch ((BBLLVMOptimizationLevel)options.optimization_level)
+    {
+        case BBLLVMOptimizationLevel::O0: optimization_level = OptimizationLevel::O0; break;
+        case BBLLVMOptimizationLevel::O1: optimization_level = OptimizationLevel::O1; break;
+        case BBLLVMOptimizationLevel::O2: optimization_level = OptimizationLevel::O2; break;
+        case BBLLVMOptimizationLevel::O3: optimization_level = OptimizationLevel::O3; break;
+        case BBLLVMOptimizationLevel::Os: optimization_level = OptimizationLevel::Os; break;
+        case BBLLVMOptimizationLevel::Oz: optimization_level = OptimizationLevel::Oz; break;
+    }
+
+    // TODO: thin lto post-link
+    // TODO: instrument
+    if (thin_lto) {
+        __builtin_trap(); // TODO
+    } else if (lto) {
+        __builtin_trap(); // TODO
+    } else if (lto) {
+        __builtin_trap(); // TODO
+    } else {
+         module_pass_manager.addPass(pass_builder.buildPerModuleDefaultPipeline(optimization_level, lto));
+    }
+
+    // TODO: if emit bitcode/IR
+
+    module_pass_manager.run(module, module_analysis_manager);
 }

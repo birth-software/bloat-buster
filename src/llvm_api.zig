@@ -72,6 +72,9 @@ pub extern fn llvm_host_cpu_name() llvm.String;
 pub extern fn llvm_host_cpu_features() llvm.String;
 
 pub extern fn llvm_create_target_machine(create: *const llvm.Target.Machine.Create, error_message: *llvm.String) ?*llvm.Target.Machine;
+pub extern fn llvm_module_set_target(module: *llvm.Module, target_machine: *llvm.Target.Machine) void;
+
+pub extern fn llvm_module_run_optimization_pipeline(module: *llvm.Module, target_machine: *llvm.Target.Machine, options: llvm.OptimizationOptions) void;
 
 pub fn get_initializer(comptime llvm_arch: llvm.Architecture) type {
     const arch_name = @tagName(llvm_arch);
