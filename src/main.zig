@@ -1,4 +1,6 @@
 const lib = @import("lib.zig");
+const llvm = @import("LLVM.zig");
+const Arena = lib.Arena;
 
 pub const panic = struct {
     const abort = lib.os.abort;
@@ -133,19 +135,13 @@ pub const panic = struct {
     }
 };
 
-pub fn main() callconv(.C) c_int {
-    const arena = lib.Arena.initialize_default(2 * lib.MB);
-    _ = arena.allocate_bytes(1024, 1);
-    _ = arena.join_string(&.{ "foo", "fa" });
-    arena.reset();
-    lib.file.write(".zig-cache/foo", "fafu", .{});
-    const a = lib.file.read(arena, ".zig-cache/foo");
-    lib.assert(lib.string.equal(a, "fafu"));
+var global_persistent_arena: *Arena = undefined;
 
-    var buffer: [100]u8 = undefined;
-    const written_character_count = lib.format(&buffer, buffer.len, "fjaksdjkasd {u64}\n", @as(u64, 123123));
-    const result_str = buffer[0..written_character_count];
-    lib.assert(lib.string.equal(result_str, "fjaksdjkasd 123123\n"));
+pub fn main() callconv(.C) c_int {
+    lib.GlobalState.initialize();
+
+    llvm.initialize_all();
+    llvm.experiment();
     return 0;
 }
 
@@ -159,4 +155,5 @@ comptime {
 
 test {
     _ = lib;
+    _ = llvm;
 }

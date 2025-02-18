@@ -3,6 +3,10 @@ const VariableArguments = @import("std").builtin.VaList;
 extern "c" fn IsDebuggerPresent() bool;
 extern "c" fn __errno_location() *c_int;
 
+test {
+    _ = @import("lib_test.zig");
+}
+
 pub const KB = 1024;
 pub const MB = 1024 * 1024;
 pub const GB = 1024 * 1024 * 1024;
@@ -57,48 +61,6 @@ pub fn value_from_flag(value: anytype, flag: anytype) @TypeOf(value) {
         .sub => value & (@as(@TypeOf(value), 0) -% flag_int),
     };
     return result;
-}
-
-test "value_from_flag" {
-    const std = @import("std");
-    const expect = std.testing.expect;
-
-    try expect(value_from_flag(1, 1) == 1);
-    try expect(value_from_flag(2, true) == 2);
-    try expect(value_from_flag(3, false) == 0);
-    try expect(value_from_flag(3, true) == 3);
-    try expect(value_from_flag(3, 1) == 3);
-
-    try expect(value_from_flag(0xffff, 1) == 0xffff);
-    try expect(value_from_flag(0xffff, 0) == 0);
-    try expect(value_from_flag(0xffff, true) == 0xffff);
-    try expect(value_from_flag(0xffff, false) == 0);
-
-    try expect(value_from_flag(0xffffffff, 1) == 0xffffffff);
-    try expect(value_from_flag(0xffffffff, 0) == 0);
-    try expect(value_from_flag(0xffffffff, true) == 0xffffffff);
-    try expect(value_from_flag(0xffffffff, false) == 0);
-
-    try expect(value_from_flag(0xffffffffffffffff, 1) == 0xffffffffffffffff);
-    try expect(value_from_flag(0xffffffffffffffff, 0) == 0);
-    try expect(value_from_flag(0xffffffffffffffff, true) == 0xffffffffffffffff);
-    try expect(value_from_flag(0xffffffffffffffff, false) == 0);
-
-    const a: u32 = 1235;
-    const b_true: bool = true;
-    const b_false: bool = false;
-    const u_true: u1 = 1;
-    const u_false: u1 = 0;
-    try expect(value_from_flag(a, b_true) == a);
-    try expect(value_from_flag(a, b_false) == 0);
-    try expect(value_from_flag(a, u_true) == a);
-    try expect(value_from_flag(a, u_false) == 0);
-
-    const b: u64 = 0xffffffffffffffff;
-    try expect(value_from_flag(b, b_true) == b);
-    try expect(value_from_flag(b, b_false) == 0);
-    try expect(value_from_flag(b, u_true) == b);
-    try expect(value_from_flag(b, u_false) == 0);
 }
 
 pub const Error = enum(c_int) {
@@ -302,7 +264,37 @@ pub const os = struct {
         return result;
     }
 
+    pub fn get_cpu_count() usize {
+        switch (builtin.os.tag) {
+            .windows => @compileError("TODO"),
+            else => {
+                var cpu_set: posix.cpu_set_t = undefined;
+                const result = posix.sched_getaffinity(0, @sizeOf(posix.cpu_set_t), &cpu_set);
+                assert(result == 0);
+                const cpu_count = posix.CPU_COUNT(cpu_set);
+                return cpu_count;
+            },
+        }
+    }
+
     const linux = struct {
+        pub const CPU_SETSIZE = 128;
+        pub const cpu_set_t = [CPU_SETSIZE / @sizeOf(usize)]usize;
+        pub const cpu_count_t = @Type(.{
+            .int = .{
+                .signedness = .unsigned,
+                .bits = log2_int(@as(u64, CPU_SETSIZE * 8)),
+            },
+        });
+
+        pub fn CPU_COUNT(set: cpu_set_t) cpu_count_t {
+            var sum: cpu_count_t = 0;
+            for (set) |x| {
+                sum += @popCount(x);
+            }
+            return sum;
+        }
+
         const FileDescriptor = c_int;
 
         fn fd_is_valid(fd: FileDescriptor) bool {
@@ -414,6 +406,7 @@ pub const os = struct {
         extern "c" fn fstat(fd: system.FileDescriptor, stat: *Stat) c_int;
         extern "c" fn read(fd: system.FileDescriptor, pointer: [*]u8, byte_count: usize) isize;
         extern "c" fn write(fd: system.FileDescriptor, pointer: [*]const u8, byte_count: usize) isize;
+        extern "c" fn sched_getaffinity(pid: c_int, size: usize, set: *cpu_set_t) c_int;
 
         const mode_t = usize;
 
@@ -489,6 +482,17 @@ pub const os = struct {
         } else {
             libc.exit(1);
         }
+    }
+
+    pub fn get_stdout() File {
+        return switch (builtin.os.tag) {
+            .windows => @compileError("TODO"),
+            else => {
+                return File{
+                    .fd = 1,
+                };
+            },
+        };
     }
 };
 
@@ -584,6 +588,18 @@ pub const Arena = struct {
         assert(arena.position <= arena.os_position);
 
         return result;
+    }
+
+    pub fn allocate(arena: *Arena, T: type, count: usize) []T {
+        const result = arena.allocate_bytes(@sizeOf(T) * count, @alignOf(T));
+        const t_ptr: [*]T = @alignCast(@ptrCast(result));
+        const t_len = count;
+        return t_ptr[0..t_len];
+    }
+
+    pub fn allocate_one(arena: *Arena, T: type) *T {
+        const result = arena.allocate(T, 1);
+        return &result[0];
     }
 
     pub fn join_string(arena: *Arena, pieces: []const []const u8) [:0]u8 {
@@ -2424,6 +2440,20 @@ pub fn format(buffer_pointer: [*]u8, buffer_length: usize, format_string: [*:0]c
     return byte_count;
 }
 
+pub const GlobalState = struct {
+    arena: *Arena,
+    thread_count: usize,
+
+    pub fn initialize() void {
+        const thread_count = os.get_cpu_count();
+        global = .{
+            .arena = Arena.initialize_default(2 * MB),
+            .thread_count = thread_count,
+        };
+    }
+};
+pub var global: GlobalState = undefined;
+
 pub const parse = struct {
     fn integer_decimal(str: []const u8) u64 {
         var value: u64 = 0;
@@ -2436,3 +2466,19 @@ pub const parse = struct {
         return value;
     }
 };
+
+fn vprint(format_string: [*:0]const u8, args: *VariableArguments) void {
+    var buffer: [16 * 1024]u8 = undefined;
+    const slice = format_va(&buffer, format_string, args);
+    print_string(slice);
+}
+
+pub fn print(format_string: [*:0]const u8, ...) callconv(.C) void {
+    const args = @cVaStart();
+    vprint(format_string, &args);
+    @cVaEnd(&args);
+}
+
+pub fn print_string(str: []const u8) void {
+    os.get_stdout().write(str);
+}

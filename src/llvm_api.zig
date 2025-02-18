@@ -1,0 +1,110 @@
+const llvm = @import("LLVM.zig");
+
+const Bool = c_int;
+
+pub extern fn llvm_context_create_module(context: *llvm.Context, name_pointer: [*]const u8, name_length: usize) *llvm.Module;
+pub extern fn LLVMContextCreate() *llvm.Context;
+pub extern fn LLVMCreateBuilderInContext(context: *llvm.Context) *llvm.Builder;
+
+// Module
+pub extern fn llvm_module_create_function(module: *llvm.Module, function_type: *llvm.Type.Function, linkage_type: llvm.LinkageType, address_space: c_uint, name_pointer: [*]const u8, name_length: usize) *llvm.Function;
+pub extern fn llvm_context_create_basic_block(context: *llvm.Context, name_pointer: [*]const u8, name_length: usize, parent: *llvm.Function) *llvm.BasicBlock;
+
+pub extern fn llvm_function_verify(function: *llvm.Function, message_pointer: *[*]const u8, message_length: *usize) bool;
+pub extern fn llvm_module_verify(module: *llvm.Module, message_pointer: *[*]const u8, message_length: *usize) bool;
+
+pub extern fn llvm_module_to_string(module: *llvm.Module, module_pointer: *[*]const u8, module_length: *usize) void;
+pub extern fn LLVMPrintModuleToString(module: *llvm.Module) [*:0]const u8;
+
+// Builder API
+pub extern fn LLVMPositionBuilderAtEnd(builder: *llvm.Builder, basic_block: *llvm.BasicBlock) void;
+pub extern fn LLVMBuildRet(builder: *llvm.Builder, value: ?*llvm.Value) void;
+
+// TYPES
+// Types: integers
+pub extern fn LLVMInt1TypeInContext(context: *llvm.Context) *llvm.Type.Integer;
+pub extern fn LLVMInt8TypeInContext(context: *llvm.Context) *llvm.Type.Integer;
+pub extern fn LLVMInt16TypeInContext(context: *llvm.Context) *llvm.Type.Integer;
+pub extern fn LLVMInt32TypeInContext(context: *llvm.Context) *llvm.Type.Integer;
+pub extern fn LLVMInt64TypeInContext(context: *llvm.Context) *llvm.Type.Integer;
+pub extern fn LLVMInt128TypeInContext(context: *llvm.Context) *llvm.Type.Integer;
+pub extern fn LLVMIntTypeInContext(context: *llvm.Context, bit_count: c_uint) *llvm.Type.Integer;
+
+// Types: floating point
+pub extern fn LLVMHalfTypeInContext(context: *llvm.Context) *llvm.Type;
+pub extern fn LLVMBFloatTypeInContext(context: *llvm.Context) *llvm.Type;
+pub extern fn LLVMFloatTypeInContext(context: *llvm.Context) *llvm.Type;
+pub extern fn LLVMDoubleTypeInContext(context: *llvm.Context) *llvm.Type;
+pub extern fn LLVMFP128TypeInContext(context: *llvm.Context) *llvm.Type;
+
+// Types: functions
+pub extern fn LLVMFunctionType(return_type: *llvm.Type, parameter_type_pointer: [*]const *llvm.Type, parameter_type_count: c_uint, is_var_arg: Bool) *llvm.Type.Function;
+pub extern fn LLVMIsFunctionVarArg(function_type: *llvm.Type.Function) Bool;
+pub extern fn LLVMGetReturnType(function_type: *llvm.Type.Function) *llvm.Type;
+pub extern fn LLVMCountParamTypes(function_type: *llvm.Type.Function) c_uint;
+pub extern fn LLVMGetParamTypes(function_type: *llvm.Type.Function, types: [*]*llvm.Type) void;
+
+// Types: struct
+pub extern fn llvm_context_create_struct_type(context: *llvm.Context, element_types_pointer: [*]const *llvm.Type, element_type_count: usize, name_pointer: [*]const u8, name_length: usize, is_packed: bool) *llvm.Type.Struct;
+pub extern fn llvm_context_get_struct_type(context: *llvm.Context, element_types_pointer: [*]const *llvm.Type, element_type_count: usize, is_packed: bool) *llvm.Type.Struct;
+
+// Types: arrays
+pub extern fn LLVMArrayType2(element_type: *llvm.Type, element_count: u64) *llvm.Type.Array;
+
+// Types: pointers
+pub extern fn LLVMPointerTypeInContext(context: *llvm.Context, address_space: c_uint) *llvm.Type.Pointer;
+
+// Types: vectors
+pub extern fn LLVMVectorType(element_type: *llvm.Type, element_count: c_uint) *llvm.Type.FixedVector;
+pub extern fn LLVMScalableVectorType(element_type: *llvm.Type, element_count: c_uint) *llvm.Type.ScalableVector;
+
+// VALUES
+pub extern fn LLVMConstInt(type: *llvm.Type.Integer, value: c_ulonglong, sign_extend: Bool) *llvm.Constant.Integer;
+
+// Debug info API
+pub extern fn LLVMCreateDIBuilder(module: *llvm.Module) *llvm.DI.Builder;
+pub extern fn LLVMDIBuilderCreateFile(builder: *llvm.DI.Builder, file_name_pointer: [*]const u8, file_name_length: usize, directory_name_pointer: [*]const u8, directory_name_length: usize) *llvm.DI.File;
+pub extern fn LLVMDIBuilderCreateCompileUnit(builder: *llvm.DI.Builder, language: llvm.DwarfSourceLanguage, file: *llvm.DI.File, producer_name_pointer: [*]const u8, producer_name_length: usize, optimized: Bool, flags_pointer: [*]const u8, flags_length: usize, runtime_version: c_uint, split_name_pointer: [*]const u8, split_name_length: usize, dwarf_emission_kind: llvm.DwarfEmissionKind, debug_with_offset_id: c_uint, split_debug_inlining: Bool, debug_info_for_profiling: Bool, sysroot_pointer: [*]const u8, sysroot_length: usize, sdk_pointer: [*]const u8, sdk_length: usize) *llvm.DI.CompileUnit;
+pub extern fn LLVMDIBuilderCreateFunction(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, name_pointer: [*]const u8, name_length: usize, linkage_name_pointer: [*]const u8, linkage_name_length: usize, file: *llvm.DI.File, line_number: c_uint, type: *llvm.DI.Type.Subroutine, local_to_unit: Bool, is_definition: Bool, scope_line: c_uint, flags: llvm.DI.Flags, is_optimized: Bool) *llvm.DI.Subprogram;
+
+pub fn get_initializer(comptime llvm_arch: llvm.Architecture) type {
+    const arch_name = @tagName(llvm_arch);
+    return struct {
+        pub const initialize_target_info = @extern(*const fn () callconv(.C) void, .{
+            .name = "LLVMInitialize" ++ arch_name ++ "TargetInfo",
+        });
+        pub const initialize_target = @extern(*const fn () callconv(.C) void, .{
+            .name = "LLVMInitialize" ++ arch_name ++ "Target",
+        });
+        pub const initialize_target_mc = @extern(*const fn () callconv(.C) void, .{
+            .name = "LLVMInitialize" ++ arch_name ++ "TargetMC",
+        });
+        pub const initialize_asm_printer = @extern(*const fn () callconv(.C) void, .{
+            .name = "LLVMInitialize" ++ arch_name ++ "AsmPrinter",
+        });
+        pub const initialize_asm_parser = @extern(*const fn () callconv(.C) void, .{
+            .name = "LLVMInitialize" ++ arch_name ++ "AsmParser",
+        });
+        pub const initialize_disassembler = @extern(*const fn () callconv(.C) void, .{
+            .name = "LLVMInitialize" ++ arch_name ++ "Disassembler",
+        });
+
+        pub fn initialize(options: llvm.TargetInitializerOptions) void {
+            initialize_target_info();
+            initialize_target();
+            initialize_target_mc();
+
+            if (options.asm_printer) {
+                initialize_asm_printer();
+            }
+
+            if (options.asm_parser) {
+                initialize_asm_parser();
+            }
+
+            if (options.disassembler) {
+                initialize_disassembler();
+            }
+        }
+    };
+}
