@@ -71,6 +71,8 @@ pub extern fn llvm_default_target_triple() llvm.String;
 pub extern fn llvm_host_cpu_name() llvm.String;
 pub extern fn llvm_host_cpu_features() llvm.String;
 
+pub extern fn llvm_create_target_machine(create: *const llvm.Target.Machine.Create, error_message: *llvm.String) ?*llvm.Target.Machine;
+
 pub fn get_initializer(comptime llvm_arch: llvm.Architecture) type {
     const arch_name = @tagName(llvm_arch);
     return struct {
