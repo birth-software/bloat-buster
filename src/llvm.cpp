@@ -338,7 +338,7 @@ struct BBLLVMTargetOptions
     u64 global_isel_abort_mode:2;
     u64 swift_async_frame_pointer:2;
     u64 use_init_array:1;
-    u64 disabled_integrated_assembler:1;
+    u64 disable_integrated_assembler:1;
     u64 function_sections:1;
     u64 data_sections:1;
     u64 ignore_xcoff_visibility:1;
@@ -380,11 +380,7 @@ struct BBLLVMTargetOptions
     u32 exception_handling:3;
     u32 reserved:21;
     unsigned loop_alignment;
-    struct
-    {
-        int major;
-        int minor;
-    } binutils_version;
+    int binutils_version[2];
 
     BBLLVMMCTargetOptions mc;
 };
@@ -446,7 +442,222 @@ EXPORT TargetMachine* llvm_create_target_machine(const BBLLVMTargetMachineCreate
             case BBLLVMCodeGenerationOptimizationLevel::aggressive: optimization_level = CodeGenOptLevel::Aggressive; break;
         }
 
+        // INFO: This calls the default constructor, so all LLVM defaults are set and we only override what we control
         TargetOptions target_options;
+
+        target_options.UnsafeFPMath = create.target_options.unsafe_fp_math;
+        target_options.NoInfsFPMath = create.target_options.no_infs_fp_math;
+        target_options.NoNaNsFPMath = create.target_options.no_nans_fp_math;
+        target_options.NoTrappingFPMath = create.target_options.no_trapping_fp_math;
+        target_options.NoSignedZerosFPMath = create.target_options.no_signed_zeroes_fp_math;
+        target_options.ApproxFuncFPMath = create.target_options.approx_func_fp_match;
+        target_options.EnableAIXExtendedAltivecABI = create.target_options.enable_aix_extended_altivec_abi;
+        target_options.HonorSignDependentRoundingFPMathOption = create.target_options.honor_sign_dependent_rounding_fp_math;
+        target_options.NoZerosInBSS = create.target_options.no_zeroes_in_bss;
+        target_options.GuaranteedTailCallOpt = create.target_options.guaranteed_tail_call_optimization;
+        target_options.StackSymbolOrdering = create.target_options.stack_symbol_ordering;
+        target_options.EnableFastISel = create.target_options.enable_fast_isel;
+        target_options.EnableGlobalISel = create.target_options.enable_global_isel;
+
+        auto global_isel_abort_mode = (BBLLVMGlobalISelAbortMode)create.target_options.global_isel_abort_mode;
+        switch (global_isel_abort_mode)
+        {
+            case BBLLVMGlobalISelAbortMode::disable: target_options.GlobalISelAbort = GlobalISelAbortMode::Disable; break;
+            case BBLLVMGlobalISelAbortMode::enable: target_options.GlobalISelAbort = GlobalISelAbortMode::Enable; break;
+            case BBLLVMGlobalISelAbortMode::disable_with_diag: target_options.GlobalISelAbort = GlobalISelAbortMode::DisableWithDiag; break;
+        }
+        auto swift_async_frame_pointer = (BBLLVMSwiftAsyncFramePointerMode)create.target_options.swift_async_frame_pointer;
+        switch (swift_async_frame_pointer)
+        {
+            case BBLLVMSwiftAsyncFramePointerMode::deployment_based: target_options.SwiftAsyncFramePointer = SwiftAsyncFramePointerMode::DeploymentBased; break;
+            case BBLLVMSwiftAsyncFramePointerMode::always: target_options.SwiftAsyncFramePointer = SwiftAsyncFramePointerMode::Always; break;
+            case BBLLVMSwiftAsyncFramePointerMode::never: target_options.SwiftAsyncFramePointer = SwiftAsyncFramePointerMode::Never; break;
+        }
+
+        target_options.UseInitArray = create.target_options.use_init_array;
+        target_options.DisableIntegratedAS = create.target_options.disable_integrated_assembler;
+        target_options.FunctionSections = create.target_options.function_sections;
+        target_options.DataSections = create.target_options.data_sections;
+        target_options.IgnoreXCOFFVisibility = create.target_options.ignore_xcoff_visibility;
+        target_options.XCOFFTracebackTable = create.target_options.xcoff_traceback_table;
+        target_options.UniqueSectionNames = create.target_options.unique_section_names;
+        target_options.UniqueBasicBlockSectionNames = create.target_options.unique_basic_block_section_names;
+        target_options.SeparateNamedSections = create.target_options.separate_named_sections;
+        target_options.TrapUnreachable = create.target_options.trap_unreachable;
+        target_options.NoTrapAfterNoreturn = create.target_options.no_trap_after_noreturn;
+        target_options.TLSSize = create.target_options.tls_size;
+        target_options.EmulatedTLS = create.target_options.emulated_tls;
+        target_options.EnableTLSDESC = create.target_options.enable_tls_descriptors;
+        target_options.EnableIPRA = create.target_options.enable_ipra;
+        target_options.EmitStackSizeSection = create.target_options.emit_stack_size_section;
+        target_options.EnableMachineOutliner = create.target_options.enable_machine_outliner;
+        target_options.EnableMachineFunctionSplitter = create.target_options.enable_machine_function_splitter;
+        target_options.SupportsDefaultOutlining = create.target_options.supports_default_outlining;
+        target_options.EmitAddrsig = create.target_options.emit_address_significance_table;
+        target_options.BBAddrMap = create.target_options.bb_address_map;
+
+        auto bb_sections = (BBLLVMBasicBlockSection) create.target_options.bb_sections;
+        switch (bb_sections)
+        {
+            case BBLLVMBasicBlockSection::all: target_options.BBSections = BasicBlockSection::All; break;
+            case BBLLVMBasicBlockSection::list: target_options.BBSections = BasicBlockSection::List; break;
+            case BBLLVMBasicBlockSection::labels: target_options.BBSections = BasicBlockSection::Labels; break;
+            case BBLLVMBasicBlockSection::preset: target_options.BBSections = BasicBlockSection::Preset; break;
+            case BBLLVMBasicBlockSection::none: target_options.BBSections = BasicBlockSection::None; break;
+        }
+
+        target_options.EmitCallSiteInfo = create.target_options.emit_call_site_information;
+        target_options.SupportsDebugEntryValues = create.target_options.supports_debug_entry_values;
+        target_options.EnableDebugEntryValues = create.target_options.enable_debug_entry_values;
+        target_options.ValueTrackingVariableLocations = create.target_options.value_tracking_variable_locations;
+        target_options.ForceDwarfFrameSection = create.target_options.force_dwarf_frame_section;
+        target_options.XRayFunctionIndex = create.target_options.xray_function_index;
+        target_options.DebugStrictDwarf = create.target_options.debug_strict_dwarf;
+        target_options.Hotpatch = create.target_options.hotpatch;
+        target_options.PPCGenScalarMASSEntries = create.target_options.ppc_gen_scalar_mass_entries;
+        target_options.JMCInstrument = create.target_options.jmc_instrument;
+        target_options.EnableCFIFixup = create.target_options.enable_cfi_fixup;
+        target_options.MisExpect = create.target_options.mis_expect;
+        target_options.XCOFFReadOnlyPointers = create.target_options.xcoff_read_only_pointers;
+
+        auto float_abi = (BBLLVMFloatAbi) create.target_options.float_abi;
+        switch (float_abi)
+        {
+            case BBLLVMFloatAbi::normal: target_options.FloatABIType = FloatABI::Default; break;
+            case BBLLVMFloatAbi::soft: target_options.FloatABIType = FloatABI::Soft; break;
+            case BBLLVMFloatAbi::hard: target_options.FloatABIType = FloatABI::Hard; break;
+        }
+
+        auto thread_model = (BBLLVMThreadModel) create.target_options.thread_model;
+        switch (thread_model)
+        {
+            case BBLLVMThreadModel::posix: target_options.ThreadModel = ThreadModel::POSIX; break;
+            case BBLLVMThreadModel::single: target_options.ThreadModel = ThreadModel::Single; break;
+        }
+
+        auto fp_op_fusion_mode = (BBLLVMFPOpFusion) create.target_options.fp_op_fusion_mode;
+        switch (fp_op_fusion_mode)
+        {
+            case BBLLVMFPOpFusion::fast: target_options.AllowFPOpFusion = FPOpFusion::Fast; break;
+            case BBLLVMFPOpFusion::standard: target_options.AllowFPOpFusion = FPOpFusion::Standard; break;
+            case BBLLVMFPOpFusion::strict: target_options.AllowFPOpFusion = FPOpFusion::Strict; break;
+        }
+
+        auto eabi_version = (BBLLVMEAbi) create.target_options.eabi_version;
+        switch (eabi_version)
+        {
+            case BBLLVMEAbi::unknown: target_options.EABIVersion = EABI::Unknown; break;
+            case BBLLVMEAbi::normal: target_options.EABIVersion = EABI::Default; break;
+            case BBLLVMEAbi::eabi4: target_options.EABIVersion = EABI::EABI4; break;
+            case BBLLVMEAbi::eabi5: target_options.EABIVersion = EABI::EABI5; break;
+            case BBLLVMEAbi::gnu: target_options.EABIVersion = EABI::GNU; break;
+        }
+
+        auto debugger_kind = (BBLLVMDebuggerKind) create.target_options.debugger_kind;
+        switch (debugger_kind)
+        {
+            case BBLLVMDebuggerKind::normal: target_options.DebuggerTuning = DebuggerKind::Default; break;
+            case BBLLVMDebuggerKind::gdb: target_options.DebuggerTuning = DebuggerKind::GDB; break;
+            case BBLLVMDebuggerKind::lldb: target_options.DebuggerTuning = DebuggerKind::LLDB; break;
+            case BBLLVMDebuggerKind::sce: target_options.DebuggerTuning = DebuggerKind::SCE; break;
+            case BBLLVMDebuggerKind::dbx: target_options.DebuggerTuning = DebuggerKind::DBX; break;
+        }
+        
+        auto exception_handling = (BBLLVMExceptionHandling) create.target_options.exception_handling;
+        switch (exception_handling)
+        {
+            case BBLLVMExceptionHandling::none: target_options.ExceptionModel = ExceptionHandling::None; break;
+            case BBLLVMExceptionHandling::dwarf_cfi: target_options.ExceptionModel = ExceptionHandling::DwarfCFI; break;
+            case BBLLVMExceptionHandling::setjmp_longjmp: target_options.ExceptionModel = ExceptionHandling::SjLj; break;
+            case BBLLVMExceptionHandling::arm: target_options.ExceptionModel = ExceptionHandling::ARM; break;
+            case BBLLVMExceptionHandling::win_eh: target_options.ExceptionModel = ExceptionHandling::WinEH; break;
+            case BBLLVMExceptionHandling::wasm: target_options.ExceptionModel = ExceptionHandling::Wasm; break;
+            case BBLLVMExceptionHandling::aix: target_options.ExceptionModel = ExceptionHandling::AIX; break;
+            case BBLLVMExceptionHandling::zos: target_options.ExceptionModel = ExceptionHandling::ZOS; break;
+        }
+
+        target_options.LoopAlignment = create.target_options.loop_alignment;
+        target_options.BinutilsVersion = { create.target_options.binutils_version[0], create.target_options.binutils_version[1] };
+
+        if (create.target_options.mc.abi_name.length)
+        {
+            target_options.MCOptions.ABIName = { create.target_options.mc.abi_name.pointer, create.target_options.mc.abi_name.length };
+        }
+
+        if (create.target_options.mc.assembly_language.length)
+        {
+            target_options.MCOptions.AssemblyLanguage = { create.target_options.mc.assembly_language.pointer, create.target_options.mc.assembly_language.length };
+        }
+
+        if (create.target_options.mc.split_dwarf_file.length)
+        {
+            target_options.MCOptions.SplitDwarfFile = { create.target_options.mc.split_dwarf_file.pointer, create.target_options.mc.split_dwarf_file.length };
+        }
+
+        if (create.target_options.mc.as_secure_log_file.length)
+        {
+            target_options.MCOptions.AsSecureLogFile = { create.target_options.mc.as_secure_log_file.pointer, create.target_options.mc.as_secure_log_file.length };
+        }
+
+        target_options.MCOptions.Argv0 = create.target_options.mc.argv0;
+
+        if (create.target_options.mc.argv_count)
+        {
+            // TODO:
+            __builtin_trap();
+        }
+
+        if (create.target_options.mc.integrated_assembler_search_path_count)
+        {
+            // TODO:
+            __builtin_trap();
+        }
+
+        target_options.MCOptions.MCRelaxAll = create.target_options.mc.relax_all;
+        target_options.MCOptions.MCNoExecStack = create.target_options.mc.no_exec_stack;
+        target_options.MCOptions.MCFatalWarnings = create.target_options.mc.fatal_warnings;
+        target_options.MCOptions.MCNoWarn = create.target_options.mc.no_warn;
+        target_options.MCOptions.MCNoDeprecatedWarn = create.target_options.mc.no_deprecated_warn;
+        target_options.MCOptions.MCNoTypeCheck = create.target_options.mc.no_type_check;
+        target_options.MCOptions.MCSaveTempLabels = create.target_options.mc.save_temp_labels;
+        target_options.MCOptions.MCIncrementalLinkerCompatible = create.target_options.mc.incremental_linker_compatible;
+        target_options.MCOptions.FDPIC = create.target_options.mc.fdpic;
+        target_options.MCOptions.ShowMCEncoding = create.target_options.mc.show_mc_encoding;
+        target_options.MCOptions.ShowMCInst = create.target_options.mc.show_mc_inst;
+        target_options.MCOptions.AsmVerbose = create.target_options.mc.asm_verbose;
+        target_options.MCOptions.PreserveAsmComments = create.target_options.mc.preserve_asm_comments;
+        target_options.MCOptions.Dwarf64 = create.target_options.mc.dwarf64;
+        target_options.MCOptions.Crel = create.target_options.mc.crel;
+        target_options.MCOptions.X86RelaxRelocations = create.target_options.mc.x86_relax_relocations;
+        target_options.MCOptions.X86Sse2Avx = create.target_options.mc.x86_sse2_avx;
+
+        auto emit_dwarf_unwind = (BBLLVMEmitDwarfUnwindType) create.target_options.mc.emit_dwarf_unwind;
+        switch (emit_dwarf_unwind)
+        {
+            case BBLLVMEmitDwarfUnwindType::always: target_options.MCOptions.EmitDwarfUnwind = EmitDwarfUnwindType::Always; break;
+            case BBLLVMEmitDwarfUnwindType::no_compact_unwind: target_options.MCOptions.EmitDwarfUnwind = EmitDwarfUnwindType::NoCompactUnwind; break;
+            case BBLLVMEmitDwarfUnwindType::normal: target_options.MCOptions.EmitDwarfUnwind = EmitDwarfUnwindType::Default; break;
+        }
+
+        auto use_dwarf_directory = (BBLLVMDwarfDirectory) create.target_options.mc.use_dwarf_directory;
+        switch (use_dwarf_directory)
+        {
+            case BBLLVMDwarfDirectory::disable: target_options.MCOptions.MCUseDwarfDirectory = MCTargetOptions::DwarfDirectory::DisableDwarfDirectory; break;
+            case BBLLVMDwarfDirectory::enable: target_options.MCOptions.MCUseDwarfDirectory = MCTargetOptions::DwarfDirectory::EnableDwarfDirectory; break;
+            case BBLLVMDwarfDirectory::normal: target_options.MCOptions.MCUseDwarfDirectory = MCTargetOptions::DwarfDirectory::DefaultDwarfDirectory; break;
+        }
+
+        auto debug_compression_type = (BBLLVMDebugCompressionType) create.target_options.mc.debug_compression_type;
+        switch (debug_compression_type)
+        {
+            case BBLLVMDebugCompressionType::none: target_options.MCOptions.CompressDebugSections = DebugCompressionType::None; break;
+            case BBLLVMDebugCompressionType::zlib: target_options.MCOptions.CompressDebugSections = DebugCompressionType::Zlib; break;
+            case BBLLVMDebugCompressionType::zstd: target_options.MCOptions.CompressDebugSections = DebugCompressionType::Zstd; break;
+        }
+
+        target_options.MCOptions.EmitCompactUnwindNonCanonical = create.target_options.mc.emit_compact_unwind_non_canonical;
+        target_options.MCOptions.PPCUseFullRegisterNames = create.target_options.mc.ppc_use_full_register_names;
+
         target_machine = target->createTargetMachine(create.target_triple.string_ref(), create.cpu_model.string_ref(), create.cpu_features.string_ref(), target_options, relocation_model, code_model, optimization_level, create.jit);
     }
     else
@@ -456,6 +667,8 @@ EXPORT TargetMachine* llvm_create_target_machine(const BBLLVMTargetMachineCreate
         memcpy(result, error_message_string.c_str(), length);
 
         *error_message = { result, length };
+
+        target_machine = 0;
     }
 
     return target_machine;
