@@ -1,6 +1,68 @@
 const lib = @import("lib.zig");
 const Arena = lib.Arena;
 const api = @import("llvm_api.zig");
+
+/// This is a String which ABI-compatible with C++
+pub const String = extern struct {
+    pointer: [*]const u8,
+    length: usize,
+
+    pub fn from_slice(slice: []const u8) String {
+        return String{
+            .pointer = slice.ptr,
+            .length = slice.len,
+        };
+    }
+
+    pub fn to_slice(string: String) []const u8 {
+        return string.pointer[0..string.length];
+    }
+};
+
+pub const CodeModel = enum(u8) {
+    none = 0,
+    tiny = 1,
+    small = 2,
+    kernel = 3,
+    medium = 4,
+    large = 5,
+};
+
+pub const RelocationModel = enum(u8) {
+    default_relocation = 0,
+    static_relocation = 1,
+    pic = 2,
+    dynamic_no_pic = 3,
+    ropi = 4,
+    rwpi = 5,
+    ropi_rwpi = 6,
+};
+
+pub const CodeGenerationOptimizationLevel = enum(u8) {
+    none = 0, // -O0
+    less = 1, // -O1
+    normal = 2, // -O2, -Os
+    aggressive = 3, // -O3
+};
+
+/// This is ABI-compatible with C++
+pub const TargetOptions = extern struct {
+    reserved: u32,
+};
+
+/// This is ABI-compatible with C++
+pub const TargetMachineCreate = extern struct {
+    target_options: TargetOptions,
+    cpu_triple: String,
+    cpu_model: String,
+    cpu_features: String,
+    code_model: CodeModel,
+    relocation_model: RelocationModel,
+    optimization_level: CodeGenerationOptimizationLevel,
+    jit: bool,
+    reserved: u32,
+};
+
 pub const Architecture = enum {
     X86,
 };
@@ -18,11 +80,11 @@ const targets = [@typeInfo(Architecture).@"enum".fields.len]type{
 pub const Context = opaque {
     pub const create = api.LLVMContextCreate;
     pub fn create_module(context: *Context, name: [:0]const u8) *Module {
-        return api.llvm_context_create_module(context, name.ptr, name.len);
+        return api.llvm_context_create_module(context, String.from_slice(name));
     }
     pub const create_builder = api.LLVMCreateBuilderInContext;
     pub fn create_basic_block(context: *Context, name: []const u8, parent: *Function) *BasicBlock {
-        return api.llvm_context_create_basic_block(context, name.ptr, name.len, parent);
+        return api.llvm_context_create_basic_block(context, String.from_slice(name), parent);
     }
 };
 
@@ -32,9 +94,7 @@ pub const Module = opaque {
     pub const create_di_builder = api.LLVMCreateDIBuilder;
 
     pub fn to_string(module: *Module) []const u8 {
-        var result: []const u8 = undefined;
-        api.llvm_module_to_string(module, &result.ptr, &result.len);
-        return result;
+        return api.llvm_module_to_string(module).to_slice();
     }
 
     const FunctionCreate = struct {
@@ -45,12 +105,14 @@ pub const Module = opaque {
     };
 
     pub fn create_function(module: *Module, create: FunctionCreate) *Function {
-        return api.llvm_module_create_function(module, create.type, create.linkage, create.address_space, create.name.ptr, create.name.len);
+        return api.llvm_module_create_function(module, create.type, create.linkage, create.address_space, String.from_slice(create.name));
     }
 
     pub fn verify(module: *Module) VerifyResult {
         var result: VerifyResult = undefined;
-        result.success = api.llvm_module_verify(module, &result.error_message.ptr, &result.error_message.len);
+        var string: String = undefined;
+        result.success = api.llvm_module_verify(module, &string);
+        result.error_message = string.to_slice();
         return result;
     }
 };
@@ -73,7 +135,9 @@ pub const Builder = opaque {
 pub const Function = opaque {
     pub fn verify(function: *Function) VerifyResult {
         var result: VerifyResult = undefined;
-        result.success = api.llvm_function_verify(function, &result.error_message.ptr, &result.error_message.len);
+        var string: String = undefined;
+        result.success = api.llvm_function_verify(function, &string);
+        result.error_message = string.to_slice();
         return result;
     }
 };
@@ -236,18 +300,30 @@ pub const Thread = struct {
     }
 };
 
-pub var threads: []Thread = undefined;
+const Global = struct {
+    threads: []Thread,
+    host_triple: []const u8,
+    host_cpu_model: []const u8,
+    host_cpu_features: []const u8,
+};
+pub var global: Global = undefined;
 
 // This is meant to call globally, only once per execution
 pub fn initialize_all() void {
-    threads = lib.global.arena.allocate(Thread, lib.global.thread_count);
     inline for (targets) |target| {
         target.initialize(.{});
     }
+
+    global = .{
+        .threads = lib.global.arena.allocate(Thread, lib.global.thread_count),
+        .host_triple = api.llvm_default_target_triple().to_slice(),
+        .host_cpu_model = api.llvm_host_cpu_name().to_slice(),
+        .host_cpu_features = api.llvm_host_cpu_features().to_slice(),
+    };
 }
 
 pub fn experiment() void {
-    const thread = &threads[0];
+    const thread = &global.threads[0];
     thread.initialize();
     const module = thread.context.create_module("first_module");
     const builder = thread.context.create_builder();
@@ -273,8 +349,6 @@ pub fn experiment() void {
         unreachable;
     }
 
-    const module_z = api.LLVMPrintModuleToString(module);
-    _ = module_z;
     const module_string = module.to_string();
     lib.print_string(module_string);
 }

@@ -2,19 +2,18 @@ const llvm = @import("LLVM.zig");
 
 const Bool = c_int;
 
-pub extern fn llvm_context_create_module(context: *llvm.Context, name_pointer: [*]const u8, name_length: usize) *llvm.Module;
+pub extern fn llvm_context_create_module(context: *llvm.Context, name: llvm.String) *llvm.Module;
 pub extern fn LLVMContextCreate() *llvm.Context;
 pub extern fn LLVMCreateBuilderInContext(context: *llvm.Context) *llvm.Builder;
 
 // Module
-pub extern fn llvm_module_create_function(module: *llvm.Module, function_type: *llvm.Type.Function, linkage_type: llvm.LinkageType, address_space: c_uint, name_pointer: [*]const u8, name_length: usize) *llvm.Function;
-pub extern fn llvm_context_create_basic_block(context: *llvm.Context, name_pointer: [*]const u8, name_length: usize, parent: *llvm.Function) *llvm.BasicBlock;
+pub extern fn llvm_module_create_function(module: *llvm.Module, function_type: *llvm.Type.Function, linkage_type: llvm.LinkageType, address_space: c_uint, name: llvm.String) *llvm.Function;
+pub extern fn llvm_context_create_basic_block(context: *llvm.Context, name: llvm.String, parent: *llvm.Function) *llvm.BasicBlock;
 
-pub extern fn llvm_function_verify(function: *llvm.Function, message_pointer: *[*]const u8, message_length: *usize) bool;
-pub extern fn llvm_module_verify(module: *llvm.Module, message_pointer: *[*]const u8, message_length: *usize) bool;
+pub extern fn llvm_function_verify(function: *llvm.Function, error_message: *llvm.String) bool;
+pub extern fn llvm_module_verify(module: *llvm.Module, error_message: *llvm.String) bool;
 
-pub extern fn llvm_module_to_string(module: *llvm.Module, module_pointer: *[*]const u8, module_length: *usize) void;
-pub extern fn LLVMPrintModuleToString(module: *llvm.Module) [*:0]const u8;
+pub extern fn llvm_module_to_string(module: *llvm.Module) llvm.String;
 
 // Builder API
 pub extern fn LLVMPositionBuilderAtEnd(builder: *llvm.Builder, basic_block: *llvm.BasicBlock) void;
@@ -45,7 +44,7 @@ pub extern fn LLVMCountParamTypes(function_type: *llvm.Type.Function) c_uint;
 pub extern fn LLVMGetParamTypes(function_type: *llvm.Type.Function, types: [*]*llvm.Type) void;
 
 // Types: struct
-pub extern fn llvm_context_create_struct_type(context: *llvm.Context, element_types_pointer: [*]const *llvm.Type, element_type_count: usize, name_pointer: [*]const u8, name_length: usize, is_packed: bool) *llvm.Type.Struct;
+pub extern fn llvm_context_create_struct_type(context: *llvm.Context, element_types_pointer: [*]const *llvm.Type, element_type_count: usize, name: llvm.String, is_packed: bool) *llvm.Type.Struct;
 pub extern fn llvm_context_get_struct_type(context: *llvm.Context, element_types_pointer: [*]const *llvm.Type, element_type_count: usize, is_packed: bool) *llvm.Type.Struct;
 
 // Types: arrays
@@ -63,9 +62,14 @@ pub extern fn LLVMConstInt(type: *llvm.Type.Integer, value: c_ulonglong, sign_ex
 
 // Debug info API
 pub extern fn LLVMCreateDIBuilder(module: *llvm.Module) *llvm.DI.Builder;
-pub extern fn LLVMDIBuilderCreateFile(builder: *llvm.DI.Builder, file_name_pointer: [*]const u8, file_name_length: usize, directory_name_pointer: [*]const u8, directory_name_length: usize) *llvm.DI.File;
-pub extern fn LLVMDIBuilderCreateCompileUnit(builder: *llvm.DI.Builder, language: llvm.DwarfSourceLanguage, file: *llvm.DI.File, producer_name_pointer: [*]const u8, producer_name_length: usize, optimized: Bool, flags_pointer: [*]const u8, flags_length: usize, runtime_version: c_uint, split_name_pointer: [*]const u8, split_name_length: usize, dwarf_emission_kind: llvm.DwarfEmissionKind, debug_with_offset_id: c_uint, split_debug_inlining: Bool, debug_info_for_profiling: Bool, sysroot_pointer: [*]const u8, sysroot_length: usize, sdk_pointer: [*]const u8, sdk_length: usize) *llvm.DI.CompileUnit;
-pub extern fn LLVMDIBuilderCreateFunction(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, name_pointer: [*]const u8, name_length: usize, linkage_name_pointer: [*]const u8, linkage_name_length: usize, file: *llvm.DI.File, line_number: c_uint, type: *llvm.DI.Type.Subroutine, local_to_unit: Bool, is_definition: Bool, scope_line: c_uint, flags: llvm.DI.Flags, is_optimized: Bool) *llvm.DI.Subprogram;
+pub extern fn LLVMDIBuilderCreateFile(builder: *llvm.DI.Builder, file_name: llvm.String, directory_name: llvm.String) *llvm.DI.File;
+pub extern fn LLVMDIBuilderCreateCompileUnit(builder: *llvm.DI.Builder, language: llvm.DwarfSourceLanguage, file: *llvm.DI.File, producer_name: llvm.String, optimized: Bool, flags: llvm.String, runtime_version: c_uint, split_name: llvm.String, dwarf_emission_kind: llvm.DwarfEmissionKind, debug_with_offset_id: c_uint, split_debug_inlining: Bool, debug_info_for_profiling: Bool, sysroot: llvm.String, sdk: llvm.String) *llvm.DI.CompileUnit;
+pub extern fn LLVMDIBuilderCreateFunction(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, name: llvm.String, linkage_name: llvm.String, file: *llvm.DI.File, line_number: c_uint, type: *llvm.DI.Type.Subroutine, local_to_unit: Bool, is_definition: Bool, scope_line: c_uint, flags: llvm.DI.Flags, is_optimized: Bool) *llvm.DI.Subprogram;
+
+// Target
+pub extern fn llvm_default_target_triple() llvm.String;
+pub extern fn llvm_host_cpu_name() llvm.String;
+pub extern fn llvm_host_cpu_features() llvm.String;
 
 pub fn get_initializer(comptime llvm_arch: llvm.Architecture) type {
     const arch_name = @tagName(llvm_arch);
