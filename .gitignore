@@ -10,3 +10,5 @@ imgui.ini
 .DS_Store
 /*.perf
 /.gdb_history
+/.zig-cache/
+/zig-out/
