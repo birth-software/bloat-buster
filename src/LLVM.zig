@@ -388,7 +388,7 @@ const OptimizationLevel = enum(u3) {
 };
 
 /// This is ABI-compatible with C++
-pub const OptimizationOptions = packed struct(u64) {
+pub const OptimizationPipelineOptions = packed struct(u64) {
     optimization_level: OptimizationLevel,
     debug_info: u1,
     loop_unrolling: u1,
@@ -411,15 +411,15 @@ pub const OptimizationOptions = packed struct(u64) {
     });
 
     comptime {
-        assert(@sizeOf(OptimizationOptions) == @sizeOf(u64));
+        assert(@sizeOf(OptimizationPipelineOptions) == @sizeOf(u64));
         assert(padding_bit_count == 51);
     }
 
-    const OptimizationOptionsCreate = packed struct {
+    const Create = packed struct {
         optimization_level: OptimizationLevel,
         debug_info: u1,
     };
-    pub fn default(create: OptimizationOptionsCreate) OptimizationOptions {
+    pub fn default(create: Create) OptimizationPipelineOptions {
         const pref_speed = @intFromBool(create.optimization_level.prefers_speed());
         return .{
             .optimization_level = create.optimization_level,
@@ -435,6 +435,41 @@ pub const OptimizationOptions = packed struct(u64) {
             .verify_module = @intFromBool(lib.optimization_mode == .ReleaseSafe or lib.optimization_mode == .Debug),
         };
     }
+};
+
+/// This is ABI-compatible with C++
+pub const CodeGenerationPipelineOptions = extern struct {
+    output_dwarf_file_path: String,
+    output_file_path: String,
+    flags: packed struct(u64) {
+        code_generation_file_type: enum(u2) {
+            assembly_file = 0,
+            object_file = 1,
+            null = 2,
+        },
+        optimize_when_possible: u1,
+        verify_module: u1,
+        reserved: PaddingType = 0,
+    },
+
+    const padding_bit_count = 60;
+    const PaddingType = @Type(.{
+        .int = .{
+            .signedness = .unsigned,
+            .bits = padding_bit_count,
+        },
+    });
+
+    comptime {
+        assert(@sizeOf(CodeGenerationPipelineOptions) == 5 * @sizeOf(u64));
+        assert(padding_bit_count == 60);
+    }
+};
+
+pub const CodeGenerationPipelineResult = enum(u8) {
+    success = 0,
+    failed_to_create_file = 1,
+    failed_to_add_emit_passes = 2,
 };
 
 pub const Architecture = enum {
@@ -468,6 +503,7 @@ pub const Module = opaque {
     pub const create_di_builder = api.LLVMCreateDIBuilder;
     pub const set_target = api.llvm_module_set_target;
     pub const run_optimization_pipeline = api.llvm_module_run_optimization_pipeline;
+    pub const run_code_generation_pipeline = api.llvm_module_run_code_generation_pipeline;
 
     pub fn to_string(module: *Module) []const u8 {
         return api.llvm_module_to_string(module).to_slice().?;
@@ -743,5 +779,17 @@ pub fn experiment() void {
     };
     module.set_target(target_machine);
 
-    module.run_optimization_pipeline(target_machine, OptimizationOptions.default(.{ .optimization_level = .O3, .debug_info = 1 }));
+    module.run_optimization_pipeline(target_machine, OptimizationPipelineOptions.default(.{ .optimization_level = .O3, .debug_info = 1 }));
+    const result = module.run_code_generation_pipeline(target_machine, CodeGenerationPipelineOptions{
+        .output_file_path = String.from_slice(".zig-cache/foo.o"),
+        .output_dwarf_file_path = .{},
+        .flags = .{
+            .code_generation_file_type = .object_file,
+            .optimize_when_possible = 1,
+            .verify_module = @intFromBool(lib.optimization_mode == .Debug or lib.optimization_mode == .ReleaseSafe),
+        },
+    });
+    if (result != .success) {
+        unreachable;
+    }
 }

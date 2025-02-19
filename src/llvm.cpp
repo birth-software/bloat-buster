@@ -4,6 +4,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IR/DebugInfo.h"
+#include "llvm/IR/LegacyPassManager.h"
 
 #include "llvm/Passes/PassBuilder.h"
 
@@ -17,6 +18,8 @@
 #include "llvm/Target/TargetMachine.h"
 
 #include "llvm/MC/TargetRegistry.h"
+
+#include "llvm/Support/FileSystem.h"
 
 #define EXPORT extern "C"
 #define fn static
@@ -713,8 +716,8 @@ enum class BBLLVMOptimizationLevel : u8
     Oz = 5,
 };
 
-#define BB_LLVM_OPTIMIZATION_OPTIONS_PADDING_BIT_COUNT (51)
-struct BBLLVMOptimizationOptions
+#define BB_LLVM_OPTIMIZATION_PIPELINE_OPTIONS_PADDING_BIT_COUNT (51)
+struct BBLLVMOptimizationPipelineOptions
 {
     u64 optimization_level:3;
     u64 debug_info:1;
@@ -727,13 +730,13 @@ struct BBLLVMOptimizationOptions
     u64 unified_lto:1;
     u64 assignment_tracking:1;
     u64 verify_module:1;
-    u64 reserved:BB_LLVM_OPTIMIZATION_OPTIONS_PADDING_BIT_COUNT;
+    u64 reserved:BB_LLVM_OPTIMIZATION_PIPELINE_OPTIONS_PADDING_BIT_COUNT;
 };
 
-static_assert(sizeof(BBLLVMOptimizationOptions) == sizeof(u64));
-static_assert(BB_LLVM_OPTIMIZATION_OPTIONS_PADDING_BIT_COUNT == 51);
+static_assert(sizeof(BBLLVMOptimizationPipelineOptions) == sizeof(u64));
+static_assert(BB_LLVM_OPTIMIZATION_PIPELINE_OPTIONS_PADDING_BIT_COUNT == 51);
 
-EXPORT void llvm_module_run_optimization_pipeline(Module& module, TargetMachine& target_machine, BBLLVMOptimizationOptions options)
+EXPORT void llvm_module_run_optimization_pipeline(Module& module, TargetMachine& target_machine, BBLLVMOptimizationPipelineOptions options)
 {
     // TODO: PGO
     // TODO: CS profile
@@ -810,4 +813,95 @@ EXPORT void llvm_module_run_optimization_pipeline(Module& module, TargetMachine&
     // TODO: if emit bitcode/IR
 
     module_pass_manager.run(module, module_analysis_manager);
+}
+
+enum class BBLLVMCodeGenerationFileType : u8
+{
+    assembly_file = 0,
+    object_file = 1,
+    null = 2,
+};
+
+#define BB_LLVM_CODE_GENERATION_PIPELINE_OPTIONS_PADDING_BIT_COUNT (60)
+
+struct BBLLVMCodeGenerationPipelineOptions
+{
+    BBLLVMString output_dwarf_file_path;
+    BBLLVMString output_file_path;
+    u64 code_generation_file_type:2;
+    u64 optimize_when_possible:1;
+    u64 verify_module:1;
+    u64 reserved: BB_LLVM_CODE_GENERATION_PIPELINE_OPTIONS_PADDING_BIT_COUNT;
+};
+
+static_assert(sizeof(BBLLVMCodeGenerationPipelineOptions) == 5 * sizeof(u64));
+static_assert(BB_LLVM_CODE_GENERATION_PIPELINE_OPTIONS_PADDING_BIT_COUNT == 60);
+
+enum class BBLLVMCodeGenerationPipelineResult : u8
+{
+    success = 0,
+    failed_to_create_file = 1,
+    failed_to_add_emit_passes = 2,
+};
+
+EXPORT BBLLVMCodeGenerationPipelineResult llvm_module_run_code_generation_pipeline(Module& module, TargetMachine& target_machine, BBLLVMCodeGenerationPipelineOptions options)
+{
+    // We still use the legacy PM to run the codegen pipeline since the new PM
+    // does not work with the codegen pipeline.
+    // FIXME: make the new PM work with the codegen pipeline.
+    legacy::PassManager CodeGenPasses;
+    if (options.optimize_when_possible)
+    {
+        CodeGenPasses.add(createTargetTransformInfoWrapperPass(target_machine.getTargetIRAnalysis()));
+    }
+
+    raw_pwrite_stream* dwarf_object_file = 0;
+    if (options.output_dwarf_file_path.length)
+    {
+        __builtin_trap();
+    }
+
+    if (options.optimize_when_possible)
+    {
+        Triple target_triple = target_machine.getTargetTriple(); // Need to make a copy, incoming bugfix: https://github.com/llvm/llvm-project/pull/127718
+        // TODO: add library (?)
+        std::unique_ptr<TargetLibraryInfoImpl> TLII(llvm::driver::createTLII(target_triple, driver::VectorLibrary::NoLibrary));
+        CodeGenPasses.add(new TargetLibraryInfoWrapperPass(*TLII));
+    }
+
+    std::unique_ptr<raw_pwrite_stream> stream;
+
+    if (options.output_file_path.length)
+    {
+        std::error_code error_code;
+        
+        stream = std::make_unique<llvm::raw_fd_ostream>(options.output_file_path.string_ref(), error_code, sys::fs::OF_None);
+
+        if (error_code)
+        {
+            return BBLLVMCodeGenerationPipelineResult::failed_to_create_file;
+        }
+    }
+    else
+    {
+        stream = std::make_unique<llvm::raw_null_ostream>();
+    }
+
+    CodeGenFileType file_type;
+    switch ((BBLLVMCodeGenerationFileType)options.code_generation_file_type)
+    {
+        case BBLLVMCodeGenerationFileType::assembly_file: file_type = CodeGenFileType::AssemblyFile; break;
+        case BBLLVMCodeGenerationFileType::object_file: file_type = CodeGenFileType::ObjectFile; break;
+        case BBLLVMCodeGenerationFileType::null: file_type = CodeGenFileType::Null; break;
+    }
+
+    auto disable_verify = !options.verify_module;
+    if (target_machine.addPassesToEmitFile(CodeGenPasses, *stream, dwarf_object_file, file_type, disable_verify))
+    {
+        return BBLLVMCodeGenerationPipelineResult::failed_to_add_emit_passes;
+    }
+
+    CodeGenPasses.run(module);
+
+    return BBLLVMCodeGenerationPipelineResult::success;
 }
