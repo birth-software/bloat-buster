@@ -102,12 +102,22 @@ const LLVM = struct {
         llvm.addIncludePath(.{ .cwd_relative = "/usr/bin/../lib64/gcc/x86_64-pc-linux-gnu/14.2.1/../../../../include/c++/14.2.1" });
         llvm.addIncludePath(.{ .cwd_relative = "/usr/bin/../lib64/gcc/x86_64-pc-linux-gnu/14.2.1/../../../../include/c++/14.2.1/x86_64-pc-linux-gnu" });
 
-        llvm.addObjectFile(.{ .cwd_relative = "/usr/lib/libstdc++.so.6" });
-        llvm.linkSystemLibrary("unwind", .{});
-        llvm.linkSystemLibrary("z", .{});
+        const needed_libraries: []const []const u8 = &.{ "unwind", "z" };
 
-        for (llvm_libs.items) |llvm_lib| {
-            llvm.linkSystemLibrary(llvm_lib, .{});
+        llvm.addObjectFile(.{ .cwd_relative = "/usr/lib/libstdc++.so.6" });
+
+        const lld_libs: []const []const u8 = &.{ "lldCommon", "lldCOFF", "lldELF", "lldMachO", "lldMinGW", "lldWasm" };
+
+        for (needed_libraries) |lib| {
+            llvm.linkSystemLibrary(lib, .{});
+        }
+
+        for (llvm_libs.items) |lib| {
+            llvm.linkSystemLibrary(lib, .{});
+        }
+
+        for (lld_libs) |lib| {
+            llvm.linkSystemLibrary(lib, .{});
         }
 
         return LLVM{
@@ -118,6 +128,9 @@ const LLVM = struct {
     fn link(llvm: LLVM, target: *std.Build.Step.Compile) void {
         if (target.root_module != llvm.module) {
             target.root_module.addImport("llvm", llvm.module);
+        } else {
+            // TODO: should we allow this case?
+            unreachable;
         }
     }
 };

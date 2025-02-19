@@ -1,4 +1,5 @@
 const llvm = @import("LLVM.zig");
+const lld = llvm.lld;
 
 const Bool = c_int;
 
@@ -118,3 +119,7 @@ pub fn get_initializer(comptime llvm_arch: llvm.Architecture) type {
         }
     };
 }
+
+// LLD
+
+pub extern fn lld_elf_link(argument_pointer: [*:null]const ?[*:0]const u8, argument_length: u64, exit_early: bool, disable_output: bool) lld.Result;

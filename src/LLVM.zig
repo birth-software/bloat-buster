@@ -653,6 +653,14 @@ pub const DwarfEmissionKind = enum(c_int) {
     line_tables_only,
 };
 
+pub const lld = struct {
+    pub const Result = extern struct {
+        stdout: String,
+        stderr: String,
+        success: bool,
+    };
+};
+
 pub const Thread = struct {
     context: *Context,
     i1: Integer,
@@ -734,6 +742,21 @@ pub fn initialize_all() void {
     };
 }
 
+const LldArgvBuilder = struct {
+    buffer: [1024]?[*:0]const u8 = undefined,
+    count: usize = 0,
+
+    pub fn add(builder: *LldArgvBuilder, arg: [*:0]const u8) void {
+        builder.buffer[builder.count] = arg;
+        builder.count += 1;
+    }
+
+    pub fn flush(builder: *LldArgvBuilder) [:null]const ?[*:0]const u8 {
+        builder.buffer[builder.count] = null;
+        return builder.buffer[0..builder.count :null];
+    }
+};
+
 pub fn experiment() void {
     const thread = &global.threads[0];
     thread.initialize();
@@ -780,8 +803,9 @@ pub fn experiment() void {
     module.set_target(target_machine);
 
     module.run_optimization_pipeline(target_machine, OptimizationPipelineOptions.default(.{ .optimization_level = .O3, .debug_info = 1 }));
+    const object_path = ".zig-cache/foo.o";
     const result = module.run_code_generation_pipeline(target_machine, CodeGenerationPipelineOptions{
-        .output_file_path = String.from_slice(".zig-cache/foo.o"),
+        .output_file_path = String.from_slice(object_path),
         .output_dwarf_file_path = .{},
         .flags = .{
             .code_generation_file_type = .object_file,
@@ -791,5 +815,49 @@ pub fn experiment() void {
     });
     if (result != .success) {
         unreachable;
+    }
+
+    var arg_builder = LldArgvBuilder{};
+    arg_builder.add("ld.lld");
+    arg_builder.add("--error-limit=0");
+    arg_builder.add("-o");
+    arg_builder.add(".zig-cache/foo");
+    const objects: []const [*:0]const u8 = &.{object_path};
+    for (objects) |object| {
+        arg_builder.add(object);
+    }
+
+    arg_builder.add("-L/usr/lib");
+
+    const link_libcpp = false;
+    if (link_libcpp) {
+        arg_builder.add("-lstdc++");
+    }
+
+    const link_libc = true;
+
+    const dynamic_linker = true;
+    if (dynamic_linker) {
+        arg_builder.add("-dynamic-linker");
+        arg_builder.add("/usr/lib/ld-linux-x86-64.so.2");
+    }
+
+    if (link_libc) {
+        arg_builder.add("/usr/lib/Scrt1.o");
+        arg_builder.add("-lc");
+    }
+
+    const lld_args = arg_builder.flush();
+    const lld_result = api.lld_elf_link(lld_args.ptr, lld_args.len, true, false);
+    const success = lld_result.success and lld_result.stderr.length == 0;
+    if (!success) {
+        if (lld_result.stdout.length != 0) {
+            lib.print_string(lld_result.stdout.to_slice() orelse unreachable);
+        }
+
+        if (lld_result.stderr.length != 0) {
+            lib.print_string(lld_result.stderr.to_slice() orelse unreachable);
+        }
+        lib.libc.exit(1);
     }
 }
