@@ -94,6 +94,26 @@ const Parser = struct {
         return parser.content[start..parser.offset];
     }
 
+    fn consume_character_if_match(noalias parser: *Parser, expected_ch: u8) bool {
+        var is_ch = false;
+        if (parser.offset < parser.content.len) {
+            const ch = parser.content[parser.offset];
+            is_ch = expected_ch == ch;
+            parser.offset += @intFromBool(is_ch);
+        }
+
+        return is_ch;
+    }
+
+    fn expect_or_consume(noalias parser: *Parser, expected_ch: u8, is_required: bool) bool {
+        if (is_required) {
+            parser.expect_character(expected_ch);
+            return true;
+        } else {
+            return parser.consume_character_if_match(expected_ch);
+        }
+    }
+
     fn parse_integer(noalias parser: *Parser) void {
         const start = parser.offset;
         const integer_start_ch = parser.content[start];
@@ -130,16 +150,16 @@ const Parser = struct {
         }
     }
 
+    fn expect_character(noalias parser: *Parser, expected_ch: u8) void {
+        if (!parser.consume_character_if_match(expected_ch)) {
+            parser.report_error();
+        }
+    }
+
     fn parse_block(noalias parser: *Parser) void {
         parser.skip_space();
 
-        const start = parser.offset;
-        const is_left_brace = parser.content[start] == left_brace;
-        parser.offset += @intFromBool(is_left_brace);
-
-        if (!is_left_brace) {
-            parser.report_error();
-        }
+        parser.expect_character(left_brace);
 
         while (true) {
             parser.skip_space();
@@ -169,12 +189,7 @@ const Parser = struct {
                         else => parser.report_error(),
                     };
 
-                    const is_semicolon = parser.content[parser.offset] == ';';
-                    parser.offset += @intFromBool(is_semicolon);
-
-                    if (require_semicolon and !is_semicolon) {
-                        parser.report_error();
-                    }
+                    _ = parser.expect_or_consume(';', require_semicolon);
                 } else {
                     parser.report_error();
                 }
@@ -183,9 +198,7 @@ const Parser = struct {
             }
         }
 
-        // TODO: handle it in a better way
-        assert(parser.content[parser.offset] == right_brace);
-        parser.offset += 1;
+        parser.expect_character(right_brace);
     }
 
     fn parse_value(noalias parser: *Parser) void {
@@ -245,12 +258,7 @@ pub noinline fn parse_file(_content: []const u8) void {
                 }
             }
 
-            const is_right_bracket = parser.content[parser.offset] == right_bracket;
-            parser.offset += @intFromBool(is_right_bracket);
-
-            if (!is_right_bracket) {
-                parser.report_error();
-            }
+            parser.expect_character(right_bracket);
 
             parser.skip_space();
         }
@@ -260,12 +268,7 @@ pub noinline fn parse_file(_content: []const u8) void {
 
         parser.skip_space();
 
-        const is_equal_token = parser.content[parser.offset] == '=';
-        parser.offset += @intFromBool(is_equal_token);
-
-        if (!is_equal_token) {
-            parser.report_error();
-        }
+        parser.expect_character('=');
 
         parser.skip_space();
 
@@ -279,9 +282,7 @@ pub noinline fn parse_file(_content: []const u8) void {
             .@"fn" => {
                 var calling_convention = CallingConvention.unknown;
 
-                if (parser.content[parser.offset] == left_bracket) {
-                    parser.offset += 1;
-
+                if (parser.consume_character_if_match(left_bracket)) {
                     while (parser.offset < parser.content.len) {
                         const function_identifier = parser.parse_identifier();
 
@@ -291,12 +292,7 @@ pub noinline fn parse_file(_content: []const u8) void {
 
                         switch (function_keyword) {
                             .cc => {
-                                const is_left_parenthesis = parser.content[parser.offset] == left_parenthesis;
-                                parser.offset += @intFromBool(is_left_parenthesis);
-
-                                if (!is_left_parenthesis) {
-                                    parser.report_error();
-                                }
+                                parser.expect_character(left_parenthesis);
 
                                 parser.skip_space();
 
@@ -306,12 +302,7 @@ pub noinline fn parse_file(_content: []const u8) void {
 
                                 parser.skip_space();
 
-                                const is_right_parenthesis = parser.content[parser.offset] == right_parenthesis;
-                                parser.offset += @intFromBool(is_right_parenthesis);
-
-                                if (!is_right_parenthesis) {
-                                    parser.report_error();
-                                }
+                                parser.expect_character(right_parenthesis);
                             },
                             else => parser.report_error(),
                         }
@@ -324,31 +315,19 @@ pub noinline fn parse_file(_content: []const u8) void {
                         }
                     }
 
-                    const is_right_bracket = parser.content[parser.offset] == right_bracket;
-                    parser.offset += @intFromBool(is_right_bracket);
-
-                    if (!is_right_bracket) {
-                        parser.report_error();
-                    }
+                    parser.expect_character(right_bracket);
                 }
 
                 parser.skip_space();
 
-                const is_left_parenthesis = parser.content[parser.offset] == left_parenthesis;
-                parser.offset += @intFromBool(is_left_parenthesis);
-
-                if (!is_left_parenthesis) {
-                    parser.report_error();
-                }
+                parser.expect_character(left_parenthesis);
 
                 while (parser.offset < parser.content.len and parser.content[parser.offset] != right_parenthesis) {
                     // TODO: arguments
                     parser.report_error();
                 }
 
-                // TODO: handle it in a better way
-                assert(parser.content[parser.offset] == right_parenthesis);
-                parser.offset += 1;
+                parser.expect_character(right_parenthesis);
 
                 parser.skip_space();
 
