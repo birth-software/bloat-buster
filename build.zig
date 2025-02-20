@@ -79,8 +79,56 @@ const LLVM = struct {
                     else => "HOME",
                 };
                 const home_path = env.get(home_env) orelse unreachable;
-                const full_path = try std.mem.concat(b.allocator, u8, &.{ home_path, "/Downloads/llvm-", @tagName(target.result.cpu.arch), "-", @tagName(target.result.os.tag), "-", @tagName(CmakeBuildType.from_zig_build_type(optimize)), "/bin/llvm-config" });
-                const f = std.fs.cwd().openFile(full_path, .{}) catch return error.llvm_not_found;
+                const download_dir = try std.mem.concat(b.allocator, u8, &.{ home_path, "/Downloads" });
+                std.fs.makeDirAbsolute(download_dir) catch {};
+                const llvm_base = try std.mem.concat(b.allocator, u8, &.{ "llvm-", @tagName(target.result.cpu.arch), "-", @tagName(target.result.os.tag), "-", @tagName(CmakeBuildType.from_zig_build_type(optimize)) });
+                const base = try std.mem.concat(b.allocator, u8, &.{ download_dir, "/", llvm_base });
+                const full_path = try std.mem.concat(b.allocator, u8, &.{ base, "/bin/llvm-config" });
+
+                const f = std.fs.cwd().openFile(full_path, .{}) catch {
+                    const url = try std.mem.concat(b.allocator, u8, &.{ "https://github.com/birth-software/llvm/releases/download/v19.1.7/", llvm_base, ".7z" });
+                    var result = try std.process.Child.run(.{
+                        .allocator = b.allocator,
+                        .argv = &.{ "wget", "-P", download_dir, url },
+                        .max_output_bytes = std.math.maxInt(usize),
+                    });
+                    var success = false;
+                    switch (result.term) {
+                        .Exited => |exit_code| {
+                            success = exit_code == 0;
+                        },
+                        else => {},
+                    }
+
+                    if (!success) {
+                        std.debug.print("{s}\n{s}\n", .{ result.stdout, result.stderr });
+                    }
+
+                    if (success) {
+                        const file_7z = try std.mem.concat(b.allocator, u8, &.{ base, ".7z" });
+                        result = try std.process.Child.run(.{
+                            .allocator = b.allocator,
+                            .argv = &.{ "7z", "x", try std.mem.concat(b.allocator, u8, &.{ "-o", download_dir }), file_7z },
+                            .max_output_bytes = std.math.maxInt(usize),
+                        });
+                        success = false;
+                        switch (result.term) {
+                            .Exited => |exit_code| {
+                                success = exit_code == 0;
+                            },
+                            else => {},
+                        }
+
+                        if (!success) {
+                            std.debug.print("{s}\n{s}\n", .{ result.stdout, result.stderr });
+                        }
+
+                        break :blk full_path;
+                    }
+
+                    return error.llvm_not_found;
+                };
+
                 f.close();
                 break :blk full_path;
             };

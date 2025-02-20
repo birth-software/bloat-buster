@@ -59,7 +59,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ x86_64-linux-znver4 ]
+        os: [ ubuntu-24.04 ]
         BIRTH_ZIG_BUILD_TYPE: ${{ fromJSON(needs.generate-config.outputs.BIRTH_ZIG_BUILD_TYPES) }}
         ENABLE_LLVM: [ true, false ]
         SYSTEM_LLVM: [ true, false ]
@@ -74,6 +74,8 @@ jobs:
       - uses: mlugg/setup-zig@v1
         with:
           version: master
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y llvm-dev liblld-dev
       - name: Build and test
         run: |
           zig build test --summary all -Denable_llvm=${{matrix.ENABLE_LLVM}} -Doptimize=${{matrix.BIRTH_ZIG_BUILD_TYPE}} -Dsystem_llvm=${{matrix.SYSTEM_LLVM}}
