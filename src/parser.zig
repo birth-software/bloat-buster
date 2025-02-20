@@ -398,4 +398,6 @@ pub fn parser_experiment() void {
     parse_file(strlit);
 }
 
-test "parse" {}
+test "parse" {
+    parser_experiment();
+}
