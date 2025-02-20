@@ -1,4 +1,5 @@
 const lib = @import("lib.zig");
+const llvm = @import("LLVM.zig");
 const assert = lib.assert;
 
 const LexerResult = struct {
@@ -56,168 +57,168 @@ const CallingConvention = enum {
     c,
 };
 
-const Parser = struct {
+const Converter = struct {
     content: []const u8,
     offset: usize,
 
-    fn report_error(noalias parser: *Parser) noreturn {
+    fn report_error(noalias converter: *Converter) noreturn {
         @branchHint(.cold);
-        _ = parser;
+        _ = converter;
         lib.os.abort();
     }
 
-    fn skip_space(noalias parser: *Parser) void {
-        while (parser.offset < parser.content.len and is_space(parser.content[parser.offset])) {
-            parser.offset += 1;
+    fn skip_space(noalias converter: *Converter) void {
+        while (converter.offset < converter.content.len and is_space(converter.content[converter.offset])) {
+            converter.offset += 1;
         }
     }
 
-    pub fn parse_identifier(noalias parser: *Parser) []const u8 {
-        const start = parser.offset;
+    pub fn parse_identifier(noalias converter: *Converter) []const u8 {
+        const start = converter.offset;
 
-        if (is_identifier_start_ch(parser.content[start])) {
-            parser.offset += 1;
+        if (is_identifier_start_ch(converter.content[start])) {
+            converter.offset += 1;
 
-            while (parser.offset < parser.content.len) {
-                if (is_identifier_ch(parser.content[parser.offset])) {
-                    parser.offset += 1;
+            while (converter.offset < converter.content.len) {
+                if (is_identifier_ch(converter.content[converter.offset])) {
+                    converter.offset += 1;
                 } else {
                     break;
                 }
             }
         }
 
-        if (parser.offset - start == 0) {
-            parser.report_error();
+        if (converter.offset - start == 0) {
+            converter.report_error();
         }
 
-        return parser.content[start..parser.offset];
+        return converter.content[start..converter.offset];
     }
 
-    fn consume_character_if_match(noalias parser: *Parser, expected_ch: u8) bool {
+    fn consume_character_if_match(noalias converter: *Converter, expected_ch: u8) bool {
         var is_ch = false;
-        if (parser.offset < parser.content.len) {
-            const ch = parser.content[parser.offset];
+        if (converter.offset < converter.content.len) {
+            const ch = converter.content[converter.offset];
             is_ch = expected_ch == ch;
-            parser.offset += @intFromBool(is_ch);
+            converter.offset += @intFromBool(is_ch);
         }
 
         return is_ch;
     }
 
-    fn expect_or_consume(noalias parser: *Parser, expected_ch: u8, is_required: bool) bool {
+    fn expect_or_consume(noalias converter: *Converter, expected_ch: u8, is_required: bool) bool {
         if (is_required) {
-            parser.expect_character(expected_ch);
+            converter.expect_character(expected_ch);
             return true;
         } else {
-            return parser.consume_character_if_match(expected_ch);
+            return converter.consume_character_if_match(expected_ch);
         }
     }
 
-    fn parse_integer(noalias parser: *Parser) void {
-        const start = parser.offset;
-        const integer_start_ch = parser.content[start];
+    fn parse_integer(noalias converter: *Converter) void {
+        const start = converter.offset;
+        const integer_start_ch = converter.content[start];
         assert(!is_space(integer_start_ch));
         assert(is_decimal_ch(integer_start_ch));
 
         switch (integer_start_ch) {
             '0' => {
-                parser.offset += 1;
+                converter.offset += 1;
 
-                switch (parser.content[parser.offset]) {
+                switch (converter.content[converter.offset]) {
                     'x' => {
                         // TODO: parse hexadecimal
-                        parser.report_error();
+                        converter.report_error();
                     },
                     'o' => {
                         // TODO: parse octal
-                        parser.report_error();
+                        converter.report_error();
                     },
                     'b' => {
                         // TODO: parse binary
-                        parser.report_error();
+                        converter.report_error();
                     },
                     '0'...'9' => {
-                        parser.report_error();
+                        converter.report_error();
                     },
                     // Zero literal
                     else => {},
                 }
             },
             // TODO: decimal number
-            '1'...'9' => parser.report_error(),
+            '1'...'9' => converter.report_error(),
             else => unreachable,
         }
     }
 
-    fn expect_character(noalias parser: *Parser, expected_ch: u8) void {
-        if (!parser.consume_character_if_match(expected_ch)) {
-            parser.report_error();
+    fn expect_character(noalias converter: *Converter, expected_ch: u8) void {
+        if (!converter.consume_character_if_match(expected_ch)) {
+            converter.report_error();
         }
     }
 
-    fn parse_block(noalias parser: *Parser) void {
-        parser.skip_space();
+    fn parse_block(noalias converter: *Converter) void {
+        converter.skip_space();
 
-        parser.expect_character(left_brace);
+        converter.expect_character(left_brace);
 
         while (true) {
-            parser.skip_space();
+            converter.skip_space();
 
-            if (parser.offset == parser.content.len) {
+            if (converter.offset == converter.content.len) {
                 break;
             }
 
-            if (parser.content[parser.offset] == right_brace) {
+            if (converter.content[converter.offset] == right_brace) {
                 break;
             }
 
-            const statement_start_ch = parser.content[parser.offset];
+            const statement_start_ch = converter.content[converter.offset];
             if (is_identifier_start_ch(statement_start_ch)) {
-                const statement_start_identifier = parser.parse_identifier();
+                const statement_start_identifier = converter.parse_identifier();
 
                 if (string_to_enum(StatementStartKeyword, statement_start_identifier)) |statement_start_keyword| {
                     switch (statement_start_keyword) {
                         .@"return" => {
-                            parser.parse_value();
+                            converter.parse_value();
                         },
                         else => unreachable,
                     }
 
                     const require_semicolon = switch (statement_start_keyword) {
                         .@"return" => true,
-                        else => parser.report_error(),
+                        else => converter.report_error(),
                     };
 
-                    _ = parser.expect_or_consume(';', require_semicolon);
+                    _ = converter.expect_or_consume(';', require_semicolon);
                 } else {
-                    parser.report_error();
+                    converter.report_error();
                 }
             } else {
-                parser.report_error();
+                converter.report_error();
             }
         }
 
-        parser.expect_character(right_brace);
+        converter.expect_character(right_brace);
     }
 
-    fn parse_value(noalias parser: *Parser) void {
-        parser.skip_space();
+    fn parse_value(noalias converter: *Converter) void {
+        converter.skip_space();
 
-        const start = parser.offset;
-        const value_start_ch = parser.content[start];
+        const start = converter.offset;
+        const value_start_ch = converter.content[start];
         if (is_identifier_start_ch(value_start_ch)) {
-            parser.report_error();
+            converter.report_error();
         } else if (is_decimal_ch(value_start_ch)) {
-            parser.parse_integer();
+            converter.parse_integer();
         } else {
-            parser.report_error();
+            converter.report_error();
         }
     }
 };
 
 fn is_space(ch: u8) bool {
-    return ((ch == ' ') or (ch == '\n')) or ((ch == '\t' or ch == '\r'));
+    return ((@intFromBool(ch == ' ') | @intFromBool(ch == '\n')) | ((@intFromBool(ch == '\t') | @intFromBool(ch == '\r')))) != 0;
 }
 
 const StatementStartKeyword = enum {
@@ -225,118 +226,118 @@ const StatementStartKeyword = enum {
     foooooooooo,
 };
 
-pub noinline fn parse_file(_content: []const u8) void {
-    var parser = Parser{
+pub noinline fn convert(_content: []const u8) void {
+    var converter = Converter{
         .content = _content,
         .offset = 0,
     };
 
     while (true) {
-        parser.skip_space();
+        converter.skip_space();
 
-        if (parser.offset == parser.content.len) {
+        if (converter.offset == converter.content.len) {
             break;
         }
 
         var is_export = false;
 
-        if (parser.content[parser.offset] == left_bracket) {
-            parser.offset += 1;
+        if (converter.content[converter.offset] == left_bracket) {
+            converter.offset += 1;
 
-            while (parser.offset < parser.content.len) {
-                const global_keyword_string = parser.parse_identifier();
+            while (converter.offset < converter.content.len) {
+                const global_keyword_string = converter.parse_identifier();
 
-                const global_keyword = string_to_enum(GlobalKeyword, global_keyword_string) orelse parser.report_error();
+                const global_keyword = string_to_enum(GlobalKeyword, global_keyword_string) orelse converter.report_error();
                 switch (global_keyword) {
                     .@"export" => is_export = false,
-                    else => parser.report_error(),
+                    else => converter.report_error(),
                 }
 
-                switch (parser.content[parser.offset]) {
+                switch (converter.content[converter.offset]) {
                     right_bracket => break,
-                    else => parser.report_error(),
+                    else => converter.report_error(),
                 }
             }
 
-            parser.expect_character(right_bracket);
+            converter.expect_character(right_bracket);
 
-            parser.skip_space();
+            converter.skip_space();
         }
 
-        const global_name = parser.parse_identifier();
+        const global_name = converter.parse_identifier();
         _ = global_name;
 
-        parser.skip_space();
+        converter.skip_space();
 
-        parser.expect_character('=');
+        converter.expect_character('=');
 
-        parser.skip_space();
+        converter.skip_space();
 
-        const global_kind_string = parser.parse_identifier();
+        const global_kind_string = converter.parse_identifier();
 
-        parser.skip_space();
+        converter.skip_space();
 
-        const global_kind = string_to_enum(GlobalKind, global_kind_string) orelse parser.report_error();
+        const global_kind = string_to_enum(GlobalKind, global_kind_string) orelse converter.report_error();
 
         switch (global_kind) {
             .@"fn" => {
                 var calling_convention = CallingConvention.unknown;
 
-                if (parser.consume_character_if_match(left_bracket)) {
-                    while (parser.offset < parser.content.len) {
-                        const function_identifier = parser.parse_identifier();
+                if (converter.consume_character_if_match(left_bracket)) {
+                    while (converter.offset < converter.content.len) {
+                        const function_identifier = converter.parse_identifier();
 
-                        const function_keyword = string_to_enum(FunctionKeyword, function_identifier) orelse parser.report_error();
+                        const function_keyword = string_to_enum(FunctionKeyword, function_identifier) orelse converter.report_error();
 
-                        parser.skip_space();
+                        converter.skip_space();
 
                         switch (function_keyword) {
                             .cc => {
-                                parser.expect_character(left_parenthesis);
+                                converter.expect_character(left_parenthesis);
 
-                                parser.skip_space();
+                                converter.skip_space();
 
-                                const calling_convention_string = parser.parse_identifier();
+                                const calling_convention_string = converter.parse_identifier();
 
-                                calling_convention = string_to_enum(CallingConvention, calling_convention_string) orelse parser.report_error();
+                                calling_convention = string_to_enum(CallingConvention, calling_convention_string) orelse converter.report_error();
 
-                                parser.skip_space();
+                                converter.skip_space();
 
-                                parser.expect_character(right_parenthesis);
+                                converter.expect_character(right_parenthesis);
                             },
-                            else => parser.report_error(),
+                            else => converter.report_error(),
                         }
 
-                        parser.skip_space();
+                        converter.skip_space();
 
-                        switch (parser.content[parser.offset]) {
+                        switch (converter.content[converter.offset]) {
                             right_bracket => break,
-                            else => parser.report_error(),
+                            else => converter.report_error(),
                         }
                     }
 
-                    parser.expect_character(right_bracket);
+                    converter.expect_character(right_bracket);
                 }
 
-                parser.skip_space();
+                converter.skip_space();
 
-                parser.expect_character(left_parenthesis);
+                converter.expect_character(left_parenthesis);
 
-                while (parser.offset < parser.content.len and parser.content[parser.offset] != right_parenthesis) {
+                while (converter.offset < converter.content.len and converter.content[converter.offset] != right_parenthesis) {
                     // TODO: arguments
-                    parser.report_error();
+                    converter.report_error();
                 }
 
-                parser.expect_character(right_parenthesis);
+                converter.expect_character(right_parenthesis);
 
-                parser.skip_space();
+                converter.skip_space();
 
-                const return_type = parser.parse_identifier();
+                const return_type = converter.parse_identifier();
                 _ = return_type;
 
-                parser.parse_block();
+                converter.parse_block();
             },
-            else => parser.report_error(),
+            else => converter.report_error(),
         }
     }
 }
@@ -348,7 +349,7 @@ pub fn parser_experiment() void {
         \\    return 0;
         \\}
     ;
-    parse_file(strlit);
+    convert(strlit);
 }
 
 test "parse" {
