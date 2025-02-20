@@ -8,6 +8,8 @@ typedef uint64_t u64;
 #define EXPORT extern "C"
 #define fn static
 
+#include "llvm/Config/llvm-config.h"
+
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
@@ -17,6 +19,7 @@ typedef uint64_t u64;
 #include "llvm/Passes/PassBuilder.h"
 
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 
 #include "llvm/Frontend/Driver/CodeGenOptions.h"
 
@@ -158,7 +161,16 @@ EXPORT BBLLVMString llvm_host_cpu_name()
 EXPORT BBLLVMString llvm_host_cpu_features()
 {
     SubtargetFeatures Features;
-    for (const auto &[Feature, IsEnabled] : sys::getHostCPUFeatures())
+#if LLVM_VERSION_MAJOR >= 19
+    auto host_cpu_features = sys::getHostCPUFeatures();
+#else
+    StringMap<bool> host_cpu_features;
+    if (!sys::getHostCPUFeatures(host_cpu_features)) {
+        return {};
+    }
+#endif
+
+    for (const auto &[Feature, IsEnabled] : host_cpu_features)
     {
         Features.AddFeature(Feature, IsEnabled);
     }
@@ -510,7 +522,9 @@ EXPORT TargetMachine* llvm_create_target_machine(const BBLLVMTargetMachineCreate
         target_options.XCOFFTracebackTable = create.target_options.xcoff_traceback_table;
         target_options.UniqueSectionNames = create.target_options.unique_section_names;
         target_options.UniqueBasicBlockSectionNames = create.target_options.unique_basic_block_section_names;
+#if LLVM_VERSION_MAJOR >= 19
         target_options.SeparateNamedSections = create.target_options.separate_named_sections;
+#endif
         target_options.TrapUnreachable = create.target_options.trap_unreachable;
         target_options.NoTrapAfterNoreturn = create.target_options.no_trap_after_noreturn;
         target_options.TLSSize = create.target_options.tls_size;
@@ -522,7 +536,9 @@ EXPORT TargetMachine* llvm_create_target_machine(const BBLLVMTargetMachineCreate
         target_options.EnableMachineFunctionSplitter = create.target_options.enable_machine_function_splitter;
         target_options.SupportsDefaultOutlining = create.target_options.supports_default_outlining;
         target_options.EmitAddrsig = create.target_options.emit_address_significance_table;
+#if LLVM_VERSION_MAJOR >= 19
         target_options.BBAddrMap = create.target_options.bb_address_map;
+#endif
 
         auto bb_sections = (BBLLVMBasicBlockSection) create.target_options.bb_sections;
         switch (bb_sections)
@@ -649,15 +665,19 @@ EXPORT TargetMachine* llvm_create_target_machine(const BBLLVMTargetMachineCreate
         target_options.MCOptions.MCNoTypeCheck = create.target_options.mc.no_type_check;
         target_options.MCOptions.MCSaveTempLabels = create.target_options.mc.save_temp_labels;
         target_options.MCOptions.MCIncrementalLinkerCompatible = create.target_options.mc.incremental_linker_compatible;
+#if LLVM_VERSION_MAJOR >= 19
         target_options.MCOptions.FDPIC = create.target_options.mc.fdpic;
+#endif
         target_options.MCOptions.ShowMCEncoding = create.target_options.mc.show_mc_encoding;
         target_options.MCOptions.ShowMCInst = create.target_options.mc.show_mc_inst;
         target_options.MCOptions.AsmVerbose = create.target_options.mc.asm_verbose;
         target_options.MCOptions.PreserveAsmComments = create.target_options.mc.preserve_asm_comments;
         target_options.MCOptions.Dwarf64 = create.target_options.mc.dwarf64;
+#if LLVM_VERSION_MAJOR >= 19
         target_options.MCOptions.Crel = create.target_options.mc.crel;
         target_options.MCOptions.X86RelaxRelocations = create.target_options.mc.x86_relax_relocations;
         target_options.MCOptions.X86Sse2Avx = create.target_options.mc.x86_sse2_avx;
+#endif
 
         auto emit_dwarf_unwind = (BBLLVMEmitDwarfUnwindType) create.target_options.mc.emit_dwarf_unwind;
         switch (emit_dwarf_unwind)
@@ -675,6 +695,7 @@ EXPORT TargetMachine* llvm_create_target_machine(const BBLLVMTargetMachineCreate
             case BBLLVMDwarfDirectory::normal: target_options.MCOptions.MCUseDwarfDirectory = MCTargetOptions::DwarfDirectory::DefaultDwarfDirectory; break;
         }
 
+#if LLVM_VERSION_MAJOR >= 19
         auto debug_compression_type = (BBLLVMDebugCompressionType) create.target_options.mc.debug_compression_type;
         switch (debug_compression_type)
         {
@@ -682,6 +703,7 @@ EXPORT TargetMachine* llvm_create_target_machine(const BBLLVMTargetMachineCreate
             case BBLLVMDebugCompressionType::zlib: target_options.MCOptions.CompressDebugSections = DebugCompressionType::Zlib; break;
             case BBLLVMDebugCompressionType::zstd: target_options.MCOptions.CompressDebugSections = DebugCompressionType::Zstd; break;
         }
+#endif
 
         target_options.MCOptions.EmitCompactUnwindNonCanonical = create.target_options.mc.emit_compact_unwind_non_canonical;
         target_options.MCOptions.PPCUseFullRegisterNames = create.target_options.mc.ppc_use_full_register_names;
@@ -853,10 +875,12 @@ EXPORT BBLLVMCodeGenerationPipelineResult llvm_module_run_code_generation_pipeli
     // does not work with the codegen pipeline.
     // FIXME: make the new PM work with the codegen pipeline.
     legacy::PassManager CodeGenPasses;
+#if LLVM_VERSION_MAJOR >= 19
     if (options.optimize_when_possible)
     {
         CodeGenPasses.add(createTargetTransformInfoWrapperPass(target_machine.getTargetIRAnalysis()));
     }
+#endif
 
     raw_pwrite_stream* dwarf_object_file = 0;
     if (options.output_dwarf_file_path.length)

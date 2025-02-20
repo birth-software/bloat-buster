@@ -45,10 +45,26 @@ fn executable_find_in_path(allocator: std.mem.Allocator, file_name: []const u8, 
     return file_find_in_path(allocator, file_name, path_env, extension);
 }
 
+const CmakeBuildType = enum {
+    Debug,
+    RelWithDebInfo,
+    MinSizeRel,
+    Release,
+
+    fn from_zig_build_type(o: std.builtin.OptimizeMode) CmakeBuildType {
+        return switch (o) {
+            .Debug => .Debug,
+            .ReleaseSafe => .RelWithDebInfo,
+            .ReleaseSmall => .MinSizeRel,
+            .ReleaseFast => .Release,
+        };
+    }
+};
+
 const LLVM = struct {
     module: *std.Build.Module,
 
-    fn setup(b: *std.Build, path: []const u8, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) !LLVM {
+    fn setup(b: *std.Build, path: []const u8) !LLVM {
         if (enable_llvm) {
             var llvm_libs = std.ArrayList([]const u8).init(b.allocator);
             var flags = std.ArrayList([]const u8).init(b.allocator);
@@ -57,7 +73,17 @@ const LLVM = struct {
                 const f = std.fs.cwd().openFile(full_path, .{}) catch return error.llvm_not_found;
                 f.close();
                 break :blk full_path;
-            } else executable_find_in_path(b.allocator, "llvm-config", path) orelse return error.llvm_not_found;
+            } else if (system_llvm) executable_find_in_path(b.allocator, "llvm-config", path) orelse return error.llvm_not_found else blk: {
+                const home_env = switch (@import("builtin").os.tag) {
+                    .windows => "USERPROFILE",
+                    else => "HOME",
+                };
+                const home_path = env.get(home_env) orelse unreachable;
+                const full_path = try std.mem.concat(b.allocator, u8, &.{ home_path, "/Downloads/llvm-", @tagName(target.result.cpu.arch), "-", @tagName(target.result.os.tag), "-", @tagName(CmakeBuildType.from_zig_build_type(optimize)), "/bin/llvm-config" });
+                const f = std.fs.cwd().openFile(full_path, .{}) catch return error.llvm_not_found;
+                f.close();
+                break :blk full_path;
+            };
             const llvm_components_result = try run_process_and_capture_stdout(b, &.{ llvm_config_path, "--components" });
             var it = std.mem.splitScalar(u8, llvm_components_result, ' ');
             var args = std.ArrayList([]const u8).init(b.allocator);
@@ -96,15 +122,76 @@ const LLVM = struct {
 
             llvm.addLibraryPath(.{ .cwd_relative = llvm_lib_dir });
 
+            const a = std.fs.cwd().openDir("/usr/lib/x86_64-linux-gnu/", .{});
+            if (a) |_| {
+                var dir = a catch unreachable;
+                dir.close();
+                llvm.addLibraryPath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu/" });
+            } else |err| {
+                err catch {};
+            }
+
             llvm.addCSourceFiles(.{
                 .files = &.{"src/llvm.cpp"},
                 .flags = flags.items,
             });
-            llvm.addIncludePath(.{ .cwd_relative = "/usr/bin/../lib64/gcc/x86_64-pc-linux-gnu/14.2.1/../../../../include/c++/14.2.1" });
-            llvm.addIncludePath(.{ .cwd_relative = "/usr/bin/../lib64/gcc/x86_64-pc-linux-gnu/14.2.1/../../../../include/c++/14.2.1/x86_64-pc-linux-gnu" });
-            llvm.addObjectFile(.{ .cwd_relative = "/usr/lib/libstdc++.so.6" });
 
-            const needed_libraries: []const []const u8 = &.{ "unwind", "z" };
+            var dir = try std.fs.cwd().openDir("/usr/include/c++", .{
+                .iterate = true,
+            });
+            var iterator = dir.iterate();
+            const gcc_version = while (try iterator.next()) |entry| {
+                if (entry.kind == .directory) {
+                    break entry.name;
+                }
+            } else return error.include_cpp_dir_not_found;
+            dir.close();
+            const general_cpp_include_dir = try std.mem.concat(b.allocator, u8, &.{ "/usr/include/c++/", gcc_version });
+            llvm.addIncludePath(.{ .cwd_relative = general_cpp_include_dir });
+
+            {
+                const arch_cpp_include_dir = try std.mem.concat(b.allocator, u8, &.{ general_cpp_include_dir, "/x86_64-pc-linux-gnu" });
+                const d2 = std.fs.cwd().openDir(arch_cpp_include_dir, .{});
+                if (d2) |_| {
+                    var d = d2 catch unreachable;
+                    d.close();
+                    llvm.addIncludePath(.{ .cwd_relative = arch_cpp_include_dir });
+                } else |err| err catch {};
+            }
+
+            {
+                const arch_cpp_include_dir = try std.mem.concat(b.allocator, u8, &.{ "/usr/include/x86_64-linux-gnu/c++/", gcc_version });
+                const d2 = std.fs.cwd().openDir(arch_cpp_include_dir, .{});
+                if (d2) |_| {
+                    var d = d2 catch unreachable;
+                    d.close();
+                    llvm.addIncludePath(.{ .cwd_relative = arch_cpp_include_dir });
+                } else |err| err catch {};
+            }
+
+            var found_libcpp = false;
+
+            if (std.fs.cwd().openFile("/usr/lib/libstdc++.so.6", .{})) |file| {
+                file.close();
+                found_libcpp = true;
+                llvm.addObjectFile(.{ .cwd_relative = "/usr/lib/libstdc++.so.6" });
+            } else |err| {
+                err catch {};
+            }
+
+            if (std.fs.cwd().openFile("/usr/lib/x86_64-linux-gnu/libstdc++.so.6", .{})) |file| {
+                file.close();
+                found_libcpp = true;
+                llvm.addObjectFile(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu/libstdc++.so.6" });
+            } else |err| {
+                err catch {};
+            }
+
+            if (!found_libcpp) {
+                return error.libcpp_not_found;
+            }
+
+            const needed_libraries: []const []const u8 = &.{ "unwind", "z", "zstd" };
 
             const lld_libs: []const []const u8 = &.{ "lldCommon", "lldCOFF", "lldELF", "lldMachO", "lldMinGW", "lldWasm" };
 
@@ -128,9 +215,9 @@ const LLVM = struct {
         }
     }
 
-    fn link(llvm: LLVM, target: *std.Build.Step.Compile) void {
-        if (target.root_module != llvm.module) {
-            target.root_module.addImport("llvm", llvm.module);
+    fn link(llvm: LLVM, compile: *std.Build.Step.Compile) void {
+        if (compile.root_module != llvm.module) {
+            compile.root_module.addImport("llvm", llvm.module);
         } else {
             // TODO: should we allow this case?
             unreachable;
@@ -149,12 +236,17 @@ fn debug_binary(b: *std.Build, exe: *std.Build.Step.Compile) *std.Build.Step.Run
 }
 
 var enable_llvm: bool = undefined;
+var system_llvm: bool = undefined;
+var target: std.Build.ResolvedTarget = undefined;
+var optimize: std.builtin.OptimizeMode = undefined;
+var env: std.process.EnvMap = undefined;
 
 pub fn build(b: *std.Build) !void {
-    const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+    env = try std.process.getEnvMap(b.allocator);
+    target = b.standardTargetOptions(.{});
+    optimize = b.standardOptimizeOption(.{});
     enable_llvm = b.option(bool, "enable_llvm", "Enable LLVM") orelse false;
-    const env = try std.process.getEnvMap(b.allocator);
+    system_llvm = b.option(bool, "system_llvm", "Link against system LLVM libraries") orelse true;
     const path = env.get("PATH") orelse unreachable;
 
     const configuration = b.addOptions();
@@ -167,7 +259,7 @@ pub fn build(b: *std.Build) !void {
     });
     exe_mod.addOptions("configuration", configuration);
 
-    const llvm = try LLVM.setup(b, path, target, optimize);
+    const llvm = try LLVM.setup(b, path);
 
     const exe = b.addExecutable(.{
         .name = "bloat-buster",
@@ -206,4 +298,8 @@ pub fn build(b: *std.Build) !void {
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
+
+    const debug_test_cmd = debug_binary(b, exe_unit_tests);
+    const debug_test_step = b.step("debug_test", "Debug the tests");
+    debug_test_step.dependOn(&debug_test_cmd.step);
 }

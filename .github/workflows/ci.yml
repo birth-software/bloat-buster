@@ -22,6 +22,7 @@ jobs:
       BIRTH_GITHUB_TARGETS: ${{ steps.generate-config.outputs.BIRTH_GITHUB_TARGETS }}
       BIRTH_BUILD_TYPES: ${{ steps.generate-config.outputs.BIRTH_BUILD_TYPES }}
       BIRTH_CMAKE_BUILD_TYPES: ${{ steps.generate-config.outputs.BIRTH_CMAKE_BUILD_TYPES }}
+      BIRTH_ZIG_BUILD_TYPES: ${{ steps.generate-config.outputs.BIRTH_ZIG_BUILD_TYPES }}
       BIRTH_COMPILERS: ${{ steps.generate-config.outputs.BIRTH_COMPILERS }}
       BIRTH_LINUX_IMAGE: ${{ steps.generate-config.outputs.BIRTH_LINUX_IMAGE }}
       BIRTH_MACOS_IMAGE: ${{ steps.generate-config.outputs.BIRTH_MACOS_IMAGE }}
@@ -32,7 +33,7 @@ jobs:
         uses: actions/checkout@v4
       - name: Generate config
         id: generate-config
-        uses: birth-software/github-config@v4
+        uses: birth-software/github-config@v6
       - name: Create tag
         if: github.ref == 'refs/heads/main'
         shell: bash
@@ -59,7 +60,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ x86_64-linux-znver4 ]
-        BIRTH_BUILD_TYPE: ${{ fromJSON(needs.generate-config.outputs.BIRTH_BUILD_TYPES) }}
+        BIRTH_ZIG_BUILD_TYPE: ${{ fromJSON(needs.generate-config.outputs.BIRTH_ZIG_BUILD_TYPES) }}
+        ENABLE_LLVM: [ true, false ]
+        SYSTEM_LLVM: [ true, false ]
     runs-on: ${{ matrix.os }}
     env:
       BIRTH_LINUX_IMAGE: ${{ needs.generate-config.outputs.BIRTH_LINUX_IMAGE }}
@@ -68,10 +71,11 @@ jobs:
       RELEASE_TAG_NAME: ${{ needs.generate-config.outputs.RELEASE_TAG_NAME }}
     steps:
       - uses: actions/checkout@v4
-      - name: Build
-        env:
-          CC: clang
-          BB_BUILD_TYPE: ${{matrix.BIRTH_BUILD_TYPE}}
-        run: ./build.sh
-      - name: Run
-        run: ./cache/bb
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: master
+      - name: Build and test
+        run: |
+          zig build test --summary all -Denable_llvm=${{matrix.ENABLE_LLVM}} -Doptimize=${{matrix.BIRTH_ZIG_BUILD_TYPE}} -Dsystem_llvm=${{matrix.SYSTEM_LLVM}}
+          zig build install -Denable_llvm=${{matrix.ENABLE_LLVM}} -Doptimize=${{matrix.BIRTH_ZIG_BUILD_TYPE}} -Dsystem_llvm=${{matrix.SYSTEM_LLVM}}
+          ldd zig-out/bin/bloat-buster

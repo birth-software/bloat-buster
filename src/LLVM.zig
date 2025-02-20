@@ -1,4 +1,5 @@
 const lib = @import("lib.zig");
+const builtin = @import("builtin");
 const Arena = lib.Arena;
 const assert = lib.assert;
 const api = @import("llvm_api.zig");
@@ -763,6 +764,9 @@ test "experiment" {
         return error.SkipZigTest;
     }
 
+    lib.GlobalState.initialize();
+    initialize_all();
+
     const thread = &global.threads[0];
     thread.initialize();
     const module = thread.context.create_module("first_module");
@@ -782,15 +786,17 @@ test "experiment" {
     builder.create_ret(return_value.to_value());
     const function_verify = function.verify();
     if (!function_verify.success) {
-        unreachable;
+        return error.function_failed_to_verify;
     }
     const module_verify = module.verify();
     if (!module_verify.success) {
-        unreachable;
+        return error.module_failed_to_verify;
     }
 
-    const module_string = module.to_string();
-    lib.print_string(module_string);
+    if (!builtin.is_test) {
+        const module_string = module.to_string();
+        lib.print_string(module_string);
+    }
 
     var error_message: String = undefined;
     const target_machine = Target.Machine.create(.{
@@ -803,12 +809,12 @@ test "experiment" {
         .code_model = .none,
         .jit = false,
     }, &error_message) orelse {
-        unreachable;
+        return error.target_machine_creation_failed;
     };
     module.set_target(target_machine);
 
     module.run_optimization_pipeline(target_machine, OptimizationPipelineOptions.default(.{ .optimization_level = .O3, .debug_info = 1 }));
-    const object_path = ".zig-cache/foo.o";
+    const object_path = "foo.o";
     const result = module.run_code_generation_pipeline(target_machine, CodeGenerationPipelineOptions{
         .output_file_path = String.from_slice(object_path),
         .output_dwarf_file_path = .{},
@@ -818,51 +824,67 @@ test "experiment" {
             .verify_module = @intFromBool(lib.optimization_mode == .Debug or lib.optimization_mode == .ReleaseSafe),
         },
     });
-    if (result != .success) {
-        unreachable;
+    switch (result) {
+        .success => {},
+        .failed_to_create_file => return error.failed_to_create_file,
+        .failed_to_add_emit_passes => return error.failed_to_add_emit_passes,
     }
 
     var arg_builder = LldArgvBuilder{};
     arg_builder.add("ld.lld");
     arg_builder.add("--error-limit=0");
     arg_builder.add("-o");
-    arg_builder.add(".zig-cache/foo");
+    arg_builder.add("foo");
     const objects: []const [*:0]const u8 = &.{object_path};
     for (objects) |object| {
         arg_builder.add(object);
     }
 
-    arg_builder.add("-L/usr/lib");
+    const library_paths = [_][:0]const u8{ "/usr/lib", "/usr/lib/x86_64-linux-gnu" };
 
-    const link_libcpp = false;
-    if (link_libcpp) {
-        arg_builder.add("-lstdc++");
-    }
+    inline for (library_paths) |library_path| {
+        const scrt1_path = library_path ++ "/" ++ "Scrt1.o";
+        const file = lib.os.File.open(scrt1_path, .{ .read = 1 }, .{});
+        if (file.is_valid()) {
+            file.close();
 
-    const link_libc = true;
+            arg_builder.add("-L" ++ library_path);
 
-    const dynamic_linker = true;
-    if (dynamic_linker) {
-        arg_builder.add("-dynamic-linker");
-        arg_builder.add("/usr/lib/ld-linux-x86-64.so.2");
-    }
+            const link_libcpp = false;
+            if (link_libcpp) {
+                arg_builder.add("-lstdc++");
+            }
 
-    if (link_libc) {
-        arg_builder.add("/usr/lib/Scrt1.o");
-        arg_builder.add("-lc");
-    }
+            const link_libc = true;
 
-    const lld_args = arg_builder.flush();
-    const lld_result = api.lld_elf_link(lld_args.ptr, lld_args.len, true, false);
-    const success = lld_result.success and lld_result.stderr.length == 0;
-    if (!success) {
-        if (lld_result.stdout.length != 0) {
-            lib.print_string(lld_result.stdout.to_slice() orelse unreachable);
+            const dynamic_linker = true;
+            if (dynamic_linker) {
+                arg_builder.add("-dynamic-linker");
+                arg_builder.add("/usr/lib/ld-linux-x86-64.so.2");
+            }
+
+            if (link_libc) {
+                arg_builder.add(scrt1_path);
+                arg_builder.add("-lc");
+            }
+
+            const lld_args = arg_builder.flush();
+            const lld_result = api.lld_elf_link(lld_args.ptr, lld_args.len, true, false);
+            const success = lld_result.success and lld_result.stderr.length == 0;
+            if (!success) {
+                if (lld_result.stdout.length != 0) {
+                    lib.print_string_stderr(lld_result.stdout.to_slice() orelse unreachable);
+                }
+
+                if (lld_result.stderr.length != 0) {
+                    lib.print_string_stderr(lld_result.stderr.to_slice() orelse unreachable);
+                }
+                return error.linking_failed;
+            }
+            break;
         }
-
-        if (lld_result.stderr.length != 0) {
-            lib.print_string(lld_result.stderr.to_slice() orelse unreachable);
-        }
-        lib.libc.exit(1);
+    } else {
+        lib.print_string_stderr("Failed to find directory for Scrt1.o\n");
+        lib.os.abort();
     }
 }

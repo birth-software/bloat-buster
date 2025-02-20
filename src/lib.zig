@@ -157,7 +157,7 @@ pub const os = struct {
                 .windows => @compileError("TODO"),
                 else => {
                     const o = posix.O{
-                        .ACCMODE = if (flags.read | flags.write != 0) .RDWR else if (flags.read != 0) .RDONLY else if (flags.write != 0) .WRONLY else unreachable,
+                        .ACCMODE = if (flags.read & flags.write != 0) .RDWR else if (flags.read != 0) .RDONLY else if (flags.write != 0) .WRONLY else unreachable,
                         .TRUNC = flags.truncate,
                         .CREAT = flags.create,
                         .DIRECTORY = flags.directory,
@@ -491,6 +491,17 @@ pub const os = struct {
             else => {
                 return File{
                     .fd = 1,
+                };
+            },
+        };
+    }
+
+    pub fn get_stderr() File {
+        return switch (builtin.os.tag) {
+            .windows => @compileError("TODO"),
+            else => {
+                return File{
+                    .fd = 2,
                 };
             },
         };
@@ -2480,6 +2491,12 @@ pub fn print(format_string: [*:0]const u8, ...) callconv(.C) void {
     @cVaEnd(&args);
 }
 
-pub fn print_string(str: []const u8) void {
+pub const print_string = print_string_stdout;
+
+pub fn print_string_stdout(str: []const u8) void {
     os.get_stdout().write(str);
+}
+
+pub fn print_string_stderr(str: []const u8) void {
+    os.get_stderr().write(str);
 }
