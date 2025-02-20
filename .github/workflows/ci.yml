@@ -61,7 +61,6 @@ jobs:
       matrix:
         os: [ ubuntu-24.04 ]
         BIRTH_ZIG_BUILD_TYPE: ${{ fromJSON(needs.generate-config.outputs.BIRTH_ZIG_BUILD_TYPES) }}
-        ENABLE_LLVM: [ true, false ]
         SYSTEM_LLVM: [ true, false ]
     runs-on: ${{ matrix.os }}
     env:
@@ -78,6 +77,6 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y llvm-dev liblld-dev
       - name: Build and test
         run: |
-          zig build test --summary all -Denable_llvm=${{matrix.ENABLE_LLVM}} -Doptimize=${{matrix.BIRTH_ZIG_BUILD_TYPE}} -Dsystem_llvm=${{matrix.SYSTEM_LLVM}}
-          zig build install -Denable_llvm=${{matrix.ENABLE_LLVM}} -Doptimize=${{matrix.BIRTH_ZIG_BUILD_TYPE}} -Dsystem_llvm=${{matrix.SYSTEM_LLVM}}
+          zig build test --summary all -Doptimize=${{matrix.BIRTH_ZIG_BUILD_TYPE}} -Dsystem_llvm=${{matrix.SYSTEM_LLVM}}
+          zig build install -Doptimize=${{matrix.BIRTH_ZIG_BUILD_TYPE}} -Dsystem_llvm=${{matrix.SYSTEM_LLVM}}
           ldd zig-out/bin/bloat-buster

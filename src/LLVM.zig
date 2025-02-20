@@ -760,9 +760,16 @@ const LldArgvBuilder = struct {
 };
 
 test "experiment" {
-    if (!configuration.enable_llvm) {
-        return error.SkipZigTest;
-    }
+    const std = @import("std");
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const allocator = std.testing.allocator;
+
+    const object_file_path = try std.mem.joinZ(allocator, "/", &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "foo.o" });
+    // Zig stuf... sigh
+    defer allocator.free(object_file_path);
+    const executable_file_path = try std.mem.joinZ(allocator, "/", &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "foo" });
+    defer allocator.free(executable_file_path);
 
     lib.GlobalState.initialize();
     initialize_all();
@@ -814,9 +821,8 @@ test "experiment" {
     module.set_target(target_machine);
 
     module.run_optimization_pipeline(target_machine, OptimizationPipelineOptions.default(.{ .optimization_level = .O3, .debug_info = 1 }));
-    const object_path = "foo.o";
     const result = module.run_code_generation_pipeline(target_machine, CodeGenerationPipelineOptions{
-        .output_file_path = String.from_slice(object_path),
+        .output_file_path = String.from_slice(object_file_path),
         .output_dwarf_file_path = .{},
         .flags = .{
             .code_generation_file_type = .object_file,
@@ -826,7 +832,11 @@ test "experiment" {
     });
     switch (result) {
         .success => {},
-        .failed_to_create_file => return error.failed_to_create_file,
+        .failed_to_create_file => {
+            lib.print_string_stderr(object_file_path);
+            lib.print_string_stderr("\n");
+            return error.failed_to_create_file;
+        },
         .failed_to_add_emit_passes => return error.failed_to_add_emit_passes,
     }
 
@@ -834,8 +844,8 @@ test "experiment" {
     arg_builder.add("ld.lld");
     arg_builder.add("--error-limit=0");
     arg_builder.add("-o");
-    arg_builder.add("foo");
-    const objects: []const [*:0]const u8 = &.{object_path};
+    arg_builder.add(executable_file_path);
+    const objects: []const [*:0]const u8 = &.{object_file_path};
     for (objects) |object| {
         arg_builder.add(object);
     }
