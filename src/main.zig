@@ -1,7 +1,7 @@
 const lib = @import("lib.zig");
 const configuration = @import("configuration");
 const llvm = @import("LLVM.zig");
-const parser = @import("parser.zig");
+const converter = @import("converter.zig");
 const Arena = lib.Arena;
 
 pub const panic = struct {
@@ -140,7 +140,7 @@ pub const panic = struct {
 var global_persistent_arena: *Arena = undefined;
 
 pub fn main() callconv(.C) c_int {
-    parser.parser_experiment();
+    converter.parser_experiment();
     return 0;
 }
 
@@ -155,5 +155,5 @@ comptime {
 test {
     _ = lib;
     _ = llvm;
-    _ = parser;
+    _ = converter;
 }
