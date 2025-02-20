@@ -2,6 +2,7 @@ const lib = @import("lib.zig");
 const Arena = lib.Arena;
 const assert = lib.assert;
 const api = @import("llvm_api.zig");
+const configuration = @import("configuration");
 
 /// This is a String which ABI-compatible with C++
 pub const String = extern struct {
@@ -757,7 +758,11 @@ const LldArgvBuilder = struct {
     }
 };
 
-pub fn experiment() void {
+test "experiment" {
+    if (!configuration.enable_llvm) {
+        return error.SkipZigTest;
+    }
+
     const thread = &global.threads[0];
     thread.initialize();
     const module = thread.context.create_module("first_module");
