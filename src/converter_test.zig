@@ -114,3 +114,7 @@ test "constant shift right" {
 test "constant and" {
     try invoke("constant_and");
 }
+
+test "constant or" {
+    try invoke("constant_or");
+}

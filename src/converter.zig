@@ -306,6 +306,7 @@ const Converter = struct {
         ashr,
         lshr,
         @"and",
+        @"or",
     };
 
     fn parse_value(noalias converter: *Converter, noalias thread: *llvm.Thread, expected_type: Type) *llvm.Value {
@@ -338,6 +339,7 @@ const Converter = struct {
                 .ashr => thread.builder.create_ashr(left, right),
                 .lshr => thread.builder.create_lshr(left, right),
                 .@"and" => thread.builder.create_and(left, right),
+                .@"or" => thread.builder.create_or(left, right),
             };
 
             const ch = converter.content[converter.offset];
@@ -397,6 +399,10 @@ const Converter = struct {
                 '&' => blk: {
                     converter.offset += 1;
                     break :blk .@"and";
+                },
+                '|' => blk: {
+                    converter.offset += 1;
+                    break :blk .@"or";
                 },
                 else => os.abort(),
             };
