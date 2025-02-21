@@ -20,6 +20,9 @@ pub extern fn llvm_module_to_string(module: *llvm.Module) llvm.String;
 pub extern fn LLVMPositionBuilderAtEnd(builder: *llvm.Builder, basic_block: *llvm.BasicBlock) void;
 pub extern fn LLVMBuildRet(builder: *llvm.Builder, value: ?*llvm.Value) void;
 
+pub extern fn LLVMTypeOf(value: *llvm.Value) *llvm.Type;
+pub extern fn LLVMGlobalGetValueType(value: *llvm.GlobalValue) *llvm.Type;
+
 // TYPES
 // Types: integers
 pub extern fn LLVMInt1TypeInContext(context: *llvm.Context) *llvm.Type.Integer;
@@ -57,6 +60,9 @@ pub extern fn LLVMPointerTypeInContext(context: *llvm.Context, address_space: c_
 // Types: vectors
 pub extern fn LLVMVectorType(element_type: *llvm.Type, element_count: c_uint) *llvm.Type.FixedVector;
 pub extern fn LLVMScalableVectorType(element_type: *llvm.Type, element_count: c_uint) *llvm.Type.ScalableVector;
+
+pub extern fn llvm_type_is_function(ty: *llvm.Type) bool;
+pub extern fn llvm_type_is_integer(ty: *llvm.Type) bool;
 
 // VALUES
 pub extern fn LLVMConstInt(type: *llvm.Type.Integer, value: c_ulonglong, sign_extend: Bool) *llvm.Constant.Integer;

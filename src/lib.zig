@@ -1,4 +1,5 @@
 const builtin = @import("builtin");
+pub const is_test = builtin.is_test;
 pub const optimization_mode = builtin.mode;
 const VariableArguments = @import("std").builtin.VaList;
 extern "c" fn IsDebuggerPresent() bool;
@@ -520,6 +521,22 @@ pub const string = struct {
             result = libc.memcmp(a.ptr, b.ptr, a.len) == 0;
         }
         return result;
+    }
+};
+
+pub const cstring = struct {
+    pub fn length(pointer: [*:0]const u8) usize {
+        var it = pointer;
+        while (it[0] != 0) {
+            it += 1;
+        }
+
+        const result = it - pointer;
+        return result;
+    }
+
+    pub fn to_slice(pointer: [*:0]const u8) [:0]const u8 {
+        return pointer[0..length(pointer) :0];
     }
 };
 
@@ -2456,7 +2473,10 @@ pub const GlobalState = struct {
     arena: *Arena,
     thread_count: usize,
 
+    pub var initialized = false;
     pub fn initialize() void {
+        assert(!initialized);
+        defer initialized = true;
         const thread_count = os.get_cpu_count();
         global = .{
             .arena = Arena.initialize_default(2 * MB),
@@ -2467,7 +2487,7 @@ pub const GlobalState = struct {
 pub var global: GlobalState = undefined;
 
 pub const parse = struct {
-    fn integer_decimal(str: []const u8) u64 {
+    pub fn integer_decimal(str: []const u8) u64 {
         var value: u64 = 0;
 
         for (str) |ch| {

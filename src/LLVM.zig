@@ -369,7 +369,7 @@ pub const MCTargetOptions = extern struct {
     }
 };
 
-const OptimizationLevel = enum(u3) {
+pub const OptimizationLevel = enum(u3) {
     O0 = 0,
     O1 = 1,
     O2 = 2,
@@ -490,7 +490,7 @@ const targets = [@typeInfo(Architecture).@"enum".fields.len]type{
 
 pub const Context = opaque {
     pub const create = api.LLVMContextCreate;
-    pub fn create_module(context: *Context, name: [:0]const u8) *Module {
+    pub fn create_module(context: *Context, name: []const u8) *Module {
         return api.llvm_context_create_module(context, String.from_slice(name));
     }
     pub const create_builder = api.LLVMCreateBuilderInContext;
@@ -546,7 +546,23 @@ pub const Builder = opaque {
     }
 };
 
+pub const GlobalValue = opaque {
+    pub const get_type = api.LLVMGlobalGetValueType;
+};
+
 pub const Function = opaque {
+    pub fn get_type(function: *Function) *Type.Function {
+        return function.to_global_value().get_type().to_function();
+    }
+
+    pub fn to_value(function: *Function) *Value {
+        return @ptrCast(function);
+    }
+
+    pub fn to_global_value(function: *Function) *GlobalValue {
+        return @ptrCast(function);
+    }
+
     pub fn verify(function: *Function) VerifyResult {
         var result: VerifyResult = undefined;
         var string: String = undefined;
@@ -568,7 +584,9 @@ pub const Constant = opaque {
     };
 };
 
-pub const Value = opaque {};
+pub const Value = opaque {
+    pub const get_type = api.LLVMTypeOf;
+};
 
 pub const DI = struct {
     pub const Builder = opaque {
@@ -618,9 +636,22 @@ pub const DI = struct {
 };
 
 pub const Type = opaque {
+    pub const is_function = api.llvm_type_is_function;
+    pub const is_integer = api.llvm_type_is_integer;
+    pub fn to_function(t: *Type) *Type.Function {
+        assert(t.is_function());
+        return @ptrCast(t);
+    }
+
+    pub fn to_integer(t: *Type) *Type.Integer {
+        assert(t.is_integer());
+        return @ptrCast(t);
+    }
+
     pub const Function = opaque {
-        pub fn get(return_type: *Type, parameter_types: []const *Type, is_var_args: c_int) *Type.Function {
-            return api.LLVMFunctionType(return_type, parameter_types.ptr, @intCast(parameter_types.len), is_var_args);
+        pub const get_return_type = api.LLVMGetReturnType;
+        pub fn get(return_type: *Type, parameter_types: []const *Type, is_var_args: bool) *Type.Function {
+            return api.LLVMFunctionType(return_type, parameter_types.ptr, @intCast(parameter_types.len), @intFromBool(is_var_args));
         }
     };
 
@@ -722,7 +753,7 @@ pub const Thread = struct {
     }
 };
 
-const Global = struct {
+pub const Global = struct {
     threads: []Thread,
     host_triple: []const u8,
     host_cpu_model: []const u8,
@@ -730,8 +761,12 @@ const Global = struct {
 };
 pub var global: Global = undefined;
 
+pub var initialized = false;
+
 // This is meant to call globally, only once per execution
 pub fn initialize_all() void {
+    assert(!initialized);
+    defer initialized = true;
     inline for (targets) |target| {
         target.initialize(.{});
     }
@@ -759,142 +794,141 @@ const LldArgvBuilder = struct {
     }
 };
 
-test "experiment" {
-    const std = @import("std");
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-    const allocator = std.testing.allocator;
+pub const ModuleBuilder = struct {
+    module: *Module,
+    builder: *Builder,
 
-    const object_file_path = try std.mem.joinZ(allocator, "/", &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "foo.o" });
-    // Zig stuf... sigh
-    defer allocator.free(object_file_path);
-    const executable_file_path = try std.mem.joinZ(allocator, "/", &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "foo" });
-    defer allocator.free(executable_file_path);
+    pub fn initialize(thread: *Thread, module_name: []const u8) ModuleBuilder {
+        const module = thread.context.create_module(module_name);
+        const builder = thread.context.create_builder();
 
-    lib.GlobalState.initialize();
-    initialize_all();
+        return .{
+            .module = module,
+            .builder = builder,
+        };
+    }
+};
+
+pub const FunctionBuilder = struct {
+    function: *Function,
+    current_basic_block: *BasicBlock,
+};
+
+pub fn default_initialize() *Thread {
+    assert(lib.GlobalState.initialized);
+    if (!initialized) {
+        initialize_all();
+    }
 
     const thread = &global.threads[0];
     thread.initialize();
-    const module = thread.context.create_module("first_module");
-    const builder = thread.context.create_builder();
-    // const di_builder = module.create_di_builder();
-    const return_type = thread.i32.type;
-    const return_value = thread.i32.zero;
-    // const return_value = thread.
-    const function_type = Type.Function.get(return_type.to_type(), &.{}, 0);
-    const function = module.create_function(.{
-        .type = function_type,
-        .linkage = .ExternalLinkage,
-        .name = "main",
-    });
-    const entry_basic_block = thread.context.create_basic_block("entry", function);
-    builder.position_at_end(entry_basic_block);
-    builder.create_ret(return_value.to_value());
-    const function_verify = function.verify();
-    if (!function_verify.success) {
-        return error.function_failed_to_verify;
-    }
-    const module_verify = module.verify();
-    if (!module_verify.success) {
-        return error.module_failed_to_verify;
-    }
 
-    if (!builtin.is_test) {
-        const module_string = module.to_string();
-        lib.print_string(module_string);
-    }
+    return thread;
+}
 
-    var error_message: String = undefined;
-    const target_machine = Target.Machine.create(.{
-        .target_options = Target.Options.default(),
-        .cpu_triple = String.from_slice(global.host_triple),
-        .cpu_model = String.from_slice(global.host_cpu_model),
-        .cpu_features = String.from_slice(global.host_cpu_features),
-        .optimization_level = .none,
-        .relocation_model = .default,
-        .code_model = .none,
-        .jit = false,
-    }, &error_message) orelse {
-        return error.target_machine_creation_failed;
-    };
+pub const GenerateObject = struct {
+    path: []const u8,
+    target_triple: []const u8,
+    cpu_model: []const u8,
+    cpu_features: []const u8,
+    target_options: Target.Options,
+};
+
+pub const ObjectGenerate = struct {
+    path: []const u8,
+    optimization_level: ?OptimizationLevel,
+    debug_info: u1,
+    optimize_when_possible: u1,
+};
+
+pub fn object_generate(module: *Module, target_machine: *Target.Machine, generate: ObjectGenerate) CodeGenerationPipelineResult {
     module.set_target(target_machine);
 
-    module.run_optimization_pipeline(target_machine, OptimizationPipelineOptions.default(.{ .optimization_level = .O3, .debug_info = 1 }));
+    if (generate.optimization_level) |optimization_level| {
+        module.run_optimization_pipeline(target_machine, OptimizationPipelineOptions.default(.{ .optimization_level = optimization_level, .debug_info = generate.debug_info }));
+    }
+
     const result = module.run_code_generation_pipeline(target_machine, CodeGenerationPipelineOptions{
-        .output_file_path = String.from_slice(object_file_path),
+        .output_file_path = String.from_slice(generate.path),
         .output_dwarf_file_path = .{},
         .flags = .{
             .code_generation_file_type = .object_file,
-            .optimize_when_possible = 1,
+            .optimize_when_possible = generate.optimize_when_possible,
             .verify_module = @intFromBool(lib.optimization_mode == .Debug or lib.optimization_mode == .ReleaseSafe),
         },
     });
-    switch (result) {
-        .success => {},
-        .failed_to_create_file => {
-            lib.print_string_stderr(object_file_path);
-            lib.print_string_stderr("\n");
-            return error.failed_to_create_file;
-        },
-        .failed_to_add_emit_passes => return error.failed_to_add_emit_passes,
-    }
 
+    return result;
+}
+
+pub const LinkOptions = struct {
+    objects: []const [:0]const u8,
+    output_path: [:0]const u8,
+};
+
+pub fn link(arena: *Arena, options: LinkOptions) lld.Result {
     var arg_builder = LldArgvBuilder{};
     arg_builder.add("ld.lld");
     arg_builder.add("--error-limit=0");
     arg_builder.add("-o");
-    arg_builder.add(executable_file_path);
-    const objects: []const [*:0]const u8 = &.{object_file_path};
-    for (objects) |object| {
+    arg_builder.add(options.output_path);
+    for (options.objects) |object| {
         arg_builder.add(object);
     }
 
     const library_paths = [_][:0]const u8{ "/usr/lib", "/usr/lib/x86_64-linux-gnu" };
 
-    inline for (library_paths) |library_path| {
+    const scrt1_object_directory_path = inline for (library_paths) |library_path| {
         const scrt1_path = library_path ++ "/" ++ "Scrt1.o";
         const file = lib.os.File.open(scrt1_path, .{ .read = 1 }, .{});
         if (file.is_valid()) {
             file.close();
-
-            arg_builder.add("-L" ++ library_path);
-
-            const link_libcpp = false;
-            if (link_libcpp) {
-                arg_builder.add("-lstdc++");
-            }
-
-            const link_libc = true;
-
-            const dynamic_linker = true;
-            if (dynamic_linker) {
-                arg_builder.add("-dynamic-linker");
-                arg_builder.add("/usr/lib/ld-linux-x86-64.so.2");
-            }
-
-            if (link_libc) {
-                arg_builder.add(scrt1_path);
-                arg_builder.add("-lc");
-            }
-
-            const lld_args = arg_builder.flush();
-            const lld_result = api.lld_elf_link(lld_args.ptr, lld_args.len, true, false);
-            const success = lld_result.success and lld_result.stderr.length == 0;
-            if (!success) {
-                if (lld_result.stdout.length != 0) {
-                    lib.print_string_stderr(lld_result.stdout.to_slice() orelse unreachable);
-                }
-
-                if (lld_result.stderr.length != 0) {
-                    lib.print_string_stderr(lld_result.stderr.to_slice() orelse unreachable);
-                }
-                return error.linking_failed;
-            }
-            break;
+            break library_path;
         }
     } else {
         lib.print_string_stderr("Failed to find directory for Scrt1.o\n");
         lib.os.abort();
+    };
+
+    arg_builder.add(arena.join_string(&.{ "-L", scrt1_object_directory_path }));
+
+    const link_libcpp = false;
+    if (link_libcpp) {
+        arg_builder.add("-lstdc++");
     }
+
+    const link_libc = true;
+
+    const dynamic_linker = true;
+    if (dynamic_linker) {
+        arg_builder.add("-dynamic-linker");
+        arg_builder.add("/usr/lib/ld-linux-x86-64.so.2");
+    }
+
+    if (link_libc) {
+        const scrt1_path = arena.join_string(&.{ scrt1_object_directory_path, "/Scrt1.o" });
+        arg_builder.add(scrt1_path);
+        arg_builder.add("-lc");
+    }
+
+    const lld_args = arg_builder.flush();
+    const lld_result = api.lld_elf_link(lld_args.ptr, lld_args.len, true, false);
+    const success = lld_result.success and lld_result.stderr.length == 0;
+    if (!success) {
+        for (lld_args) |lld_arg| {
+            lib.print_string_stderr(lib.cstring.to_slice(lld_arg.?));
+            lib.print_string_stderr(" ");
+        }
+        lib.print_string_stderr("\n");
+
+        if (lld_result.stdout.length != 0) {
+            lib.print_string_stderr(lld_result.stdout.to_slice() orelse unreachable);
+        }
+
+        if (lld_result.stderr.length != 0) {
+            lib.print_string_stderr(lld_result.stderr.to_slice() orelse unreachable);
+        }
+    }
+
+    return lld_result;
 }

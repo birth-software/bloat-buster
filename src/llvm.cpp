@@ -32,7 +32,7 @@ typedef uint64_t u64;
 
 #include "llvm/Support/FileSystem.h"
 
-#include "lld/Common/Driver.h"
+#include "lld/Common/CommonLinkerContext.h"
 
 
 using namespace llvm;
@@ -51,6 +51,18 @@ struct BBLLVMString
 EXPORT Module* llvm_context_create_module(LLVMContext& context, BBLLVMString name)
 {
     return new Module(name.string_ref(), context);
+}
+
+EXPORT bool llvm_type_is_function(const Type& type)
+{
+    auto result = type.isFunctionTy();
+    return result;
+}
+
+EXPORT bool llvm_type_is_integer(const Type& type)
+{
+    auto result = type.isIntegerTy();
+    return result;
 }
 
 EXPORT Value* llvm_builder_create_add(IRBuilder<>& builder, Value* left, Value* right, bool nuw, bool nsw)
@@ -989,6 +1001,9 @@ fn LLDResult lld_api_generic(lld_api_args(), LinkerFunction linker_function)
         memcpy(stderr_pointer, stderr_string.data(), stderr_length);
         result.stderr_string = { stderr_pointer, stderr_length };
     }
+
+    // TODO: should we only call it on success?
+    lld::CommonLinkerContext::destroy();
 
     return result;
 }

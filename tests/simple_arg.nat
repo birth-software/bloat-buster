@@ -1,4 +1,0 @@
-fn main(argument_count: s32) s32
-{
-    return argument_count - 1;
-}

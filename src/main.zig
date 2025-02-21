@@ -140,12 +140,11 @@ pub const panic = struct {
 var global_persistent_arena: *Arena = undefined;
 
 pub fn main() callconv(.C) c_int {
-    converter.parser_experiment();
     return 0;
 }
 
 comptime {
-    if (!@import("builtin").is_test) {
+    if (!lib.is_test) {
         @export(&main, .{
             .name = "main",
         });

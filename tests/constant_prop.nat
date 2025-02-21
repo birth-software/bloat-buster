@@ -1,4 +1,0 @@
-fn[cc(.c)] main [export] () s32
-{
-    return 2 + 4 - 1 - 5;
-}
