@@ -33,6 +33,10 @@ pub extern fn LLVMBuildAnd(builder: *llvm.Builder, left: *llvm.Value, right: *ll
 pub extern fn LLVMBuildOr(builder: *llvm.Builder, left: *llvm.Value, right: *llvm.Value, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildXor(builder: *llvm.Builder, left: *llvm.Value, right: *llvm.Value, name: [*:0]const u8) *llvm.Value;
 
+pub extern fn llvm_builder_create_alloca(builder: *llvm.Builder, ty: *llvm.Type, address_space: c_uint, name: llvm.String) *llvm.Value;
+pub extern fn LLVMBuildStore(builder: *llvm.Builder, value: *llvm.Value, pointer: *llvm.Value) *llvm.Value;
+pub extern fn LLVMBuildLoad2(builder: *llvm.Builder, ty: *llvm.Type, pointer: *llvm.Value, name: [*:0]const u8) *llvm.Value;
+
 pub extern fn LLVMTypeOf(value: *llvm.Value) *llvm.Type;
 pub extern fn LLVMGlobalGetValueType(value: *llvm.GlobalValue) *llvm.Type;
 

@@ -63,10 +63,18 @@ const CallingConvention = enum {
     c,
 };
 
+const Local = struct {
+    name: []const u8,
+    alloca: *llvm.Value,
+    type: Type,
+};
+
 pub const FunctionBuilder = struct {
     function: *llvm.Function,
     current_basic_block: *llvm.BasicBlock,
     return_type: Type,
+    local_buffer: [64]Local = undefined,
+    local_count: u32 = 0,
 };
 
 const Type = packed struct(u64) {
@@ -252,6 +260,9 @@ const Converter = struct {
 
         converter.expect_character(left_brace);
 
+        const local_offset = function_builder.local_count;
+        defer function_builder.local_count = local_offset;
+
         while (true) {
             converter.skip_space();
 
@@ -263,30 +274,65 @@ const Converter = struct {
                 break;
             }
 
+            const require_semicolon = true;
+
             const statement_start_ch = converter.content[converter.offset];
-            if (is_identifier_start_ch(statement_start_ch)) {
+            if (statement_start_ch == '>') {
+                converter.offset += 1;
+
+                converter.skip_space();
+
+                const local_name = converter.parse_identifier();
+
+                converter.skip_space();
+
+                if (converter.consume_character_if_match(':')) {
+                    converter.skip_space();
+
+                    const local_type = converter.parse_type(thread);
+
+                    converter.skip_space();
+
+                    converter.expect_character('=');
+
+                    converter.skip_space();
+
+                    const value = converter.parse_value(thread, local_type, function_builder);
+                    const alloca = thread.builder.create_alloca(local_type.get(), local_name);
+                    _ = thread.builder.create_store(value, alloca);
+
+                    const local = &function_builder.local_buffer[function_builder.local_count];
+                    function_builder.local_count += 1;
+                    local.* = .{
+                        .name = local_name,
+                        .alloca = alloca,
+                        .type = local_type,
+                    };
+                } else {
+                    converter.report_error();
+                }
+            } else if (is_identifier_start_ch(statement_start_ch)) {
                 const statement_start_identifier = converter.parse_identifier();
 
                 if (string_to_enum(StatementStartKeyword, statement_start_identifier)) |statement_start_keyword| {
                     switch (statement_start_keyword) {
                         .@"return" => {
-                            const return_value = converter.parse_value(thread, function_builder.return_type);
+                            const return_value = converter.parse_value(thread, function_builder.return_type, function_builder);
                             thread.builder.create_ret(return_value);
                         },
                         else => unreachable,
                     }
-
-                    const require_semicolon = switch (statement_start_keyword) {
-                        .@"return" => true,
-                        else => converter.report_error(),
-                    };
-
-                    _ = converter.expect_or_consume(';', require_semicolon);
                 } else {
                     converter.report_error();
                 }
             } else {
                 converter.report_error();
+            }
+
+            converter.skip_space();
+
+            if (require_semicolon) {
+                converter.expect_character(';');
             }
         }
 
@@ -310,7 +356,7 @@ const Converter = struct {
         xor,
     };
 
-    fn parse_value(noalias converter: *Converter, noalias thread: *llvm.Thread, expected_type: Type) *llvm.Value {
+    fn parse_value(noalias converter: *Converter, noalias thread: *llvm.Thread, expected_type: Type, function_builder: *FunctionBuilder) *llvm.Value {
         converter.skip_space();
 
         var value_state = ExpressionState.none;
@@ -319,7 +365,7 @@ const Converter = struct {
         const value = while (true) {
             const current_value = switch (converter.content[converter.offset] == left_parenthesis) {
                 true => os.abort(),
-                false => converter.parse_single_value(expected_type),
+                false => converter.parse_single_value(thread, expected_type, function_builder),
             };
 
             converter.skip_space();
@@ -424,7 +470,7 @@ const Converter = struct {
         negative,
     };
 
-    fn parse_single_value(noalias converter: *Converter, expected_type: Type) *llvm.Value {
+    fn parse_single_value(noalias converter: *Converter, thread: *llvm.Thread, expected_type: Type, noalias function_builder: *FunctionBuilder) *llvm.Value {
         converter.skip_space();
 
         const prefix_offset = converter.offset;
@@ -444,7 +490,16 @@ const Converter = struct {
         const value_offset = converter.offset;
         const value_start_ch = converter.content[value_offset];
         const value = switch (value_start_ch) {
-            'a'...'z', 'A'...'Z', '_' => os.abort(),
+            'a'...'z', 'A'...'Z', '_' => b: {
+                const identifier = converter.parse_identifier();
+                for (function_builder.local_buffer[0..function_builder.local_count]) |*local| {
+                    if (lib.string.equal(identifier, local.name)) {
+                        break :b thread.builder.create_load(local.type.get(), local.alloca);
+                    }
+                } else {
+                    os.abort();
+                }
+            },
             '0'...'9' => converter.parse_integer(expected_type, prefix == .negative),
             else => os.abort(),
         };

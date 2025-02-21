@@ -540,6 +540,11 @@ pub const Builder = opaque {
     pub const position_at_end = api.LLVMPositionBuilderAtEnd;
 
     pub const create_ret = api.LLVMBuildRet;
+
+    pub fn create_ret_void(builder: *Builder) void {
+        builder.create_ret(null);
+    }
+
     pub fn create_add(builder: *Builder, left: *Value, right: *Value) *Value {
         return api.LLVMBuildAdd(builder, left, right, "");
     }
@@ -592,8 +597,14 @@ pub const Builder = opaque {
         return api.LLVMBuildXor(builder, left, right, "");
     }
 
-    pub fn create_ret_void(builder: *Builder) void {
-        builder.create_ret(null);
+    pub fn create_alloca(builder: *Builder, ty: *Type, name: []const u8) *Value {
+        return api.llvm_builder_create_alloca(builder, ty, 0, String.from_slice(name));
+    }
+
+    pub const create_store = api.LLVMBuildStore;
+
+    pub fn create_load(builder: *Builder, ty: *Type, pointer: *Value) *Value {
+        return api.LLVMBuildLoad2(builder, ty, pointer, "");
     }
 };
 

@@ -126,3 +126,7 @@ test "constant_or" {
 test "constant_xor" {
     try invsrc(@src());
 }
+
+test "minimal_stack" {
+    try invsrc(@src());
+}

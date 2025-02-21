@@ -65,12 +65,6 @@ EXPORT bool llvm_type_is_integer(const Type& type)
     return result;
 }
 
-EXPORT Value* llvm_builder_create_add(IRBuilder<>& builder, Value* left, Value* right, bool nuw, bool nsw)
-{
-    auto* result = builder.CreateAdd(left, right, "", nuw, nsw);
-    return result;
-}
-
 EXPORT Function* llvm_module_create_function(Module* module, FunctionType* function_type, GlobalValue::LinkageTypes linkage_type, unsigned address_space, BBLLVMString name)
 {
     auto* function = Function::Create(function_type, linkage_type, address_space, name.string_ref(), module);
@@ -95,6 +89,13 @@ EXPORT BasicBlock* llvm_context_create_basic_block(LLVMContext& context, BBLLVMS
 {
     auto* basic_block = BasicBlock::Create(context, name.string_ref(), parent);
     return basic_block;
+}
+
+EXPORT AllocaInst* llvm_builder_create_alloca(IRBuilder<>& builder, Type* type, unsigned address_space, BBLLVMString name)
+{   
+    const DataLayout &data_layout = builder.GetInsertBlock()->getDataLayout();
+    Align alignment = data_layout.getABITypeAlign(type);
+    return builder.Insert(new AllocaInst(type, address_space, 0, alignment), name.string_ref());
 }
 
 fn BBLLVMString stream_to_string(raw_string_ostream& stream)
