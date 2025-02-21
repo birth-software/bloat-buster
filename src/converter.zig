@@ -144,53 +144,71 @@ const Converter = struct {
         }
     }
 
-    fn parse_integer(noalias converter: *Converter, expected_type: *llvm.Type) *llvm.Value {
+    fn parse_decimal(noalias converter: *Converter) u64 {
+        var value: u64 = 0;
+        while (true) {
+            const ch = converter.content[converter.offset];
+            if (!is_decimal_ch(ch)) {
+                break;
+            }
+
+            converter.offset += 1;
+            value = lib.parse.accumulate_decimal(value, ch);
+        }
+
+        return value;
+    }
+
+    fn parse_integer(noalias converter: *Converter, expected_type: *llvm.Type, signed: bool) *llvm.Value {
         const start = converter.offset;
         const integer_start_ch = converter.content[start];
         assert(!is_space(integer_start_ch));
         assert(is_decimal_ch(integer_start_ch));
         const integer_type = expected_type.to_integer();
 
-        const sign_extend = false;
-        var value: u64 = 0;
+        const sign_extend = signed;
 
-        switch (integer_start_ch) {
-            '0' => {
-                converter.offset += 1;
-
-                switch (converter.content[converter.offset]) {
-                    'x' => {
-                        // TODO: parse hexadecimal
-                        converter.report_error();
-                    },
-                    'o' => {
-                        // TODO: parse octal
-                        converter.report_error();
-                    },
-                    'b' => {
-                        // TODO: parse binary
-                        converter.report_error();
-                    },
-                    '0'...'9' => {
-                        converter.report_error();
-                    },
-                    // Zero literal
-                    else => {},
-                }
-            },
-            '1'...'9' => {
-                while (true) {
-                    const ch = converter.content[converter.offset];
-                    if (!is_decimal_ch(ch)) {
-                        break;
-                    }
-
+        const value: u64 = switch (signed) {
+            true => switch (integer_start_ch) {
+                '0' => blk: {
                     converter.offset += 1;
-                    value = lib.parse.accumulate_decimal(value, ch);
-                }
+
+                    switch (converter.content[converter.offset]) {
+                        'x', 'o', 'b', '0'...'9' => converter.report_error(),
+                        else => break :blk 0,
+                    }
+                },
+                '1'...'9' => @bitCast(-@as(i64, @intCast(converter.parse_decimal()))),
+                else => unreachable,
             },
-            else => unreachable,
-        }
+            false => switch (integer_start_ch) {
+                '0' => blk: {
+                    converter.offset += 1;
+
+                    switch (converter.content[converter.offset]) {
+                        'x' => {
+                            // TODO: parse hexadecimal
+                            converter.report_error();
+                        },
+                        'o' => {
+                            // TODO: parse octal
+                            converter.report_error();
+                        },
+                        'b' => {
+                            // TODO: parse binary
+                            converter.report_error();
+                        },
+                        '0'...'9' => {
+                            converter.report_error();
+                        },
+                        // Zero literal
+                        else => break :blk 0,
+                    }
+                },
+                '1'...'9' => converter.parse_decimal(),
+                else => unreachable,
+            },
+        };
 
         const integer_value = integer_type.get_constant(value, @intFromBool(sign_extend));
         return integer_value.to_value();
@@ -251,6 +269,7 @@ const Converter = struct {
     const ExpressionState = enum {
         none,
         sub,
+        add,
     };
 
     fn parse_value(noalias converter: *Converter, noalias thread: *llvm.Thread, expected_type: *llvm.Type) *llvm.Value {
@@ -267,14 +286,14 @@ const Converter = struct {
 
             converter.skip_space();
 
-            switch (value_state) {
-                .none => previous_value = current_value,
-                .sub => {
-                    const left = previous_value;
-                    const right = current_value;
-                    previous_value = thread.builder.create_sub(left, right);
-                },
-            }
+            const left = previous_value;
+            const right = current_value;
+
+            previous_value = switch (value_state) {
+                .none => current_value,
+                .sub => thread.builder.create_sub(left, right),
+                .add => thread.builder.create_add(left, right),
+            };
 
             const ch = converter.content[converter.offset];
             value_state = switch (ch) {
@@ -282,6 +301,10 @@ const Converter = struct {
                 '-' => blk: {
                     converter.offset += 1;
                     break :blk .sub;
+                },
+                '+' => blk: {
+                    converter.offset += 1;
+                    break :blk .add;
                 },
                 else => os.abort(),
             };
@@ -292,19 +315,51 @@ const Converter = struct {
         return value;
     }
 
+    const Prefix = enum {
+        none,
+        negative,
+    };
+
     fn parse_single_value(noalias converter: *Converter, expected_type: *llvm.Type) *llvm.Value {
         converter.skip_space();
 
-        const start = converter.offset;
-        const value_start_ch = converter.content[start];
-        if (is_identifier_start_ch(value_start_ch)) {
-            converter.report_error();
-        } else if (is_decimal_ch(value_start_ch)) {
-            const value = converter.parse_integer(expected_type);
-            return value;
-        } else {
-            converter.report_error();
-        }
+        const prefix_offset = converter.offset;
+        const prefix_ch = converter.content[prefix_offset];
+        var is_signed = false;
+        const prefix: Prefix = switch (prefix_ch) {
+            'a'...'z', 'A'...'Z', '_', '0'...'9' => .none,
+            '-' => blk: {
+                converter.offset += 1;
+
+                // TODO: should we skip space here?
+                converter.skip_space();
+                is_signed = true;
+                break :blk .negative;
+            },
+            else => os.abort(),
+        };
+        _ = prefix;
+
+        const value_offset = converter.offset;
+        const value_start_ch = converter.content[value_offset];
+        const value = switch (value_start_ch) {
+            'a'...'z', 'A'...'Z', '_' => os.abort(),
+            '0'...'9' => converter.parse_integer(expected_type, is_signed),
+            else => os.abort(),
+        };
+
+        return value;
+        // if (is_identifier_start_ch(value_start_ch)) {
+        //     converter.report_error();
+        // } else if (is_decimal_ch(value_start_ch)) {
+        //     const value = converter.parse_integer(expected_type);
+        //     return value;
+        // } else if ({
+        //     switch (value_start_ch) {
+        //
+        //     }
+        //     converter.report_error();
+        // }
     }
 };
 
@@ -629,6 +684,10 @@ pub noinline fn convert(options: ConvertOptions) void {
 
 test "minimal" {
     try invoke("minimal");
+}
+
+test "constant add" {
+    try invoke("constant_add");
 }
 
 test "constant sub" {
