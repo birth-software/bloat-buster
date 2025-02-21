@@ -560,6 +560,14 @@ pub const Builder = opaque {
         return api.LLVMBuildUDiv(builder, left, right, "");
     }
 
+    pub fn create_srem(builder: *Builder, left: *Value, right: *Value) *Value {
+        return api.LLVMBuildSRem(builder, left, right, "");
+    }
+
+    pub fn create_urem(builder: *Builder, left: *Value, right: *Value) *Value {
+        return api.LLVMBuildURem(builder, left, right, "");
+    }
+
     pub fn create_ret_void(builder: *Builder) void {
         builder.create_ret(null);
     }

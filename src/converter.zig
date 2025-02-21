@@ -296,6 +296,8 @@ const Converter = struct {
         mul,
         udiv,
         sdiv,
+        urem,
+        srem,
     };
 
     fn parse_value(noalias converter: *Converter, noalias thread: *llvm.Thread, expected_type: Type) *llvm.Value {
@@ -322,6 +324,8 @@ const Converter = struct {
                 .mul => thread.builder.create_mul(left, right),
                 .sdiv => thread.builder.create_sdiv(left, right),
                 .udiv => thread.builder.create_udiv(left, right),
+                .srem => thread.builder.create_srem(left, right),
+                .urem => thread.builder.create_urem(left, right),
             };
 
             const ch = converter.content[converter.offset];
@@ -344,6 +348,13 @@ const Converter = struct {
                     switch (expected_type.signedness) {
                         true => break :blk .sdiv,
                         false => break :blk .udiv,
+                    }
+                },
+                '%' => blk: {
+                    converter.offset += 1;
+                    switch (expected_type.signedness) {
+                        true => break :blk .srem,
+                        false => break :blk .urem,
                     }
                 },
                 else => os.abort(),
@@ -727,4 +738,8 @@ test "constant mul" {
 
 test "constant div" {
     try invoke("constant_div");
+}
+
+test "constant rem" {
+    try invoke("constant_rem");
 }
