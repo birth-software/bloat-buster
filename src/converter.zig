@@ -59,6 +59,29 @@ const CallingConvention = enum {
     c,
 };
 
+pub const FunctionBuilder = struct {
+    function: *llvm.Function,
+    current_basic_block: *llvm.BasicBlock,
+    return_type: Type,
+};
+
+const Type = packed struct(u64) {
+    llvm: u48,
+    signedness: bool,
+    reserved: u15 = 0,
+
+    pub fn new(llvm_type: *llvm.Type, signedness: bool) Type {
+        return .{
+            .llvm = @intCast(@intFromPtr(llvm_type)),
+            .signedness = signedness,
+        };
+    }
+
+    pub fn get(t: Type) *llvm.Type {
+        return @ptrFromInt(t.llvm);
+    }
+};
+
 const Converter = struct {
     content: []const u8,
     offset: usize,
@@ -75,7 +98,7 @@ const Converter = struct {
         }
     }
 
-    pub fn parse_type(noalias converter: *Converter, noalias thread: *llvm.Thread) *llvm.Type {
+    pub fn parse_type(noalias converter: *Converter, noalias thread: *llvm.Thread) Type {
         const identifier = converter.parse_identifier();
         var integer_type = identifier.len > 1 and identifier[0] == 's' or identifier[0] == 'u';
         if (integer_type) {
@@ -85,6 +108,11 @@ const Converter = struct {
         }
 
         if (integer_type) {
+            const signedness = switch (identifier[0]) {
+                's' => true,
+                'u' => false,
+                else => unreachable,
+            };
             const bit_count = lib.parse.integer_decimal(identifier[1..]);
             const llvm_int_type = switch (bit_count) {
                 // TODO: consider u1?
@@ -96,7 +124,7 @@ const Converter = struct {
                 else => converter.report_error(),
             };
             const llvm_type = llvm_int_type.to_type();
-            return llvm_type;
+            return Type.new(llvm_type, signedness);
         } else {
             os.abort();
         }
@@ -159,33 +187,19 @@ const Converter = struct {
         return value;
     }
 
-    fn parse_integer(noalias converter: *Converter, expected_type: *llvm.Type, signed: bool) *llvm.Value {
+    fn parse_integer(noalias converter: *Converter, expected_type: Type, sign: bool) *llvm.Value {
         const start = converter.offset;
         const integer_start_ch = converter.content[start];
         assert(!is_space(integer_start_ch));
         assert(is_decimal_ch(integer_start_ch));
-        const integer_type = expected_type.to_integer();
 
-        const sign_extend = signed;
+        const value: u64 = switch (integer_start_ch) {
+            '0' => blk: {
+                converter.offset += 1;
 
-        const value: u64 = switch (signed) {
-            true => switch (integer_start_ch) {
-                '0' => blk: {
-                    converter.offset += 1;
-
-                    switch (converter.content[converter.offset]) {
-                        'x', 'o', 'b', '0'...'9' => converter.report_error(),
-                        else => break :blk 0,
-                    }
-                },
-                '1'...'9' => @bitCast(-@as(i64, @intCast(converter.parse_decimal()))),
-                else => unreachable,
-            },
-            false => switch (integer_start_ch) {
-                '0' => blk: {
-                    converter.offset += 1;
-
-                    switch (converter.content[converter.offset]) {
+                const next_ch = converter.content[converter.offset];
+                break :blk switch (sign) {
+                    false => switch (next_ch) {
                         'x' => {
                             // TODO: parse hexadecimal
                             converter.report_error();
@@ -202,15 +216,24 @@ const Converter = struct {
                             converter.report_error();
                         },
                         // Zero literal
-                        else => break :blk 0,
-                    }
-                },
-                '1'...'9' => converter.parse_decimal(),
-                else => unreachable,
+                        else => 0,
+                    },
+                    true => switch (next_ch) {
+                        'x', 'o', 'b', '0' => converter.report_error(),
+                        '1'...'9' => @bitCast(-@as(i64, @intCast(converter.parse_decimal()))),
+                        else => unreachable,
+                    },
+                };
             },
+            '1'...'9' => switch (sign) {
+                true => @bitCast(-@as(i64, @intCast(converter.parse_decimal()))),
+                false => converter.parse_decimal(),
+            },
+            else => unreachable,
         };
 
-        const integer_value = integer_type.get_constant(value, @intFromBool(sign_extend));
+        const integer_type = expected_type.get().to_integer();
+        const integer_value = integer_type.get_constant(value, @intFromBool(expected_type.signedness));
         return integer_value.to_value();
     }
 
@@ -220,7 +243,7 @@ const Converter = struct {
         }
     }
 
-    fn parse_block(noalias converter: *Converter, noalias thread: *llvm.Thread, noalias function_builder: *llvm.FunctionBuilder) void {
+    fn parse_block(noalias converter: *Converter, noalias thread: *llvm.Thread, noalias function_builder: *FunctionBuilder) void {
         converter.skip_space();
 
         converter.expect_character(left_brace);
@@ -243,7 +266,7 @@ const Converter = struct {
                 if (string_to_enum(StatementStartKeyword, statement_start_identifier)) |statement_start_keyword| {
                     switch (statement_start_keyword) {
                         .@"return" => {
-                            const return_value = converter.parse_value(thread, function_builder.function.get_type().get_return_type());
+                            const return_value = converter.parse_value(thread, function_builder.return_type);
                             thread.builder.create_ret(return_value);
                         },
                         else => unreachable,
@@ -271,9 +294,11 @@ const Converter = struct {
         add,
         sub,
         mul,
+        udiv,
+        sdiv,
     };
 
-    fn parse_value(noalias converter: *Converter, noalias thread: *llvm.Thread, expected_type: *llvm.Type) *llvm.Value {
+    fn parse_value(noalias converter: *Converter, noalias thread: *llvm.Thread, expected_type: Type) *llvm.Value {
         converter.skip_space();
 
         var value_state = ExpressionState.none;
@@ -295,6 +320,8 @@ const Converter = struct {
                 .sub => thread.builder.create_sub(left, right),
                 .add => thread.builder.create_add(left, right),
                 .mul => thread.builder.create_mul(left, right),
+                .sdiv => thread.builder.create_sdiv(left, right),
+                .udiv => thread.builder.create_udiv(left, right),
             };
 
             const ch = converter.content[converter.offset];
@@ -312,6 +339,13 @@ const Converter = struct {
                     converter.offset += 1;
                     break :blk .mul;
                 },
+                '/' => blk: {
+                    converter.offset += 1;
+                    switch (expected_type.signedness) {
+                        true => break :blk .sdiv,
+                        false => break :blk .udiv,
+                    }
+                },
                 else => os.abort(),
             };
 
@@ -326,12 +360,11 @@ const Converter = struct {
         negative,
     };
 
-    fn parse_single_value(noalias converter: *Converter, expected_type: *llvm.Type) *llvm.Value {
+    fn parse_single_value(noalias converter: *Converter, expected_type: Type) *llvm.Value {
         converter.skip_space();
 
         const prefix_offset = converter.offset;
         const prefix_ch = converter.content[prefix_offset];
-        var is_signed = false;
         const prefix: Prefix = switch (prefix_ch) {
             'a'...'z', 'A'...'Z', '_', '0'...'9' => .none,
             '-' => blk: {
@@ -339,33 +372,20 @@ const Converter = struct {
 
                 // TODO: should we skip space here?
                 converter.skip_space();
-                is_signed = true;
                 break :blk .negative;
             },
             else => os.abort(),
         };
-        _ = prefix;
 
         const value_offset = converter.offset;
         const value_start_ch = converter.content[value_offset];
         const value = switch (value_start_ch) {
             'a'...'z', 'A'...'Z', '_' => os.abort(),
-            '0'...'9' => converter.parse_integer(expected_type, is_signed),
+            '0'...'9' => converter.parse_integer(expected_type, prefix == .negative),
             else => os.abort(),
         };
 
         return value;
-        // if (is_identifier_start_ch(value_start_ch)) {
-        //     converter.report_error();
-        // } else if (is_decimal_ch(value_start_ch)) {
-        //     const value = converter.parse_integer(expected_type);
-        //     return value;
-        // } else if ({
-        //     switch (value_start_ch) {
-        //
-        //     }
-        //     converter.report_error();
-        // }
     }
 };
 
@@ -607,7 +627,7 @@ pub noinline fn convert(options: ConvertOptions) void {
                 converter.skip_space();
 
                 const return_type = converter.parse_type(thread);
-                const function_type = llvm.Type.Function.get(return_type, &.{}, false);
+                const function_type = llvm.Type.Function.get(return_type.get(), &.{}, false);
 
                 const function = module.create_function(.{
                     .name = global_name,
@@ -621,9 +641,10 @@ pub noinline fn convert(options: ConvertOptions) void {
                 const entry_block = thread.context.create_basic_block("entry", function);
                 thread.builder.position_at_end(entry_block);
 
-                var function_builder = llvm.FunctionBuilder{
+                var function_builder = FunctionBuilder{
                     .function = function,
                     .current_basic_block = entry_block,
+                    .return_type = return_type,
                 };
 
                 converter.parse_block(thread, &function_builder);
@@ -702,4 +723,8 @@ test "constant sub" {
 
 test "constant mul" {
     try invoke("constant_mul");
+}
+
+test "constant div" {
+    try invoke("constant_div");
 }

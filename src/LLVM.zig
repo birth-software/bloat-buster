@@ -552,6 +552,14 @@ pub const Builder = opaque {
         return api.LLVMBuildMul(builder, left, right, "");
     }
 
+    pub fn create_sdiv(builder: *Builder, left: *Value, right: *Value) *Value {
+        return api.LLVMBuildSDiv(builder, left, right, "");
+    }
+
+    pub fn create_udiv(builder: *Builder, left: *Value, right: *Value) *Value {
+        return api.LLVMBuildUDiv(builder, left, right, "");
+    }
+
     pub fn create_ret_void(builder: *Builder) void {
         builder.create_ret(null);
     }
@@ -805,11 +813,6 @@ const LldArgvBuilder = struct {
         builder.buffer[builder.count] = null;
         return builder.buffer[0..builder.count :null];
     }
-};
-
-pub const FunctionBuilder = struct {
-    function: *Function,
-    current_basic_block: *BasicBlock,
 };
 
 pub fn default_initialize() *Thread {
