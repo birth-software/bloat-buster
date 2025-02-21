@@ -130,3 +130,11 @@ test "constant_xor" {
 test "minimal_stack" {
     try invsrc(@src());
 }
+
+test "stack_add" {
+    try invsrc(@src());
+}
+
+test "stack_sub" {
+    try invsrc(@src());
+}
