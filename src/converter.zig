@@ -3,7 +3,6 @@ const assert = lib.assert;
 const os = lib.os;
 const Arena = lib.Arena;
 const llvm = @import("LLVM.zig");
-const configuration = @import("configuration");
 
 const LexerResult = struct {
     token: Token,
@@ -307,7 +306,9 @@ const ConvertOptions = struct {
     executable: [:0]const u8,
     build_mode: BuildMode,
     name: []const u8,
+    has_debug_info: u1,
 };
+
 pub noinline fn convert(options: ConvertOptions) void {
     var converter = Converter{
         .content = options.content,
@@ -478,7 +479,7 @@ pub noinline fn convert(options: ConvertOptions) void {
 
     const object_generate_result = llvm.object_generate(module_builder.module, target_machine, .{
         .optimize_when_possible = @intFromBool(@intFromEnum(options.build_mode) > @intFromEnum(BuildMode.soft_optimize)),
-        .debug_info = configuration.has_debug_info,
+        .debug_info = options.has_debug_info,
         .optimization_level = if (options.build_mode != .debug_none) options.build_mode.to_llvm_ir() else null,
         .path = options.object,
     });
@@ -499,15 +500,25 @@ pub noinline fn convert(options: ConvertOptions) void {
     }
 }
 
-fn get_test_build_mode() BuildMode {
-    return @enumFromInt(@intFromEnum(configuration.test_build_mode));
-}
-
 test "minimal" {
-    invoke("minimal", get_test_build_mode());
+    invoke("minimal");
 }
 
-pub fn invoke(name: []const u8, build_mode: BuildMode) void {
+fn invoke(name: []const u8) void {
+    inline for (@typeInfo(BuildMode).@"enum".fields) |f| {
+        const build_mode = @field(BuildMode, f.name);
+        inline for ([2]u1{ 0, 1 }) |has_debug_info| {
+            invoke_wrapper(name, build_mode, has_debug_info);
+        }
+    }
+}
+
+// We invoke a function with comptime parameters so it's easily visible in CI stack traces
+fn invoke_wrapper(name: []const u8, comptime build_mode: BuildMode, comptime has_debug_info: u1) void {
+    return invoke_single(name, build_mode, has_debug_info);
+}
+
+fn invoke_single(name: []const u8, build_mode: BuildMode, has_debug_info: u1) void {
     const std = @import("std");
     if (!lib.GlobalState.initialized) {
         lib.GlobalState.initialize();
@@ -531,5 +542,6 @@ pub fn invoke(name: []const u8, build_mode: BuildMode) void {
         .executable = executable_path,
         .build_mode = build_mode,
         .name = name,
+        .has_debug_info = has_debug_info,
     });
 }

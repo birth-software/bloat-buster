@@ -1,5 +1,4 @@
 const lib = @import("lib.zig");
-const configuration = @import("configuration");
 const llvm = @import("LLVM.zig");
 const converter = @import("converter.zig");
 const Arena = lib.Arena;

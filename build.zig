@@ -302,19 +302,11 @@ pub fn build(b: *std.Build) !void {
     system_llvm = b.option(bool, "system_llvm", "Link against system LLVM libraries") orelse true;
     const path = env.get("PATH") orelse unreachable;
 
-    const test_build_mode = b.option(BuildMode, "test_build_mode", "Test build mode") orelse .debug_none;
-    const has_debug_info = b.option(bool, "has_debug_info", "Has debug information") orelse true;
-
-    const configuration = b.addOptions();
-    configuration.addOption(BuildMode, "test_build_mode", test_build_mode);
-    configuration.addOption(u1, "has_debug_info", @intFromBool(has_debug_info));
-
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
-    exe_mod.addOptions("configuration", configuration);
 
     const llvm = try LLVM.setup(b, path);
 
