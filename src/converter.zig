@@ -268,8 +268,9 @@ const Converter = struct {
 
     const ExpressionState = enum {
         none,
-        sub,
         add,
+        sub,
+        mul,
     };
 
     fn parse_value(noalias converter: *Converter, noalias thread: *llvm.Thread, expected_type: *llvm.Type) *llvm.Value {
@@ -293,6 +294,7 @@ const Converter = struct {
                 .none => current_value,
                 .sub => thread.builder.create_sub(left, right),
                 .add => thread.builder.create_add(left, right),
+                .mul => thread.builder.create_mul(left, right),
             };
 
             const ch = converter.content[converter.offset];
@@ -305,6 +307,10 @@ const Converter = struct {
                 '+' => blk: {
                     converter.offset += 1;
                     break :blk .add;
+                },
+                '*' => blk: {
+                    converter.offset += 1;
+                    break :blk .mul;
                 },
                 else => os.abort(),
             };
@@ -692,4 +698,8 @@ test "constant add" {
 
 test "constant sub" {
     try invoke("constant_sub");
+}
+
+test "constant mul" {
+    try invoke("constant_mul");
 }

@@ -548,6 +548,10 @@ pub const Builder = opaque {
         return api.LLVMBuildSub(builder, left, right, "");
     }
 
+    pub fn create_mul(builder: *Builder, left: *Value, right: *Value) *Value {
+        return api.LLVMBuildMul(builder, left, right, "");
+    }
+
     pub fn create_ret_void(builder: *Builder) void {
         builder.create_ret(null);
     }
