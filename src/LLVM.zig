@@ -580,6 +580,10 @@ pub const Builder = opaque {
         return api.LLVMBuildLShr(builder, left, right, "");
     }
 
+    pub fn create_and(builder: *Builder, left: *Value, right: *Value) *Value {
+        return api.LLVMBuildAnd(builder, left, right, "");
+    }
+
     pub fn create_ret_void(builder: *Builder) void {
         builder.create_ret(null);
     }

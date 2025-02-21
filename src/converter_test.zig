@@ -110,3 +110,7 @@ test "constant shift left" {
 test "constant shift right" {
     try invoke("constant_shift_right");
 }
+
+test "constant and" {
+    try invoke("constant_and");
+}
