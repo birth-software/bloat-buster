@@ -1,5 +1,6 @@
 const lib = @import("lib.zig");
 const assert = lib.assert;
+const std = @import("std");
 
 const converter = @import("converter.zig");
 const BuildMode = converter.BuildMode;
@@ -9,7 +10,6 @@ fn invoke(name: []const u8) !void {
         lib.GlobalState.initialize();
     }
 
-    const std = @import("std");
     comptime assert(lib.is_test);
     const allocator = std.testing.allocator;
 
@@ -79,42 +79,50 @@ fn invoke_single(options: InvokeWrapper, build_mode: BuildMode, has_debug_info: 
     });
 }
 
+fn invsrc(src: std.builtin.SourceLocation) !void {
+    try invoke(src.fn_name[std.mem.lastIndexOfScalar(u8, src.fn_name, '.').? + 1 ..]);
+}
+
 test "minimal" {
-    try invoke("minimal");
+    try invsrc(@src());
 }
 
-test "constant add" {
-    try invoke("constant_add");
+test "constant_add" {
+    try invsrc(@src());
 }
 
-test "constant sub" {
-    try invoke("constant_sub");
+test "constant_sub" {
+    try invsrc(@src());
 }
 
-test "constant mul" {
-    try invoke("constant_mul");
+test "constant_mul" {
+    try invsrc(@src());
 }
 
-test "constant div" {
-    try invoke("constant_div");
+test "constant_div" {
+    try invsrc(@src());
 }
 
-test "constant rem" {
-    try invoke("constant_rem");
+test "constant_rem" {
+    try invsrc(@src());
 }
 
-test "constant shift left" {
-    try invoke("constant_shift_left");
+test "constant_shift_left" {
+    try invsrc(@src());
 }
 
-test "constant shift right" {
-    try invoke("constant_shift_right");
+test "constant_shift_right" {
+    try invsrc(@src());
 }
 
-test "constant and" {
-    try invoke("constant_and");
+test "constant_and" {
+    try invsrc(@src());
 }
 
-test "constant or" {
-    try invoke("constant_or");
+test "constant_or" {
+    try invsrc(@src());
+}
+
+test "constant_xor" {
+    try invsrc(@src());
 }

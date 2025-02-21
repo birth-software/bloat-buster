@@ -588,6 +588,10 @@ pub const Builder = opaque {
         return api.LLVMBuildOr(builder, left, right, "");
     }
 
+    pub fn create_xor(builder: *Builder, left: *Value, right: *Value) *Value {
+        return api.LLVMBuildXor(builder, left, right, "");
+    }
+
     pub fn create_ret_void(builder: *Builder) void {
         builder.create_ret(null);
     }
