@@ -302,6 +302,9 @@ const Converter = struct {
         sdiv,
         urem,
         srem,
+        shl,
+        ashr,
+        lshr,
     };
 
     fn parse_value(noalias converter: *Converter, noalias thread: *llvm.Thread, expected_type: Type) *llvm.Value {
@@ -330,6 +333,9 @@ const Converter = struct {
                 .udiv => thread.builder.create_udiv(left, right),
                 .srem => thread.builder.create_srem(left, right),
                 .urem => thread.builder.create_urem(left, right),
+                .shl => thread.builder.create_shl(left, right),
+                .ashr => thread.builder.create_ashr(left, right),
+                .lshr => thread.builder.create_lshr(left, right),
             };
 
             const ch = converter.content[converter.offset];
@@ -349,10 +355,10 @@ const Converter = struct {
                 },
                 '/' => blk: {
                     converter.offset += 1;
-                    switch (expected_type.signedness) {
-                        true => break :blk .sdiv,
-                        false => break :blk .udiv,
-                    }
+                    break :blk switch (expected_type.signedness) {
+                        true => .sdiv,
+                        false => .udiv,
+                    };
                 },
                 '%' => blk: {
                     converter.offset += 1;
@@ -360,6 +366,31 @@ const Converter = struct {
                         true => break :blk .srem,
                         false => break :blk .urem,
                     }
+                },
+                '<' => blk: {
+                    converter.offset += 1;
+
+                    break :blk switch (converter.content[converter.offset]) {
+                        '<' => b: {
+                            converter.offset += 1;
+                            break :b .shl;
+                        },
+                        else => os.abort(),
+                    };
+                },
+                '>' => blk: {
+                    converter.offset += 1;
+
+                    break :blk switch (converter.content[converter.offset]) {
+                        '>' => b: {
+                            converter.offset += 1;
+                            break :b switch (expected_type.signedness) {
+                                true => .ashr,
+                                false => .lshr,
+                            };
+                        },
+                        else => os.abort(),
+                    };
                 },
                 else => os.abort(),
             };

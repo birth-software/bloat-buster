@@ -102,3 +102,11 @@ test "constant div" {
 test "constant rem" {
     try invoke("constant_rem");
 }
+
+test "constant shift left" {
+    try invoke("constant_shift_left");
+}
+
+test "constant shift right" {
+    try invoke("constant_shift_right");
+}

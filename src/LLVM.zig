@@ -568,6 +568,18 @@ pub const Builder = opaque {
         return api.LLVMBuildURem(builder, left, right, "");
     }
 
+    pub fn create_shl(builder: *Builder, left: *Value, right: *Value) *Value {
+        return api.LLVMBuildShl(builder, left, right, "");
+    }
+
+    pub fn create_ashr(builder: *Builder, left: *Value, right: *Value) *Value {
+        return api.LLVMBuildAShr(builder, left, right, "");
+    }
+
+    pub fn create_lshr(builder: *Builder, left: *Value, right: *Value) *Value {
+        return api.LLVMBuildLShr(builder, left, right, "");
+    }
+
     pub fn create_ret_void(builder: *Builder) void {
         builder.create_ret(null);
     }
