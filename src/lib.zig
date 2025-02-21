@@ -2492,10 +2492,14 @@ pub const parse = struct {
 
         for (str) |ch| {
             assert(is_decimal_digit(ch));
-            value = (value * 10) + (ch - '0');
+            value = accumulate_decimal(value, ch);
         }
 
         return value;
+    }
+
+    pub fn accumulate_decimal(accumulator: u64, ch: u8) u64 {
+        return (accumulator * 10) + (ch - '0');
     }
 };
 

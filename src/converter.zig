@@ -75,8 +75,7 @@ const Converter = struct {
         }
     }
 
-    pub fn parse_type(noalias converter: *Converter, noalias thread: *llvm.Thread, noalias module_builder: *llvm.ModuleBuilder) *llvm.Type {
-        _ = module_builder;
+    pub fn parse_type(noalias converter: *Converter, noalias thread: *llvm.Thread) *llvm.Type {
         const identifier = converter.parse_identifier();
         var integer_type = identifier.len > 1 and identifier[0] == 's' or identifier[0] == 'u';
         if (integer_type) {
@@ -150,6 +149,10 @@ const Converter = struct {
         const integer_start_ch = converter.content[start];
         assert(!is_space(integer_start_ch));
         assert(is_decimal_ch(integer_start_ch));
+        const integer_type = expected_type.to_integer();
+
+        const sign_extend = false;
+        var value: u64 = 0;
 
         switch (integer_start_ch) {
             '0' => {
@@ -172,18 +175,25 @@ const Converter = struct {
                         converter.report_error();
                     },
                     // Zero literal
-                    else => {
-                        const integer_type = expected_type.to_integer();
-                        const sign_extend = false;
-                        const integer_value = integer_type.get_constant(0, @intFromBool(sign_extend));
-                        return integer_value.to_value();
-                    },
+                    else => {},
                 }
             },
-            // TODO: decimal number
-            '1'...'9' => converter.report_error(),
+            '1'...'9' => {
+                while (true) {
+                    const ch = converter.content[converter.offset];
+                    if (!is_decimal_ch(ch)) {
+                        break;
+                    }
+
+                    converter.offset += 1;
+                    value = lib.parse.accumulate_decimal(value, ch);
+                }
+            },
             else => unreachable,
         }
+
+        const integer_value = integer_type.get_constant(value, @intFromBool(sign_extend));
+        return integer_value.to_value();
     }
 
     fn expect_character(noalias converter: *Converter, expected_ch: u8) void {
@@ -192,8 +202,7 @@ const Converter = struct {
         }
     }
 
-    fn parse_block(noalias converter: *Converter, thread: *llvm.Thread, module_builder: *llvm.ModuleBuilder, function_builder: *llvm.FunctionBuilder) void {
-        _ = thread;
+    fn parse_block(noalias converter: *Converter, noalias thread: *llvm.Thread, noalias function_builder: *llvm.FunctionBuilder) void {
         converter.skip_space();
 
         converter.expect_character(left_brace);
@@ -216,8 +225,8 @@ const Converter = struct {
                 if (string_to_enum(StatementStartKeyword, statement_start_identifier)) |statement_start_keyword| {
                     switch (statement_start_keyword) {
                         .@"return" => {
-                            const return_value = converter.parse_value(function_builder.function.get_type().get_return_type());
-                            module_builder.builder.create_ret(return_value);
+                            const return_value = converter.parse_value(thread, function_builder.function.get_type().get_return_type());
+                            thread.builder.create_ret(return_value);
                         },
                         else => unreachable,
                     }
@@ -239,7 +248,51 @@ const Converter = struct {
         converter.expect_character(right_brace);
     }
 
-    fn parse_value(noalias converter: *Converter, expected_type: *llvm.Type) *llvm.Value {
+    const ExpressionState = enum {
+        none,
+        sub,
+    };
+
+    fn parse_value(noalias converter: *Converter, noalias thread: *llvm.Thread, expected_type: *llvm.Type) *llvm.Value {
+        converter.skip_space();
+
+        var value_state = ExpressionState.none;
+        var previous_value: *llvm.Value = undefined;
+
+        const value = while (true) {
+            const current_value = switch (converter.content[converter.offset] == left_parenthesis) {
+                true => os.abort(),
+                false => converter.parse_single_value(expected_type),
+            };
+
+            converter.skip_space();
+
+            switch (value_state) {
+                .none => previous_value = current_value,
+                .sub => {
+                    const left = previous_value;
+                    const right = current_value;
+                    previous_value = thread.builder.create_sub(left, right);
+                },
+            }
+
+            const ch = converter.content[converter.offset];
+            value_state = switch (ch) {
+                ';' => break previous_value,
+                '-' => blk: {
+                    converter.offset += 1;
+                    break :blk .sub;
+                },
+                else => os.abort(),
+            };
+
+            converter.skip_space();
+        };
+
+        return value;
+    }
+
+    fn parse_single_value(noalias converter: *Converter, expected_type: *llvm.Type) *llvm.Value {
         converter.skip_space();
 
         const start = converter.offset;
@@ -299,6 +352,81 @@ pub const BuildMode = enum {
     }
 };
 
+fn invoke(name: []const u8) !void {
+    if (!lib.GlobalState.initialized) {
+        lib.GlobalState.initialize();
+    }
+
+    const std = @import("std");
+    comptime assert(lib.is_test);
+    const allocator = std.testing.allocator;
+
+    inline for (@typeInfo(BuildMode).@"enum".fields) |f| {
+        const build_mode = @field(BuildMode, f.name);
+        inline for ([2]u1{ 0, 1 }) |has_debug_info| {
+            var tmp_dir = std.testing.tmpDir(.{});
+            defer tmp_dir.cleanup();
+            const base_path = lib.global.arena.join_string(&.{ ".zig-cache/tmp/", &tmp_dir.sub_path, "/", name });
+            const executable_path = base_path;
+            invoke_wrapper(.{
+                .object_path = lib.global.arena.join_string(&.{ base_path, ".o" }),
+                .executable_path = executable_path,
+                .file_path = lib.global.arena.join_string(&.{ "tests/", name, ".bbb" }),
+                .name = name,
+            }, build_mode, has_debug_info);
+            const run_result = std.process.Child.run(.{
+                .allocator = allocator,
+                .argv = &.{executable_path},
+            }) catch |err| {
+                std.debug.print("error: {}\n", .{err});
+                const path = lib.global.arena.join_string(&.{ ".zig-cache/tmp/", &tmp_dir.sub_path });
+                const r = try std.process.Child.run(.{
+                    .allocator = allocator,
+                    .argv = &.{ "/usr/bin/ls", "-lasR", path },
+                    .max_output_bytes = std.math.maxInt(usize),
+                });
+                defer allocator.free(r.stdout);
+                defer allocator.free(r.stderr);
+                std.debug.print("ls {s} {s}\n", .{ path, r.stdout });
+                return err;
+            };
+            const success = switch (run_result.term) {
+                .Exited => |exit_code| exit_code == 0,
+                else => false,
+            };
+            if (!success) {
+                return error.executable_failed_to_run_successfully;
+            }
+        }
+    }
+}
+
+const InvokeWrapper = struct {
+    executable_path: [:0]const u8,
+    object_path: [:0]const u8,
+    file_path: [:0]const u8,
+    name: []const u8,
+};
+
+// We invoke a function with comptime parameters so it's easily visible in CI stack traces
+fn invoke_wrapper(options: InvokeWrapper, comptime build_mode: BuildMode, comptime has_debug_info: u1) void {
+    return invoke_single(options, build_mode, has_debug_info);
+}
+
+fn invoke_single(options: InvokeWrapper, build_mode: BuildMode, has_debug_info: u1) void {
+    const file_content = lib.file.read(lib.global.arena, options.file_path);
+
+    convert(.{
+        .path = options.file_path,
+        .content = file_content,
+        .object = options.object_path,
+        .executable = options.executable_path,
+        .build_mode = build_mode,
+        .name = options.name,
+        .has_debug_info = has_debug_info,
+    });
+}
+
 const ConvertOptions = struct {
     content: []const u8,
     path: [:0]const u8,
@@ -316,8 +444,7 @@ pub noinline fn convert(options: ConvertOptions) void {
     };
 
     const thread = llvm.default_initialize();
-    var module_builder_memory = llvm.ModuleBuilder.initialize(thread, options.name);
-    const module_builder = &module_builder_memory;
+    const module = thread.context.create_module(options.name);
 
     while (true) {
         converter.skip_space();
@@ -418,10 +545,10 @@ pub noinline fn convert(options: ConvertOptions) void {
 
                 converter.skip_space();
 
-                const return_type = converter.parse_type(thread, module_builder);
+                const return_type = converter.parse_type(thread);
                 const function_type = llvm.Type.Function.get(return_type, &.{}, false);
 
-                const function = module_builder.module.create_function(.{
+                const function = module.create_function(.{
                     .name = global_name,
                     .linkage = switch (is_export) {
                         true => .ExternalLinkage,
@@ -431,14 +558,14 @@ pub noinline fn convert(options: ConvertOptions) void {
                 });
 
                 const entry_block = thread.context.create_basic_block("entry", function);
-                module_builder.builder.position_at_end(entry_block);
+                thread.builder.position_at_end(entry_block);
 
                 var function_builder = llvm.FunctionBuilder{
                     .function = function,
                     .current_basic_block = entry_block,
                 };
 
-                converter.parse_block(thread, module_builder, &function_builder);
+                converter.parse_block(thread, &function_builder);
 
                 if (lib.optimization_mode == .Debug) {
                     const verify_result = function.verify();
@@ -452,13 +579,13 @@ pub noinline fn convert(options: ConvertOptions) void {
     }
 
     if (lib.optimization_mode == .Debug) {
-        const verify_result = module_builder.module.verify();
+        const verify_result = module.verify();
         if (!verify_result.success) {
             os.abort();
         }
 
         if (!lib.is_test) {
-            const module_string = module_builder.module.to_string();
+            const module_string = module.to_string();
             lib.print_string_stderr(module_string);
         }
     }
@@ -477,7 +604,7 @@ pub noinline fn convert(options: ConvertOptions) void {
         os.abort();
     };
 
-    const object_generate_result = llvm.object_generate(module_builder.module, target_machine, .{
+    const object_generate_result = llvm.object_generate(module, target_machine, .{
         .optimize_when_possible = @intFromBool(@intFromEnum(options.build_mode) > @intFromEnum(BuildMode.soft_optimize)),
         .debug_info = options.has_debug_info,
         .optimization_level = if (options.build_mode != .debug_none) options.build_mode.to_llvm_ir() else null,
@@ -501,47 +628,9 @@ pub noinline fn convert(options: ConvertOptions) void {
 }
 
 test "minimal" {
-    invoke("minimal");
+    try invoke("minimal");
 }
 
-fn invoke(name: []const u8) void {
-    inline for (@typeInfo(BuildMode).@"enum".fields) |f| {
-        const build_mode = @field(BuildMode, f.name);
-        inline for ([2]u1{ 0, 1 }) |has_debug_info| {
-            invoke_wrapper(name, build_mode, has_debug_info);
-        }
-    }
-}
-
-// We invoke a function with comptime parameters so it's easily visible in CI stack traces
-fn invoke_wrapper(name: []const u8, comptime build_mode: BuildMode, comptime has_debug_info: u1) void {
-    return invoke_single(name, build_mode, has_debug_info);
-}
-
-fn invoke_single(name: []const u8, build_mode: BuildMode, has_debug_info: u1) void {
-    const std = @import("std");
-    if (!lib.GlobalState.initialized) {
-        lib.GlobalState.initialize();
-    }
-    var tmp_dir = if (lib.is_test) std.testing.tmpDir(.{}) else {};
-    defer {
-        if (lib.is_test) {
-            tmp_dir.cleanup();
-        }
-    }
-
-    const object_path = lib.global.arena.join_string(if (lib.is_test) &.{ ".zig-cache/tmp/", &tmp_dir.sub_path, "/", name, ".o" } else &.{ name, ".o" });
-    const executable_path = lib.global.arena.join_string(if (lib.is_test) &.{ ".zig-cache/tmp/", &tmp_dir.sub_path, "/", name, ".o" } else &.{name});
-    const file_path = lib.global.arena.join_string(&.{ "tests/", name, ".bbb" });
-    const file_content = lib.file.read(lib.global.arena, file_path);
-
-    convert(.{
-        .path = file_path,
-        .content = file_content,
-        .object = object_path,
-        .executable = executable_path,
-        .build_mode = build_mode,
-        .name = name,
-        .has_debug_info = has_debug_info,
-    });
+test "constant sub" {
+    try invoke("constant_sub");
 }

@@ -1,7 +1,8 @@
 const lib = @import("lib.zig");
-const builtin = @import("builtin");
 const Arena = lib.Arena;
 const assert = lib.assert;
+const os = lib.os;
+const builtin = @import("builtin");
 const api = @import("llvm_api.zig");
 
 /// This is a String which ABI-compatible with C++
@@ -539,6 +540,13 @@ pub const Builder = opaque {
     pub const position_at_end = api.LLVMPositionBuilderAtEnd;
 
     pub const create_ret = api.LLVMBuildRet;
+    pub fn create_add(builder: *Builder, left: *Value, right: *Value) *Value {
+        return api.LLVMBuildAdd(builder, left, right, "");
+    }
+
+    pub fn create_sub(builder: *Builder, left: *Value, right: *Value) *Value {
+        return api.LLVMBuildSub(builder, left, right, "");
+    }
 
     pub fn create_ret_void(builder: *Builder) void {
         builder.create_ret(null);
@@ -695,6 +703,7 @@ pub const lld = struct {
 
 pub const Thread = struct {
     context: *Context,
+    builder: *Builder,
     i1: Integer,
     i8: Integer,
     i16: Integer,
@@ -724,6 +733,7 @@ pub const Thread = struct {
 
         thread.* = .{
             .context = context,
+            .builder = context.create_builder(),
             .i1 = .{
                 .type = type_i1,
                 .zero = zero_i1,
@@ -790,21 +800,6 @@ const LldArgvBuilder = struct {
     pub fn flush(builder: *LldArgvBuilder) [:null]const ?[*:0]const u8 {
         builder.buffer[builder.count] = null;
         return builder.buffer[0..builder.count :null];
-    }
-};
-
-pub const ModuleBuilder = struct {
-    module: *Module,
-    builder: *Builder,
-
-    pub fn initialize(thread: *Thread, module_name: []const u8) ModuleBuilder {
-        const module = thread.context.create_module(module_name);
-        const builder = thread.context.create_builder();
-
-        return .{
-            .module = module,
-            .builder = builder,
-        };
     }
 };
 
@@ -901,7 +896,9 @@ pub fn link(arena: *Arena, options: LinkOptions) lld.Result {
     const dynamic_linker = true;
     if (dynamic_linker) {
         arg_builder.add("-dynamic-linker");
-        arg_builder.add("/usr/lib/ld-linux-x86-64.so.2");
+
+        const dynamic_linker_path = "/usr/lib64/ld-linux-x86-64.so.2";
+        arg_builder.add(dynamic_linker_path);
     }
 
     if (link_libc) {

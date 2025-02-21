@@ -19,6 +19,8 @@ pub extern fn llvm_module_to_string(module: *llvm.Module) llvm.String;
 // Builder API
 pub extern fn LLVMPositionBuilderAtEnd(builder: *llvm.Builder, basic_block: *llvm.BasicBlock) void;
 pub extern fn LLVMBuildRet(builder: *llvm.Builder, value: ?*llvm.Value) void;
+pub extern fn LLVMBuildAdd(builder: *llvm.Builder, left: *llvm.Value, right: *llvm.Value, name: [*:0]const u8) *llvm.Value;
+pub extern fn LLVMBuildSub(builder: *llvm.Builder, left: *llvm.Value, right: *llvm.Value, name: [*:0]const u8) *llvm.Value;
 
 pub extern fn LLVMTypeOf(value: *llvm.Value) *llvm.Type;
 pub extern fn LLVMGlobalGetValueType(value: *llvm.GlobalValue) *llvm.Type;
