@@ -65,6 +65,12 @@ EXPORT bool llvm_type_is_integer(const Type& type)
     return result;
 }
 
+EXPORT unsigned llvm_integer_type_get_bit_count(const IntegerType& integer_type)
+{
+    auto result = integer_type.getBitWidth();
+    return result;
+}
+
 EXPORT Function* llvm_module_create_function(Module* module, FunctionType* function_type, GlobalValue::LinkageTypes linkage_type, unsigned address_space, BBLLVMString name)
 {
     auto* function = Function::Create(function_type, linkage_type, address_space, name.string_ref(), module);

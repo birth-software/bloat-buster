@@ -606,6 +606,12 @@ pub const Builder = opaque {
     pub fn create_load(builder: *Builder, ty: *Type, pointer: *Value) *Value {
         return api.LLVMBuildLoad2(builder, ty, pointer, "");
     }
+
+    pub fn clear_current_debug_location(builder: *Builder) void {
+        return builder.set_current_debug_location(null);
+    }
+
+    pub const set_current_debug_location = api.LLVMSetCurrentDebugLocation2;
 };
 
 pub const GlobalValue = opaque {
@@ -632,6 +638,8 @@ pub const Function = opaque {
         result.error_message = string.to_slice();
         return result;
     }
+    pub const set_subprogram = api.LLVMSetSubprogram;
+    pub const get_subprogram = api.LLVMGetSubprogram;
 };
 
 pub const Constant = opaque {
@@ -652,48 +660,107 @@ pub const Value = opaque {
 
 pub const DI = struct {
     pub const Builder = opaque {
-        pub fn create_file(builder: *DI.Builder, file_name: []const u8, directory_name: []const u8) *File {
-            return api.LLVMCreateDIBuilder(builder, file_name.ptr, file_name.len, directory_name.ptr, directory_name.len);
+        pub fn create_file(builder: *DI.Builder, file_name: []const u8, directory: []const u8) *File {
+            return api.LLVMDIBuilderCreateFile(builder, String.from_slice(file_name), String.from_slice(directory));
+        }
+
+        pub fn create_compile_unit(builder: *DI.Builder, file: *DI.File, optimized: bool) *DI.CompileUnit {
+            return api.LLVMDIBuilderCreateCompileUnit(builder, .C17, file, String.from_slice("bloat buster"), @intFromBool(optimized), String{}, 0, String{}, .full, 0, 0, @intFromBool(optimized), String{}, String{});
+        }
+
+        pub const finalize = api.LLVMDIBuilderFinalize;
+
+        pub fn create_subroutine_type(builder: *DI.Builder, file: *DI.File, parameter_types: []const *DI.Type, flags: DI.Flags) *DI.Type.Subroutine {
+            return api.LLVMDIBuilderCreateSubroutineType(builder, file, parameter_types.ptr, @intCast(parameter_types.len), flags);
+        }
+
+        pub fn create_function(builder: *DI.Builder, scope: *DI.Scope, name: []const u8, linkage_name: []const u8, file: *DI.File, line_number: c_uint, subroutine_type: *DI.Type.Subroutine, local_to_unit: bool, is_definition: bool, scope_line: c_uint, flags: DI.Flags, is_optimized: bool) *DI.Subprogram {
+            return api.LLVMDIBuilderCreateFunction(builder, scope, String.from_slice(name), String.from_slice(linkage_name), file, line_number, subroutine_type, @intFromBool(local_to_unit), @intFromBool(is_definition), scope_line, flags, @intFromBool(is_optimized));
+        }
+
+        pub fn create_basic_type(builder: *DI.Builder, name: []const u8, bit_count: u64, dwarf_type: Dwarf.Type, flags: DI.Flags) *DI.Type {
+            return api.LLVMDIBuilderCreateBasicType(builder, name.ptr, name.len, bit_count, dwarf_type, flags);
+        }
+
+        pub const finalize_subprogram = api.LLVMDIBuilderFinalizeSubprogram;
+
+        pub fn create_expression(builder: *DI.Builder, slice: []const u64) *DI.Expression {
+            return api.LLVMDIBuilderCreateExpression(builder, slice.ptr, slice.len);
+        }
+
+        pub fn null_expression(builder: *DI.Builder) *DI.Expression {
+            return api.LLVMDIBuilderCreateExpression(builder, null, 0);
+        }
+
+        pub fn create_auto_variable(builder: *DI.Builder, scope: *DI.Scope, name: []const u8, file: *DI.File, line: c_uint, auto_type: *DI.Type, always_preserve: bool, flags: DI.Flags, alignment_in_bits: u32) *DI.LocalVariable {
+            return api.LLVMDIBuilderCreateAutoVariable(builder, scope, name.ptr, name.len, file, line, auto_type, @intFromBool(always_preserve), flags, alignment_in_bits);
+        }
+
+        pub const insert_declare_record_at_end = api.LLVMDIBuilderInsertDeclareRecordAtEnd;
+    };
+
+    pub const create_debug_location = api.LLVMDIBuilderCreateDebugLocation;
+
+    pub const CompileUnit = opaque {
+        pub fn to_scope(compile_unit: *DI.CompileUnit) *DI.Scope {
+            return @ptrCast(compile_unit);
         }
     };
     pub const File = opaque {};
+    pub const Scope = opaque {};
+    pub const Subprogram = opaque {};
+    pub const Expression = opaque {};
+    pub const LocalVariable = opaque {};
+    pub const Location = opaque {};
+    pub const Metadata = opaque {};
+    pub const Record = opaque {};
 
-    const Flags = enum(c_int) {
-        _,
-        const Zero = 0;
-        const Private = 1;
-        const Protected = 2;
-        const Public = 3;
-        const FwdDecl = 1 << 2;
-        const AppleBlock = 1 << 3;
-        const ReservedBit4 = 1 << 4;
-        const Virtual = 1 << 5;
-        const Artificial = 1 << 6;
-        const Explicit = 1 << 7;
-        const Prototyped = 1 << 8;
-        const ObjcClassComplete = 1 << 9;
-        const ObjectPointer = 1 << 10;
-        const Vector = 1 << 11;
-        const StaticMember = 1 << 12;
-        const LValueReference = 1 << 13;
-        const RValueReference = 1 << 14;
-        const Reserved = 1 << 15;
-        const SingleInheritance = 1 << 16;
-        const MultipleInheritance = 2 << 16;
-        const VirtualInheritance = 3 << 16;
-        const IntroducedVirtual = 1 << 18;
-        const BitField = 1 << 19;
-        const NoReturn = 1 << 20;
-        const TypePassByValue = 1 << 22;
-        const TypePassByReference = 1 << 23;
-        const EnumClass = 1 << 24;
-        const Thunk = 1 << 25;
-        const NonTrivial = 1 << 26;
-        const BigEndian = 1 << 27;
-        const LittleEndian = 1 << 28;
-        const IndirectVirtualBase = (1 << 2) | (1 << 5);
-        const Accessibility = Private | Protected | Public;
-        const PtrToMemberRep = SingleInheritance | MultipleInheritance | VirtualInheritance;
+    pub const Type = opaque {
+        pub const Subroutine = opaque {};
+    };
+
+    pub const Flags = packed struct(u32) {
+        visibility: Visibility = .none,
+        forward_declaration: bool = false,
+        apple_block: bool = false,
+        block_by_ref_struct: bool = false,
+        virtual: bool = false,
+        artificial: bool = false,
+        explicit: bool = false,
+        prototyped: bool = false,
+        objective_c_class_complete: bool = false,
+        object_pointer: bool = false,
+        vector: bool = false,
+        static_member: bool = false,
+        lvalue_reference: bool = false,
+        rvalue_reference: bool = false,
+        reserved: bool = false,
+        inheritance: Inheritance = .none,
+        introduced_virtual: bool = false,
+        bit_field: bool = false,
+        no_return: bool = false,
+        type_pass_by_value: bool = false,
+        type_pass_by_reference: bool = false,
+        enum_class: bool = false,
+        thunk: bool = false,
+        non_trivial: bool = false,
+        big_endian: bool = false,
+        little_endian: bool = false,
+        all_calls_described: bool = false,
+        _: u3 = 0,
+
+        const Visibility = enum(u2) {
+            none = 0,
+            private = 1,
+            protected = 2,
+            public = 3,
+        };
+        const Inheritance = enum(u2) {
+            none = 0,
+            single = 1,
+            multiple = 2,
+            virtual = 3,
+        };
     };
 };
 
@@ -722,6 +789,131 @@ pub const Type = opaque {
         pub fn to_type(integer: *Type.Integer) *Type {
             return @ptrCast(integer);
         }
+        pub const get_bit_count = api.llvm_integer_type_get_bit_count;
+    };
+};
+
+pub const Dwarf = struct {
+    pub const Type = enum(c_uint) {
+        void = 0x0,
+        address = 0x1,
+        boolean = 0x2,
+        complex_float = 0x3,
+        float = 0x4,
+        signed = 0x5,
+        signed_char = 0x6,
+        unsigned = 0x7,
+        unsigned_char = 0x8,
+
+        // DWARF 3.
+        imaginary_float = 0x9,
+        packed_decimal = 0xa,
+        numeric_string = 0xb,
+        edited = 0xc,
+        signed_fixed = 0xd,
+        unsigned_fixed = 0xe,
+        decimal_float = 0xf,
+
+        // DWARF 4.
+        UTF = 0x10,
+
+        // DWARF 5.
+        UCS = 0x11,
+        ASCII = 0x12,
+
+        // HP extensions.
+        HP_float80 = 0x80, // Floating-point (80 bit).
+        HP_complex_float80 = 0x81, // Complex floating-point (80 bit).
+        HP_float128 = 0x82, // Floating-point (128 bit).
+        HP_complex_float128 = 0x83, // Complex fp (128 bit).
+        HP_floathpintel = 0x84, // Floating-point (82 bit IA64).
+        HP_imaginary_float80 = 0x85,
+        HP_imaginary_float128 = 0x86,
+        HP_VAX_float = 0x88, // F or G floating.
+        HP_VAX_float_d = 0x89, // D floating.
+        HP_packed_decimal = 0x8a, // Cobol.
+        HP_zoned_decimal = 0x8b, // Cobol.
+        HP_edited = 0x8c, // Cobol.
+        HP_signed_fixed = 0x8d, // Cobol.
+        HP_unsigned_fixed = 0x8e, // Cobol.
+        HP_VAX_complex_float = 0x8f, // F or G floating complex.
+        HP_VAX_complex_float_d = 0x90, // D floating complex.
+    };
+
+    pub const EmissionKind = enum(c_int) {
+        none,
+        full,
+        line_tables_only,
+    };
+
+    pub const SourceLanguage = enum(c_int) {
+        C89,
+        C,
+        Ada83,
+        C_plus_plus,
+        Cobol74,
+        Cobol85,
+        Fortran77,
+        Fortran90,
+        Pascal83,
+        Modula2,
+        // New in DWARF v3:
+        Java,
+        C99,
+        Ada95,
+        Fortran95,
+        PLI,
+        ObjC,
+        ObjC_plus_plus,
+        UPC,
+        D,
+        // New in DWARF v4:
+        Python,
+        // New in DWARF v5:
+        OpenCL,
+        Go,
+        Modula3,
+        Haskell,
+        C_plus_plus_03,
+        C_plus_plus_11,
+        OCaml,
+        Rust,
+        C11,
+        Swift,
+        Julia,
+        Dylan,
+        C_plus_plus_14,
+        Fortran03,
+        Fortran08,
+        RenderScript,
+        BLISS,
+        Kotlin,
+        Zig,
+        Crystal,
+        C_plus_plus_17,
+        C_plus_plus_20,
+        C17,
+        Fortran18,
+        Ada2005,
+        Ada2012,
+        HIP,
+        Assembly,
+        C_sharp,
+        Mojo,
+        GLSL,
+        GLSL_ES,
+        HLSL,
+        OpenCL_CPP,
+        CPP_for_OpenCL,
+        SYCL,
+        Ruby,
+        Move,
+        Hylo,
+
+        // Vendor extensions:
+        Mips_Assembler,
+        GOOGLE_RenderScript,
+        BORLAND_Delphi,
     };
 };
 
@@ -737,15 +929,6 @@ pub const LinkageType = enum(c_int) {
     PrivateLinkage,
     ExternalWeakLinkage,
     CommonLinkage,
-};
-
-pub const DwarfSourceLanguage = enum(c_int) {
-    c17 = 0x2c,
-};
-pub const DwarfEmissionKind = enum(c_int) {
-    none,
-    full,
-    line_tables_only,
 };
 
 pub const lld = struct {
@@ -881,7 +1064,7 @@ pub const GenerateObject = struct {
 pub const ObjectGenerate = struct {
     path: []const u8,
     optimization_level: ?OptimizationLevel,
-    debug_info: u1,
+    debug_info: bool,
     optimize_when_possible: u1,
 };
 
@@ -889,7 +1072,7 @@ pub fn object_generate(module: *Module, target_machine: *Target.Machine, generat
     module.set_target(target_machine);
 
     if (generate.optimization_level) |optimization_level| {
-        module.run_optimization_pipeline(target_machine, OptimizationPipelineOptions.default(.{ .optimization_level = optimization_level, .debug_info = generate.debug_info }));
+        module.run_optimization_pipeline(target_machine, OptimizationPipelineOptions.default(.{ .optimization_level = optimization_level, .debug_info = @intFromBool(generate.debug_info) }));
     }
 
     const result = module.run_code_generation_pipeline(target_machine, CodeGenerationPipelineOptions{

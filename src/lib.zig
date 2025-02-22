@@ -518,11 +518,25 @@ pub const os = struct {
             },
         };
     }
+
+    pub fn absolute_path_stack(noalias buffer: []u8, noalias relative_path: [*:0]const u8) [:0]const u8 {
+        const real_path = libc.realpath(relative_path, buffer.ptr) orelse unreachable;
+        const result = cstring.to_slice(real_path);
+        assert(result.len < buffer.len);
+        return result;
+    }
+
+    pub fn absolute_path(arena: *Arena, noalias relative_path: [*:0]const u8) [:0]const u8 {
+        // TODO: pick a more correct number
+        var buffer: [4096]u8 = undefined;
+        return arena.duplicate_string(absolute_path_stack(&buffer, relative_path));
+    }
 };
 
 pub const libc = struct {
     pub extern "c" fn exit(c_int) noreturn;
     pub extern "c" fn memcmp(a: [*]const u8, b: [*]const u8, byte_count: usize) c_int;
+    pub extern "c" fn realpath(noalias path: [*:0]const u8, noalias resolved_path: [*]u8) ?[*:0]const u8;
 };
 
 pub const string = struct {

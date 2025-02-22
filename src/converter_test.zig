@@ -15,7 +15,7 @@ fn invoke(name: []const u8) !void {
 
     inline for (@typeInfo(BuildMode).@"enum".fields) |f| {
         const build_mode = @field(BuildMode, f.name);
-        inline for ([2]u1{ 0, 1 }) |has_debug_info| {
+        inline for ([2]bool{ false, true }) |has_debug_info| {
             var tmp_dir = std.testing.tmpDir(.{});
             defer tmp_dir.cleanup();
             const base_path = lib.global.arena.join_string(&.{ ".zig-cache/tmp/", &tmp_dir.sub_path, "/", name });
@@ -61,11 +61,11 @@ const InvokeWrapper = struct {
 };
 
 // We invoke a function with comptime parameters so it's easily visible in CI stack traces
-fn invoke_wrapper(options: InvokeWrapper, comptime build_mode: BuildMode, comptime has_debug_info: u1) void {
+fn invoke_wrapper(options: InvokeWrapper, comptime build_mode: BuildMode, comptime has_debug_info: bool) void {
     return invoke_single(options, build_mode, has_debug_info);
 }
 
-fn invoke_single(options: InvokeWrapper, build_mode: BuildMode, has_debug_info: u1) void {
+fn invoke_single(options: InvokeWrapper, build_mode: BuildMode, has_debug_info: bool) void {
     const file_content = lib.file.read(lib.global.arena, options.file_path);
 
     converter.convert(.{

@@ -142,19 +142,19 @@ pub fn main(argc: c_int, argv: [*:null]const ?[*:0]const u8) callconv(.C) c_int 
         lib.print_string("Failed to match argument count");
         return 1;
     }
-    const file_path_pointer = argv[1] orelse return 1;
-    const file_path = lib.cstring.to_slice(file_path_pointer);
-    if (file_path.len < 5) {
+    const relative_file_path_pointer = argv[1] orelse return 1;
+    const relative_file_path = lib.cstring.to_slice(relative_file_path_pointer);
+    if (relative_file_path.len < 5) {
         return 1;
     }
 
-    const extension_start = lib.string.last_character(file_path, '.') orelse return 1;
-    if (!lib.string.equal(file_path[extension_start..], ".bbb")) {
+    const extension_start = lib.string.last_character(relative_file_path, '.') orelse return 1;
+    if (!lib.string.equal(relative_file_path[extension_start..], ".bbb")) {
         return 1;
     }
-    const separator_index = lib.string.last_character(file_path, '/') orelse 0;
-    const base_start = separator_index + @intFromBool(separator_index != 0 or file_path[separator_index] == '/');
-    const base_name = file_path[base_start..extension_start];
+    const separator_index = lib.string.last_character(relative_file_path, '/') orelse 0;
+    const base_start = separator_index + @intFromBool(separator_index != 0 or relative_file_path[separator_index] == '/');
+    const base_name = relative_file_path[base_start..extension_start];
 
     lib.GlobalState.initialize();
 
@@ -166,7 +166,8 @@ pub fn main(argc: c_int, argv: [*:null]const ?[*:0]const u8) callconv(.C) c_int 
     const output_object_path = arena.join_string(&.{ output_path_base, ".o" });
     const output_executable_path = output_path_base;
 
-    const file_content = lib.file.read(arena, file_path);
+    const file_content = lib.file.read(arena, relative_file_path);
+    const file_path = os.absolute_path(arena, relative_file_path);
     converter.convert(.{
         .executable = output_executable_path,
         .object = output_object_path,
@@ -174,7 +175,7 @@ pub fn main(argc: c_int, argv: [*:null]const ?[*:0]const u8) callconv(.C) c_int 
         .build_mode = .debug_none,
         .content = file_content,
         .path = file_path,
-        .has_debug_info = 1,
+        .has_debug_info = true,
     });
     return 0;
 }
