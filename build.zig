@@ -274,7 +274,13 @@ fn debug_binary(b: *std.Build, exe: *std.Build.Step.Compile) *std.Build.Step.Run
     run_step.addArg("gdb");
     run_step.addArg("-ex");
     run_step.addArg("r");
-    run_step.addArtifactArg(exe);
+    if (b.args) |args| {
+        run_step.addArg("--args");
+        run_step.addArtifactArg(exe);
+        run_step.addArgs(args);
+    } else {
+        run_step.addArtifactArg(exe);
+    }
 
     return run_step;
 }

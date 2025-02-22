@@ -279,6 +279,16 @@ pub const os = struct {
         }
     }
 
+    pub fn make_directory(path: [*:0]const u8) void {
+        switch (builtin.os.tag) {
+            .windows => @compileError("TODO"),
+            else => {
+                const result = posix.mkdir(path, 0o755);
+                _ = result;
+            },
+        }
+    }
+
     const linux = struct {
         pub const CPU_SETSIZE = 128;
         pub const cpu_set_t = [CPU_SETSIZE / @sizeOf(usize)]usize;
@@ -409,6 +419,7 @@ pub const os = struct {
         extern "c" fn read(fd: system.FileDescriptor, pointer: [*]u8, byte_count: usize) isize;
         extern "c" fn write(fd: system.FileDescriptor, pointer: [*]const u8, byte_count: usize) isize;
         extern "c" fn sched_getaffinity(pid: c_int, size: usize, set: *cpu_set_t) c_int;
+        extern "c" fn mkdir(path: [*:0]const u8, mode: mode_t) c_int;
 
         const mode_t = usize;
 
@@ -521,6 +532,29 @@ pub const string = struct {
             result = libc.memcmp(a.ptr, b.ptr, a.len) == 0;
         }
         return result;
+    }
+
+    pub fn first_character(str: []const u8, ch: u8) ?usize {
+        for (str, 0..) |existing_ch, i| {
+            if (ch == existing_ch) {
+                return i;
+            }
+        }
+
+        return null;
+    }
+
+    pub fn last_character(str: []const u8, ch: u8) ?usize {
+        var i = str.len;
+        while (i > 0) {
+            i -= 1;
+
+            if (str[i] == ch) {
+                return i;
+            }
+        }
+
+        return null;
     }
 };
 
@@ -2474,6 +2508,7 @@ pub const GlobalState = struct {
     thread_count: usize,
 
     pub var initialized = false;
+
     pub fn initialize() void {
         assert(!initialized);
         defer initialized = true;
@@ -2515,7 +2550,7 @@ pub fn print(format_string: [*:0]const u8, ...) callconv(.C) void {
     @cVaEnd(&args);
 }
 
-pub const print_string = print_string_stdout;
+pub const print_string = print_string_stderr;
 
 pub fn print_string_stdout(str: []const u8) void {
     os.get_stdout().write(str);
