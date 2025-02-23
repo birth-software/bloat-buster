@@ -474,7 +474,19 @@ const Converter = struct {
                         },
                     }
                 } else {
-                    converter.report_error();
+                    converter.skip_space();
+
+                    if (converter.consume_character_if_match(left_parenthesis)) {
+                        // This is a call
+                        const variable = if (function.locals.find(statement_start_identifier)) |local| local else if (module.globals.find(statement_start_identifier)) |global| global else {
+                            converter.report_error();
+                        };
+                        const call = thread.builder.create_call(variable.type.get().to_function(), variable.storage, &.{});
+                        _ = call;
+                        @trap();
+                    } else {
+                        converter.report_error();
+                    }
                 }
             } else {
                 converter.report_error();
@@ -688,7 +700,20 @@ const Converter = struct {
                             converter.report_error();
                         }
                     };
-                    break :b thread.builder.create_load(variable.type.get(), variable.storage);
+
+                    converter.skip_space();
+
+                    if (converter.consume_character_if_match(left_parenthesis)) {
+                        // TODO: arguments
+                        converter.skip_space();
+                        converter.expect_character(right_parenthesis);
+                        const call = thread.builder.create_call(variable.type.get().to_function(), variable.storage, &.{});
+                        call.to_instruction().set_calling_convention(variable.storage.get_calling_convention());
+                        break :b call;
+                    } else {
+                        const load = thread.builder.create_load(variable.type.get(), variable.storage);
+                        break :b load;
+                    }
                 } else {
                     converter.report_error();
                 }

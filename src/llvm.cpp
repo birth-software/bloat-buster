@@ -53,6 +53,12 @@ EXPORT Module* llvm_context_create_module(LLVMContext& context, BBLLVMString nam
     return new Module(name.string_ref(), context);
 }
 
+EXPORT bool llvm_value_is_instruction(Value* value)
+{
+    auto result = isa<Instruction>(value);
+    return result;
+}
+
 EXPORT bool llvm_type_is_function(const Type& type)
 {
     auto result = type.isFunctionTy();

@@ -17,6 +17,9 @@ pub extern fn LLVMGetBasicBlockTerminator(basic_block: *llvm.BasicBlock) ?*llvm.
 pub extern fn LLVMSetFunctionCallConv(function: *llvm.Function, calling_convention: llvm.CallingConvention) void;
 pub extern fn LLVMGetFunctionCallConv(function: *llvm.Function) llvm.CallingConvention;
 
+pub extern fn LLVMSetInstructionCallConv(instruction: *llvm.Instruction, calling_convention: llvm.CallingConvention) void;
+pub extern fn LLVMGetInstructionCallConv(instruction: *llvm.Instruction) llvm.CallingConvention;
+
 pub extern fn llvm_function_to_string(function: *llvm.Function) *llvm.String;
 pub extern fn llvm_function_verify(function: *llvm.Function, error_message: *llvm.String) bool;
 pub extern fn llvm_module_verify(module: *llvm.Module, error_message: *llvm.String) bool;
@@ -45,11 +48,13 @@ pub extern fn LLVMBuildCondBr(builder: *llvm.Builder, condition: *llvm.Value, ta
 pub extern fn llvm_builder_create_alloca(builder: *llvm.Builder, ty: *llvm.Type, address_space: c_uint, name: llvm.String) *llvm.Value;
 pub extern fn LLVMBuildStore(builder: *llvm.Builder, value: *llvm.Value, pointer: *llvm.Value) *llvm.Value;
 pub extern fn LLVMBuildLoad2(builder: *llvm.Builder, ty: *llvm.Type, pointer: *llvm.Value, name: [*:0]const u8) *llvm.Value;
+pub extern fn LLVMBuildCall2(builder: *llvm.Builder, ty: *llvm.Type.Function, pointer: *llvm.Value, argument_pointer: [*]const *llvm.Value, argument_count: c_uint, name: [*:0]const u8) *llvm.Value;
 
 pub extern fn LLVMSetCurrentDebugLocation2(builder: *llvm.Builder, location: ?*llvm.DI.Location) void;
 
 pub extern fn LLVMTypeOf(value: *llvm.Value) *llvm.Type;
 pub extern fn LLVMGlobalGetValueType(value: *llvm.GlobalValue) *llvm.Type;
+pub extern fn llvm_value_is_instruction(value: *llvm.Value) bool;
 
 // TYPES
 // Types: integers

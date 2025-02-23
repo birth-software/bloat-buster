@@ -636,6 +636,10 @@ pub const Builder = opaque {
     }
 
     pub const create_conditional_branch = api.LLVMBuildCondBr;
+
+    pub fn create_call(builder: *Builder, function_type: *Type.Function, function_value: *Value, arguments: []const *Value) *Value {
+        return api.LLVMBuildCall2(builder, function_type, function_value, arguments.ptr, @intCast(arguments.len), "");
+    }
 };
 
 pub const GlobalValue = opaque {
@@ -699,10 +703,32 @@ pub const Value = opaque {
         return api.LLVMIsConstant(value) != 0;
     }
 
+    pub const is_instruction = api.llvm_value_is_instruction;
+
     pub fn to_constant(value: *Value) *Constant {
         assert(value.is_constant());
         return @ptrCast(value);
     }
+
+    pub fn to_instruction(value: *Value) *Instruction {
+        assert(value.is_instruction());
+        return @ptrCast(value);
+    }
+
+    pub fn get_calling_convention(value: *Value) CallingConvention {
+        if (value.is_instruction()) {
+            const instruction = value.to_instruction();
+            return instruction.get_calling_convention();
+        } else {
+            const function = @as(*Function, @ptrCast(value));
+            return function.get_calling_convention();
+        }
+    }
+};
+
+pub const Instruction = opaque {
+    pub const set_calling_convention = api.LLVMSetInstructionCallConv;
+    pub const get_calling_convention = api.LLVMGetInstructionCallConv;
 };
 
 pub const DI = struct {
@@ -827,6 +853,7 @@ pub const DI = struct {
 pub const Type = opaque {
     pub const is_function = api.llvm_type_is_function;
     pub const is_integer = api.llvm_type_is_integer;
+
     pub fn to_function(t: *Type) *Type.Function {
         assert(t.is_function());
         return @ptrCast(t);
@@ -1260,8 +1287,7 @@ pub fn link(arena: *Arena, options: LinkOptions) lld.Result {
     }
 
     if (link_libc) {
-        const scrt1_path = arena.join_string(&.{ scrt1_object_directory_path, "/Scrt1.o" });
-        arg_builder.add(scrt1_path);
+        arg_builder.add(arena.join_string(&.{ scrt1_object_directory_path, "/", "Scrt1.o" }));
         arg_builder.add("-lc");
     }
 
