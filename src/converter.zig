@@ -944,6 +944,13 @@ pub noinline fn convert(options: ConvertOptions) void {
                         });
                         handle.set_calling_convention(calling_convention.to_llvm());
 
+                        const global = module.globals.add();
+                        global.* = .{
+                            .type = Type.new(function_type.to_type(), false),
+                            .storage = handle.to_value(),
+                            .name = global_name,
+                        };
+
                         const entry_block = thread.context.create_basic_block("entry", handle);
                         thread.builder.position_at_end(entry_block);
 

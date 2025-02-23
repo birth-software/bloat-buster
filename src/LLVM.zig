@@ -842,6 +842,10 @@ pub const Type = opaque {
         pub fn get(return_type: *Type, parameter_types: []const *Type, is_var_args: bool) *Type.Function {
             return api.LLVMFunctionType(return_type, parameter_types.ptr, @intCast(parameter_types.len), @intFromBool(is_var_args));
         }
+
+        pub fn to_type(function_type: *Type.Function) *Type {
+            return @ptrCast(function_type);
+        }
     };
 
     pub const Integer = opaque {
