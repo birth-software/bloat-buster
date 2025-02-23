@@ -777,11 +777,11 @@ pub const BuildMode = enum {
 const ConvertOptions = struct {
     content: []const u8,
     path: [:0]const u8,
-    object: [:0]const u8,
     executable: [:0]const u8,
     build_mode: BuildMode,
     name: []const u8,
     has_debug_info: bool,
+    objects: []const [:0]const u8,
 };
 
 pub noinline fn convert(options: ConvertOptions) void {
@@ -1093,14 +1093,14 @@ pub noinline fn convert(options: ConvertOptions) void {
         .optimize_when_possible = @intFromBool(@intFromEnum(options.build_mode) > @intFromEnum(BuildMode.soft_optimize)),
         .debug_info = options.has_debug_info,
         .optimization_level = if (options.build_mode != .debug_none) options.build_mode.to_llvm_ir() else null,
-        .path = options.object,
+        .path = options.objects[0],
     });
 
     switch (object_generate_result) {
         .success => {
             const result = llvm.link(lib.global.arena, .{
                 .output_path = options.executable,
-                .objects = &.{options.object},
+                .objects = options.objects,
             });
 
             switch (result.success) {

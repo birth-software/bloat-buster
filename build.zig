@@ -308,19 +308,34 @@ pub fn build(b: *std.Build) !void {
     system_llvm = b.option(bool, "system_llvm", "Link against system LLVM libraries") orelse true;
     const path = env.get("PATH") orelse unreachable;
 
+    const c_abi = b.addObject(.{
+        .name = "c_abi",
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    c_abi.addCSourceFiles(.{
+        .files = &.{"src/c_abi.c"},
+        .flags = &.{"-g"},
+    });
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
+    const configuration = b.addOptions();
+    configuration.addOptionPath("c_abi_object_path", c_abi.getEmittedBin());
+    exe_mod.addOptions("configuration", configuration);
 
     const llvm = try LLVM.setup(b, path);
 
     const exe = b.addExecutable(.{
         .name = "bloat-buster",
         .root_module = exe_mod,
+        .link_libc = true,
     });
-    exe.linkLibC();
 
     llvm.link(exe);
 

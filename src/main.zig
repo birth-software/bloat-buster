@@ -1,4 +1,5 @@
 const lib = @import("lib.zig");
+const configuration = @import("configuration");
 const os = lib.os;
 const llvm = @import("LLVM.zig");
 const converter = @import("converter.zig");
@@ -170,7 +171,7 @@ pub fn main(argc: c_int, argv: [*:null]const ?[*:0]const u8) callconv(.C) c_int 
     const file_path = os.absolute_path(arena, relative_file_path);
     converter.convert(.{
         .executable = output_executable_path,
-        .object = output_object_path,
+        .objects = &.{output_object_path},
         .name = base_name,
         .build_mode = .debug_none,
         .content = file_content,

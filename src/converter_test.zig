@@ -1,6 +1,7 @@
 const lib = @import("lib.zig");
 const assert = lib.assert;
 const std = @import("std");
+const configuration = @import("configuration");
 
 const converter = @import("converter.zig");
 const BuildMode = converter.BuildMode;
@@ -12,6 +13,7 @@ fn invoke(name: []const u8) !void {
 
     comptime assert(lib.is_test);
     const allocator = std.testing.allocator;
+    const c_abi_object_path = lib.global.arena.duplicate_string(configuration.c_abi_object_path);
 
     inline for (@typeInfo(BuildMode).@"enum".fields) |f| {
         const build_mode = @field(BuildMode, f.name);
@@ -21,8 +23,9 @@ fn invoke(name: []const u8) !void {
             const base_path = lib.global.arena.join_string(&.{ ".zig-cache/tmp/", &tmp_dir.sub_path, "/", name });
             const executable_path = base_path;
             const directory_path = lib.global.arena.join_string(&.{ ".zig-cache/tmp/", &tmp_dir.sub_path });
+            const object_path = lib.global.arena.join_string(&.{ base_path, ".o" });
             try unit_test(allocator, .{
-                .object_path = lib.global.arena.join_string(&.{ base_path, ".o" }),
+                .object_paths = if (lib.string.equal(name, "c_abi")) &.{ object_path, c_abi_object_path } else &.{object_path},
                 .executable_path = executable_path,
                 .file_path = lib.global.arena.join_string(&.{ "tests/", name, ".bbb" }),
                 .name = name,
@@ -36,7 +39,7 @@ fn invoke(name: []const u8) !void {
 
 const InvokeWrapper = struct {
     executable_path: [:0]const u8,
-    object_path: [:0]const u8,
+    object_paths: []const [:0]const u8,
     file_path: [:0]const u8,
     name: []const u8,
     build_mode: BuildMode,
@@ -50,7 +53,7 @@ fn unit_test(allocator: std.mem.Allocator, options: InvokeWrapper) !void {
     converter.convert(.{
         .path = options.file_path,
         .content = file_content,
-        .object = options.object_path,
+        .objects = options.object_paths,
         .executable = options.executable_path,
         .build_mode = options.build_mode,
         .name = options.name,
