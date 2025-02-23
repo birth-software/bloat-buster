@@ -142,3 +142,7 @@ test "stack_sub" {
 test "global" {
     try invsrc(@src());
 }
+
+test "simple_branch" {
+    try invsrc(@src());
+}

@@ -499,7 +499,9 @@ pub const Context = opaque {
     }
 };
 
-pub const BasicBlock = opaque {};
+pub const BasicBlock = opaque {
+    pub const get_terminator = api.LLVMGetBasicBlockTerminator;
+};
 
 pub const Module = opaque {
     pub const create_di_builder = api.LLVMCreateDIBuilder;
@@ -628,6 +630,12 @@ pub const Builder = opaque {
     }
 
     pub const set_current_debug_location = api.LLVMSetCurrentDebugLocation2;
+
+    pub fn create_compare(builder: *Builder, predicate: IntPredicate, left: *Value, right: *Value) *Value {
+        return api.LLVMBuildICmp(builder, predicate, left, right, "");
+    }
+
+    pub const create_conditional_branch = api.LLVMBuildCondBr;
 };
 
 pub const GlobalValue = opaque {
@@ -663,6 +671,10 @@ pub const Function = opaque {
     }
     pub const set_subprogram = api.LLVMSetSubprogram;
     pub const get_subprogram = api.LLVMGetSubprogram;
+
+    pub fn to_string(function: *Function) []const u8 {
+        return api.llvm_function_to_string(function).to_slice();
+    }
 };
 
 pub const Constant = opaque {
@@ -734,7 +746,8 @@ pub const DI = struct {
             const declaration: ?*DI.Metadata = null;
             return api.LLVMDIBuilderCreateGlobalVariableExpression(builder, scope, name.ptr, name.len, linkage_name.ptr, linkage_name.len, file, line, global_type, @intFromBool(local_to_unit), expression, declaration, align_in_bits);
         }
-        // pub extern fn LLVMDIBuilderCreateGlobalVariableExpression(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, name_pointer: [*]const u8, name_length: usize, linkage_name_pointer: [*]const u8, linkage_name_length: usize, file: *llvm.DI.File, line: c_uint, global_type: *llvm.DI.Type, local_to_unit: Bool, expression: *llvm.DI.Expression, declaration: ?*llvm.DI.Metadata, align_in_bits: u32) *llvm.DI.GlobalVariableExpression;
+
+        pub const create_lexical_block = api.LLVMDIBuilderCreateLexicalBlock;
     };
 
     pub const create_debug_location = api.LLVMDIBuilderCreateDebugLocation;
@@ -749,6 +762,11 @@ pub const DI = struct {
     pub const Subprogram = opaque {};
     pub const Expression = opaque {};
     pub const GlobalVariableExpression = opaque {};
+    pub const LexicalBlock = opaque {
+        pub fn to_scope(lexical_block: *LexicalBlock) *Scope {
+            return @ptrCast(lexical_block);
+        }
+    };
     pub const LocalVariable = opaque {};
     pub const Location = opaque {};
     pub const Metadata = opaque {};
@@ -954,6 +972,19 @@ pub const Dwarf = struct {
         GOOGLE_RenderScript,
         BORLAND_Delphi,
     };
+};
+
+pub const IntPredicate = enum(c_int) {
+    eq = 32,
+    ne,
+    ugt,
+    uge,
+    ult,
+    ule,
+    sgt,
+    sge,
+    slt,
+    sle,
 };
 
 pub const LinkageType = enum(c_int) {

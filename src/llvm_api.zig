@@ -12,6 +12,9 @@ pub extern fn llvm_module_create_global_variable(module: *llvm.Module, global_ty
 pub extern fn llvm_module_create_function(module: *llvm.Module, function_type: *llvm.Type.Function, linkage_type: llvm.LinkageType, address_space: c_uint, name: llvm.String) *llvm.Function;
 pub extern fn llvm_context_create_basic_block(context: *llvm.Context, name: llvm.String, parent: *llvm.Function) *llvm.BasicBlock;
 
+pub extern fn LLVMGetBasicBlockTerminator(basic_block: *llvm.BasicBlock) ?*llvm.Value;
+
+pub extern fn llvm_function_to_string(function: *llvm.Function) *llvm.String;
 pub extern fn llvm_function_verify(function: *llvm.Function, error_message: *llvm.String) bool;
 pub extern fn llvm_module_verify(module: *llvm.Module, error_message: *llvm.String) bool;
 
@@ -33,6 +36,8 @@ pub extern fn LLVMBuildLShr(builder: *llvm.Builder, left: *llvm.Value, right: *l
 pub extern fn LLVMBuildAnd(builder: *llvm.Builder, left: *llvm.Value, right: *llvm.Value, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildOr(builder: *llvm.Builder, left: *llvm.Value, right: *llvm.Value, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildXor(builder: *llvm.Builder, left: *llvm.Value, right: *llvm.Value, name: [*:0]const u8) *llvm.Value;
+pub extern fn LLVMBuildICmp(builder: *llvm.Builder, predicate: llvm.IntPredicate, left: *llvm.Value, right: *llvm.Value, name: [*:0]const u8) *llvm.Value;
+pub extern fn LLVMBuildCondBr(builder: *llvm.Builder, condition: *llvm.Value, taken: *llvm.BasicBlock, not_taken: *llvm.BasicBlock) *llvm.Value;
 
 pub extern fn llvm_builder_create_alloca(builder: *llvm.Builder, ty: *llvm.Type, address_space: c_uint, name: llvm.String) *llvm.Value;
 pub extern fn LLVMBuildStore(builder: *llvm.Builder, value: *llvm.Value, pointer: *llvm.Value) *llvm.Value;
@@ -108,6 +113,7 @@ pub extern fn LLVMDIBuilderCreateAutoVariable(builder: *llvm.DI.Builder, scope: 
 pub extern fn LLVMDIBuilderInsertDeclareRecordAtEnd(builder: *llvm.DI.Builder, storage: *llvm.Value, local_variable: *llvm.DI.LocalVariable, expression: *llvm.DI.Expression, debug_location: *llvm.DI.Location, basic_block: *llvm.BasicBlock) *llvm.DI.Record;
 pub extern fn LLVMDIBuilderCreateGlobalVariableExpression(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, name_pointer: [*]const u8, name_length: usize, linkage_name_pointer: [*]const u8, linkage_name_length: usize, file: *llvm.DI.File, line: c_uint, global_type: *llvm.DI.Type, local_to_unit: Bool, expression: *llvm.DI.Expression, declaration: ?*llvm.DI.Metadata, align_in_bits: u32) *llvm.DI.GlobalVariableExpression;
 pub extern fn llvm_global_variable_add_debug_info(global_variable: *llvm.GlobalVariable, debug_global_variable: *llvm.DI.GlobalVariableExpression) void;
+pub extern fn LLVMDIBuilderCreateLexicalBlock(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, file: *llvm.DI.File, line: c_uint, column: c_uint) *llvm.DI.LexicalBlock;
 
 // Target
 pub extern fn llvm_default_target_triple() llvm.String;

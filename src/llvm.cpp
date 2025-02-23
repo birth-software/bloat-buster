@@ -133,6 +133,16 @@ fn BBLLVMString stream_to_string(raw_string_ostream& stream)
     return { result, length };
 }
 
+EXPORT BBLLVMString llvm_function_to_string(Function& function)
+{
+    std::string buffer;
+    raw_string_ostream os(buffer);
+    function.print(os);
+    os.flush();
+    auto result = stream_to_string(os);
+    return result;
+}
+
 EXPORT bool llvm_function_verify(Function& function, BBLLVMString* error_message)
 {
     std::string message_buffer;
@@ -145,6 +155,7 @@ EXPORT bool llvm_function_verify(Function& function, BBLLVMString* error_message
     // We invert the condition because LLVM conventions are just stupid
     return !result;
 }
+
 
 EXPORT bool llvm_module_verify(const Module& module, BBLLVMString* error_message)
 {

@@ -104,7 +104,7 @@ const ModuleBuilder = struct {
 };
 
 pub const FunctionBuilder = struct {
-    function: *llvm.Function,
+    handle: *llvm.Function,
     current_basic_block: *llvm.BasicBlock,
     current_scope: *llvm.DI.Scope,
     return_type: Type,
@@ -315,6 +315,17 @@ const Converter = struct {
     fn parse_block(noalias converter: *Converter, noalias thread: *llvm.Thread, noalias module: *ModuleBuilder, noalias function: *FunctionBuilder) void {
         converter.skip_space();
 
+        const block_line = converter.get_line();
+        const block_column = converter.get_column();
+
+        const current_scope = function.current_scope;
+        defer function.current_scope = current_scope;
+
+        if (module.di_builder) |di_builder| {
+            const lexical_block = di_builder.create_lexical_block(current_scope, module.file, block_line, block_column);
+            function.current_scope = lexical_block.to_scope();
+        }
+
         converter.expect_character(left_brace);
 
         const local_offset = function.locals.count;
@@ -331,7 +342,7 @@ const Converter = struct {
                 break;
             }
 
-            const require_semicolon = true;
+            var require_semicolon = true;
 
             const line = converter.get_line();
             const column = converter.get_column();
@@ -404,7 +415,56 @@ const Converter = struct {
                             const return_value = converter.parse_value(thread, module, function, function.return_type);
                             thread.builder.create_ret(return_value);
                         },
-                        else => unreachable,
+                        .@"if" => {
+                            const taken_block = thread.context.create_basic_block("", function.handle);
+                            const not_taken_block = thread.context.create_basic_block("", function.handle);
+
+                            converter.skip_space();
+
+                            converter.expect_character(left_parenthesis);
+                            converter.skip_space();
+
+                            const condition = converter.parse_value(thread, module, function, null);
+
+                            converter.skip_space();
+                            converter.expect_character(right_parenthesis);
+
+                            _ = thread.builder.create_conditional_branch(condition, taken_block, not_taken_block);
+                            thread.builder.position_at_end(taken_block);
+
+                            converter.parse_block(thread, module, function);
+
+                            const is_first_block_terminated = function.current_basic_block.get_terminator() != null;
+                            if (!is_first_block_terminated) {
+                                @trap();
+                            }
+
+                            converter.skip_space();
+
+                            var is_else = false;
+                            if (is_identifier_start_ch(converter.content[converter.offset])) {
+                                const identifier = converter.parse_identifier();
+                                is_else = lib.string.equal(identifier, "else");
+                                if (!is_else) {
+                                    converter.offset -= identifier.len;
+                                }
+                            }
+
+                            var is_second_block_terminated = false;
+                            if (is_else) {
+                                thread.builder.position_at_end(not_taken_block);
+                                converter.parse_block(thread, module, function);
+                                is_second_block_terminated = function.current_basic_block.get_terminator() != null;
+                            } else {
+                                @trap();
+                            }
+
+                            if (!(is_first_block_terminated and is_second_block_terminated)) {
+                                @trap();
+                            }
+
+                            require_semicolon = false;
+                        },
                     }
                 } else {
                     converter.report_error();
@@ -438,18 +498,32 @@ const Converter = struct {
         @"and",
         @"or",
         xor,
+        icmp_ne,
+
+        pub fn to_int_predicate(expression_state: ExpressionState) llvm.IntPredicate {
+            return switch (expression_state) {
+                .icmp_ne => .ne,
+                else => unreachable,
+            };
+        }
     };
 
-    fn parse_value(noalias converter: *Converter, noalias thread: *llvm.Thread, noalias module: *ModuleBuilder, noalias function: ?*FunctionBuilder, expected_type: Type) *llvm.Value {
+    fn parse_value(noalias converter: *Converter, noalias thread: *llvm.Thread, noalias module: *ModuleBuilder, noalias function: ?*FunctionBuilder, maybe_expected_type: ?Type) *llvm.Value {
         converter.skip_space();
 
         var value_state = ExpressionState.none;
         var previous_value: *llvm.Value = undefined;
+        var iterations: usize = 0;
+        var iterative_expected_type: ?Type = maybe_expected_type;
 
-        const value = while (true) {
+        const value = while (true) : (iterations += 1) {
+            if (iterations == 1 and iterative_expected_type == null) {
+                iterative_expected_type = Type.new(previous_value.get_type(), false);
+            }
+
             const current_value = switch (converter.content[converter.offset] == left_parenthesis) {
                 true => os.abort(),
-                false => converter.parse_single_value(thread, module, function, expected_type),
+                false => converter.parse_single_value(thread, module, function, iterative_expected_type),
             };
 
             converter.skip_space();
@@ -472,11 +546,12 @@ const Converter = struct {
                 .@"and" => thread.builder.create_and(left, right),
                 .@"or" => thread.builder.create_or(left, right),
                 .xor => thread.builder.create_xor(left, right),
+                .icmp_ne => |icmp| thread.builder.create_compare(icmp.to_int_predicate(), left, right),
             };
 
             const ch = converter.content[converter.offset];
             value_state = switch (ch) {
-                ';' => break previous_value,
+                ';', right_parenthesis => break previous_value,
                 '-' => blk: {
                     converter.offset += 1;
                     break :blk .sub;
@@ -491,14 +566,14 @@ const Converter = struct {
                 },
                 '/' => blk: {
                     converter.offset += 1;
-                    break :blk switch (expected_type.signedness) {
+                    break :blk switch (iterative_expected_type.?.signedness) {
                         true => .sdiv,
                         false => .udiv,
                     };
                 },
                 '%' => blk: {
                     converter.offset += 1;
-                    switch (expected_type.signedness) {
+                    switch (iterative_expected_type.?.signedness) {
                         true => break :blk .srem,
                         false => break :blk .urem,
                     }
@@ -520,7 +595,7 @@ const Converter = struct {
                     break :blk switch (converter.content[converter.offset]) {
                         '>' => b: {
                             converter.offset += 1;
-                            break :b switch (expected_type.signedness) {
+                            break :b switch (iterative_expected_type.?.signedness) {
                                 true => .ashr,
                                 false => .lshr,
                             };
@@ -540,6 +615,16 @@ const Converter = struct {
                     converter.offset += 1;
                     break :blk .xor;
                 },
+                '!' => blk: {
+                    converter.offset += 1;
+                    break :blk switch (converter.content[converter.offset]) {
+                        '=' => b: {
+                            converter.offset += 1;
+                            break :b .icmp_ne;
+                        },
+                        else => os.abort(),
+                    };
+                },
                 else => os.abort(),
             };
 
@@ -554,7 +639,7 @@ const Converter = struct {
         negative,
     };
 
-    fn parse_single_value(noalias converter: *Converter, noalias thread: *llvm.Thread, noalias module: *ModuleBuilder, noalias maybe_function: ?*FunctionBuilder, expected_type: Type) *llvm.Value {
+    fn parse_single_value(noalias converter: *Converter, noalias thread: *llvm.Thread, noalias module: *ModuleBuilder, noalias maybe_function: ?*FunctionBuilder, expected_type: ?Type) *llvm.Value {
         converter.skip_space();
 
         if (maybe_function) |function| {
@@ -601,7 +686,7 @@ const Converter = struct {
                     converter.report_error();
                 }
             },
-            '0'...'9' => converter.parse_integer(expected_type, prefix == .negative),
+            '0'...'9' => converter.parse_integer(expected_type.?, prefix == .negative),
             else => os.abort(),
         };
 
@@ -615,7 +700,7 @@ fn is_space(ch: u8) bool {
 
 const StatementStartKeyword = enum {
     @"return",
-    foooooooooo,
+    @"if",
 };
 
 pub const BuildMode = enum {
@@ -855,7 +940,7 @@ pub noinline fn convert(options: ConvertOptions) void {
                         thread.builder.position_at_end(entry_block);
 
                         var function = FunctionBuilder{
-                            .function = handle,
+                            .handle = handle,
                             .current_basic_block = entry_block,
                             .return_type = return_type,
                             .current_scope = undefined,
@@ -938,6 +1023,9 @@ pub noinline fn convert(options: ConvertOptions) void {
     if (lib.optimization_mode == .Debug) {
         const verify_result = module.handle.verify();
         if (!verify_result.success) {
+            lib.print_string(module.handle.to_string());
+            lib.print_string("============================\n");
+            lib.print_string(verify_result.error_message orelse unreachable);
             os.abort();
         }
 
