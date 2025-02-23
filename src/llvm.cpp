@@ -71,6 +71,17 @@ EXPORT unsigned llvm_integer_type_get_bit_count(const IntegerType& integer_type)
     return result;
 }
 
+EXPORT GlobalVariable* llvm_module_create_global_variable(Module& module, Type* type, bool is_constant, GlobalValue::LinkageTypes linkage_type, Constant* initial_value, BBLLVMString name, GlobalVariable* before, GlobalValue::ThreadLocalMode thread_local_mode, unsigned address_space, bool externally_initialized)
+{
+    auto* global_variable = new GlobalVariable(module, type, is_constant, linkage_type, initial_value, name.string_ref(), before, thread_local_mode, address_space, externally_initialized);
+    return global_variable;
+}
+
+EXPORT void llvm_global_variable_add_debug_info(GlobalVariable& global_variable, DIGlobalVariableExpression* debug_global_variable)
+{
+    global_variable.addDebugInfo(debug_global_variable);
+}
+
 EXPORT Function* llvm_module_create_function(Module* module, FunctionType* function_type, GlobalValue::LinkageTypes linkage_type, unsigned address_space, BBLLVMString name)
 {
     auto* function = Function::Create(function_type, linkage_type, address_space, name.string_ref(), module);

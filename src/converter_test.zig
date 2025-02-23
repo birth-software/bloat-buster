@@ -138,3 +138,7 @@ test "stack_add" {
 test "stack_sub" {
     try invsrc(@src());
 }
+
+test "global" {
+    try invsrc(@src());
+}

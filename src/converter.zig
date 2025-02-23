@@ -63,10 +63,44 @@ const CallingConvention = enum {
     c,
 };
 
-const Local = struct {
+const Variable = struct {
     name: []const u8,
-    alloca: *llvm.Value,
+    storage: *llvm.Value,
     type: Type,
+};
+
+const VariableArray = struct {
+    buffer: [64]Variable = undefined,
+    count: u32 = 0,
+
+    pub fn get(variables: *VariableArray) []Variable {
+        return variables.buffer[0..variables.count];
+    }
+
+    pub fn add(variables: *VariableArray) *Variable {
+        const result = &variables.buffer[variables.count];
+        variables.count += 1;
+        return result;
+    }
+
+    pub fn find(variables: *VariableArray, name: []const u8) ?*Variable {
+        for (variables.get()) |*variable| {
+            if (lib.string.equal(variable.name, name)) {
+                return variable;
+            }
+        } else {
+            return null;
+        }
+    }
+};
+
+const ModuleBuilder = struct {
+    handle: *llvm.Module,
+    di_builder: ?*llvm.DI.Builder,
+    global_scope: *llvm.DI.Scope,
+    file: *llvm.DI.File,
+    integer_types: [8]*llvm.DI.Type,
+    globals: VariableArray = .{},
 };
 
 pub const FunctionBuilder = struct {
@@ -74,8 +108,7 @@ pub const FunctionBuilder = struct {
     current_basic_block: *llvm.BasicBlock,
     current_scope: *llvm.DI.Scope,
     return_type: Type,
-    local_buffer: [64]Local = undefined,
-    local_count: u32 = 0,
+    locals: VariableArray = .{},
 };
 
 const Type = packed struct(u64) {
@@ -284,8 +317,8 @@ const Converter = struct {
 
         converter.expect_character(left_brace);
 
-        const local_offset = function.local_count;
-        defer function.local_count = local_offset;
+        const local_offset = function.locals.count;
+        defer function.locals.count = local_offset;
 
         while (true) {
             converter.skip_space();
@@ -353,11 +386,10 @@ const Converter = struct {
                     }
                     _ = thread.builder.create_store(value, alloca);
 
-                    const local = &function.local_buffer[function.local_count];
-                    function.local_count += 1;
+                    const local = function.locals.add();
                     local.* = .{
                         .name = local_name,
-                        .alloca = alloca,
+                        .storage = alloca,
                         .type = local_type,
                     };
                 } else {
@@ -408,7 +440,7 @@ const Converter = struct {
         xor,
     };
 
-    fn parse_value(noalias converter: *Converter, noalias thread: *llvm.Thread, noalias module: *ModuleBuilder, noalias function: *FunctionBuilder, expected_type: Type) *llvm.Value {
+    fn parse_value(noalias converter: *Converter, noalias thread: *llvm.Thread, noalias module: *ModuleBuilder, noalias function: ?*FunctionBuilder, expected_type: Type) *llvm.Value {
         converter.skip_space();
 
         var value_state = ExpressionState.none;
@@ -522,15 +554,17 @@ const Converter = struct {
         negative,
     };
 
-    fn parse_single_value(noalias converter: *Converter, noalias thread: *llvm.Thread, noalias module: *ModuleBuilder, noalias function: *FunctionBuilder, expected_type: Type) *llvm.Value {
+    fn parse_single_value(noalias converter: *Converter, noalias thread: *llvm.Thread, noalias module: *ModuleBuilder, noalias maybe_function: ?*FunctionBuilder, expected_type: Type) *llvm.Value {
         converter.skip_space();
 
-        if (module.di_builder) |_| {
-            const line = converter.get_line();
-            const column = converter.get_column();
-            const inlined_at: ?*llvm.DI.Metadata = null; // TODO
-            const debug_location = llvm.DI.create_debug_location(thread.context, line, column, function.current_scope, inlined_at);
-            thread.builder.set_current_debug_location(debug_location);
+        if (maybe_function) |function| {
+            if (module.di_builder) |_| {
+                const line = converter.get_line();
+                const column = converter.get_column();
+                const inlined_at: ?*llvm.DI.Metadata = null; // TODO
+                const debug_location = llvm.DI.create_debug_location(thread.context, line, column, function.current_scope, inlined_at);
+                thread.builder.set_current_debug_location(debug_location);
+            }
         }
 
         const prefix_offset = converter.offset;
@@ -551,13 +585,20 @@ const Converter = struct {
         const value_start_ch = converter.content[value_offset];
         const value = switch (value_start_ch) {
             'a'...'z', 'A'...'Z', '_' => b: {
-                const identifier = converter.parse_identifier();
-                for (function.local_buffer[0..function.local_count]) |*local| {
-                    if (lib.string.equal(identifier, local.name)) {
-                        break :b thread.builder.create_load(local.type.get(), local.alloca);
-                    }
+                if (maybe_function) |function| {
+                    const identifier = converter.parse_identifier();
+                    const variable = blk: {
+                        if (function.locals.find(identifier)) |local| {
+                            break :blk local;
+                        } else if (module.globals.find(identifier)) |global| {
+                            break :blk global;
+                        } else {
+                            converter.report_error();
+                        }
+                    };
+                    break :b thread.builder.create_load(variable.type.get(), variable.storage);
                 } else {
-                    os.abort();
+                    converter.report_error();
                 }
             },
             '0'...'9' => converter.parse_integer(expected_type, prefix == .negative),
@@ -624,14 +665,6 @@ const ConvertOptions = struct {
     build_mode: BuildMode,
     name: []const u8,
     has_debug_info: bool,
-};
-
-const ModuleBuilder = struct {
-    handle: *llvm.Module,
-    di_builder: ?*llvm.DI.Builder,
-    global_scope: *llvm.DI.Scope,
-    file: *llvm.DI.File,
-    integer_types: [8]*llvm.DI.Type,
 };
 
 pub noinline fn convert(options: ConvertOptions) void {
@@ -704,7 +737,9 @@ pub noinline fn convert(options: ConvertOptions) void {
 
         var is_export = false;
 
-        const global_line_offset = converter.line_offset;
+        const global_line = converter.get_line();
+        const global_column = converter.get_column();
+        _ = global_column;
 
         if (converter.content[converter.offset] == left_bracket) {
             converter.offset += 1;
@@ -733,120 +768,166 @@ pub noinline fn convert(options: ConvertOptions) void {
 
         converter.skip_space();
 
+        var global_type: ?Type = null;
+        if (converter.consume_character_if_match(':')) {
+            converter.skip_space();
+
+            global_type = converter.parse_type(thread);
+
+            converter.skip_space();
+        }
+
         converter.expect_character('=');
 
         converter.skip_space();
 
-        const global_kind_string = converter.parse_identifier();
+        if (is_identifier_start_ch(converter.content[converter.offset])) {
+            const global_string = converter.parse_identifier();
+            converter.skip_space();
 
-        converter.skip_space();
+            if (string_to_enum(GlobalKind, global_string)) |global_kind| {
+                switch (global_kind) {
+                    .@"fn" => {
+                        var calling_convention = CallingConvention.unknown;
 
-        const global_kind = string_to_enum(GlobalKind, global_kind_string) orelse converter.report_error();
+                        if (converter.consume_character_if_match(left_bracket)) {
+                            while (converter.offset < converter.content.len) {
+                                const function_identifier = converter.parse_identifier();
 
-        switch (global_kind) {
-            .@"fn" => {
-                var calling_convention = CallingConvention.unknown;
+                                const function_keyword = string_to_enum(FunctionKeyword, function_identifier) orelse converter.report_error();
 
-                if (converter.consume_character_if_match(left_bracket)) {
-                    while (converter.offset < converter.content.len) {
-                        const function_identifier = converter.parse_identifier();
+                                converter.skip_space();
 
-                        const function_keyword = string_to_enum(FunctionKeyword, function_identifier) orelse converter.report_error();
+                                switch (function_keyword) {
+                                    .cc => {
+                                        converter.expect_character(left_parenthesis);
+
+                                        converter.skip_space();
+
+                                        const calling_convention_string = converter.parse_identifier();
+
+                                        calling_convention = string_to_enum(CallingConvention, calling_convention_string) orelse converter.report_error();
+
+                                        converter.skip_space();
+
+                                        converter.expect_character(right_parenthesis);
+                                    },
+                                    else => converter.report_error(),
+                                }
+
+                                converter.skip_space();
+
+                                switch (converter.content[converter.offset]) {
+                                    right_bracket => break,
+                                    else => converter.report_error(),
+                                }
+                            }
+
+                            converter.expect_character(right_bracket);
+                        }
 
                         converter.skip_space();
 
-                        switch (function_keyword) {
-                            .cc => {
-                                converter.expect_character(left_parenthesis);
+                        converter.expect_character(left_parenthesis);
 
-                                converter.skip_space();
+                        while (converter.offset < converter.content.len and converter.content[converter.offset] != right_parenthesis) {
+                            // TODO: arguments
+                            converter.report_error();
+                        }
 
-                                const calling_convention_string = converter.parse_identifier();
+                        converter.expect_character(right_parenthesis);
 
-                                calling_convention = string_to_enum(CallingConvention, calling_convention_string) orelse converter.report_error();
+                        converter.skip_space();
 
-                                converter.skip_space();
+                        const return_type = converter.parse_type(thread);
+                        const function_type = llvm.Type.Function.get(return_type.get(), &.{}, false);
 
-                                converter.expect_character(right_parenthesis);
+                        const handle = module.handle.create_function(.{
+                            .name = global_name,
+                            .linkage = switch (is_export) {
+                                true => .ExternalLinkage,
+                                false => .InternalLinkage,
                             },
-                            else => converter.report_error(),
+                            .type = function_type,
+                        });
+
+                        const entry_block = thread.context.create_basic_block("entry", handle);
+                        thread.builder.position_at_end(entry_block);
+
+                        var function = FunctionBuilder{
+                            .function = handle,
+                            .current_basic_block = entry_block,
+                            .return_type = return_type,
+                            .current_scope = undefined,
+                        };
+
+                        if (module.di_builder) |di_builder| {
+                            const debug_return_type = return_type.to_debug_type(&module);
+                            const subroutine_type = di_builder.create_subroutine_type(module.file, &.{debug_return_type}, .{});
+                            const linkage_name = global_name;
+                            const scope_line: u32 = @intCast(converter.line_offset + 1);
+                            const local_to_unit = !is_export;
+                            const flags = llvm.DI.Flags{};
+                            const is_definition = true;
+                            const subprogram = di_builder.create_function(module.global_scope, global_name, linkage_name, module.file, global_line, subroutine_type, local_to_unit, is_definition, scope_line, flags, options.build_mode.is_optimized());
+                            handle.set_subprogram(subprogram);
+
+                            function.current_scope = @ptrCast(subprogram);
                         }
 
-                        converter.skip_space();
+                        converter.parse_block(thread, &module, &function);
 
-                        switch (converter.content[converter.offset]) {
-                            right_bracket => break,
-                            else => converter.report_error(),
+                        if (module.di_builder) |di_builder| {
+                            di_builder.finalize_subprogram(handle.get_subprogram());
                         }
-                    }
 
-                    converter.expect_character(right_bracket);
+                        if (lib.optimization_mode == .Debug and module.di_builder == null) {
+                            const verify_result = handle.verify();
+                            if (!verify_result.success) {
+                                os.abort();
+                            }
+                        }
+                    },
+                    else => converter.report_error(),
                 }
-
-                converter.skip_space();
-
-                converter.expect_character(left_parenthesis);
-
-                while (converter.offset < converter.content.len and converter.content[converter.offset] != right_parenthesis) {
-                    // TODO: arguments
-                    converter.report_error();
-                }
-
-                converter.expect_character(right_parenthesis);
-
-                converter.skip_space();
-
-                const return_type = converter.parse_type(thread);
-                const function_type = llvm.Type.Function.get(return_type.get(), &.{}, false);
-
-                const handle = module.handle.create_function(.{
-                    .name = global_name,
+            } else {
+                converter.report_error();
+            }
+        } else {
+            if (global_type) |expected_type| {
+                const value = converter.parse_value(thread, &module, null, expected_type);
+                const global_variable = module.handle.create_global_variable(.{
                     .linkage = switch (is_export) {
                         true => .ExternalLinkage,
                         false => .InternalLinkage,
                     },
-                    .type = function_type,
+                    .name = global_name,
+                    .initial_value = value.to_constant(),
+                    .type = expected_type.get(),
                 });
 
-                const entry_block = thread.context.create_basic_block("entry", handle);
-                thread.builder.position_at_end(entry_block);
-
-                var function = FunctionBuilder{
-                    .function = handle,
-                    .current_basic_block = entry_block,
-                    .return_type = return_type,
-                    .current_scope = undefined,
+                const global = module.globals.add();
+                global.* = .{
+                    .name = global_name,
+                    .storage = global_variable.to_value(),
+                    .type = expected_type,
                 };
 
+                converter.skip_space();
+
+                converter.expect_character(';');
+
                 if (module.di_builder) |di_builder| {
-                    const debug_return_type = return_type.to_debug_type(&module);
-                    const subroutine_type = di_builder.create_subroutine_type(module.file, &.{debug_return_type}, .{});
+                    const debug_type = expected_type.to_debug_type(&module);
                     const linkage_name = global_name;
-                    const line: u32 = @intCast(global_line_offset + 1);
-                    const scope_line: u32 = @intCast(converter.line_offset + 1);
-                    const local_to_unit = !is_export;
-                    const flags = llvm.DI.Flags{};
-                    const is_definition = true;
-                    const subprogram = di_builder.create_function(module.global_scope, global_name, linkage_name, module.file, line, subroutine_type, local_to_unit, is_definition, scope_line, flags, options.build_mode.is_optimized());
-                    handle.set_subprogram(subprogram);
-
-                    function.current_scope = @ptrCast(subprogram);
+                    const local_to_unit = is_export; // TODO: extern
+                    const alignment = 0; // TODO
+                    const global_variable_expression = di_builder.create_global_variable(module.global_scope, global_name, linkage_name, module.file, global_line, debug_type, local_to_unit, di_builder.null_expression(), alignment);
+                    global_variable.add_debug_info(global_variable_expression);
                 }
-
-                converter.parse_block(thread, &module, &function);
-
-                if (module.di_builder) |di_builder| {
-                    di_builder.finalize_subprogram(handle.get_subprogram());
-                }
-
-                if (lib.optimization_mode == .Debug and module.di_builder == null) {
-                    const verify_result = handle.verify();
-                    if (!verify_result.success) {
-                        os.abort();
-                    }
-                }
-            },
-            else => converter.report_error(),
+            } else {
+                converter.report_error();
+            }
         }
     }
 

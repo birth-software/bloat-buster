@@ -511,7 +511,7 @@ pub const Module = opaque {
         return api.llvm_module_to_string(module).to_slice().?;
     }
 
-    const FunctionCreate = struct {
+    pub const FunctionCreate = struct {
         type: *Type.Function,
         linkage: LinkageType,
         address_space: c_uint = 0,
@@ -520,6 +520,22 @@ pub const Module = opaque {
 
     pub fn create_function(module: *Module, create: FunctionCreate) *Function {
         return api.llvm_module_create_function(module, create.type, create.linkage, create.address_space, String.from_slice(create.name));
+    }
+
+    pub const GlobalCreate = struct {
+        type: *Type,
+        initial_value: *Constant,
+        name: []const u8,
+        before: ?*GlobalVariable = null,
+        address_space: c_uint = 0,
+        linkage: LinkageType,
+        thread_local_mode: ThreadLocalMode = .none,
+        is_constant: bool = false,
+        externally_initialized: bool = false,
+    };
+
+    pub fn create_global_variable(module: *Module, create: GlobalCreate) *GlobalVariable {
+        return api.llvm_module_create_global_variable(module, create.type, create.is_constant, create.linkage, create.initial_value, String.from_slice(create.name), create.before, create.thread_local_mode, create.address_space, create.externally_initialized);
     }
 
     pub fn verify(module: *Module) VerifyResult {
@@ -618,6 +634,13 @@ pub const GlobalValue = opaque {
     pub const get_type = api.LLVMGlobalGetValueType;
 };
 
+pub const GlobalVariable = opaque {
+    pub const add_debug_info = api.llvm_global_variable_add_debug_info;
+    pub fn to_value(global_variable: *GlobalVariable) *Value {
+        return @ptrCast(global_variable);
+    }
+};
+
 pub const Function = opaque {
     pub fn get_type(function: *Function) *Type.Function {
         return function.to_global_value().get_type().to_function();
@@ -656,6 +679,15 @@ pub const Constant = opaque {
 
 pub const Value = opaque {
     pub const get_type = api.LLVMTypeOf;
+
+    pub fn is_constant(value: *Value) bool {
+        return api.LLVMIsConstant(value) != 0;
+    }
+
+    pub fn to_constant(value: *Value) *Constant {
+        assert(value.is_constant());
+        return @ptrCast(value);
+    }
 };
 
 pub const DI = struct {
@@ -697,6 +729,12 @@ pub const DI = struct {
         }
 
         pub const insert_declare_record_at_end = api.LLVMDIBuilderInsertDeclareRecordAtEnd;
+
+        pub fn create_global_variable(builder: *DI.Builder, scope: *DI.Scope, name: []const u8, linkage_name: []const u8, file: *DI.File, line: c_uint, global_type: *DI.Type, local_to_unit: bool, expression: *DI.Expression, align_in_bits: u32) *DI.GlobalVariableExpression {
+            const declaration: ?*DI.Metadata = null;
+            return api.LLVMDIBuilderCreateGlobalVariableExpression(builder, scope, name.ptr, name.len, linkage_name.ptr, linkage_name.len, file, line, global_type, @intFromBool(local_to_unit), expression, declaration, align_in_bits);
+        }
+        // pub extern fn LLVMDIBuilderCreateGlobalVariableExpression(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, name_pointer: [*]const u8, name_length: usize, linkage_name_pointer: [*]const u8, linkage_name_length: usize, file: *llvm.DI.File, line: c_uint, global_type: *llvm.DI.Type, local_to_unit: Bool, expression: *llvm.DI.Expression, declaration: ?*llvm.DI.Metadata, align_in_bits: u32) *llvm.DI.GlobalVariableExpression;
     };
 
     pub const create_debug_location = api.LLVMDIBuilderCreateDebugLocation;
@@ -710,6 +748,7 @@ pub const DI = struct {
     pub const Scope = opaque {};
     pub const Subprogram = opaque {};
     pub const Expression = opaque {};
+    pub const GlobalVariableExpression = opaque {};
     pub const LocalVariable = opaque {};
     pub const Location = opaque {};
     pub const Metadata = opaque {};
@@ -929,6 +968,10 @@ pub const LinkageType = enum(c_int) {
     PrivateLinkage,
     ExternalWeakLinkage,
     CommonLinkage,
+};
+
+pub const ThreadLocalMode = enum(c_uint) {
+    none = 0,
 };
 
 pub const lld = struct {
