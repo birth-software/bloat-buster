@@ -675,6 +675,9 @@ pub const Function = opaque {
     pub fn to_string(function: *Function) []const u8 {
         return api.llvm_function_to_string(function).to_slice();
     }
+
+    pub const set_calling_convention = api.LLVMSetFunctionCallConv;
+    pub const get_calling_convention = api.LLVMGetFunctionCallConv;
 };
 
 pub const Constant = opaque {
@@ -1003,6 +1006,50 @@ pub const LinkageType = enum(c_int) {
 
 pub const ThreadLocalMode = enum(c_uint) {
     none = 0,
+};
+
+pub const CallingConvention = enum(c_uint) {
+    c = 0,
+    fast = 8,
+    cold = 9,
+    ghc = 10,
+    hipe = 11,
+    anyreg = 13,
+    preserve_most = 14,
+    preserve_all = 15,
+    swift = 16,
+    cxx_fast_tls = 17,
+    x86_stdcall = 64,
+    x86_fastcall = 65,
+    arm_apcs = 66,
+    arm_aapcs = 67,
+    arm_aapcsvfp = 68,
+    msp430_interrupt = 69,
+    x86_thiscall = 70,
+    ptx_kernel = 71,
+    ptx_device = 72,
+    spir_func = 75,
+    spir_kernel = 76,
+    intel_oclbi = 77,
+    x86_64_system_v = 78,
+    win64 = 79,
+    x86_vector = 80,
+    hhvm = 81,
+    hhvmc = 82,
+    x86_interrupt = 83,
+    avr_interrupt = 84,
+    avr_signal = 85,
+    avr_builtin = 86,
+    amdgpu_vs = 87,
+    amdgpu_gs = 88,
+    amdgpu_ps = 89,
+    amdgpu_cs = 90,
+    amdgpu_kernel = 91,
+    x86_regcall = 92,
+    amdgpu_hs = 93,
+    msp430_builtin = 94,
+    amgpu_ls = 95,
+    amdgpu_es = 96,
 };
 
 pub const lld = struct {

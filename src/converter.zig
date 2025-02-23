@@ -61,6 +61,13 @@ const FunctionKeyword = enum {
 const CallingConvention = enum {
     unknown,
     c,
+
+    pub fn to_llvm(calling_convention: CallingConvention) llvm.CallingConvention {
+        return switch (calling_convention) {
+            .unknown => .fast,
+            .c => .c,
+        };
+    }
 };
 
 const Variable = struct {
@@ -935,6 +942,7 @@ pub noinline fn convert(options: ConvertOptions) void {
                             },
                             .type = function_type,
                         });
+                        handle.set_calling_convention(calling_convention.to_llvm());
 
                         const entry_block = thread.context.create_basic_block("entry", handle);
                         thread.builder.position_at_end(entry_block);

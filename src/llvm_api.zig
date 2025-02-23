@@ -14,6 +14,9 @@ pub extern fn llvm_context_create_basic_block(context: *llvm.Context, name: llvm
 
 pub extern fn LLVMGetBasicBlockTerminator(basic_block: *llvm.BasicBlock) ?*llvm.Value;
 
+pub extern fn LLVMSetFunctionCallConv(function: *llvm.Function, calling_convention: llvm.CallingConvention) void;
+pub extern fn LLVMGetFunctionCallConv(function: *llvm.Function) llvm.CallingConvention;
+
 pub extern fn llvm_function_to_string(function: *llvm.Function) *llvm.String;
 pub extern fn llvm_function_verify(function: *llvm.Function, error_message: *llvm.String) bool;
 pub extern fn llvm_module_verify(module: *llvm.Module, error_message: *llvm.String) bool;
