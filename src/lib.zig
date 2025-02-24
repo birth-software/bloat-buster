@@ -39,6 +39,23 @@ pub fn align_forward_u32(value: u32, alignment: u32) u32 {
     return align_forward(u32, value, alignment);
 }
 
+pub fn is_power_of_two(value: anytype) bool {
+    return (value & (value - 1)) == 0;
+}
+
+pub fn next_power_of_two(n: u64) u64 {
+    var result = n;
+    result -= 1;
+    result |= result >> 1;
+    result |= result >> 2;
+    result |= result >> 4;
+    result |= result >> 8;
+    result |= result >> 16;
+    result |= result >> 32;
+    result += 1;
+    return result;
+}
+
 const ValueFromFlag = enum {
     sub,
     cmov,

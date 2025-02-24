@@ -156,3 +156,7 @@ test "simple_branch" {
 test "basic_call" {
     try invsrc(@src());
 }
+
+test "struct" {
+    try invsrc(@src());
+}

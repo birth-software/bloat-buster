@@ -53,24 +53,6 @@ EXPORT Module* llvm_context_create_module(LLVMContext& context, BBLLVMString nam
     return new Module(name.string_ref(), context);
 }
 
-EXPORT bool llvm_value_is_instruction(Value* value)
-{
-    auto result = isa<Instruction>(value);
-    return result;
-}
-
-EXPORT bool llvm_type_is_function(const Type& type)
-{
-    auto result = type.isFunctionTy();
-    return result;
-}
-
-EXPORT bool llvm_type_is_integer(const Type& type)
-{
-    auto result = type.isIntegerTy();
-    return result;
-}
-
 EXPORT unsigned llvm_integer_type_get_bit_count(const IntegerType& integer_type)
 {
     auto result = integer_type.getBitWidth();
@@ -92,6 +74,12 @@ EXPORT Function* llvm_module_create_function(Module* module, FunctionType* funct
 {
     auto* function = Function::Create(function_type, linkage_type, address_space, name.string_ref(), module);
     return function;
+}
+
+EXPORT StructType* llvm_context_create_forward_declared_struct_type(LLVMContext& context, BBLLVMString name)
+{
+    auto* struct_type = StructType::create(context, name.string_ref());
+    return struct_type;
 }
 
 EXPORT StructType* llvm_context_create_struct_type(LLVMContext& context, Type** type_pointer, size_t type_count, BBLLVMString name, bool is_packed)

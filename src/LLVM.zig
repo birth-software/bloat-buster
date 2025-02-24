@@ -497,6 +497,16 @@ pub const Context = opaque {
     pub fn create_basic_block(context: *Context, name: []const u8, parent: *Function) *BasicBlock {
         return api.llvm_context_create_basic_block(context, String.from_slice(name), parent);
     }
+
+    pub fn create_forward_declared_struct_type(context: *Context, name: []const u8) *Type.Struct {
+        return api.llvm_context_create_forward_declared_struct_type(context, String.from_slice(name));
+    }
+    pub fn create_struct_type(context: *Context, element_types: []const *Type, name: []const u8) *Type.Struct {
+        const is_packed = false;
+        return api.llvm_context_create_struct_type(context, element_types.ptr, @intCast(element_types.len), String.from_slice(name), is_packed);
+    }
+
+    pub const get_struct_type = api.llvm_context_get_struct_type;
 };
 
 pub const BasicBlock = opaque {
@@ -640,6 +650,14 @@ pub const Builder = opaque {
     pub fn create_call(builder: *Builder, function_type: *Type.Function, function_value: *Value, arguments: []const *Value) *Value {
         return api.LLVMBuildCall2(builder, function_type, function_value, arguments.ptr, @intCast(arguments.len), "");
     }
+
+    pub fn create_struct_gep(builder: *Builder, struct_type: *Type.Struct, pointer: *Value, index: c_uint) *Value {
+        return api.LLVMBuildStructGEP2(builder, struct_type, pointer, index, "");
+    }
+
+    pub fn create_insert_value(builder: *Builder, aggregate: *Value, element: *Value, index: c_uint) *Value {
+        return api.LLVMBuildInsertValue(builder, aggregate, element, index, "");
+    }
 };
 
 pub const GlobalValue = opaque {
@@ -682,6 +700,8 @@ pub const Function = opaque {
 
     pub const set_calling_convention = api.LLVMSetFunctionCallConv;
     pub const get_calling_convention = api.LLVMGetFunctionCallConv;
+
+    pub const get_arguments = api.LLVMGetParams;
 };
 
 pub const Constant = opaque {
@@ -696,14 +716,19 @@ pub const Constant = opaque {
     };
 };
 
+pub const Argument = opaque {
+    pub fn to_value(argument: *Argument) *Value {
+        return @ptrCast(argument);
+    }
+};
+
 pub const Value = opaque {
     pub const get_type = api.LLVMTypeOf;
+    pub const get_kind = api.LLVMGetValueKind;
 
     pub fn is_constant(value: *Value) bool {
         return api.LLVMIsConstant(value) != 0;
     }
-
-    pub const is_instruction = api.llvm_value_is_instruction;
 
     pub fn to_constant(value: *Value) *Constant {
         assert(value.is_constant());
@@ -711,19 +736,64 @@ pub const Value = opaque {
     }
 
     pub fn to_instruction(value: *Value) *Instruction {
-        assert(value.is_instruction());
+        assert(value.get_kind() == .Instruction);
+        return @ptrCast(value);
+    }
+
+    pub fn to_function(value: *Value) *Function {
+        assert(value.get_kind() == .Function);
         return @ptrCast(value);
     }
 
     pub fn get_calling_convention(value: *Value) CallingConvention {
-        if (value.is_instruction()) {
-            const instruction = value.to_instruction();
-            return instruction.get_calling_convention();
-        } else {
-            const function = @as(*Function, @ptrCast(value));
-            return function.get_calling_convention();
+        const kind = value.get_kind();
+        switch (kind) {
+            .Instruction => {
+                const instruction = value.to_instruction();
+                return instruction.get_calling_convention();
+            },
+            .Function => {
+                const function = value.to_function();
+                return function.get_calling_convention();
+            },
+            else => unreachable,
         }
     }
+
+    pub const Kind = enum(c_uint) {
+        Argument,
+        BasicBlock,
+        MemoryUse,
+        MemoryDef,
+        MemoryPhi,
+
+        Function,
+        GlobalAlias,
+        GlobalIFunc,
+        GlobalVariable,
+        BlockAddress,
+        ConstantExpr,
+        ConstantArray,
+        ConstantStruct,
+        ConstantVector,
+
+        UndefValue,
+        ConstantAggregateZero,
+        ConstantDataArray,
+        ConstantDataVector,
+        ConstantInt,
+        ConstantFP,
+        ConstantPointerNull,
+        ConstantTokenNone,
+
+        MetadataAsValue,
+        InlineAsm,
+
+        Instruction,
+        PoisonValue,
+        ConstantTargetNone,
+        ConstantPtrAuth,
+    };
 };
 
 pub const Instruction = opaque {
@@ -769,6 +839,10 @@ pub const DI = struct {
             return api.LLVMDIBuilderCreateAutoVariable(builder, scope, name.ptr, name.len, file, line, auto_type, @intFromBool(always_preserve), flags, alignment_in_bits);
         }
 
+        pub fn create_parameter_variable(builder: *DI.Builder, scope: *DI.Scope, name: []const u8, argument_number: c_uint, file: *DI.File, line: c_uint, parameter_type: *DI.Type, always_preserve: bool, flags: DI.Flags) *DI.LocalVariable {
+            return api.LLVMDIBuilderCreateParameterVariable(builder, scope, name.ptr, name.len, argument_number, file, line, parameter_type, @intFromBool(always_preserve), flags);
+        }
+
         pub const insert_declare_record_at_end = api.LLVMDIBuilderInsertDeclareRecordAtEnd;
 
         pub fn create_global_variable(builder: *DI.Builder, scope: *DI.Scope, name: []const u8, linkage_name: []const u8, file: *DI.File, line: c_uint, global_type: *DI.Type, local_to_unit: bool, expression: *DI.Expression, align_in_bits: u32) *DI.GlobalVariableExpression {
@@ -777,6 +851,23 @@ pub const DI = struct {
         }
 
         pub const create_lexical_block = api.LLVMDIBuilderCreateLexicalBlock;
+
+        pub fn create_replaceable_composite_type(builder: *DI.Builder, tag: c_uint, name: []const u8, scope: *DI.Scope, file: *DI.File, line: c_uint) *DI.Type.Composite {
+            return api.LLVMDIBuilderCreateReplaceableCompositeType(builder, tag, name.ptr, name.len, scope, file, line, 0, 0, 0, .{}, null, 0);
+        }
+
+        pub fn create_struct_type(builder: *DI.Builder, scope: *DI.Scope, name: []const u8, file: *DI.File, line: c_uint, bit_size: u64, align_in_bits: u32, flags: DI.Flags, members: []const *DI.Type.Derived) *DI.Type.Composite {
+            const derived_from: ?*DI.Type = null;
+            const runtime_language: c_uint = 0;
+            const vtable_holder: ?*DI.Metadata = null;
+            const unique_id_pointer: ?[*]const u8 = null;
+            const unique_id_length: usize = 0;
+            return api.LLVMDIBuilderCreateStructType(builder, scope, name.ptr, name.len, file, line, bit_size, align_in_bits, flags, derived_from, members.ptr, @intCast(members.len), runtime_language, vtable_holder, unique_id_pointer, unique_id_length);
+        }
+
+        pub fn create_member_type(builder: *DI.Builder, scope: *DI.Scope, name: []const u8, file: *DI.File, line: c_uint, bit_size: u64, align_in_bits: u32, bit_offset: u64, flags: DI.Flags, member_type: *DI.Type) *DI.Type.Derived {
+            return api.LLVMDIBuilderCreateMemberType(builder, scope, name.ptr, name.len, file, line, bit_size, align_in_bits, bit_offset, flags, member_type);
+        }
     };
 
     pub const create_debug_location = api.LLVMDIBuilderCreateDebugLocation;
@@ -802,7 +893,19 @@ pub const DI = struct {
     pub const Record = opaque {};
 
     pub const Type = opaque {
-        pub const Subroutine = opaque {};
+        pub const Subroutine = opaque {
+            pub fn to_type(subroutine: *Subroutine) *DI.Type {
+                return @ptrCast(subroutine);
+            }
+        };
+        pub const Composite = opaque {
+            pub fn to_type(composite: *Composite) *DI.Type {
+                return @ptrCast(composite);
+            }
+
+            pub const replace_all_uses_with = api.LLVMMetadataReplaceAllUsesWith;
+        };
+        pub const Derived = opaque {};
     };
 
     pub const Flags = packed struct(u32) {
@@ -851,17 +954,46 @@ pub const DI = struct {
 };
 
 pub const Type = opaque {
-    pub const is_function = api.llvm_type_is_function;
-    pub const is_integer = api.llvm_type_is_integer;
+    pub const Kind = enum(c_uint) {
+        Void,
+        Half,
+        Float,
+        Double,
+        X86_FP80,
+        FP128,
+        PPC_FP128,
+        Label,
+        Integer,
+        Function,
+        Struct,
+        Array,
+        Pointer,
+        Vector,
+        Metadata,
+        X86_MMX,
+        Token,
+        ScalableVector,
+        BFloat,
+        X86_AMX,
+        TargetExt,
+    };
 
-    pub fn to_function(t: *Type) *Type.Function {
-        assert(t.is_function());
-        return @ptrCast(t);
+    pub const get_kind = api.LLVMGetTypeKind;
+    pub const get_poison = api.LLVMGetPoison;
+
+    pub fn to_integer(ty: *Type) *Type.Integer {
+        assert(ty.get_kind() == .Integer);
+        return @ptrCast(ty);
     }
 
-    pub fn to_integer(t: *Type) *Type.Integer {
-        assert(t.is_integer());
-        return @ptrCast(t);
+    pub fn to_function(ty: *Type) *Type.Function {
+        assert(ty.get_kind() == .Function);
+        return @ptrCast(ty);
+    }
+
+    pub fn to_struct(ty: *Type) *Type.Struct {
+        assert(ty.get_kind() == .Struct);
+        return @ptrCast(ty);
     }
 
     pub const Function = opaque {
@@ -881,6 +1013,17 @@ pub const Type = opaque {
             return @ptrCast(integer);
         }
         pub const get_bit_count = api.llvm_integer_type_get_bit_count;
+    };
+
+    pub const Struct = opaque {
+        pub fn to_type(struct_type: *Type.Struct) *Type {
+            return @ptrCast(struct_type);
+        }
+
+        pub fn set_body(struct_type: *Type.Struct, element_types: []const *Type) void {
+            const is_packed = false;
+            api.LLVMStructSetBody(struct_type, element_types.ptr, @intCast(element_types.len), @intFromBool(is_packed));
+        }
     };
 };
 
