@@ -51,6 +51,7 @@ const GlobalKeyword = enum {
 const GlobalKind = enum {
     @"fn",
     @"struct",
+    bits,
 };
 
 const FunctionKeyword = enum {
@@ -71,16 +72,21 @@ const CallingConvention = enum {
 };
 
 const Module = struct {
-    llvm: *llvm.Module,
-    di_builder: ?*llvm.DI.Builder,
-    global_scope: *llvm.DI.Scope = undefined,
-    file: *llvm.DI.File = undefined,
-    debug_integer_types: [8]*llvm.DI.Type = undefined,
+    llvm: LLVM,
     globals: Variable.Array = .{},
     types: Type.Array = .{},
     values: Value.Array = .{},
-    debug_tag: c_uint = 0,
     current_function: ?*Variable = null,
+    debug_tag: c_uint = 0,
+
+    const LLVM = struct {
+        context: *llvm.Context,
+        handle: *llvm.Module,
+        builder: *llvm.Builder,
+        di_builder: ?*llvm.DI.Builder = null,
+        global_scope: *llvm.DI.Scope,
+        file: *llvm.DI.File,
+    };
 
     pub fn get_type(module: *Module, index: usize) *Type {
         assert(index < module.types.count);
@@ -89,13 +95,18 @@ const Module = struct {
     }
 
     pub fn integer_type(module: *Module, bit_count: u32, sign: bool) *Type {
-        assert(lib.is_power_of_two(bit_count));
-        const index = @as(usize, @intFromBool(sign)) * 4 + @ctz(bit_count) - 3;
-        const result = module.get_type(index);
-        assert(result.bb == .integer);
-        assert(result.bb.integer.bit_count == bit_count);
-        assert(result.bb.integer.signed == sign);
-        return result;
+        switch (bit_count) {
+            1...64 => {
+                const index = @as(usize, @intFromBool(sign)) * 64 + bit_count;
+                const result = module.get_type(index);
+                assert(result.bb == .integer);
+                assert(result.bb.integer.bit_count == bit_count);
+                assert(result.bb.integer.signed == sign);
+                return result;
+            },
+            128 => @trap(),
+            else => @trap(),
+        }
     }
 
     pub fn void_type(module: *Module) *Type {
@@ -105,15 +116,17 @@ const Module = struct {
         return result;
     }
 
-    pub fn initialize(arena: *Arena, thread: *llvm.Thread, options: ConvertOptions) *Module {
-        const module = arena.allocate_one(Module);
-        const m = thread.context.create_module(options.name);
-        module.* = Module{
-            .llvm = m,
-            .di_builder = if (options.has_debug_info) m.create_di_builder() else null,
-        };
+    pub fn initialize(arena: *Arena, options: ConvertOptions) *Module {
+        const context = llvm.Context.create();
+        const handle = context.create_module(options.name);
 
-        if (module.di_builder) |di_builder| {
+        var maybe_di_builder: ?*llvm.DI.Builder = null;
+        var global_scope: *llvm.DI.Scope = undefined;
+        var file: *llvm.DI.File = undefined;
+
+        if (options.has_debug_info) {
+            const di_builder = handle.create_di_builder();
+            maybe_di_builder = di_builder;
             var directory: []const u8 = undefined;
             var file_name: []const u8 = undefined;
             if (lib.string.last_character(options.path, '/')) |index| {
@@ -122,58 +135,95 @@ const Module = struct {
             } else {
                 os.abort();
             }
-            const file = di_builder.create_file(file_name, directory);
+            file = di_builder.create_file(file_name, directory);
             const compile_unit = di_builder.create_compile_unit(file, options.build_mode.is_optimized());
-            module.global_scope = compile_unit.to_scope();
-            module.file = file;
+            global_scope = compile_unit.to_scope();
         }
 
+        const module = arena.allocate_one(Module);
+        module.* = .{
+            .llvm = .{
+                .global_scope = global_scope,
+                .file = file,
+                .handle = handle,
+                .context = context,
+                .builder = context.create_builder(),
+            },
+        };
+
+        var llvm_integer_types: [64]*llvm.Type = undefined;
+
+        for (1..64 + 1) |bit_count| {
+            llvm_integer_types[bit_count - 1] = context.get_integer_type(@intCast(bit_count)).to_type();
+        }
+
+        const llvm_i128 = context.get_integer_type(128).to_type();
+
+        _ = module.types.add(.{
+            .name = "void",
+            .llvm = .{
+                .handle = context.get_void_type(),
+                .debug = if (maybe_di_builder) |di_builder| di_builder.create_basic_type("void", 0, .void, .{}) else undefined,
+            },
+            .bb = .void,
+        });
+
         for ([2]bool{ false, true }) |sign| {
-            for (0..4) |i| {
+            for (1..64 + 1) |bit_count| {
                 var name_buffer = [3]u8{ if (sign) 's' else 'u', 0, 0 };
-                const bit_count = @as(u32, 1) << @intCast(3 + i);
-                switch (bit_count) {
-                    8 => name_buffer[1] = '8',
-                    16 => {
-                        name_buffer[1] = '1';
-                        name_buffer[2] = '6';
-                    },
-                    32 => {
-                        name_buffer[1] = '3';
-                        name_buffer[2] = '2';
-                    },
-                    64 => {
-                        name_buffer[1] = '6';
-                        name_buffer[2] = '4';
-                    },
-                    else => unreachable,
+                var digit_buffer = [2]u8{ 0, 0 };
+
+                var it = bit_count;
+                var i: usize = 0;
+                while (it != 0) : (i += 1) {
+                    const digit: u8 = @intCast((it % 10) + '0');
+                    digit_buffer[i] = digit;
+                    it = it / 10;
                 }
+
+                name_buffer[1] = digit_buffer[1];
+                name_buffer[2] = digit_buffer[0];
+
                 const name_length = @as(usize, 2) + @intFromBool(bit_count > 9);
+
                 const name = arena.duplicate_string(name_buffer[0..name_length]);
                 _ = module.types.add(.{
                     .name = name,
                     .bb = .{
                         .integer = .{
-                            .bit_count = bit_count,
+                            .bit_count = @intCast(bit_count),
                             .signed = sign,
                         },
                     },
                     .llvm = .{
-                        .handle = switch (bit_count) {
-                            1 => thread.i1.type.to_type(),
-                            8 => thread.i8.type.to_type(),
-                            16 => thread.i16.type.to_type(),
-                            32 => thread.i32.type.to_type(),
-                            64 => thread.i64.type.to_type(),
-                            else => unreachable,
-                        },
-                        .debug = if (module.di_builder) |di_builder| blk: {
+                        .handle = llvm_integer_types[bit_count - 1],
+                        .debug = if (maybe_di_builder) |di_builder| blk: {
                             const dwarf_type: llvm.Dwarf.Type = if (bit_count == 8 and !sign) .unsigned_char else if (sign) .signed else .unsigned;
                             break :blk di_builder.create_basic_type(name, bit_count, dwarf_type, .{});
                         } else undefined,
                     },
                 });
             }
+        }
+
+        for ([2]bool{ false, true }) |sign| {
+            const name = if (sign) "s128" else "u128";
+            _ = module.types.add(.{
+                .name = name,
+                .bb = .{
+                    .integer = .{
+                        .bit_count = 128,
+                        .signed = sign,
+                    },
+                },
+                .llvm = .{
+                    .handle = llvm_i128,
+                    .debug = if (maybe_di_builder) |di_builder| blk: {
+                        const dwarf_type: llvm.Dwarf.Type = if (sign) .signed else .unsigned;
+                        break :blk di_builder.create_basic_type(name, 128, dwarf_type, .{});
+                    } else undefined,
+                },
+            });
         }
 
         return module;
@@ -197,6 +247,7 @@ pub const Value = struct {
         instruction,
         constant_integer,
         struct_initialization,
+        bits_initialization,
     },
     type: *Type,
     llvm: *llvm.Value,
@@ -220,6 +271,12 @@ const Field = struct {
     byte_offset: usize,
 };
 
+const FunctionType = struct {
+    semantic_argument_types: []const *Type,
+    semantic_return_type: *Type,
+    calling_convention: CallingConvention,
+};
+
 const StructType = struct {
     fields: []const Field,
     bit_size: u64,
@@ -228,10 +285,9 @@ const StructType = struct {
     byte_alignment: u64,
 };
 
-const FunctionType = struct {
-    semantic_argument_types: []const *Type,
-    semantic_return_type: *Type,
-    calling_convention: CallingConvention,
+const Bits = struct {
+    fields: []const Field,
+    backing_type: *Type,
 };
 
 pub const Type = struct {
@@ -247,6 +303,7 @@ pub const Type = struct {
             signed: bool,
         },
         @"struct": StructType,
+        bits: Bits,
         function: FunctionType,
     };
 
@@ -254,6 +311,7 @@ pub const Type = struct {
         return switch (ty.bb) {
             .integer => |integer| integer.bit_count,
             .@"struct" => |struct_type| struct_type.bit_size,
+            .bits => |bits| bits.backing_type.get_bit_size(),
             .void, .forward_declaration, .function => unreachable,
         };
     }
@@ -262,6 +320,7 @@ pub const Type = struct {
         return switch (ty.bb) {
             .integer => |integer| @divExact(@max(8, lib.next_power_of_two(integer.bit_count)), 8),
             .@"struct" => |struct_type| struct_type.byte_size,
+            .bits => |bits| bits.backing_type.get_byte_size(),
             .void, .forward_declaration, .function => unreachable,
         };
     }
@@ -270,6 +329,7 @@ pub const Type = struct {
         return switch (ty.bb) {
             .integer => |integer| integer.bit_count,
             .@"struct" => |struct_type| struct_type.bit_alignment,
+            .bits => |bits| bits.backing_type.get_bit_alignment(),
             .void, .forward_declaration, .function => unreachable,
         };
     }
@@ -277,13 +337,14 @@ pub const Type = struct {
     pub fn get_byte_alignment(ty: *const Type) u64 {
         return switch (ty.bb) {
             .integer => |integer| @divExact(@max(8, lib.next_power_of_two(integer.bit_count)), 8),
-            .@"struct" => |struct_type| struct_type.bit_alignment,
+            .@"struct" => |struct_type| struct_type.byte_alignment,
+            .bits => |bits| bits.backing_type.get_byte_alignment(),
             .void, .forward_declaration, .function => unreachable,
         };
     }
 
     const Array = struct {
-        buffer: [64]Type = undefined,
+        buffer: [1024]Type = undefined,
         count: usize = 0,
 
         pub fn get(types: *Array) []Type {
@@ -523,7 +584,7 @@ const Converter = struct {
         }
     }
 
-    fn parse_block(noalias converter: *Converter, noalias thread: *llvm.Thread, noalias module: *Module) void {
+    fn parse_block(noalias converter: *Converter, noalias module: *Module) void {
         converter.skip_space();
 
         const current_function_global = module.current_function orelse unreachable;
@@ -534,8 +595,8 @@ const Converter = struct {
         const current_scope = current_function.current_scope;
         defer current_function.current_scope = current_scope;
 
-        if (module.di_builder) |di_builder| {
-            const lexical_block = di_builder.create_lexical_block(current_scope, module.file, block_line, block_column);
+        if (module.llvm.di_builder) |di_builder| {
+            const lexical_block = di_builder.create_lexical_block(current_scope, module.llvm.file, block_line, block_column);
             current_function.current_scope = lexical_block.to_scope();
         }
 
@@ -561,10 +622,10 @@ const Converter = struct {
             const column = converter.get_column();
 
             var statement_debug_location: *llvm.DI.Location = undefined;
-            if (module.di_builder) |_| {
+            if (module.llvm.di_builder) |_| {
                 const inlined_at: ?*llvm.DI.Metadata = null; // TODO
-                statement_debug_location = llvm.DI.create_debug_location(thread.context, line, column, current_function.current_scope, inlined_at);
-                thread.builder.set_current_debug_location(statement_debug_location);
+                statement_debug_location = llvm.DI.create_debug_location(module.llvm.context, line, column, current_function.current_scope, inlined_at);
+                module.llvm.builder.set_current_debug_location(statement_debug_location);
             }
 
             const statement_start_ch = converter.content[converter.offset];
@@ -588,33 +649,33 @@ const Converter = struct {
 
                     converter.skip_space();
 
-                    if (module.di_builder) |_| {
-                        thread.builder.clear_current_debug_location();
+                    if (module.llvm.di_builder) |_| {
+                        module.llvm.builder.clear_current_debug_location();
                     }
 
                     const local_storage = module.values.add();
                     local_storage.* = .{
-                        .llvm = thread.builder.create_alloca(local_type.llvm.handle, local_name),
+                        .llvm = module.llvm.builder.create_alloca(local_type.llvm.handle, local_name),
                         .type = local_type,
                         .bb = .local,
                     };
 
-                    const value = converter.parse_value(thread, module, local_type);
+                    const value = converter.parse_value(module, local_type);
 
-                    if (module.di_builder) |di_builder| {
-                        thread.builder.set_current_debug_location(statement_debug_location);
+                    if (module.llvm.di_builder) |di_builder| {
+                        module.llvm.builder.set_current_debug_location(statement_debug_location);
                         const debug_type = local_type.llvm.debug;
                         const always_preserve = true;
                         // TODO:
                         const alignment = 0;
                         const flags = llvm.DI.Flags{};
-                        const local_variable = di_builder.create_auto_variable(current_function.current_scope, local_name, module.file, line, debug_type, always_preserve, flags, alignment);
+                        const local_variable = di_builder.create_auto_variable(current_function.current_scope, local_name, module.llvm.file, line, debug_type, always_preserve, flags, alignment);
                         const inlined_at: ?*llvm.DI.Metadata = null; // TODO
-                        const debug_location = llvm.DI.create_debug_location(thread.context, line, column, current_function.current_scope, inlined_at);
+                        const debug_location = llvm.DI.create_debug_location(module.llvm.context, line, column, current_function.current_scope, inlined_at);
                         _ = di_builder.insert_declare_record_at_end(local_storage.llvm, local_variable, di_builder.null_expression(), debug_location, current_function.current_basic_block);
-                        thread.builder.set_current_debug_location(statement_debug_location);
+                        module.llvm.builder.set_current_debug_location(statement_debug_location);
                     }
-                    _ = thread.builder.create_store(value.llvm, local_storage.llvm);
+                    _ = module.llvm.builder.create_store(value.llvm, local_storage.llvm);
 
                     const local = current_function.locals.add();
                     local.* = .{
@@ -630,27 +691,27 @@ const Converter = struct {
                 if (string_to_enum(StatementStartKeyword, statement_start_identifier)) |statement_start_keyword| {
                     switch (statement_start_keyword) {
                         .@"return" => {
-                            const return_value = converter.parse_value(thread, module, current_function_global.value.type.bb.function.semantic_return_type);
-                            thread.builder.create_ret(return_value.llvm);
+                            const return_value = converter.parse_value(module, current_function_global.value.type.bb.function.semantic_return_type);
+                            module.llvm.builder.create_ret(return_value.llvm);
                         },
                         .@"if" => {
-                            const taken_block = thread.context.create_basic_block("", current_function_global.value.llvm.to_function());
-                            const not_taken_block = thread.context.create_basic_block("", current_function_global.value.llvm.to_function());
+                            const taken_block = module.llvm.context.create_basic_block("", current_function_global.value.llvm.to_function());
+                            const not_taken_block = module.llvm.context.create_basic_block("", current_function_global.value.llvm.to_function());
 
                             converter.skip_space();
 
                             converter.expect_character(left_parenthesis);
                             converter.skip_space();
 
-                            const condition = converter.parse_value(thread, module, null);
+                            const condition = converter.parse_value(module, null);
 
                             converter.skip_space();
                             converter.expect_character(right_parenthesis);
 
-                            _ = thread.builder.create_conditional_branch(condition.llvm, taken_block, not_taken_block);
-                            thread.builder.position_at_end(taken_block);
+                            _ = module.llvm.builder.create_conditional_branch(condition.llvm, taken_block, not_taken_block);
+                            module.llvm.builder.position_at_end(taken_block);
 
-                            converter.parse_block(thread, module);
+                            converter.parse_block(module);
 
                             const is_first_block_terminated = current_function.current_basic_block.get_terminator() != null;
                             if (!is_first_block_terminated) {
@@ -670,8 +731,8 @@ const Converter = struct {
 
                             var is_second_block_terminated = false;
                             if (is_else) {
-                                thread.builder.position_at_end(not_taken_block);
-                                converter.parse_block(thread, module);
+                                module.llvm.builder.position_at_end(not_taken_block);
+                                converter.parse_block(module);
                                 is_second_block_terminated = current_function.current_basic_block.get_terminator() != null;
                             } else {
                                 @trap();
@@ -692,7 +753,7 @@ const Converter = struct {
                         const variable = if (current_function.locals.find(statement_start_identifier)) |local| local else if (module.globals.find(statement_start_identifier)) |global| global else {
                             converter.report_error();
                         };
-                        const call = thread.builder.create_call(variable.value.type.llvm.handle.to_function(), variable.value.llvm, &.{});
+                        const call = module.llvm.builder.create_call(variable.value.type.llvm.handle.to_function(), variable.value.llvm, &.{});
                         _ = call;
                         @trap();
                     } else {
@@ -738,7 +799,7 @@ const Converter = struct {
         }
     };
 
-    fn parse_value(noalias converter: *Converter, noalias thread: *llvm.Thread, noalias module: *Module, maybe_expected_type: ?*Type) *Value {
+    fn parse_value(noalias converter: *Converter, noalias module: *Module, maybe_expected_type: ?*Type) *Value {
         converter.skip_space();
 
         var value_state = ExpressionState.none;
@@ -751,9 +812,14 @@ const Converter = struct {
                 iterative_expected_type = previous_value.?.type;
             }
 
-            const current_value = switch (converter.content[converter.offset] == left_parenthesis) {
-                true => os.abort(),
-                false => converter.parse_single_value(thread, module, iterative_expected_type),
+            const current_value = switch (converter.consume_character_if_match(left_parenthesis)) {
+                true => blk: {
+                    const r = converter.parse_value(module, iterative_expected_type);
+                    converter.skip_space();
+                    converter.expect_character(right_parenthesis);
+                    break :blk r;
+                },
+                false => converter.parse_single_value(module, iterative_expected_type),
             };
 
             converter.skip_space();
@@ -766,20 +832,20 @@ const Converter = struct {
 
             const llvm_value = switch (value_state) {
                 .none => current_value.llvm,
-                .sub => thread.builder.create_sub(left.?.llvm, right.llvm),
-                .add => thread.builder.create_add(left.?.llvm, right.llvm),
-                .mul => thread.builder.create_mul(left.?.llvm, right.llvm),
-                .sdiv => thread.builder.create_sdiv(left.?.llvm, right.llvm),
-                .udiv => thread.builder.create_udiv(left.?.llvm, right.llvm),
-                .srem => thread.builder.create_srem(left.?.llvm, right.llvm),
-                .urem => thread.builder.create_urem(left.?.llvm, right.llvm),
-                .shl => thread.builder.create_shl(left.?.llvm, right.llvm),
-                .ashr => thread.builder.create_ashr(left.?.llvm, right.llvm),
-                .lshr => thread.builder.create_lshr(left.?.llvm, right.llvm),
-                .@"and" => thread.builder.create_and(left.?.llvm, right.llvm),
-                .@"or" => thread.builder.create_or(left.?.llvm, right.llvm),
-                .xor => thread.builder.create_xor(left.?.llvm, right.llvm),
-                .icmp_ne => |icmp| thread.builder.create_compare(icmp.to_int_predicate(), left.?.llvm, right.llvm),
+                .sub => module.llvm.builder.create_sub(left.?.llvm, right.llvm),
+                .add => module.llvm.builder.create_add(left.?.llvm, right.llvm),
+                .mul => module.llvm.builder.create_mul(left.?.llvm, right.llvm),
+                .sdiv => module.llvm.builder.create_sdiv(left.?.llvm, right.llvm),
+                .udiv => module.llvm.builder.create_udiv(left.?.llvm, right.llvm),
+                .srem => module.llvm.builder.create_srem(left.?.llvm, right.llvm),
+                .urem => module.llvm.builder.create_urem(left.?.llvm, right.llvm),
+                .shl => module.llvm.builder.create_shl(left.?.llvm, right.llvm),
+                .ashr => module.llvm.builder.create_ashr(left.?.llvm, right.llvm),
+                .lshr => module.llvm.builder.create_lshr(left.?.llvm, right.llvm),
+                .@"and" => module.llvm.builder.create_and(left.?.llvm, right.llvm),
+                .@"or" => module.llvm.builder.create_or(left.?.llvm, right.llvm),
+                .xor => module.llvm.builder.create_xor(left.?.llvm, right.llvm),
+                .icmp_ne => |icmp| module.llvm.builder.create_compare(icmp.to_int_predicate(), left.?.llvm, right.llvm),
             };
 
             previous_value = module.values.add();
@@ -891,16 +957,60 @@ const Converter = struct {
         negative,
     };
 
-    fn parse_single_value(noalias converter: *Converter, noalias thread: *llvm.Thread, noalias module: *Module, expected_type: ?*Type) *Value {
+    const Intrinsic = enum {
+        extend,
+        foo,
+    };
+
+    fn parse_intrinsic(noalias converter: *Converter, noalias module: *Module, expected_type: ?*Type) *Value {
+        converter.expect_character('#');
+        converter.skip_space();
+        const intrinsic_name = converter.parse_identifier();
+        const intrinsic_keyword = string_to_enum(Intrinsic, intrinsic_name) orelse converter.report_error();
+        converter.skip_space();
+
+        converter.expect_character(left_parenthesis);
+
+        converter.skip_space();
+
+        switch (intrinsic_keyword) {
+            .extend => {
+                const source_value = converter.parse_value(module, null);
+                converter.skip_space();
+                converter.expect_character(right_parenthesis);
+                const source_type = source_value.type;
+                const destination_type = expected_type orelse converter.report_error();
+                if (source_type.get_bit_size() >= destination_type.get_bit_size()) {
+                    converter.report_error();
+                }
+
+                const extension_instruction = switch (source_type.bb.integer.signed) {
+                    true => module.llvm.builder.create_sign_extend(source_value.llvm, destination_type.llvm.handle),
+                    false => module.llvm.builder.create_zero_extend(source_value.llvm, destination_type.llvm.handle),
+                };
+                const value = module.values.add();
+                value.* = .{
+                    .llvm = extension_instruction,
+                    .type = destination_type,
+                    .bb = .instruction,
+                };
+
+                return value;
+            },
+            else => unreachable,
+        }
+    }
+
+    fn parse_single_value(noalias converter: *Converter, noalias module: *Module, expected_type: ?*Type) *Value {
         converter.skip_space();
 
         if (module.current_function) |function| {
-            if (module.di_builder) |_| {
+            if (module.llvm.di_builder) |_| {
                 const line = converter.get_line();
                 const column = converter.get_column();
                 const inlined_at: ?*llvm.DI.Metadata = null; // TODO
-                const debug_location = llvm.DI.create_debug_location(thread.context, line, column, function.value.bb.function.current_scope, inlined_at);
-                thread.builder.set_current_debug_location(debug_location);
+                const debug_location = llvm.DI.create_debug_location(module.llvm.context, line, column, function.value.bb.function.current_scope, inlined_at);
+                module.llvm.builder.set_current_debug_location(debug_location);
             }
         }
 
@@ -950,7 +1060,7 @@ const Converter = struct {
 
                             converter.skip_space();
 
-                            const field_value = converter.parse_value(thread, module, field.type);
+                            const field_value = converter.parse_value(module, field.type);
 
                             if (must_be_constant) {
                                 if (field_index != field_count) {
@@ -958,7 +1068,7 @@ const Converter = struct {
                                 }
                                 @trap();
                             } else {
-                                llvm_value = thread.builder.create_insert_value(llvm_value, field_value.llvm, field_index);
+                                llvm_value = module.llvm.builder.create_insert_value(llvm_value, field_value.llvm, field_index);
                             }
 
                             converter.skip_space();
@@ -984,11 +1094,65 @@ const Converter = struct {
 
                         return value;
                     },
+                    .bits => |*bits| {
+                        var field_count: usize = 0;
+
+                        var llvm_value = bits.backing_type.llvm.handle.to_integer().get_constant(0, @intFromBool(false)).to_value();
+
+                        while (converter.consume_character_if_match('.')) : (field_count += 1) {
+                            converter.skip_space();
+
+                            const field_name = converter.parse_identifier();
+                            const field_index: u32 = for (bits.fields, 0..) |*field, field_index| {
+                                if (lib.string.equal(field.name, field_name)) {
+                                    break @intCast(field_index);
+                                }
+                            } else converter.report_error();
+
+                            const field = bits.fields[field_index];
+
+                            converter.skip_space();
+
+                            converter.expect_character('=');
+
+                            converter.skip_space();
+
+                            const field_value = converter.parse_value(module, field.type);
+
+                            const extended_field_value = module.llvm.builder.create_zero_extend(field_value.llvm, bits.backing_type.llvm.handle);
+                            const shifted_value = module.llvm.builder.create_shl(extended_field_value, bits.backing_type.llvm.handle.to_integer().get_constant(field.bit_offset, @intFromBool(false)).to_value());
+                            const or_value = module.llvm.builder.create_or(llvm_value, shifted_value);
+                            llvm_value = or_value;
+
+                            converter.skip_space();
+
+                            _ = converter.consume_character_if_match(',');
+
+                            converter.skip_space();
+                        }
+
+                        if (field_count != bits.fields.len) {
+                            // expect: 'zero' keyword
+                            @trap();
+                        }
+
+                        converter.expect_character(right_brace);
+
+                        const value = module.values.add();
+                        value.* = .{
+                            .llvm = llvm_value,
+                            .type = ty,
+                            .bb = .bits_initialization,
+                        };
+
+                        return value;
+                    },
                     else => converter.report_error(),
                 }
 
                 @trap();
             },
+            '#' => return converter.parse_intrinsic(module, expected_type),
             else => os.abort(),
         };
 
@@ -1027,14 +1191,14 @@ const Converter = struct {
                                     @trap();
                                 },
                                 .unknown => {
-                                    const argument_value = converter.parse_value(thread, module, variable.value.type.bb.function.semantic_argument_types[argument_count]);
+                                    const argument_value = converter.parse_value(module, variable.value.type.bb.function.semantic_argument_types[argument_count]);
                                     llvm_arguments[argument_count] = argument_value.llvm;
                                 },
                             }
                         }
 
                         const llvm_argument_values = llvm_arguments[0..argument_count];
-                        const llvm_call = thread.builder.create_call(variable.value.type.llvm.handle.to_function(), variable.value.llvm, llvm_argument_values);
+                        const llvm_call = module.llvm.builder.create_call(variable.value.type.llvm.handle.to_function(), variable.value.llvm, llvm_argument_values);
                         llvm_call.to_instruction().set_calling_convention(variable.value.llvm.get_calling_convention());
                         const call = module.values.add();
                         call.* = .{
@@ -1055,22 +1219,43 @@ const Converter = struct {
                                     }
                                 } else converter.report_error();
                                 const field = struct_type.fields[field_index];
-                                const gep = thread.builder.create_struct_gep(variable.value.type.llvm.handle.to_struct(), variable.value.llvm, field_index);
+                                const gep = module.llvm.builder.create_struct_gep(variable.value.type.llvm.handle.to_struct(), variable.value.llvm, field_index);
                                 const load = module.values.add();
-                                // const llvm_field_index =  thread.llvminteger_type.get_constant(field_index, @intFromBool(false));
                                 load.* = .{
-                                    .llvm = thread.builder.create_load(field.type.llvm.handle, gep),
+                                    .llvm = module.llvm.builder.create_load(field.type.llvm.handle, gep),
                                     .type = field.type,
                                     .bb = .instruction,
                                 };
                                 break :b load;
+                            },
+                            .bits => |*bits| {
+                                const field_name = converter.parse_identifier();
+                                const field_index: u32 = for (bits.fields, 0..) |field, field_index| {
+                                    if (lib.string.equal(field.name, field_name)) {
+                                        break @intCast(field_index);
+                                    }
+                                } else converter.report_error();
+                                const field = bits.fields[field_index];
+
+                                const bitfield_load = module.llvm.builder.create_load(bits.backing_type.llvm.handle, variable.value.llvm);
+                                const bitfield_shifted = module.llvm.builder.create_lshr(bitfield_load, bits.backing_type.llvm.handle.to_integer().get_constant(field.bit_offset, @intFromBool(false)).to_value());
+                                const bitfield_masked = module.llvm.builder.create_and(bitfield_shifted, bits.backing_type.llvm.handle.to_integer().get_constant((@as(u64, 1) << @intCast(field.type.get_bit_size())) - 1, @intFromBool(false)).to_value());
+
+                                const value = module.values.add();
+                                value.* = .{
+                                    .type = bits.backing_type,
+                                    .llvm = bitfield_masked,
+                                    .bb = .instruction,
+                                };
+
+                                break :b value;
                             },
                             else => @trap(),
                         }
                     } else {
                         const load = module.values.add();
                         load.* = .{
-                            .llvm = thread.builder.create_load(variable.value.type.llvm.handle, variable.value.llvm),
+                            .llvm = module.llvm.builder.create_load(variable.value.type.llvm.handle, variable.value.llvm),
                             .type = variable.value.type,
                             .bb = .instruction,
                         };
@@ -1154,9 +1339,9 @@ pub noinline fn convert(options: ConvertOptions) void {
         .line_character_offset = 0,
     };
 
-    const thread = llvm.default_initialize();
+    llvm.default_initialize();
 
-    const module = Module.initialize(lib.global.arena, thread, options);
+    const module = Module.initialize(lib.global.arena, options);
 
     while (true) {
         converter.skip_space();
@@ -1322,7 +1507,7 @@ pub noinline fn convert(options: ConvertOptions) void {
                                     for (arguments, argument_types, debug_argument_types[1..]) |*argument, *argument_type, *debug_argument_type| {
                                         argument_type.* = argument.type.llvm.handle;
                                         debug_argument_type.* = argument.type.llvm.debug;
-                                        if (module.di_builder) |_| {
+                                        if (module.llvm.di_builder) |_| {
                                             assert(@intFromPtr(argument.type.llvm.debug) != 0xaaaa_aaaa_aaaa_aaaa);
                                         }
                                     }
@@ -1333,7 +1518,7 @@ pub noinline fn convert(options: ConvertOptions) void {
                         }
 
                         const llvm_function_type = llvm.Type.Function.get(return_type.llvm.handle, argument_types, false);
-                        const llvm_handle = module.llvm.create_function(.{
+                        const llvm_handle = module.llvm.handle.create_function(.{
                             .name = global_name,
                             .linkage = switch (is_export) {
                                 true => .ExternalLinkage,
@@ -1343,20 +1528,20 @@ pub noinline fn convert(options: ConvertOptions) void {
                         });
                         llvm_handle.set_calling_convention(calling_convention.to_llvm());
 
-                        const entry_block = thread.context.create_basic_block("entry", llvm_handle);
-                        thread.builder.position_at_end(entry_block);
+                        const entry_block = module.llvm.context.create_basic_block("entry", llvm_handle);
+                        module.llvm.builder.position_at_end(entry_block);
 
                         const global = module.globals.add();
 
                         var subroutine_type: *llvm.DI.Type.Subroutine = undefined;
-                        const current_scope: *llvm.DI.Scope = if (module.di_builder) |di_builder| blk: {
+                        const current_scope: *llvm.DI.Scope = if (module.llvm.di_builder) |di_builder| blk: {
                             const subroutine_type_flags = llvm.DI.Flags{};
-                            subroutine_type = di_builder.create_subroutine_type(module.file, debug_argument_types, subroutine_type_flags);
+                            subroutine_type = di_builder.create_subroutine_type(module.llvm.file, debug_argument_types, subroutine_type_flags);
                             const scope_line: u32 = @intCast(converter.line_offset + 1);
                             const local_to_unit = !is_export;
                             const flags = llvm.DI.Flags{};
                             const is_definition = true;
-                            const subprogram = di_builder.create_function(module.global_scope, global_name, linkage_name, module.file, global_line, subroutine_type, local_to_unit, is_definition, scope_line, flags, options.build_mode.is_optimized());
+                            const subprogram = di_builder.create_function(module.llvm.global_scope, global_name, linkage_name, module.llvm.file, global_line, subroutine_type, local_to_unit, is_definition, scope_line, flags, options.build_mode.is_optimized());
                             llvm_handle.set_subprogram(subprogram);
 
                             break :blk @ptrCast(subprogram);
@@ -1408,7 +1593,7 @@ pub noinline fn convert(options: ConvertOptions) void {
                         const argument_variables = global.value.bb.function.arguments.add_many(argument_count);
 
                         for (argument_variables, arguments) |*argument_variable, *argument| {
-                            const argument_alloca = thread.builder.create_alloca(argument.type.llvm.handle, argument.name);
+                            const argument_alloca = module.llvm.builder.create_alloca(argument.type.llvm.handle, argument.name);
                             const argument_value = module.values.add();
                             argument_value.* = .{
                                 .llvm = argument_alloca,
@@ -1429,31 +1614,31 @@ pub noinline fn convert(options: ConvertOptions) void {
                             switch (calling_convention) {
                                 .unknown => {
                                     for (argument_variables, llvm_arguments) |*argument_variable, llvm_argument| {
-                                        _ = thread.builder.create_store(llvm_argument.to_value(), argument_variable.value.llvm);
+                                        _ = module.llvm.builder.create_store(llvm_argument.to_value(), argument_variable.value.llvm);
                                     }
                                 },
                                 .c => @trap(),
                             }
 
-                            if (module.di_builder) |di_builder| {
+                            if (module.llvm.di_builder) |di_builder| {
                                 for (argument_variables, arguments, 0..) |argument_variable, argument, argument_number| {
                                     const always_preserve = true;
                                     const flags = llvm.DI.Flags{};
-                                    const parameter_variable = di_builder.create_parameter_variable(global.value.bb.function.current_scope, argument_variable.name, @intCast(argument_number + 1), module.file, argument.line, argument.type.llvm.debug, always_preserve, flags);
+                                    const parameter_variable = di_builder.create_parameter_variable(global.value.bb.function.current_scope, argument_variable.name, @intCast(argument_number + 1), module.llvm.file, argument.line, argument.type.llvm.debug, always_preserve, flags);
                                     const inlined_at: ?*llvm.DI.Metadata = null; // TODO
-                                    const debug_location = llvm.DI.create_debug_location(thread.context, argument.line, argument.column, global.value.bb.function.current_scope, inlined_at);
+                                    const debug_location = llvm.DI.create_debug_location(module.llvm.context, argument.line, argument.column, global.value.bb.function.current_scope, inlined_at);
                                     _ = di_builder.insert_declare_record_at_end(argument_variable.value.llvm, parameter_variable, di_builder.null_expression(), debug_location, global.value.bb.function.current_basic_block);
                                 }
                             }
                         }
 
-                        converter.parse_block(thread, module);
+                        converter.parse_block(module);
 
-                        if (module.di_builder) |di_builder| {
+                        if (module.llvm.di_builder) |di_builder| {
                             di_builder.finalize_subprogram(llvm_handle.get_subprogram());
                         }
 
-                        if (lib.optimization_mode == .Debug and module.di_builder == null) {
+                        if (lib.optimization_mode == .Debug and module.llvm.di_builder == null) {
                             const verify_result = llvm_handle.verify();
                             if (!verify_result.success) {
                                 os.abort();
@@ -1469,14 +1654,14 @@ pub noinline fn convert(options: ConvertOptions) void {
                             @trap();
                         }
 
-                        const llvm_struct_type = thread.context.create_forward_declared_struct_type(global_name);
+                        const llvm_struct_type = module.llvm.context.create_forward_declared_struct_type(global_name);
                         const struct_type = module.types.add(.{
                             .name = global_name,
                             .bb = .forward_declaration,
                             .llvm = .{
                                 .handle = llvm_struct_type.to_type(),
-                                .debug = if (module.di_builder) |di_builder| blk: {
-                                    const r = di_builder.create_replaceable_composite_type(module.debug_tag, global_name, module.global_scope, module.file, global_line);
+                                .debug = if (module.llvm.di_builder) |di_builder| blk: {
+                                    const r = di_builder.create_replaceable_composite_type(module.debug_tag, global_name, module.llvm.global_scope, module.llvm.file, global_line);
                                     module.debug_tag += 1;
                                     break :blk r.to_type();
                                 } else undefined,
@@ -1523,8 +1708,8 @@ pub noinline fn convert(options: ConvertOptions) void {
                             };
                             llvm_field_type_buffer[field_count] = field_type.llvm.handle;
 
-                            if (module.di_builder) |di_builder| {
-                                const member_type = di_builder.create_member_type(module.global_scope, field_name, module.file, field_line, field_bit_size, @intCast(field_bit_alignment), field_bit_offset, .{}, field_type.llvm.debug);
+                            if (module.llvm.di_builder) |di_builder| {
+                                const member_type = di_builder.create_member_type(module.llvm.global_scope, field_name, module.llvm.file, field_line, field_bit_size, @intCast(field_bit_alignment), field_bit_offset, .{}, field_type.llvm.debug);
                                 llvm_debug_member_type_buffer[field_count] = member_type;
                             }
 
@@ -1555,9 +1740,9 @@ pub noinline fn convert(options: ConvertOptions) void {
                         const element_types = llvm_field_type_buffer[0..field_count];
                         llvm_struct_type.set_body(element_types);
 
-                        if (module.di_builder) |di_builder| {
+                        if (module.llvm.di_builder) |di_builder| {
                             const member_types = llvm_debug_member_type_buffer[0..field_count];
-                            const debug_struct_type = di_builder.create_struct_type(module.global_scope, global_name, module.file, global_line, bit_size, @intCast(bit_alignment), .{}, member_types);
+                            const debug_struct_type = di_builder.create_struct_type(module.llvm.global_scope, global_name, module.llvm.file, global_line, bit_size, @intCast(bit_alignment), .{}, member_types);
                             const forward_declared: *llvm.DI.Type.Composite = @ptrCast(struct_type.llvm.debug);
                             forward_declared.replace_all_uses_with(debug_struct_type);
                             struct_type.llvm.debug = debug_struct_type.to_type();
@@ -1573,19 +1758,103 @@ pub noinline fn convert(options: ConvertOptions) void {
                             },
                         };
                     },
+                    .bits => {
+                        // TODO: allow implicit backing type?
+                        const backing_type = converter.parse_type(module);
+                        if (backing_type.bb != .integer) {
+                            converter.report_error();
+                        }
+
+                        if (backing_type.get_bit_size() > 64) {
+                            converter.report_error();
+                        }
+
+                        converter.skip_space();
+
+                        converter.expect_character(left_brace);
+
+                        var field_buffer: [128]Field = undefined;
+                        var llvm_debug_field_buffer: [128]*llvm.DI.Type.Derived = undefined;
+                        var field_count: usize = 0;
+
+                        var field_bit_offset: u64 = 0;
+
+                        while (true) : (field_count += 1) {
+                            converter.skip_space();
+
+                            if (converter.consume_character_if_match(right_brace)) {
+                                break;
+                            }
+
+                            const field_line = converter.get_line();
+
+                            const field_name = converter.parse_identifier();
+
+                            converter.skip_space();
+
+                            converter.expect_character(':');
+
+                            converter.skip_space();
+
+                            const field_type = converter.parse_type(module);
+
+                            field_buffer[field_count] = .{
+                                .name = field_name,
+                                .type = field_type,
+                                .bit_offset = field_bit_offset,
+                                .byte_offset = 0,
+                            };
+
+                            const field_bit_size = field_type.get_bit_size();
+                            field_bit_offset += field_bit_size;
+
+                            if (module.llvm.di_builder) |di_builder| {
+                                const member_type = di_builder.create_bit_field_member_type(module.llvm.global_scope, field_name, module.llvm.file, field_line, field_bit_size, field_bit_offset, 0, .{}, backing_type.llvm.debug);
+                                llvm_debug_field_buffer[field_count] = member_type;
+                            }
+
+                            converter.skip_space();
+
+                            _ = converter.consume_character_if_match(',');
+                        }
+
+                        _ = converter.consume_character_if_match(';');
+
+                        const fields = lib.global.arena.allocate(Field, field_count);
+                        @memcpy(fields, field_buffer[0..field_count]);
+
+                        const bit_size = backing_type.get_bit_size();
+                        const bit_alignment = backing_type.get_bit_alignment();
+
+                        const debug_member_types = llvm_debug_field_buffer[0..field_count];
+
+                        _ = module.types.add(.{
+                            .name = global_name,
+                            .llvm = .{
+                                .handle = backing_type.llvm.handle,
+                                .debug = if (module.llvm.di_builder) |di_builder| di_builder.create_struct_type(module.llvm.global_scope, global_name, module.llvm.file, global_line, bit_size, @intCast(bit_alignment), .{}, debug_member_types).to_type() else undefined,
+                            },
+                            .bb = .{
+                                .bits = .{
+                                    .fields = fields,
+                                    .backing_type = backing_type,
+                                },
+                            },
+                        });
+                    },
                 }
             } else {
                 converter.report_error();
             }
         } else {
             if (global_type) |expected_type| {
-                const value = converter.parse_value(thread, module, expected_type);
+                const value = converter.parse_value(module, expected_type);
 
                 converter.skip_space();
 
                 converter.expect_character(';');
 
-                const global_variable = module.llvm.create_global_variable(.{
+                const global_variable = module.llvm.handle.create_global_variable(.{
                     .linkage = switch (is_export) {
                         true => .ExternalLinkage,
                         false => .InternalLinkage,
@@ -1595,11 +1864,11 @@ pub noinline fn convert(options: ConvertOptions) void {
                     .type = expected_type.llvm.handle,
                 });
 
-                if (module.di_builder) |di_builder| {
+                if (module.llvm.di_builder) |di_builder| {
                     const linkage_name = global_name;
                     const local_to_unit = is_export; // TODO: extern
                     const alignment = 0; // TODO
-                    const global_variable_expression = di_builder.create_global_variable(module.global_scope, global_name, linkage_name, module.file, global_line, expected_type.llvm.debug, local_to_unit, di_builder.null_expression(), alignment);
+                    const global_variable_expression = di_builder.create_global_variable(module.llvm.global_scope, global_name, linkage_name, module.llvm.file, global_line, expected_type.llvm.debug, local_to_unit, di_builder.null_expression(), alignment);
                     global_variable.add_debug_info(global_variable_expression);
                 }
 
@@ -1621,21 +1890,21 @@ pub noinline fn convert(options: ConvertOptions) void {
         }
     }
 
-    if (module.di_builder) |di_builder| {
+    if (module.llvm.di_builder) |di_builder| {
         di_builder.finalize();
     }
 
     if (lib.optimization_mode == .Debug) {
-        const verify_result = module.llvm.verify();
+        const verify_result = module.llvm.handle.verify();
         if (!verify_result.success) {
-            lib.print_string(module.llvm.to_string());
+            lib.print_string(module.llvm.handle.to_string());
             lib.print_string("============================\n");
             lib.print_string(verify_result.error_message orelse unreachable);
             os.abort();
         }
 
         if (!lib.is_test) {
-            const module_string = module.llvm.to_string();
+            const module_string = module.llvm.handle.to_string();
             lib.print_string_stderr(module_string);
         }
     }
@@ -1654,7 +1923,7 @@ pub noinline fn convert(options: ConvertOptions) void {
         os.abort();
     };
 
-    const object_generate_result = llvm.object_generate(module.llvm, target_machine, .{
+    const object_generate_result = llvm.object_generate(module.llvm.handle, target_machine, .{
         .optimize_when_possible = @intFromBool(@intFromEnum(options.build_mode) > @intFromEnum(BuildMode.soft_optimize)),
         .debug_info = options.has_debug_info,
         .optimization_level = if (options.build_mode != .debug_none) options.build_mode.to_llvm_ir() else null,

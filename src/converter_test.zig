@@ -160,3 +160,11 @@ test "basic_call" {
 test "struct" {
     try invsrc(@src());
 }
+
+test "extend" {
+    try invsrc(@src());
+}
+
+test "bits" {
+    try invsrc(@src());
+}

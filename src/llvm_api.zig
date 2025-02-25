@@ -53,6 +53,8 @@ pub extern fn LLVMBuildLoad2(builder: *llvm.Builder, ty: *llvm.Type, pointer: *l
 pub extern fn LLVMBuildCall2(builder: *llvm.Builder, ty: *llvm.Type.Function, pointer: *llvm.Value, argument_pointer: [*]const *llvm.Value, argument_count: c_uint, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildStructGEP2(builder: *llvm.Builder, struct_type: *llvm.Type.Struct, pointer: *llvm.Value, index: c_uint, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildInsertValue(builder: *llvm.Builder, aggregate: *llvm.Value, element: *llvm.Value, index: c_uint, name: [*:0]const u8) *llvm.Value;
+pub extern fn LLVMBuildZExt(builder: *llvm.Builder, value: *llvm.Value, destination_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
+pub extern fn LLVMBuildSExt(builder: *llvm.Builder, value: *llvm.Value, destination_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
 
 pub extern fn LLVMSetCurrentDebugLocation2(builder: *llvm.Builder, location: ?*llvm.DI.Location) void;
 
@@ -62,6 +64,7 @@ pub extern fn llvm_value_is_instruction(value: *llvm.Value) bool;
 
 // TYPES
 // Types: integers
+pub extern fn LLVMVoidTypeInContext(context: *llvm.Context) *llvm.Type;
 pub extern fn LLVMInt1TypeInContext(context: *llvm.Context) *llvm.Type.Integer;
 pub extern fn LLVMInt8TypeInContext(context: *llvm.Context) *llvm.Type.Integer;
 pub extern fn LLVMInt16TypeInContext(context: *llvm.Context) *llvm.Type.Integer;
@@ -133,6 +136,7 @@ pub extern fn LLVMDIBuilderCreateLexicalBlock(builder: *llvm.DI.Builder, scope: 
 pub extern fn LLVMDIBuilderCreateReplaceableCompositeType(builder: *llvm.DI.Builder, tag: c_uint, name_pointer: [*]const u8, name_length: usize, scope: *llvm.DI.Scope, file: *llvm.DI.File, line: c_uint, runtime_language: c_uint, bit_size: u64, align_in_bits: u32, flags: llvm.DI.Flags, unique_identifier_pointer: ?[*]const u8, unique_identifier_length: usize) *llvm.DI.Type.Composite;
 pub extern fn LLVMDIBuilderCreateStructType(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, name_pointer: [*]const u8, name_length: usize, file: *llvm.DI.File, line: c_uint, bit_size: u64, align_in_bits: u32, flags: llvm.DI.Flags, derived_from: ?*llvm.DI.Type, member_pointer: [*]const *llvm.DI.Type.Derived, member_length: c_uint, runtime_language: c_uint, vtable_holder: ?*llvm.DI.Metadata, unique_id_pointer: ?[*]const u8, unique_id_length: usize) *llvm.DI.Type.Composite;
 pub extern fn LLVMDIBuilderCreateMemberType(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, name_pointer: [*]const u8, name_length: usize, file: *llvm.DI.File, line: c_uint, bit_size: u64, align_in_bits: u32, bit_offset: u64, flags: llvm.DI.Flags, member_type: *llvm.DI.Type) *llvm.DI.Type.Derived;
+pub extern fn LLVMDIBuilderCreateBitFieldMemberType(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, name_pointer: [*]const u8, name_length: usize, file: *llvm.DI.File, line: c_uint, bit_size: u64, bit_offset: u64, bit_storage_offset: u64, flags: llvm.DI.Flags, member_type: *llvm.DI.Type) *llvm.DI.Type.Derived;
 
 pub extern fn LLVMMetadataReplaceAllUsesWith(forward: *llvm.DI.Type.Composite, complete: *llvm.DI.Type.Composite) void;
 

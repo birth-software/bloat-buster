@@ -136,6 +136,11 @@ pub const panic = struct {
         @branchHint(.cold);
         abort();
     }
+
+    pub fn sliceCastLenRemainder(_: usize) noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 };
 
 pub fn main(argc: c_int, argv: [*:null]const ?[*:0]const u8) callconv(.C) c_int {

@@ -507,6 +507,9 @@ pub const Context = opaque {
     }
 
     pub const get_struct_type = api.llvm_context_get_struct_type;
+
+    pub const get_void_type = api.LLVMVoidTypeInContext;
+    pub const get_integer_type = api.LLVMIntTypeInContext;
 };
 
 pub const BasicBlock = opaque {
@@ -657,6 +660,14 @@ pub const Builder = opaque {
 
     pub fn create_insert_value(builder: *Builder, aggregate: *Value, element: *Value, index: c_uint) *Value {
         return api.LLVMBuildInsertValue(builder, aggregate, element, index, "");
+    }
+
+    pub fn create_zero_extend(builder: *Builder, value: *Value, destination_type: *Type) *Value {
+        return api.LLVMBuildZExt(builder, value, destination_type, "");
+    }
+
+    pub fn create_sign_extend(builder: *Builder, value: *Value, destination_type: *Type) *Value {
+        return api.LLVMBuildSExt(builder, value, destination_type, "");
     }
 };
 
@@ -867,6 +878,10 @@ pub const DI = struct {
 
         pub fn create_member_type(builder: *DI.Builder, scope: *DI.Scope, name: []const u8, file: *DI.File, line: c_uint, bit_size: u64, align_in_bits: u32, bit_offset: u64, flags: DI.Flags, member_type: *DI.Type) *DI.Type.Derived {
             return api.LLVMDIBuilderCreateMemberType(builder, scope, name.ptr, name.len, file, line, bit_size, align_in_bits, bit_offset, flags, member_type);
+        }
+
+        pub fn create_bit_field_member_type(builder: *DI.Builder, scope: *DI.Scope, name: []const u8, file: *DI.File, line: c_uint, bit_size: u64, bit_offset: u64, bit_storage_offset: u64, flags: DI.Flags, member_type: *DI.Type) *DI.Type.Derived {
+            return api.LLVMDIBuilderCreateBitFieldMemberType(builder, scope, name.ptr, name.len, file, line, bit_size, bit_offset, bit_storage_offset, flags, member_type);
         }
     };
 
@@ -1234,69 +1249,7 @@ pub const lld = struct {
     };
 };
 
-pub const Thread = struct {
-    context: *Context,
-    builder: *Builder,
-    i1: Integer,
-    i8: Integer,
-    i16: Integer,
-    i32: Integer,
-    i64: Integer,
-    i128: Integer,
-
-    pub const Integer = struct {
-        type: *Type.Integer,
-        zero: *Constant.Integer,
-    };
-
-    pub fn initialize(thread: *Thread) void {
-        const context = Context.create();
-        const type_i1 = api.LLVMInt1TypeInContext(context);
-        const type_i8 = api.LLVMInt8TypeInContext(context);
-        const type_i16 = api.LLVMInt16TypeInContext(context);
-        const type_i32 = api.LLVMInt32TypeInContext(context);
-        const type_i64 = api.LLVMInt64TypeInContext(context);
-        const type_i128 = api.LLVMInt128TypeInContext(context);
-        const zero_i1 = type_i1.get_constant(0, 0);
-        const zero_i8 = type_i8.get_constant(0, 0);
-        const zero_i16 = type_i16.get_constant(0, 0);
-        const zero_i32 = type_i32.get_constant(0, 0);
-        const zero_i64 = type_i64.get_constant(0, 0);
-        const zero_i128 = type_i128.get_constant(0, 0);
-
-        thread.* = .{
-            .context = context,
-            .builder = context.create_builder(),
-            .i1 = .{
-                .type = type_i1,
-                .zero = zero_i1,
-            },
-            .i8 = .{
-                .type = type_i8,
-                .zero = zero_i8,
-            },
-            .i16 = .{
-                .type = type_i16,
-                .zero = zero_i16,
-            },
-            .i32 = .{
-                .type = type_i32,
-                .zero = zero_i32,
-            },
-            .i64 = .{
-                .type = type_i64,
-                .zero = zero_i64,
-            },
-            .i128 = .{
-                .type = type_i128,
-                .zero = zero_i128,
-            },
-        };
-    }
-};
-
 pub const Global = struct {
-    threads: []Thread,
     host_triple: []const u8,
     host_cpu_model: []const u8,
     host_cpu_features: []const u8,
@@ -1314,7 +1267,6 @@ pub fn initialize_all() void {
     }
 
     global = .{
-        .threads = lib.global.arena.allocate(Thread, lib.global.thread_count),
         .host_triple = api.llvm_default_target_triple().to_slice() orelse unreachable,
         .host_cpu_model = api.llvm_host_cpu_name().to_slice() orelse unreachable,
         .host_cpu_features = api.llvm_host_cpu_features().to_slice() orelse unreachable,
@@ -1336,16 +1288,11 @@ const LldArgvBuilder = struct {
     }
 };
 
-pub fn default_initialize() *Thread {
+pub fn default_initialize() void {
     assert(lib.GlobalState.initialized);
     if (!initialized) {
         initialize_all();
     }
-
-    const thread = &global.threads[0];
-    thread.initialize();
-
-    return thread;
 }
 
 pub const GenerateObject = struct {
