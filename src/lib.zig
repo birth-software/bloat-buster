@@ -9,6 +9,11 @@ test {
     _ = @import("lib_test.zig");
 }
 
+const CSlice = extern struct {
+    pointer: ?*anyopaque,
+    length: usize,
+};
+
 pub const KB = 1024;
 pub const MB = 1024 * 1024;
 pub const GB = 1024 * 1024 * 1024;

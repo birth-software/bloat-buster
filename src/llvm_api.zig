@@ -52,6 +52,8 @@ pub extern fn LLVMBuildStore(builder: *llvm.Builder, value: *llvm.Value, pointer
 pub extern fn LLVMBuildLoad2(builder: *llvm.Builder, ty: *llvm.Type, pointer: *llvm.Value, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildCall2(builder: *llvm.Builder, ty: *llvm.Type.Function, pointer: *llvm.Value, argument_pointer: [*]const *llvm.Value, argument_count: c_uint, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildStructGEP2(builder: *llvm.Builder, struct_type: *llvm.Type.Struct, pointer: *llvm.Value, index: c_uint, name: [*:0]const u8) *llvm.Value;
+pub extern fn LLVMBuildInBoundsGEP2(builder: *llvm.Builder, ty: *llvm.Type, aggregate: *llvm.Value, index_pointer: [*]const *llvm.Value, index_count: c_uint, name: [*:0]const u8) *llvm.Value;
+
 pub extern fn LLVMBuildInsertValue(builder: *llvm.Builder, aggregate: *llvm.Value, element: *llvm.Value, index: c_uint, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildZExt(builder: *llvm.Builder, value: *llvm.Value, destination_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildSExt(builder: *llvm.Builder, value: *llvm.Value, destination_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
@@ -112,6 +114,7 @@ pub extern fn llvm_integer_type_get_bit_count(integer_type: *llvm.Type.Integer) 
 // VALUES
 pub extern fn LLVMGetPoison(type: *llvm.Type) *llvm.Value;
 pub extern fn LLVMConstInt(type: *llvm.Type.Integer, value: c_ulonglong, sign_extend: Bool) *llvm.Constant.Integer;
+pub extern fn LLVMConstArray2(element_type: *llvm.Type, value_pointer: [*]const *llvm.Constant, value_length: u64) *llvm.Constant.Array;
 
 pub extern fn LLVMGetValueKind(value: *llvm.Value) llvm.Value.Kind;
 pub extern fn LLVMIsConstant(value: *llvm.Value) Bool;
@@ -134,6 +137,7 @@ pub extern fn LLVMDIBuilderCreateGlobalVariableExpression(builder: *llvm.DI.Buil
 pub extern fn llvm_global_variable_add_debug_info(global_variable: *llvm.GlobalVariable, debug_global_variable: *llvm.DI.GlobalVariableExpression) void;
 pub extern fn LLVMDIBuilderCreateLexicalBlock(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, file: *llvm.DI.File, line: c_uint, column: c_uint) *llvm.DI.LexicalBlock;
 pub extern fn LLVMDIBuilderCreateReplaceableCompositeType(builder: *llvm.DI.Builder, tag: c_uint, name_pointer: [*]const u8, name_length: usize, scope: *llvm.DI.Scope, file: *llvm.DI.File, line: c_uint, runtime_language: c_uint, bit_size: u64, align_in_bits: u32, flags: llvm.DI.Flags, unique_identifier_pointer: ?[*]const u8, unique_identifier_length: usize) *llvm.DI.Type.Composite;
+pub extern fn LLVMDIBuilderCreateArrayType(builder: *llvm.DI.Builder, element_count: u64, align_in_bits: u32, element_type: *llvm.DI.Type, subscript_pointer: ?[*]const *llvm.DI.Metadata, subscript_count: c_uint) *llvm.DI.Type.Composite;
 pub extern fn LLVMDIBuilderCreateStructType(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, name_pointer: [*]const u8, name_length: usize, file: *llvm.DI.File, line: c_uint, bit_size: u64, align_in_bits: u32, flags: llvm.DI.Flags, derived_from: ?*llvm.DI.Type, member_pointer: [*]const *llvm.DI.Type.Derived, member_length: c_uint, runtime_language: c_uint, vtable_holder: ?*llvm.DI.Metadata, unique_id_pointer: ?[*]const u8, unique_id_length: usize) *llvm.DI.Type.Composite;
 pub extern fn LLVMDIBuilderCreateMemberType(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, name_pointer: [*]const u8, name_length: usize, file: *llvm.DI.File, line: c_uint, bit_size: u64, align_in_bits: u32, bit_offset: u64, flags: llvm.DI.Flags, member_type: *llvm.DI.Type) *llvm.DI.Type.Derived;
 pub extern fn LLVMDIBuilderCreateBitFieldMemberType(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, name_pointer: [*]const u8, name_length: usize, file: *llvm.DI.File, line: c_uint, bit_size: u64, bit_offset: u64, bit_storage_offset: u64, flags: llvm.DI.Flags, member_type: *llvm.DI.Type) *llvm.DI.Type.Derived;

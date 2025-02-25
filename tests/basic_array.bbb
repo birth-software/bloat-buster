@@ -1,0 +1,5 @@
+[export] main = fn [cc(c)] () s32
+{
+    >array: [_]s32 = [3, 2, 1, 0];
+    return array[3];
+}

@@ -490,10 +490,13 @@ const targets = [@typeInfo(Architecture).@"enum".fields.len]type{
 
 pub const Context = opaque {
     pub const create = api.LLVMContextCreate;
+
     pub fn create_module(context: *Context, name: []const u8) *Module {
         return api.llvm_context_create_module(context, String.from_slice(name));
     }
+
     pub const create_builder = api.LLVMCreateBuilderInContext;
+
     pub fn create_basic_block(context: *Context, name: []const u8, parent: *Function) *BasicBlock {
         return api.llvm_context_create_basic_block(context, String.from_slice(name), parent);
     }
@@ -501,6 +504,7 @@ pub const Context = opaque {
     pub fn create_forward_declared_struct_type(context: *Context, name: []const u8) *Type.Struct {
         return api.llvm_context_create_forward_declared_struct_type(context, String.from_slice(name));
     }
+
     pub fn create_struct_type(context: *Context, element_types: []const *Type, name: []const u8) *Type.Struct {
         const is_packed = false;
         return api.llvm_context_create_struct_type(context, element_types.ptr, @intCast(element_types.len), String.from_slice(name), is_packed);
@@ -658,6 +662,10 @@ pub const Builder = opaque {
         return api.LLVMBuildStructGEP2(builder, struct_type, pointer, index, "");
     }
 
+    pub fn create_gep(builder: *Builder, ty: *Type, aggregate: *Value, indices: []const *Value) *Value {
+        return api.LLVMBuildInBoundsGEP2(builder, ty, aggregate, indices.ptr, @intCast(indices.len), "");
+    }
+
     pub fn create_insert_value(builder: *Builder, aggregate: *Value, element: *Value, index: c_uint) *Value {
         return api.LLVMBuildInsertValue(builder, aggregate, element, index, "");
     }
@@ -722,6 +730,12 @@ pub const Constant = opaque {
 
     pub const Integer = opaque {
         pub fn to_value(constant: *Constant.Integer) *Value {
+            return @ptrCast(constant);
+        }
+    };
+
+    pub const Array = opaque {
+        pub fn to_value(constant: *Constant.Array) *Value {
             return @ptrCast(constant);
         }
     };
@@ -865,6 +879,10 @@ pub const DI = struct {
 
         pub fn create_replaceable_composite_type(builder: *DI.Builder, tag: c_uint, name: []const u8, scope: *DI.Scope, file: *DI.File, line: c_uint) *DI.Type.Composite {
             return api.LLVMDIBuilderCreateReplaceableCompositeType(builder, tag, name.ptr, name.len, scope, file, line, 0, 0, 0, .{}, null, 0);
+        }
+
+        pub fn create_array_type(builder: *DI.Builder, element_count: u64, align_in_bits: u32, element_type: *DI.Type, subscripts: []const *DI.Metadata) *DI.Type.Composite {
+            return api.LLVMDIBuilderCreateArrayType(builder, element_count, align_in_bits, element_type, subscripts.ptr, @intCast(subscripts.len));
         }
 
         pub fn create_struct_type(builder: *DI.Builder, scope: *DI.Scope, name: []const u8, file: *DI.File, line: c_uint, bit_size: u64, align_in_bits: u32, flags: DI.Flags, members: []const *DI.Type.Derived) *DI.Type.Composite {
@@ -1040,6 +1058,20 @@ pub const Type = opaque {
             api.LLVMStructSetBody(struct_type, element_types.ptr, @intCast(element_types.len), @intFromBool(is_packed));
         }
     };
+
+    pub const Array = opaque {
+        pub fn to_type(array_type: *Type.Array) *Type {
+            return @ptrCast(array_type);
+        }
+    };
+
+    pub fn get_array_type(element_type: *Type, element_count: u64) *Type.Array {
+        return api.LLVMArrayType2(element_type, element_count);
+    }
+
+    pub fn get_constant_array(element_type: *Type, values: []const *Constant) *Constant.Array {
+        return api.LLVMConstArray2(element_type, values.ptr, values.len);
+    }
 };
 
 pub const Dwarf = struct {

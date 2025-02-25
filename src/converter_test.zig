@@ -168,3 +168,7 @@ test "extend" {
 test "bits" {
     try invsrc(@src());
 }
+
+test "basic_array" {
+    try invsrc(@src());
+}
