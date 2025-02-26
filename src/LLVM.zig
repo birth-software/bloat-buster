@@ -677,6 +677,8 @@ pub const Builder = opaque {
     pub fn create_sign_extend(builder: *Builder, value: *Value, destination_type: *Type) *Value {
         return api.LLVMBuildSExt(builder, value, destination_type, "");
     }
+
+    pub const create_unreachable = api.LLVMBuildUnreachable;
 };
 
 pub const GlobalValue = opaque {

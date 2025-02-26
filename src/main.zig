@@ -182,6 +182,7 @@ pub fn main(argc: c_int, argv: [*:null]const ?[*:0]const u8) callconv(.C) c_int 
         .content = file_content,
         .path = file_path,
         .has_debug_info = true,
+        .target = converter.Target.get_native(),
     });
     return 0;
 }

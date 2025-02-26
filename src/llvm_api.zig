@@ -57,6 +57,7 @@ pub extern fn LLVMBuildInBoundsGEP2(builder: *llvm.Builder, ty: *llvm.Type, aggr
 pub extern fn LLVMBuildInsertValue(builder: *llvm.Builder, aggregate: *llvm.Value, element: *llvm.Value, index: c_uint, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildZExt(builder: *llvm.Builder, value: *llvm.Value, destination_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildSExt(builder: *llvm.Builder, value: *llvm.Value, destination_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
+pub extern fn LLVMBuildUnreachable(builder: *llvm.Builder) *llvm.Value;
 
 pub extern fn LLVMSetCurrentDebugLocation2(builder: *llvm.Builder, location: ?*llvm.DI.Location) void;
 

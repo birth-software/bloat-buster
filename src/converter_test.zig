@@ -58,6 +58,7 @@ fn unit_test(allocator: std.mem.Allocator, options: InvokeWrapper) !void {
         .build_mode = options.build_mode,
         .name = options.name,
         .has_debug_info = options.has_debug_info,
+        .target = converter.Target.get_native(),
     });
     const run_result = std.process.Child.run(.{
         .allocator = allocator,
@@ -170,5 +171,9 @@ test "bits" {
 }
 
 test "basic_array" {
+    try invsrc(@src());
+}
+
+test "extern" {
     try invsrc(@src());
 }
