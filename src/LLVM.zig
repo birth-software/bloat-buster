@@ -488,6 +488,12 @@ const targets = [@typeInfo(Architecture).@"enum".fields.len]type{
     api.get_initializer(.X86),
 };
 
+pub const Intrinsic = enum {
+    pub const Id = enum(c_uint) {
+        _,
+    };
+};
+
 pub const Context = opaque {
     pub const create = api.LLVMContextCreate;
 
@@ -518,6 +524,10 @@ pub const Context = opaque {
     pub const get_void_type = api.LLVMVoidTypeInContext;
     pub const get_integer_type = api.LLVMIntTypeInContext;
     pub const get_pointer_type = api.LLVMPointerTypeInContext;
+
+    pub fn get_intrinsic_type(context: *Context, intrinsic_id: Intrinsic.Id, parameter_types: []const *Type) *Type.Function {
+        return api.LLVMIntrinsicGetType(context, intrinsic_id, parameter_types.ptr, parameter_types.len);
+    }
 };
 
 pub const BasicBlock = opaque {
@@ -567,6 +577,10 @@ pub const Module = opaque {
         result.success = api.llvm_module_verify(module, &string);
         result.error_message = string.to_slice();
         return result;
+    }
+
+    pub fn get_intrinsic_declaration(module: *Module, intrinsic_id: Intrinsic.Id, parameter_types: []const *Type) *Value {
+        return api.LLVMGetIntrinsicDeclaration(module, intrinsic_id, parameter_types.ptr, parameter_types.len);
     }
 };
 
@@ -1217,6 +1231,10 @@ pub const Dwarf = struct {
         BORLAND_Delphi,
     };
 };
+
+pub fn lookup_intrinsic_id(name: []const u8) Intrinsic.Id {
+    return api.LLVMLookupIntrinsicID(name.ptr, name.len);
+}
 
 pub const IntPredicate = enum(c_int) {
     eq = 32,

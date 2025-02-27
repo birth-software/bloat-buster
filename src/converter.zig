@@ -115,6 +115,9 @@ const Module = struct {
         global_scope: *llvm.DI.Scope,
         file: *llvm.DI.File,
         pointer_type: *llvm.Type,
+        // intrinsics: struct {
+        //     trap:
+        // },
     };
 
     pub fn get_infer_or_ignore_value(module: *Module) *Value {
@@ -271,6 +274,31 @@ const Module = struct {
         };
 
         return module;
+    }
+
+    pub fn get_pointer_type(module: *Module, element_type: *Type) *Type {
+        const all_types = module.types.get();
+        const pointer_type = for (module.pointer_type_buffer[0..module.pointer_type_count]) |pointer_type_index| {
+            const pointer_type = &all_types[pointer_type_index];
+            if (pointer_type.bb.pointer == element_type) {
+                break pointer_type;
+            }
+        } else blk: {
+            const pointer_name = lib.global.arena.join_string(&.{ "&", element_type.name.? });
+            const pointer_type = module.types.add(.{
+                .name = pointer_name,
+                .llvm = .{
+                    .handle = module.llvm.pointer_type,
+                    .debug = if (module.llvm.di_builder) |di_builder| di_builder.create_pointer_type(element_type.llvm.debug, 64, 64, 0, pointer_name).to_type() else undefined,
+                },
+                .bb = .{
+                    .pointer = element_type,
+                },
+            });
+            break :blk pointer_type;
+        };
+
+        return pointer_type;
     }
 };
 
@@ -612,28 +640,7 @@ const Converter = struct {
 
                 const element_type = converter.parse_type(module);
 
-                const all_types = module.types.get();
-                const pointer_type = for (module.pointer_type_buffer[0..module.pointer_type_count]) |pointer_type_index| {
-                    const pointer_type = &all_types[pointer_type_index];
-                    if (pointer_type.bb.pointer == element_type) {
-                        break pointer_type;
-                    }
-                } else blk: {
-                    const pointer_name = lib.global.arena.join_string(&.{ "&", element_type.name.? });
-                    const pointer_type = module.types.add(.{
-                        .name = pointer_name,
-                        .llvm = .{
-                            .handle = module.llvm.pointer_type,
-                            .debug = if (module.llvm.di_builder) |di_builder| di_builder.create_pointer_type(element_type.llvm.debug, 64, 64, 0, pointer_name).to_type() else undefined,
-                        },
-                        .bb = .{
-                            .pointer = element_type,
-                        },
-                    });
-                    break :blk pointer_type;
-                };
-
-                return pointer_type;
+                return module.get_pointer_type(element_type);
             },
             else => @trap(),
         }
@@ -925,6 +932,12 @@ const Converter = struct {
                 } else {
                     converter.report_error();
                 }
+            } else if (statement_start_ch == '#') {
+                const intrinsic = converter.parse_intrinsic(module, null);
+                switch (intrinsic.type.bb) {
+                    .void, .noreturn => {},
+                    else => @trap(),
+                }
             } else if (is_identifier_start_ch(statement_start_ch)) {
                 const statement_start_identifier = converter.parse_identifier();
 
@@ -970,16 +983,22 @@ const Converter = struct {
                             }
 
                             var is_second_block_terminated = false;
+                            module.llvm.builder.position_at_end(not_taken_block);
                             if (is_else) {
-                                module.llvm.builder.position_at_end(not_taken_block);
                                 converter.parse_block(module);
                                 is_second_block_terminated = current_function.current_basic_block.get_terminator() != null;
-                            } else {
-                                @trap();
                             }
 
                             if (!(is_first_block_terminated and is_second_block_terminated)) {
-                                @trap();
+                                if (!is_first_block_terminated) {
+                                    @trap();
+                                }
+
+                                if (!is_second_block_terminated) {
+                                    if (is_else) {
+                                        @trap();
+                                    } else {}
+                                }
                             }
 
                             require_semicolon = false;
@@ -1252,11 +1271,12 @@ const Converter = struct {
     const Prefix = enum {
         none,
         negative,
+        not_zero,
     };
 
     const Intrinsic = enum {
         extend,
-        foo,
+        trap,
     };
 
     fn parse_intrinsic(noalias converter: *Converter, noalias module: *Module, expected_type: ?*Type) *Value {
@@ -1294,7 +1314,27 @@ const Converter = struct {
 
                 return value;
             },
-            else => unreachable,
+            .trap => {
+                converter.expect_character(right_parenthesis);
+
+                // TODO: lookup in advance
+                const intrinsic_id = llvm.lookup_intrinsic_id("llvm.trap");
+                const parameter_types: []const *llvm.Type = &.{};
+                const parameter_values: []const *llvm.Value = &.{};
+                const intrinsic_function = module.llvm.handle.get_intrinsic_declaration(intrinsic_id, parameter_types);
+                const intrinsic_function_type = module.llvm.context.get_intrinsic_type(intrinsic_id, parameter_types);
+                const llvm_call = module.llvm.builder.create_call(intrinsic_function_type, intrinsic_function, parameter_values);
+                _ = module.llvm.builder.create_unreachable();
+
+                const value = module.values.add();
+                value.* = .{
+                    .llvm = llvm_call,
+                    .type = module.noreturn_type,
+                    .bb = .instruction,
+                };
+
+                return value;
+            },
         }
     }
 
@@ -1509,12 +1549,19 @@ const Converter = struct {
                 converter.offset += 1;
                 return converter.parse_value(module, expected_type, .pointer);
             },
+            '!' => blk: {
+                converter.offset += 1;
+
+                // TODO: should we skip space here?
+                converter.skip_space();
+                break :blk .not_zero;
+            },
             else => os.abort(),
         };
 
         const value_offset = converter.offset;
         const value_start_ch = converter.content[value_offset];
-        const value = switch (value_start_ch) {
+        var value = switch (value_start_ch) {
             'a'...'z', 'A'...'Z', '_' => b: {
                 if (module.current_function) |current_function| {
                     const identifier = converter.parse_identifier();
@@ -1668,6 +1715,21 @@ const Converter = struct {
             '0'...'9' => converter.parse_integer(module, expected_type.?, prefix == .negative),
             else => os.abort(),
         };
+        _ = &value;
+
+        switch (prefix) {
+            .none,
+            .negative, // Already done in 'parse_integer' // TODO:
+            => {},
+            .not_zero => {
+                const llvm_value = module.llvm.builder.create_compare(.eq, value.llvm, value.type.llvm.handle.to_integer().get_constant(0, 0).to_value());
+                value.* = .{
+                    .llvm = llvm_value,
+                    .bb = .instruction,
+                    .type = module.integer_type(1, false),
+                };
+            },
+        }
 
         return value;
     }
@@ -1924,12 +1986,10 @@ pub const Abi = struct {
             }
         }
 
-        fn get_int_type_at_offset(ty: *Type, offset: u32, source_type: *Type, source_offset: u32) *Type {
+        fn get_int_type_at_offset(module: *Module, ty: *Type, offset: u32, source_type: *Type, source_offset: u32) *Type {
             switch (ty.bb) {
-                .bits => {
-                    @trap();
-                    // const bitfield = ty.get_payload(.bitfield);
-                    // return get_int_type_at_offset(bitfield.backing_type, offset, if (source_type == ty) bitfield.backing_type else source_type, source_offset);
+                .bits => |bits| {
+                    return get_int_type_at_offset(module, bits.backing_type, offset, if (source_type == ty) bits.backing_type else source_type, source_offset);
                 },
                 .integer => |integer_type| {
                     switch (integer_type.bit_count) {
@@ -1948,29 +2008,25 @@ pub const Abi = struct {
                 // .typed_pointer => return if (offset == 0) ty else unreachable,
                 .@"struct" => {
                     if (get_member_at_offset(ty, offset)) |field| {
-                        return get_int_type_at_offset(field.type, @intCast(offset - field.byte_offset), source_type, source_offset);
+                        return get_int_type_at_offset(module, field.type, @intCast(offset - field.byte_offset), source_type, source_offset);
                     }
                     unreachable;
                 },
-                .array => {
-                    @trap();
-                    // const array_type = ty.get_payload(.array);
-                    // const element_type = array_type.descriptor.element_type;
-                    // const element_size = element_type.size;
-                    // const element_offset = (offset / element_size) * element_size;
-                    // return get_int_type_at_offset(element_type, @intCast(offset - element_offset), source_type, source_offset);
+                .array => |array_type| {
+                    const element_type = array_type.element_type;
+                    const element_size = element_type.get_byte_size();
+                    const element_offset = (offset / element_size) * element_size;
+                    return get_int_type_at_offset(module, element_type, @intCast(offset - element_offset), source_type, source_offset);
                 },
                 else => |t| @panic(@tagName(t)),
             }
 
             if (source_type.get_byte_size() - source_offset > 8) {
-                @trap();
-                // return &instance.threads[ty.sema.thread].integers[63].type;
+                return module.integer_type(64, false);
             } else {
-                // const byte_count =  source_type.size - source_offset;
-                // const bit_count = byte_count * 8;
-                // return &instance.threads[ty.sema.thread].integers[bit_count - 1].type;
-                @trap();
+                const byte_count = source_type.get_byte_size() - source_offset;
+                const bit_count = byte_count * 8;
+                return module.integer_type(@intCast(bit_count), false);
             }
 
             unreachable;
@@ -2090,13 +2146,13 @@ pub const Abi = struct {
             unreachable;
         }
 
-        fn indirect_return(ty: *Type) Function.Abi.Information {
+        fn indirect_return(ty: *Type) Abi.Information {
             if (ty.is_aggregate()) {
                 return .{
                     .kind = .{
                         .indirect = .{
                             .type = ty,
-                            .alignment = ty.alignment,
+                            .alignment = @intCast(ty.get_byte_alignment()),
                         },
                     },
                 };
@@ -2324,30 +2380,28 @@ pub noinline fn convert(options: ConvertOptions) void {
                                                         else => |t| @panic(@tagName(t)),
                                                     },
                                                     .integer => b: {
-                                                        const result_type = Abi.SystemV.get_int_type_at_offset(semantic_return_type, 0, semantic_return_type, 0);
+                                                        const result_type = Abi.SystemV.get_int_type_at_offset(module, semantic_return_type, 0, semantic_return_type, 0);
                                                         if (type_classes[1] == .none and semantic_return_type.get_bit_size() < 32) {
-                                                            // const signed = switch (semantic_return_type.sema.id) {
-                                                            //     .integer => @intFromEnum(semantic_return_type.get_payload(.integer).signedness) != 0,
-                                                            //     .bitfield => false,
-                                                            //     else => |t| @panic(@tagName(t)),
-                                                            // };
+                                                            const signed = switch (semantic_return_type.bb) {
+                                                                .integer => |integer_type| integer_type.signed,
+                                                                .bits => false,
+                                                                else => |t| @panic(@tagName(t)),
+                                                            };
                                                             // _ = signed;
-
-                                                            @trap();
-                                                            // break :rta .{
-                                                            //     .kind = .{
-                                                            //         .direct_coerce = semantic_return_type,
-                                                            //     },
-                                                            //     .attributes = .{
-                                                            //         .sign_extend = signed,
-                                                            //         .zero_extend = !signed,
-                                                            //     },
-                                                            // };
+                                                            break :ret_ty_abi .{
+                                                                .kind = .{
+                                                                    .direct_coerce = semantic_return_type,
+                                                                },
+                                                                .attributes = .{
+                                                                    .sign_extend = signed,
+                                                                    .zero_extend = !signed,
+                                                                },
+                                                            };
                                                         }
 
                                                         break :b result_type;
                                                     },
-                                                    .memory => @trap(), // break :rta Abi.SystemV.indirect_return(semantic_return_type),
+                                                    .memory => break :ret_ty_abi Abi.SystemV.indirect_return(semantic_return_type),
                                                     else => |t| @panic(@tagName(t)),
                                                 };
 
@@ -2355,7 +2409,7 @@ pub noinline fn convert(options: ConvertOptions) void {
                                                     .none, .memory => null,
                                                     .integer => b: {
                                                         assert(type_classes[0] != .none);
-                                                        const high_part = Abi.SystemV.get_int_type_at_offset(semantic_return_type, 8, semantic_return_type, 8);
+                                                        const high_part = Abi.SystemV.get_int_type_at_offset(module, semantic_return_type, 8, semantic_return_type, 8);
                                                         break :b high_part;
                                                     },
                                                     else => |t| @panic(@tagName(t)),
@@ -2372,12 +2426,11 @@ pub noinline fn convert(options: ConvertOptions) void {
                                                                 .kind = .direct,
                                                             };
                                                         } else {
-                                                            @trap();
-                                                            // break :rta Function.Abi.Information{
-                                                            //     .kind = .{
-                                                            //         .direct_coerce = result_type,
-                                                            //     },
-                                                            // };
+                                                            break :ret_ty_abi Abi.Information{
+                                                                .kind = .{
+                                                                    .direct_coerce = result_type,
+                                                                },
+                                                            };
                                                         }
                                                     } else {
                                                         unreachable;
@@ -2415,7 +2468,7 @@ pub noinline fn convert(options: ConvertOptions) void {
                                                     const result_type = switch (type_classes[0]) {
                                                         .integer => b: {
                                                             needed_registers.gpr += 1;
-                                                            const result_type = Abi.SystemV.get_int_type_at_offset(semantic_argument_type, 0, semantic_argument_type, 0);
+                                                            const result_type = Abi.SystemV.get_int_type_at_offset(module, semantic_argument_type, 0, semantic_argument_type, 0);
                                                             if (type_classes[1] == .none and semantic_argument_type.get_bit_size() < 32) {
                                                                 const signed = switch (semantic_argument_type.bb) {
                                                                     .integer => |integer_type| integer_type.signed,
@@ -2443,7 +2496,7 @@ pub noinline fn convert(options: ConvertOptions) void {
                                                         .integer => b: {
                                                             assert(type_classes[0] != .none);
                                                             needed_registers.gpr += 1;
-                                                            const high_part = Abi.SystemV.get_int_type_at_offset(semantic_argument_type, 8, semantic_argument_type, 8);
+                                                            const high_part = Abi.SystemV.get_int_type_at_offset(module, semantic_argument_type, 8, semantic_argument_type, 8);
                                                             break :b high_part;
                                                         },
                                                         else => |t| @panic(@tagName(t)),
@@ -2497,16 +2550,20 @@ pub noinline fn convert(options: ConvertOptions) void {
                         const abi_return_type = switch (return_type_abi.kind) {
                             .ignore, .direct => semantic_return_type,
                             .direct_coerce => |coerced_type| coerced_type,
-                            // .indirect => |indirect| b: {
-                            //     _ = abi_argument_types.append(get_typed_pointer(thread, .{
-                            //         .pointee = indirect.type,
-                            //     }));
-                            //     break :b &thread.void;
-                            // },
+                            .indirect => |indirect| b: {
+                                const indirect_pointer_type = module.get_pointer_type(indirect.type);
+                                abi_argument_type_buffer[abi_argument_type_count] = indirect_pointer_type;
+                                llvm_abi_argument_type_buffer[abi_argument_type_count] = indirect_pointer_type.llvm.handle;
+                                abi_argument_type_count += 1;
+                                break :b module.void_type;
+                            },
                             .direct_pair => |pair| b: {
-                                for (module.anonymous_pair_type_buffer[0..module.anonymous_pair_type_count]) |*anonymous_type| {
-                                    _ = anonymous_type;
-                                    @trap();
+                                for (module.anonymous_pair_type_buffer[0..module.anonymous_pair_type_count]) |anonymous_type_index| {
+                                    const anonymous_type = &module.types.get()[anonymous_type_index];
+                                    const fields = anonymous_type.bb.@"struct".fields;
+                                    if (fields.len == 2 and pair[0] == fields[0].type and pair[1] == fields[1].type) {
+                                        break :b anonymous_type;
+                                    }
                                 } else {
                                     const llvm_pair_members = &.{ pair[0].llvm.handle, pair[1].llvm.handle };
                                     const llvm_pair = module.llvm.context.get_struct_type(llvm_pair_members);
@@ -2572,9 +2629,12 @@ pub noinline fn convert(options: ConvertOptions) void {
                                     llvm_abi_argument_type_buffer[abi_argument_type_count] = pair[1].llvm.handle;
                                     abi_argument_type_count += 1;
                                 },
-                                // .indirect => |indirect| _ = abi_argument_types.append(get_typed_pointer(thread, .{
-                                //     .pointee = indirect.type,
-                                // })),
+                                .indirect => |indirect| {
+                                    const indirect_pointer_type = module.get_pointer_type(indirect.type);
+                                    abi_argument_type_buffer[abi_argument_type_count] = indirect_pointer_type;
+                                    llvm_abi_argument_type_buffer[abi_argument_type_count] = indirect_pointer_type.llvm.handle;
+                                    abi_argument_type_count += 1;
+                                },
                                 else => |t| @panic(@tagName(t)),
                             }
 

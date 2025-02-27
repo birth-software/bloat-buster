@@ -138,9 +138,9 @@ ByVal = struct
 [extern] c_ret_struct_with_array = fn [cc(c)] () StructWithArray;
 
 [extern] c_modify_by_ref_param = fn [cc(c)] (x: ByRef) ByRef;
-[extern] c_func_ptr_byval fn [cc(c)] (a: u64, b: u64, c: ByVal, d: u64, e: u64, f: u64) void;
+[extern] c_func_ptr_byval = fn [cc(c)] (a: u64, b: u64, c: ByVal, d: u64, e: u64, f: u64) void;
 
-[export] require = fn [cc(c)] (ok: u8)
+[export] require = fn [cc(c)] (ok: u8) void
 {
     if (!ok)
     {

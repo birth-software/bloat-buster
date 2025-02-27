@@ -181,3 +181,7 @@ test "extern" {
 test "pointer" {
     try invsrc(@src());
 }
+
+test "if_no_else" {
+    try invsrc(@src());
+}

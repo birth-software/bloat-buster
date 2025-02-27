@@ -65,6 +65,11 @@ pub extern fn LLVMTypeOf(value: *llvm.Value) *llvm.Type;
 pub extern fn LLVMGlobalGetValueType(value: *llvm.GlobalValue) *llvm.Type;
 pub extern fn llvm_value_is_instruction(value: *llvm.Value) bool;
 
+// Intrinsics
+pub extern fn LLVMLookupIntrinsicID(name_pointer: [*]const u8, name_length: usize) llvm.Intrinsic.Id;
+pub extern fn LLVMGetIntrinsicDeclaration(module: *llvm.Module, intrinsic_id: llvm.Intrinsic.Id, parameter_type_pointer: [*]const *llvm.Type, parameter_type_count: usize) *llvm.Value;
+pub extern fn LLVMIntrinsicGetType(context: *llvm.Context, intrinsic_id: llvm.Intrinsic.Id, parameter_type_pointer: [*]const *llvm.Type, parameter_type_count: usize) *llvm.Type.Function;
+
 // TYPES
 // Types: integers
 pub extern fn LLVMVoidTypeInContext(context: *llvm.Context) *llvm.Type;
