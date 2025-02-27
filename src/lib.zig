@@ -2365,8 +2365,36 @@ pub const string_format = struct {
     // zig fmt: on
 };
 
+pub fn and_bool_branchless(a: bool, b: bool) bool {
+    return (@intFromBool(a) & @intFromBool(b)) != 0;
+}
+
+pub fn or_bool_branchless(a: bool, b: bool) bool {
+    return (@intFromBool(a) | @intFromBool(b)) != 0;
+}
+
+fn is_character_between_ranges(ch: u8, start: u8, end: u8) bool {
+    return and_bool_branchless(ch >= start, ch <= end);
+}
+
 fn is_decimal_digit(ch: u8) bool {
-    return ch >= '0' and ch <= '9';
+    return is_character_between_ranges(ch, '0', '9');
+}
+
+fn is_hex_digit_alpha_lower(ch: u8) bool {
+    return is_character_between_ranges(ch, 'a', 'f');
+}
+
+fn is_hex_digit_alpha_upper(ch: u8) bool {
+    return is_character_between_ranges(ch, 'A', 'F');
+}
+
+fn is_hex_digit_alpha(ch: u8) bool {
+    return or_bool_branchless(is_hex_digit_alpha_lower(ch), is_hex_digit_alpha_upper(ch));
+}
+
+pub fn is_hex_digit(ch: u8) bool {
+    return or_bool_branchless(is_decimal_digit(ch), is_hex_digit_alpha(ch));
 }
 
 inline fn log2_int(v: anytype) u8 {
@@ -2558,6 +2586,27 @@ pub const GlobalState = struct {
 pub var global: GlobalState = undefined;
 
 pub const parse = struct {
+    pub fn integer_hexadecimal(str: []const u8) u64 {
+        var value: u64 = 0;
+
+        for (str) |ch| {
+            assert(is_hex_digit(ch));
+            value = accumulate_hexadecimal(value, ch);
+        }
+
+        return value;
+    }
+
+    pub fn accumulate_hexadecimal(accumulator: u64, ch: u8) u64 {
+        const value_to_add: u64 = if (is_decimal_digit(ch)) ch - '0' else if (is_hex_digit_alpha_upper(ch))
+            ch - 'A' + 10
+        else if (is_hex_digit_alpha_lower(ch))
+            ch - 'a' + 10
+        else
+            unreachable;
+        return (accumulator * 16) + value_to_add;
+    }
+
     pub fn integer_decimal(str: []const u8) u64 {
         var value: u64 = 0;
 
@@ -2573,6 +2622,27 @@ pub const parse = struct {
         return (accumulator * 10) + (ch - '0');
     }
 };
+
+test "parse integer decimal" {
+    const std = @import("std");
+    const expect = std.testing.expect;
+    try expect(parse.integer_decimal("0") == 0);
+    try expect(parse.integer_decimal("5") == 5);
+    try expect(parse.integer_decimal("10") == 10);
+    try expect(parse.integer_decimal("901283") == 901283);
+    try expect(parse.integer_decimal("189234819023129038") == 189234819023129038);
+}
+
+test "parse integer hexadecimal" {
+    const std = @import("std");
+    const expect = std.testing.expect;
+    try expect(parse.integer_hexadecimal("0") == 0);
+    try expect(parse.integer_hexadecimal("5") == 5);
+    try expect(parse.integer_hexadecimal("10") == 0x10);
+    try expect(parse.integer_hexadecimal("901283") == 0x901283);
+    try expect(parse.integer_hexadecimal("1892348190231290") == 0x1892348190231290);
+    try expect(parse.integer_hexadecimal("1b92a48c90d3e2f0") == 0x1b92a48c90d3e2f0);
+}
 
 fn vprint(format_string: [*:0]const u8, args: *VariableArguments) void {
     var buffer: [16 * 1024]u8 = undefined;

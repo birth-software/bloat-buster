@@ -703,6 +703,21 @@ const Converter = struct {
         return value;
     }
 
+    fn parse_hexadecimal(noalias converter: *Converter) u64 {
+        var value: u64 = 0;
+        while (true) {
+            const ch = converter.content[converter.offset];
+            if (!lib.is_hex_digit(ch)) {
+                break;
+            }
+
+            converter.offset += 1;
+            value = lib.parse.accumulate_hexadecimal(value, ch);
+        }
+
+        return value;
+    }
+
     fn parse_integer(noalias converter: *Converter, noalias module: *Module, expected_type: *Type, sign: bool) *Value {
         const start = converter.offset;
         const integer_start_ch = converter.content[start];
@@ -716,9 +731,9 @@ const Converter = struct {
                 const next_ch = converter.content[converter.offset];
                 break :blk switch (sign) {
                     false => switch (next_ch) {
-                        'x' => {
-                            // TODO: parse hexadecimal
-                            converter.report_error();
+                        'x' => b: {
+                            converter.offset += 1;
+                            break :b converter.parse_hexadecimal();
                         },
                         'o' => {
                             // TODO: parse octal
