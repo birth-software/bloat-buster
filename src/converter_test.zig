@@ -177,3 +177,7 @@ test "basic_array" {
 test "extern" {
     try invsrc(@src());
 }
+
+test "pointer" {
+    try invsrc(@src());
+}

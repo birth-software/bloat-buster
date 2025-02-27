@@ -142,6 +142,7 @@ pub extern fn LLVMDIBuilderCreateArrayType(builder: *llvm.DI.Builder, element_co
 pub extern fn LLVMDIBuilderCreateStructType(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, name_pointer: [*]const u8, name_length: usize, file: *llvm.DI.File, line: c_uint, bit_size: u64, align_in_bits: u32, flags: llvm.DI.Flags, derived_from: ?*llvm.DI.Type, member_pointer: [*]const *llvm.DI.Type.Derived, member_length: c_uint, runtime_language: c_uint, vtable_holder: ?*llvm.DI.Metadata, unique_id_pointer: ?[*]const u8, unique_id_length: usize) *llvm.DI.Type.Composite;
 pub extern fn LLVMDIBuilderCreateMemberType(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, name_pointer: [*]const u8, name_length: usize, file: *llvm.DI.File, line: c_uint, bit_size: u64, align_in_bits: u32, bit_offset: u64, flags: llvm.DI.Flags, member_type: *llvm.DI.Type) *llvm.DI.Type.Derived;
 pub extern fn LLVMDIBuilderCreateBitFieldMemberType(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, name_pointer: [*]const u8, name_length: usize, file: *llvm.DI.File, line: c_uint, bit_size: u64, bit_offset: u64, bit_storage_offset: u64, flags: llvm.DI.Flags, member_type: *llvm.DI.Type) *llvm.DI.Type.Derived;
+pub extern fn LLVMDIBuilderCreatePointerType(builder: *llvm.DI.Builder, element_type: *llvm.DI.Type, bit_size: u64, align_in_bits: u32, address_space: c_uint, name_pointer: [*]const u8, name_length: usize) *llvm.DI.Type.Derived;
 
 pub extern fn LLVMMetadataReplaceAllUsesWith(forward: *llvm.DI.Type.Composite, complete: *llvm.DI.Type.Composite) void;
 

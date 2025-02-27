@@ -510,10 +510,14 @@ pub const Context = opaque {
         return api.llvm_context_create_struct_type(context, element_types.ptr, @intCast(element_types.len), String.from_slice(name), is_packed);
     }
 
-    pub const get_struct_type = api.llvm_context_get_struct_type;
+    pub fn get_struct_type(context: *Context, element_types: []const *Type) *Type.Struct {
+        const is_packed = false;
+        return api.llvm_context_get_struct_type(context, element_types.ptr, element_types.len, is_packed);
+    }
 
     pub const get_void_type = api.LLVMVoidTypeInContext;
     pub const get_integer_type = api.LLVMIntTypeInContext;
+    pub const get_pointer_type = api.LLVMPointerTypeInContext;
 };
 
 pub const BasicBlock = opaque {
@@ -903,6 +907,10 @@ pub const DI = struct {
         pub fn create_bit_field_member_type(builder: *DI.Builder, scope: *DI.Scope, name: []const u8, file: *DI.File, line: c_uint, bit_size: u64, bit_offset: u64, bit_storage_offset: u64, flags: DI.Flags, member_type: *DI.Type) *DI.Type.Derived {
             return api.LLVMDIBuilderCreateBitFieldMemberType(builder, scope, name.ptr, name.len, file, line, bit_size, bit_offset, bit_storage_offset, flags, member_type);
         }
+
+        pub fn create_pointer_type(builder: *DI.Builder, element_type: *DI.Type, bit_size: u64, align_in_bits: u32, address_space: c_uint, name: []const u8) *DI.Type.Derived {
+            return api.LLVMDIBuilderCreatePointerType(builder, element_type, bit_size, align_in_bits, address_space, name.ptr, name.len);
+        }
     };
 
     pub const create_debug_location = api.LLVMDIBuilderCreateDebugLocation;
@@ -940,7 +948,11 @@ pub const DI = struct {
 
             pub const replace_all_uses_with = api.LLVMMetadataReplaceAllUsesWith;
         };
-        pub const Derived = opaque {};
+        pub const Derived = opaque {
+            pub fn to_type(derived: *Derived) *DI.Type {
+                return @ptrCast(derived);
+            }
+        };
     };
 
     pub const Flags = packed struct(u32) {
@@ -1064,6 +1076,12 @@ pub const Type = opaque {
     pub const Array = opaque {
         pub fn to_type(array_type: *Type.Array) *Type {
             return @ptrCast(array_type);
+        }
+    };
+
+    pub const Pointer = opaque {
+        pub fn to_type(pointer_type: *Type.Pointer) *Type {
+            return @ptrCast(pointer_type);
         }
     };
 
