@@ -283,7 +283,7 @@ ByVal = struct
     >res = c_modify_by_ref_param({ .val = 1, .arr = undefined, });
     require(res.val == 42);
 
-    >function_pointer = c_func_ptr_byval&;
+    >function_pointer = &c_func_ptr_byval;
     function_pointer(1, 2, { .origin = { .x = 9, .y = 10, .z = 11, }, .size = { .width = 12, .height = 13, .depth = 14, }, }, 3, 4, 5);
     return 0;
 }
@@ -328,7 +328,7 @@ ByVal = struct
     require(x == -4);
 }
 
-[export] bb_ptr = fn [cc(c)] (x: *u8) void
+[export] bb_ptr = fn [cc(c)] (x: &u8) void
 {
     require(#int_from_pointer(x) == 0xdeadbeef);
 }
