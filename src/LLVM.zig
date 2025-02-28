@@ -26,6 +26,24 @@ pub const String = extern struct {
     }
 };
 
+pub const Intrinsic = enum {
+    pub const Id = enum(c_uint) {
+        _,
+    };
+};
+
+pub const Attribute = opaque {
+    pub const Index = enum(c_uint) {
+        @"return" = 0,
+        function = 0xffff_ffff,
+        _,
+    };
+
+    pub const Kind = enum(c_uint) {
+        _,
+    };
+};
+
 pub const CodeModel = enum(u8) {
     none = 0,
     tiny = 1,
@@ -488,12 +506,6 @@ const targets = [@typeInfo(Architecture).@"enum".fields.len]type{
     api.get_initializer(.X86),
 };
 
-pub const Intrinsic = enum {
-    pub const Id = enum(c_uint) {
-        _,
-    };
-};
-
 pub const Context = opaque {
     pub const create = api.LLVMContextCreate;
 
@@ -528,6 +540,13 @@ pub const Context = opaque {
     pub fn get_intrinsic_type(context: *Context, intrinsic_id: Intrinsic.Id, parameter_types: []const *Type) *Type.Function {
         return api.LLVMIntrinsicGetType(context, intrinsic_id, parameter_types.ptr, parameter_types.len);
     }
+
+    pub fn create_string_attribute(context: *Context, attribute_name: []const u8, attribute_value: []const u8) *Attribute {
+        return api.LLVMCreateStringAttribute(context, attribute_name.ptr, @intCast(attribute_name.len), attribute_value.ptr, @intCast(attribute_value.len));
+    }
+
+    pub const create_enum_attribute = api.LLVMCreateEnumAttribute;
+    pub const create_type_attribute = api.LLVMCreateTypeAttribute;
 };
 
 pub const BasicBlock = opaque {
@@ -741,6 +760,8 @@ pub const Function = opaque {
     pub const get_calling_convention = api.LLVMGetFunctionCallConv;
 
     pub const get_arguments = api.LLVMGetParams;
+
+    pub const add_attribute = api.LLVMAddAttributeAtIndex;
 };
 
 pub const Constant = opaque {
@@ -771,6 +792,8 @@ pub const Value = opaque {
     pub const get_type = api.LLVMTypeOf;
     pub const get_kind = api.LLVMGetValueKind;
 
+    pub const is_call_instruction = api.LLVMIsACallInst;
+
     pub fn is_constant(value: *Value) bool {
         return api.LLVMIsConstant(value) != 0;
     }
@@ -794,8 +817,8 @@ pub const Value = opaque {
         const kind = value.get_kind();
         switch (kind) {
             .Instruction => {
-                const instruction = value.to_instruction();
-                return instruction.get_calling_convention();
+                const call = value.to_instruction().to_call();
+                return call.get_calling_convention();
             },
             .Function => {
                 const function = value.to_function();
@@ -842,8 +865,18 @@ pub const Value = opaque {
 };
 
 pub const Instruction = opaque {
-    pub const set_calling_convention = api.LLVMSetInstructionCallConv;
-    pub const get_calling_convention = api.LLVMGetInstructionCallConv;
+    pub fn to_value(instruction: *Instruction) *Value {
+        return @ptrCast(instruction);
+    }
+    pub fn to_call(instruction: *Instruction) *Instruction.Call {
+        assert(instruction.to_value().is_call_instruction() != null);
+        return @ptrCast(instruction);
+    }
+    pub const Call = opaque {
+        pub const set_calling_convention = api.LLVMSetInstructionCallConv;
+        pub const get_calling_convention = api.LLVMGetInstructionCallConv;
+        pub const add_attribute = api.LLVMAddCallSiteAttribute;
+    };
 };
 
 pub const DI = struct {
@@ -1234,6 +1267,10 @@ pub const Dwarf = struct {
 
 pub fn lookup_intrinsic_id(name: []const u8) Intrinsic.Id {
     return api.LLVMLookupIntrinsicID(name.ptr, name.len);
+}
+
+pub fn lookup_attribute_kind(name: []const u8) Attribute.Kind {
+    return api.LLVMGetEnumAttributeKindForName(name.ptr, name.len);
 }
 
 pub const IntPredicate = enum(c_int) {

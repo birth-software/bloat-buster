@@ -7,6 +7,8 @@ pub extern fn llvm_context_create_module(context: *llvm.Context, name: llvm.Stri
 pub extern fn LLVMContextCreate() *llvm.Context;
 pub extern fn LLVMCreateBuilderInContext(context: *llvm.Context) *llvm.Builder;
 
+pub extern fn LLVMIsACallInst(value: *llvm.Value) ?*llvm.Instruction.Call;
+
 // Module
 pub extern fn llvm_module_create_global_variable(module: *llvm.Module, global_type: *llvm.Type, is_constant: bool, linkage: llvm.LinkageType, initial_value: *llvm.Constant, name: llvm.String, before: ?*llvm.GlobalVariable, thread_local_mode: llvm.ThreadLocalMode, address_space: c_uint, externally_initialized: bool) *llvm.GlobalVariable;
 pub extern fn llvm_module_create_function(module: *llvm.Module, function_type: *llvm.Type.Function, linkage_type: llvm.LinkageType, address_space: c_uint, name: llvm.String) *llvm.Function;
@@ -17,8 +19,8 @@ pub extern fn LLVMGetBasicBlockTerminator(basic_block: *llvm.BasicBlock) ?*llvm.
 pub extern fn LLVMSetFunctionCallConv(function: *llvm.Function, calling_convention: llvm.CallingConvention) void;
 pub extern fn LLVMGetFunctionCallConv(function: *llvm.Function) llvm.CallingConvention;
 
-pub extern fn LLVMSetInstructionCallConv(instruction: *llvm.Instruction, calling_convention: llvm.CallingConvention) void;
-pub extern fn LLVMGetInstructionCallConv(instruction: *llvm.Instruction) llvm.CallingConvention;
+pub extern fn LLVMSetInstructionCallConv(instruction: *llvm.Instruction.Call, calling_convention: llvm.CallingConvention) void;
+pub extern fn LLVMGetInstructionCallConv(instruction: *llvm.Instruction.Call) llvm.CallingConvention;
 
 pub extern fn LLVMGetParams(function: *llvm.Function, argument_buffer: [*]*llvm.Argument) void;
 
@@ -69,6 +71,17 @@ pub extern fn llvm_value_is_instruction(value: *llvm.Value) bool;
 pub extern fn LLVMLookupIntrinsicID(name_pointer: [*]const u8, name_length: usize) llvm.Intrinsic.Id;
 pub extern fn LLVMGetIntrinsicDeclaration(module: *llvm.Module, intrinsic_id: llvm.Intrinsic.Id, parameter_type_pointer: [*]const *llvm.Type, parameter_type_count: usize) *llvm.Value;
 pub extern fn LLVMIntrinsicGetType(context: *llvm.Context, intrinsic_id: llvm.Intrinsic.Id, parameter_type_pointer: [*]const *llvm.Type, parameter_type_count: usize) *llvm.Type.Function;
+
+// Attributes
+pub extern fn LLVMGetEnumAttributeKindForName(name_pointer: [*]const u8, name_length: usize) llvm.Attribute.Kind;
+
+pub extern fn LLVMCreateEnumAttribute(context: *llvm.Context, kind: llvm.Attribute.Kind, value: u64) *llvm.Attribute;
+pub extern fn LLVMCreateTypeAttribute(context: *llvm.Context, kind: llvm.Attribute.Kind, ty: *llvm.Type) *llvm.Attribute;
+pub extern fn LLVMCreateConstantRangeAttribute(context: *llvm.Context, kind: llvm.Attribute.Kind, bit_count: c_uint, lower_words: [*]const u64, upper_words: [*]const u64) *llvm.Attribute;
+pub extern fn LLVMCreateStringAttribute(context: *llvm.Context, key_pointer: [*]const u8, key_length: c_uint, value_pointer: [*]const u8, value_length: usize) *llvm.Attribute;
+
+pub extern fn LLVMAddAttributeAtIndex(function: *llvm.Function, attribute_index: llvm.Attribute.Index, attribute: *llvm.Attribute) void;
+pub extern fn LLVMAddCallSiteAttribute(call: *llvm.Instruction.Call, attribute_index: llvm.Attribute.Index, attribute: *llvm.Attribute) void;
 
 // TYPES
 // Types: integers
