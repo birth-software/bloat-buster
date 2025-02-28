@@ -189,3 +189,7 @@ test "if_no_else" {
 test "comments" {
     try invsrc(@src());
 }
+
+test "local_type_inference" {
+    try invsrc(@src());
+}

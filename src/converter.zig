@@ -420,7 +420,7 @@ pub const Value = struct {
     llvm: *llvm.Value,
 
     const Array = struct {
-        buffer: [64]Value = undefined,
+        buffer: [1024]Value = undefined,
         count: usize = 0,
 
         pub fn add(values: *Array) *Value {
@@ -954,8 +954,6 @@ const Converter = struct {
     fn parse_call(noalias converter: *Converter, noalias module: *Module, callable: *Value) *Value {
         var llvm_abi_argument_value_buffer: [64]*llvm.Value = undefined;
         const function_type = &callable.type.bb.function;
-        const calling_convention = function_type.calling_convention;
-        _ = calling_convention;
         const llvm_indirect_return_value: ?*Value = switch (function_type.return_type_abi.kind) {
             .indirect => @trap(),
             else => null,
@@ -978,6 +976,8 @@ const Converter = struct {
             }
 
             const semantic_argument_value = converter.parse_value(module, function_type.semantic_argument_types[semantic_argument_index], .value);
+
+            _ = converter.consume_character_if_match(',');
 
             const argument_abi = function_type.argument_type_abis[semantic_argument_index];
 
@@ -1044,7 +1044,10 @@ const Converter = struct {
                 @trap();
             },
             .direct => {},
-            else => @trap(),
+            .direct_pair => @trap(),
+            .direct_coerce => @trap(),
+            .direct_coerce_int => @trap(),
+            .expand_coerce => @trap(),
         }
 
         if (llvm_indirect_return_value) |indirect_value| {
@@ -1115,53 +1118,48 @@ const Converter = struct {
 
                 converter.skip_space();
 
-                if (converter.consume_character_if_match(':')) {
-                    converter.skip_space();
+                const has_type = converter.consume_character_if_match(':');
 
-                    const local_type = converter.parse_type(module);
+                converter.skip_space();
 
-                    converter.skip_space();
+                const local_type_inference: ?*Type = switch (has_type) {
+                    true => converter.parse_type(module),
+                    false => null,
+                };
 
-                    converter.expect_character('=');
+                converter.skip_space();
 
-                    converter.skip_space();
+                converter.expect_character('=');
 
-                    if (module.llvm.di_builder) |_| {
-                        module.llvm.builder.clear_current_debug_location();
-                    }
+                const value = converter.parse_value(module, local_type_inference, .value);
+                const local_type = local_type_inference orelse value.type;
+                const local_storage = module.values.add();
+                local_storage.* = .{
+                    .llvm = module.llvm.builder.create_alloca(local_type.llvm.handle, local_name),
+                    .type = local_type,
+                    .bb = .local,
+                };
 
-                    const value = converter.parse_value(module, local_type, .value);
-
-                    const local_storage = module.values.add();
-                    local_storage.* = .{
-                        .llvm = module.llvm.builder.create_alloca(local_type.llvm.handle, local_name),
-                        .type = local_type,
-                        .bb = .local,
-                    };
-
-                    if (module.llvm.di_builder) |di_builder| {
-                        module.llvm.builder.set_current_debug_location(statement_debug_location);
-                        const debug_type = local_type.llvm.debug;
-                        const always_preserve = true;
-                        // TODO:
-                        const alignment = 0;
-                        const flags = llvm.DI.Flags{};
-                        const local_variable = di_builder.create_auto_variable(current_function.current_scope, local_name, module.llvm.file, line, debug_type, always_preserve, flags, alignment);
-                        const inlined_at: ?*llvm.DI.Metadata = null; // TODO
-                        const debug_location = llvm.DI.create_debug_location(module.llvm.context, line, column, current_function.current_scope, inlined_at);
-                        _ = di_builder.insert_declare_record_at_end(local_storage.llvm, local_variable, di_builder.null_expression(), debug_location, current_function.current_basic_block);
-                        module.llvm.builder.set_current_debug_location(statement_debug_location);
-                    }
-                    _ = module.llvm.builder.create_store(value.llvm, local_storage.llvm);
-
-                    const local = current_function.locals.add();
-                    local.* = .{
-                        .name = local_name,
-                        .value = local_storage,
-                    };
-                } else {
-                    converter.report_error();
+                if (module.llvm.di_builder) |di_builder| {
+                    module.llvm.builder.set_current_debug_location(statement_debug_location);
+                    const debug_type = local_type.llvm.debug;
+                    const always_preserve = true;
+                    // TODO:
+                    const alignment = 0;
+                    const flags = llvm.DI.Flags{};
+                    const local_variable = di_builder.create_auto_variable(current_function.current_scope, local_name, module.llvm.file, line, debug_type, always_preserve, flags, alignment);
+                    const inlined_at: ?*llvm.DI.Metadata = null; // TODO
+                    const debug_location = llvm.DI.create_debug_location(module.llvm.context, line, column, current_function.current_scope, inlined_at);
+                    _ = di_builder.insert_declare_record_at_end(local_storage.llvm, local_variable, di_builder.null_expression(), debug_location, current_function.current_basic_block);
+                    module.llvm.builder.set_current_debug_location(statement_debug_location);
                 }
+                _ = module.llvm.builder.create_store(value.llvm, local_storage.llvm);
+
+                const local = current_function.locals.add();
+                local.* = .{
+                    .name = local_name,
+                    .value = local_storage,
+                };
             } else if (statement_start_ch == '#') {
                 const intrinsic = converter.parse_intrinsic(module, null);
                 switch (intrinsic.type.bb) {
