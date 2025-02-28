@@ -651,10 +651,33 @@ const Converter = struct {
     }
 
     fn skip_space(noalias converter: *Converter) void {
-        while (converter.offset < converter.content.len and is_space(converter.content[converter.offset])) {
-            converter.line_offset += @intFromBool(converter.content[converter.offset] == '\n');
-            converter.line_character_offset = if (converter.content[converter.offset] == '\n') converter.offset else converter.line_character_offset;
-            converter.offset += 1;
+        while (true) {
+            const offset = converter.offset;
+            while (converter.offset < converter.content.len and is_space(converter.content[converter.offset])) {
+                converter.line_offset += @intFromBool(converter.content[converter.offset] == '\n');
+                converter.line_character_offset = if (converter.content[converter.offset] == '\n') converter.offset else converter.line_character_offset;
+                converter.offset += 1;
+            }
+
+            if (converter.offset + 1 < converter.content.len) {
+                const i = converter.offset;
+                const is_comment = converter.content[i] == '/' and converter.content[i + 1] == '/';
+                if (is_comment) {
+                    while (converter.offset < converter.content.len and converter.content[converter.offset] != '\n') {
+                        converter.offset += 1;
+                    }
+
+                    if (converter.offset < converter.content.len) {
+                        converter.line_offset += 1;
+                        converter.line_character_offset = converter.offset;
+                        converter.offset += 1;
+                    }
+                }
+            }
+
+            if (converter.offset - offset == 0) {
+                break;
+            }
         }
     }
 

@@ -185,3 +185,7 @@ test "pointer" {
 test "if_no_else" {
     try invsrc(@src());
 }
+
+test "comments" {
+    try invsrc(@src());
+}
