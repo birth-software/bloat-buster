@@ -165,6 +165,7 @@ const LLVM = struct {
         const llvm = b.createModule(.{
             .target = target,
             .optimize = optimize,
+            .sanitize_c = false,
         });
 
         llvm.addLibraryPath(.{ .cwd_relative = llvm_lib_dir });
@@ -324,6 +325,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .sanitize_c = false,
     });
     const configuration = b.addOptions();
     configuration.addOptionPath("c_abi_object_path", c_abi.getEmittedBin());

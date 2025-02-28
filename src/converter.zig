@@ -115,9 +115,23 @@ const Module = struct {
         global_scope: *llvm.DI.Scope,
         file: *llvm.DI.File,
         pointer_type: *llvm.Type,
-        // intrinsics: struct {
-        //     trap:
-        // },
+        intrinsic_table: IntrinsicTable,
+        attribute_table: AttributeTable,
+
+        const IntrinsicTable = struct {
+            trap: llvm.Intrinsic.Id,
+        };
+
+        const AttributeTable = struct {
+            frame_pointer_all: *llvm.Attribute,
+            ssp: *llvm.Attribute,
+            @"stack-protector-buffer-size": *llvm.Attribute,
+            @"no-trapping-math": *llvm.Attribute,
+            @"noinline": *llvm.Attribute,
+            noreturn: *llvm.Attribute,
+            nounwind: *llvm.Attribute,
+            naked: *llvm.Attribute,
+        };
     };
 
     pub fn get_infer_or_ignore_value(module: *Module) *Value {
@@ -179,6 +193,19 @@ const Module = struct {
                 .context = context,
                 .builder = context.create_builder(),
                 .pointer_type = context.get_pointer_type(default_address_space).to_type(),
+                .intrinsic_table = .{
+                    .trap = llvm.lookup_intrinsic_id("llvm.trap"),
+                },
+                .attribute_table = .{
+                    .frame_pointer_all = context.create_string_attribute("frame-pointer", "all"),
+                    .ssp = context.create_enum_attribute(llvm.lookup_attribute_kind("ssp"), 0),
+                    .@"stack-protector-buffer-size" = context.create_string_attribute("stack-protector-buffer-size", "8"),
+                    .@"no-trapping-math" = context.create_string_attribute("no-trapping-math", "true"),
+                    .@"noinline" = context.create_enum_attribute(llvm.lookup_attribute_kind("noinline"), 0),
+                    .noreturn = context.create_enum_attribute(llvm.lookup_attribute_kind("noreturn"), 0),
+                    .nounwind = context.create_enum_attribute(llvm.lookup_attribute_kind("nounwind"), 0),
+                    .naked = context.create_enum_attribute(llvm.lookup_attribute_kind("naked"), 0),
+                },
             },
         };
 
@@ -302,11 +329,35 @@ const Module = struct {
     }
 };
 
+const AttributeContainerType = enum {
+    call,
+    function,
+};
+
+fn llvm_add_function_attribute(value: *llvm.Value, attribute: *llvm.Attribute, container_type: AttributeContainerType) void {
+    switch (container_type) {
+        .call => {
+            const call = value.is_call_instruction() orelse unreachable;
+            call.add_attribute(.function, attribute);
+        },
+        .function => {
+            const function = value.to_function();
+            function.add_attribute(.function, attribute);
+        },
+    }
+}
+
 pub const Function = struct {
     current_basic_block: *llvm.BasicBlock,
     current_scope: *llvm.DI.Scope,
     locals: Variable.Array = .{},
     arguments: Variable.Array = .{},
+    attributes: Attributes = .{},
+
+    const Attributes = struct {
+        @"noinline": bool = false,
+        naked: bool = false,
+    };
 };
 
 pub const ConstantInteger = struct {
@@ -363,9 +414,13 @@ const FunctionType = struct {
     semantic_argument_types: [*]const *Type,
     argument_type_abis: [*]const Abi.Information,
     abi_argument_types: [*]const *Type,
+    abi_return_type: *Type,
     semantic_argument_count: u32,
     abi_argument_count: u32,
     calling_convention: CallingConvention,
+    attributes: Attributes = .{},
+
+    const Attributes = struct {};
 
     fn get_semantic_argument_types(function_type: *const FunctionType) []const *Type {
         return function_type.semantic_argument_types[0..function_type.semantic_argument_count];
@@ -787,6 +842,67 @@ const Converter = struct {
         }
     }
 
+    fn emit_direct_coerce(module: *Module, ty: *Type, original_value: *Value) *llvm.Value {
+        const source_type = original_value.type;
+        const alloca = module.llvm.builder.create_alloca(source_type.llvm.handle, "");
+        _ = module.llvm.builder.create_store(original_value.llvm, alloca);
+
+        const target_type = ty;
+        const target_size = ty.get_byte_size();
+        const target_alignment = ty.get_byte_alignment();
+        const source_size = source_type.get_byte_size();
+        const source_alignment = source_type.get_byte_alignment();
+        const target_is_scalable_vector_type = false;
+        const source_is_scalable_vector_type = false;
+        if (source_size >= target_size and !source_is_scalable_vector_type and !target_is_scalable_vector_type) {
+            _ = target_type;
+            _ = source_alignment;
+            _ = target_alignment;
+            @trap();
+            // const load = emit_load(analyzer, thread, .{
+            //     .value = &local.instruction.value,
+            //     .type = target_type,
+            //     .scope = analyzer.current_scope,
+            //     .line = 0,
+            //     .column = 0,
+            // });
+            // return &load.instruction.value;
+        } else {
+            @trap();
+            // const alignment = @max(target_alignment, source_alignment);
+            // const temporal = emit_local_symbol(analyzer, thread, .{
+            //     .name = 0,
+            //     .initial_value = null,
+            //     .type = args.coerced_type,
+            //     .line = 0,
+            //     .column = 0,
+            // });
+            // emit_memcpy(analyzer, thread, .{
+            //     .destination = &temporal.instruction.value,
+            //     .source = &local.instruction.value,
+            //     .destination_alignment = .{
+            //         .alignment = alignment,
+            //     },
+            //     .source_alignment = .{
+            //         .alignment = source_alignment,
+            //     },
+            //     .size = source_size,
+            //     .line = 0,
+            //     .column = 0,
+            //     .scope = analyzer.current_scope,
+            // });
+            //
+            // const load = emit_load(analyzer, thread, .{
+            //     .value = &temporal.instruction.value,
+            //     .type = args.coerced_type,
+            //     .line = 0,
+            //     .column = 0,
+            //     .scope = analyzer.current_scope,
+            // });
+            // return &load.instruction.value;
+        }
+    }
+
     fn parse_call(noalias converter: *Converter, noalias module: *Module, callable: *Value) *Value {
         var llvm_abi_argument_value_buffer: [64]*llvm.Value = undefined;
         const function_type = callable.type;
@@ -822,7 +938,18 @@ const Converter = struct {
                     llvm_abi_argument_value_buffer[abi_argument_count] = semantic_argument_value.llvm;
                     abi_argument_count += 1;
                 },
-                else => @trap(),
+                .ignore => unreachable,
+                .direct_pair => unreachable,
+                .direct_coerce => |coerced_type| {
+                    const v = emit_direct_coerce(module, coerced_type, semantic_argument_value);
+                    llvm_abi_argument_value_buffer[abi_argument_count] = v;
+                    abi_argument_count += 1;
+                },
+                .direct_coerce_int => unreachable,
+                .expand_coerce => unreachable,
+                .direct_split_struct_i32 => unreachable,
+                .indirect => unreachable,
+                .expand => unreachable,
             }
         }
 
@@ -830,7 +957,9 @@ const Converter = struct {
 
         const llvm_abi_argument_values = llvm_abi_argument_value_buffer[0..abi_argument_count];
         const llvm_call = module.llvm.builder.create_call(callable.type.llvm.handle.to_function(), callable.llvm, llvm_abi_argument_values);
-        llvm_call.to_instruction().set_calling_convention(callable.llvm.get_calling_convention());
+        llvm_call.to_instruction().to_call().set_calling_convention(callable.llvm.get_calling_convention());
+
+        llvm_emit_function_attributes(module, llvm_call, &function_type.bb.function, Function.Attributes{}, .call);
 
         if (llvm_indirect_return_value) |indirect_value| {
             _ = indirect_value;
@@ -2189,6 +2318,31 @@ const ConvertOptions = struct {
     target: Target,
 };
 
+fn llvm_emit_function_attributes(module: *Module, value: *llvm.Value, function_type: *FunctionType, function_attributes: Function.Attributes, container_type: AttributeContainerType) void {
+    const enable_frame_pointer = true;
+
+    if (enable_frame_pointer) {
+        llvm_add_function_attribute(value, module.llvm.attribute_table.frame_pointer_all, container_type);
+        llvm_add_function_attribute(value, module.llvm.attribute_table.ssp, container_type);
+    }
+
+    llvm_add_function_attribute(value, module.llvm.attribute_table.@"stack-protector-buffer-size", container_type);
+    llvm_add_function_attribute(value, module.llvm.attribute_table.@"no-trapping-math", container_type);
+    llvm_add_function_attribute(value, module.llvm.attribute_table.nounwind, container_type);
+
+    if (function_attributes.@"noinline") {
+        llvm_add_function_attribute(value, module.llvm.attribute_table.@"noinline", container_type);
+    }
+
+    if (function_attributes.naked) {
+        llvm_add_function_attribute(value, module.llvm.attribute_table.naked, container_type);
+    }
+
+    if (function_type.abi_return_type == module.noreturn_type) {
+        llvm_add_function_attribute(value, module.llvm.attribute_table.noreturn, container_type);
+    }
+}
+
 pub noinline fn convert(options: ConvertOptions) void {
     var converter = Converter{
         .content = options.content,
@@ -2266,6 +2420,8 @@ pub noinline fn convert(options: ConvertOptions) void {
                 switch (global_kind) {
                     .@"fn" => {
                         var calling_convention = CallingConvention.unknown;
+                        var function_attributes = Function.Attributes{};
+                        _ = &function_attributes;
 
                         if (converter.consume_character_if_match(left_bracket)) {
                             while (converter.offset < converter.content.len) {
@@ -2478,8 +2634,6 @@ pub noinline fn convert(options: ConvertOptions) void {
                                                     assert(type_classes[1] != .memory or type_classes[0] == .memory);
                                                     assert(type_classes[1] != .sseup or type_classes[0] == .sse);
 
-                                                    _ = &needed_registers; // autofix
-
                                                     const result_type = switch (type_classes[0]) {
                                                         .integer => b: {
                                                             needed_registers.gpr += 1;
@@ -2493,7 +2647,7 @@ pub noinline fn convert(options: ConvertOptions) void {
 
                                                                 break :ata .{
                                                                     .kind = .{
-                                                                        .direct_coerce = semantic_argument_type,
+                                                                        .direct_coerce = result_type,
                                                                     },
                                                                     .attributes = .{
                                                                         .sign_extend = signed,
@@ -2501,6 +2655,7 @@ pub noinline fn convert(options: ConvertOptions) void {
                                                                     },
                                                                 };
                                                             }
+
                                                             break :b result_type;
                                                         },
                                                         .memory => break :ata Abi.SystemV.indirect_argument(semantic_argument_type, available_registers.gpr),
@@ -2670,9 +2825,7 @@ pub noinline fn convert(options: ConvertOptions) void {
                             },
                             .type = llvm_function_type,
                         });
-                        llvm_handle.set_calling_convention(calling_convention.to_llvm());
 
-                        const global = module.globals.add();
                         var subroutine_type: *llvm.DI.Type.Subroutine = undefined;
                         const current_scope: *llvm.DI.Scope = if (module.llvm.di_builder) |di_builder| blk: {
                             const subroutine_type_flags = llvm.DI.Flags{};
@@ -2708,11 +2861,18 @@ pub noinline fn convert(options: ConvertOptions) void {
                                     .semantic_argument_count = semantic_argument_count,
                                     .abi_argument_count = @intCast(abi_argument_type_count),
                                     .abi_argument_types = abi_argument_types.ptr,
+                                    .abi_return_type = abi_return_type,
                                     .argument_type_abis = argument_type_abis.ptr,
                                     .return_type_abi = return_type_abi,
                                 },
                             },
                         });
+
+                        llvm_handle.set_calling_convention(calling_convention.to_llvm());
+
+                        llvm_emit_function_attributes(module, llvm_handle.to_value(), &function_type.bb.function, function_attributes, .function);
+
+                        const global = module.globals.add();
 
                         if (converter.consume_character_if_match(';')) {
                             const value = module.values.add();
