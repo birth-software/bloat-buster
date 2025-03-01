@@ -174,7 +174,7 @@ pub fn main(argc: c_int, argv: [*:null]const ?[*:0]const u8) callconv(.C) c_int 
 
     const file_content = lib.file.read(arena, relative_file_path);
     const file_path = os.absolute_path(arena, relative_file_path);
-    converter.convert(.{
+    converter.convert(arena, .{
         .executable = output_executable_path,
         .objects = &.{output_object_path},
         .name = base_name,

@@ -4,7 +4,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-extern void require(bool ok);
+static void require(bool ok)
+{
+    if (!ok)
+    {
+        __builtin_trap();
+    }
+}
 
 #ifndef memcpy
 void* memcpy(void* dst_ptr, const void* src_ptr, size_t count)

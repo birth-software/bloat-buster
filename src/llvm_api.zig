@@ -24,7 +24,7 @@ pub extern fn LLVMGetInstructionCallConv(instruction: *llvm.Instruction.Call) ll
 
 pub extern fn LLVMGetParams(function: *llvm.Function, argument_buffer: [*]*llvm.Argument) void;
 
-pub extern fn llvm_function_to_string(function: *llvm.Function) *llvm.String;
+pub extern fn llvm_function_to_string(function: *llvm.Function) llvm.String;
 pub extern fn llvm_function_verify(function: *llvm.Function, error_message: *llvm.String) bool;
 pub extern fn llvm_module_verify(module: *llvm.Module, error_message: *llvm.String) bool;
 
@@ -32,6 +32,8 @@ pub extern fn llvm_module_to_string(module: *llvm.Module) llvm.String;
 
 // Builder API
 pub extern fn LLVMPositionBuilderAtEnd(builder: *llvm.Builder, basic_block: *llvm.BasicBlock) void;
+pub extern fn LLVMGetInsertBlock(builder: *llvm.Builder) *llvm.BasicBlock;
+
 pub extern fn LLVMBuildRet(builder: *llvm.Builder, value: ?*llvm.Value) void;
 pub extern fn LLVMBuildAdd(builder: *llvm.Builder, left: *llvm.Value, right: *llvm.Value, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildSub(builder: *llvm.Builder, left: *llvm.Value, right: *llvm.Value, name: [*:0]const u8) *llvm.Value;
@@ -57,9 +59,15 @@ pub extern fn LLVMBuildStructGEP2(builder: *llvm.Builder, struct_type: *llvm.Typ
 pub extern fn LLVMBuildInBoundsGEP2(builder: *llvm.Builder, ty: *llvm.Type, aggregate: *llvm.Value, index_pointer: [*]const *llvm.Value, index_count: c_uint, name: [*:0]const u8) *llvm.Value;
 
 pub extern fn LLVMBuildInsertValue(builder: *llvm.Builder, aggregate: *llvm.Value, element: *llvm.Value, index: c_uint, name: [*:0]const u8) *llvm.Value;
+pub extern fn LLVMBuildUnreachable(builder: *llvm.Builder) *llvm.Value;
+pub extern fn LLVMBuildMemCpy(builder: *llvm.Builder, destination: *llvm.Value, destination_alignment: c_uint, source: *llvm.Value, source_alignment: c_uint, size: *llvm.Value) *llvm.Value;
+
+// Casts
 pub extern fn LLVMBuildZExt(builder: *llvm.Builder, value: *llvm.Value, destination_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildSExt(builder: *llvm.Builder, value: *llvm.Value, destination_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
-pub extern fn LLVMBuildUnreachable(builder: *llvm.Builder) *llvm.Value;
+pub extern fn LLVMBuildIntToPtr(builder: *llvm.Builder, value: *llvm.Value, destination_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
+pub extern fn LLVMBuildPtrToInt(builder: *llvm.Builder, value: *llvm.Value, destination_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
+pub extern fn LLVMBuildTrunc(builder: *llvm.Builder, value: *llvm.Value, destination_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
 
 pub extern fn LLVMSetCurrentDebugLocation2(builder: *llvm.Builder, location: ?*llvm.DI.Location) void;
 

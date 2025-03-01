@@ -140,7 +140,7 @@ ByVal = struct
 [extern] c_modify_by_ref_param = fn [cc(c)] (x: ByRef) ByRef;
 [extern] c_func_ptr_byval = fn [cc(c)] (a: u64, b: u64, c: ByVal, d: u64, e: u64, f: u64) void;
 
-[export] require = fn [cc(c)] (ok: u8) void
+require = fn (ok: u1) void
 {
     if (!ok)
     {
@@ -330,7 +330,7 @@ ByVal = struct
 
 [export] bb_ptr = fn [cc(c)] (x: &u8) void
 {
-    require(#int_from_pointer(x) == 0xdeadbeef);
+    require(#cast_to(u64, x) == 0xdeadbeef);
 }
 
 [export] bb_five_integers = fn [cc(c)] (a: s32, b: s32, c: s32, d: s32, e: s32) void
@@ -344,7 +344,7 @@ ByVal = struct
 
 [export] bb_bool = fn [cc(c)] (x: u8) void
 {
-    require(x);
+    require(#truncate(x));
 }
 
 [export] bb_ret_struct_u64_u64 = fn [cc(c)] () Struct_u64_u64

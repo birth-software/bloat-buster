@@ -729,7 +729,10 @@ pub const Arena = struct {
 
     pub fn restore(arena: *Arena, position: u64) void {
         assert(position <= arena.position);
-        @memset(@as([*]u8, @ptrCast(arena))[position..][0 .. arena.position - position], 0);
+        const do_memset = false;
+        if (do_memset) {
+            @memset(@as([*]u8, @ptrCast(arena))[position..][0 .. arena.position - position], 0);
+        }
         arena.position = position;
     }
 

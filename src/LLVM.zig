@@ -610,6 +610,7 @@ pub const VerifyResult = struct {
 
 pub const Builder = opaque {
     pub const position_at_end = api.LLVMPositionBuilderAtEnd;
+    pub const get_insert_block = api.LLVMGetInsertBlock;
 
     pub const create_ret = api.LLVMBuildRet;
 
@@ -715,7 +716,21 @@ pub const Builder = opaque {
         return api.LLVMBuildSExt(builder, value, destination_type, "");
     }
 
+    pub fn create_int_to_ptr(builder: *Builder, value: *Value, destination_type: *Type) *Value {
+        return api.LLVMBuildIntToPtr(builder, value, destination_type, "");
+    }
+
+    pub fn create_ptr_to_int(builder: *Builder, value: *Value, destination_type: *Type) *Value {
+        return api.LLVMBuildPtrToInt(builder, value, destination_type, "");
+    }
+
+    pub fn create_truncate(builder: *Builder, value: *Value, destination_type: *Type) *Value {
+        return api.LLVMBuildTrunc(builder, value, destination_type, "");
+    }
+
     pub const create_unreachable = api.LLVMBuildUnreachable;
+
+    pub const create_memcpy = api.LLVMBuildMemCpy;
 };
 
 pub const GlobalValue = opaque {
@@ -753,7 +768,7 @@ pub const Function = opaque {
     pub const get_subprogram = api.LLVMGetSubprogram;
 
     pub fn to_string(function: *Function) []const u8 {
-        return api.llvm_function_to_string(function).to_slice();
+        return api.llvm_function_to_string(function).to_slice().?;
     }
 
     pub const set_calling_convention = api.LLVMSetFunctionCallConv;
@@ -1396,7 +1411,6 @@ const LldArgvBuilder = struct {
 };
 
 pub fn default_initialize() void {
-    assert(lib.GlobalState.initialized);
     if (!initialized) {
         initialize_all();
     }

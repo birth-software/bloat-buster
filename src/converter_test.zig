@@ -1,4 +1,5 @@
 const lib = @import("lib.zig");
+const Arena = lib.Arena;
 const assert = lib.assert;
 const std = @import("std");
 const configuration = @import("configuration");
@@ -13,21 +14,25 @@ fn invoke(name: []const u8) !void {
 
     comptime assert(lib.is_test);
     const allocator = std.testing.allocator;
-    const c_abi_object_path = lib.global.arena.duplicate_string(configuration.c_abi_object_path);
+    const arena = lib.global.arena;
+    const arena_position = arena.position;
+    defer arena.restore(arena_position);
+
+    const c_abi_object_path = arena.duplicate_string(configuration.c_abi_object_path);
 
     inline for (@typeInfo(BuildMode).@"enum".fields) |f| {
         const build_mode = @field(BuildMode, f.name);
         inline for ([2]bool{ false, true }) |has_debug_info| {
             var tmp_dir = std.testing.tmpDir(.{});
             defer tmp_dir.cleanup();
-            const base_path = lib.global.arena.join_string(&.{ ".zig-cache/tmp/", &tmp_dir.sub_path, "/", name });
+            const base_path = arena.join_string(&.{ ".zig-cache/tmp/", &tmp_dir.sub_path, "/", name });
             const executable_path = base_path;
-            const directory_path = lib.global.arena.join_string(&.{ ".zig-cache/tmp/", &tmp_dir.sub_path });
-            const object_path = lib.global.arena.join_string(&.{ base_path, ".o" });
-            try unit_test(allocator, .{
+            const directory_path = arena.join_string(&.{ ".zig-cache/tmp/", &tmp_dir.sub_path });
+            const object_path = arena.join_string(&.{ base_path, ".o" });
+            try unit_test(arena, allocator, .{
                 .object_paths = if (lib.string.equal(name, "c_abi")) &.{ object_path, c_abi_object_path } else &.{object_path},
                 .executable_path = executable_path,
-                .file_path = lib.global.arena.join_string(&.{ "tests/", name, ".bbb" }),
+                .file_path = arena.join_string(&.{ "tests/", name, ".bbb" }),
                 .name = name,
                 .directory_path = directory_path,
                 .build_mode = build_mode,
@@ -47,10 +52,10 @@ const InvokeWrapper = struct {
     directory_path: [:0]const u8,
 };
 
-fn unit_test(allocator: std.mem.Allocator, options: InvokeWrapper) !void {
-    const file_content = lib.file.read(lib.global.arena, options.file_path);
+fn unit_test(arena: *Arena, allocator: std.mem.Allocator, options: InvokeWrapper) !void {
+    const file_content = lib.file.read(arena, options.file_path);
 
-    converter.convert(.{
+    converter.convert(arena, .{
         .path = options.file_path,
         .content = file_content,
         .objects = options.object_paths,
@@ -191,5 +196,29 @@ test "comments" {
 }
 
 test "local_type_inference" {
+    try invsrc(@src());
+}
+
+test "if_no_else_void" {
+    try invsrc(@src());
+}
+
+test "c_abi0" {
+    try invsrc(@src());
+}
+
+test "c_abi1" {
+    try invsrc(@src());
+}
+
+test "return_u64_u64" {
+    try invsrc(@src());
+}
+
+test "struct_u64_u64" {
+    try invsrc(@src());
+}
+
+test "ret_c_bool" {
     try invsrc(@src());
 }
