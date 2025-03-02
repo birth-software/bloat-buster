@@ -172,11 +172,12 @@ pub fn main(argc: c_int, argv: [*:null]const ?[*:0]const u8) callconv(.C) c_int 
     const output_object_path = arena.join_string(&.{ output_path_base, ".o" });
     const output_executable_path = output_path_base;
 
+    const c_abi_object_path = arena.duplicate_string(configuration.c_abi_object_path);
     const file_content = lib.file.read(arena, relative_file_path);
     const file_path = os.absolute_path(arena, relative_file_path);
     converter.convert(arena, .{
         .executable = output_executable_path,
-        .objects = &.{output_object_path},
+        .objects = if (lib.string.equal(base_name, "c_abi")) &.{ output_object_path, c_abi_object_path } else &.{output_object_path},
         .name = base_name,
         .build_mode = .debug_none,
         .content = file_content,
