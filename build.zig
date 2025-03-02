@@ -309,11 +309,17 @@ pub fn build(b: *std.Build) !void {
     system_llvm = b.option(bool, "system_llvm", "Link against system LLVM libraries") orelse true;
     const path = env.get("PATH") orelse unreachable;
 
-    const c_abi = b.addObject(.{
-        .name = "c_abi",
+    const c_abi_module = b.createModule(.{
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .sanitize_c = false,
+    });
+    const c_abi = b.addObject(.{
+        .name = "c_abi",
+        .link_libc = true,
+        .root_module = c_abi_module,
+        .optimize = optimize,
     });
     c_abi.addCSourceFiles(.{
         .files = &.{"src/c_abi.c"},
