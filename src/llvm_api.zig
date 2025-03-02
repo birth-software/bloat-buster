@@ -8,6 +8,7 @@ pub extern fn LLVMContextCreate() *llvm.Context;
 pub extern fn LLVMCreateBuilderInContext(context: *llvm.Context) *llvm.Builder;
 
 pub extern fn LLVMIsACallInst(value: *llvm.Value) ?*llvm.Instruction.Call;
+pub extern fn LLVMSetAlignment(value: *llvm.Value, alignment: c_uint) void;
 
 // Module
 pub extern fn llvm_module_create_global_variable(module: *llvm.Module, global_type: *llvm.Type, is_constant: bool, linkage: llvm.LinkageType, initial_value: *llvm.Constant, name: llvm.String, before: ?*llvm.GlobalVariable, thread_local_mode: llvm.ThreadLocalMode, address_space: c_uint, externally_initialized: bool) *llvm.GlobalVariable;

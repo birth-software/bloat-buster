@@ -222,3 +222,23 @@ test "struct_u64_u64" {
 test "ret_c_bool" {
     try invsrc(@src());
 }
+
+test "c_split_struct_ints" {
+    try invsrc(@src());
+}
+
+test "c_ret_struct_array" {
+    try invsrc(@src());
+}
+
+test "function_pointer" {
+    try invsrc(@src());
+}
+
+test "c_struct_with_array" {
+    try invsrc(@src());
+}
+
+test "c_abi" {
+    try invsrc(@src());
+}

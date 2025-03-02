@@ -806,6 +806,7 @@ pub const Argument = opaque {
 pub const Value = opaque {
     pub const get_type = api.LLVMTypeOf;
     pub const get_kind = api.LLVMGetValueKind;
+    pub const set_alignment = api.LLVMSetAlignment;
 
     pub const is_call_instruction = api.LLVMIsACallInst;
 
@@ -1438,13 +1439,16 @@ pub fn object_generate(module: *Module, target_machine: *Target.Machine, generat
         module.run_optimization_pipeline(target_machine, OptimizationPipelineOptions.default(.{ .optimization_level = optimization_level, .debug_info = @intFromBool(generate.debug_info) }));
     }
 
+    // const mod_string = module.to_string();
+    // lib.print_string_stderr(mod_string);
+
     const result = module.run_code_generation_pipeline(target_machine, CodeGenerationPipelineOptions{
         .output_file_path = String.from_slice(generate.path),
         .output_dwarf_file_path = .{},
         .flags = .{
             .code_generation_file_type = .object_file,
             .optimize_when_possible = generate.optimize_when_possible,
-            .verify_module = @intFromBool(lib.optimization_mode == .Debug or lib.optimization_mode == .ReleaseSafe),
+            .verify_module = 1,
         },
     });
 

@@ -168,7 +168,7 @@ pub fn main(argc: c_int, argv: [*:null]const ?[*:0]const u8) callconv(.C) c_int 
 
     const build_dir = "bb-cache";
     os.make_directory(build_dir);
-    const output_path_base = arena.join_string(&.{ build_dir, "/", base_name });
+    const output_path_base = arena.join_string(&.{ build_dir, "/", base_name, "_", @tagName(lib.optimization_mode) });
     const output_object_path = arena.join_string(&.{ output_path_base, ".o" });
     const output_executable_path = output_path_base;
 
@@ -179,7 +179,7 @@ pub fn main(argc: c_int, argv: [*:null]const ?[*:0]const u8) callconv(.C) c_int 
         .executable = output_executable_path,
         .objects = if (lib.string.equal(base_name, "c_abi")) &.{ output_object_path, c_abi_object_path } else &.{output_object_path},
         .name = base_name,
-        .build_mode = .debug_none,
+        .build_mode = .soft_optimize,
         .content = file_content,
         .path = file_path,
         .has_debug_info = true,

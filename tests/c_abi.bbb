@@ -274,7 +274,7 @@ require = fn (ok: u1) void
     require(c_ret_s32() == -1);
     require(c_ret_s64() == -1);
 
-    c_struct_with_array({ .a = 1, .padding = undefined, .b = 2, });
+    c_struct_with_array({ .a = 1, .padding = [0, 0, 0, 0], .b = 2, });
 
     >x = c_ret_struct_with_array();
     require(x.a == 4);

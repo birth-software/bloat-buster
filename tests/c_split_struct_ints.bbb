@@ -1,0 +1,25 @@
+SplitStructInt = struct
+{
+    a: u64,
+    b: u8,
+    c: u32,
+}
+
+bb_split_struct_ints = fn [cc(c)] (x: SplitStructInt) void
+{
+}
+
+[export] main = fn [cc(c)] () s32
+{
+    >split: SplitStructInt = {
+        .a = 1234,
+        .b = 100,
+        .c = 1337,
+    };
+
+    bb_split_struct_ints(split);
+    >a: s32 = #truncate(split.a);
+    >b: s32 = #extend(split.b);
+    >c: s32 = split.c;
+    return a + b + 3 - c;
+}
