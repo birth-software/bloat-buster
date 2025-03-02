@@ -117,7 +117,7 @@ const Module = struct {
         context: *llvm.Context,
         handle: *llvm.Module,
         builder: *llvm.Builder,
-        di_builder: ?*llvm.DI.Builder = null,
+        di_builder: ?*llvm.DI.Builder,
         global_scope: *llvm.DI.Scope,
         file: *llvm.DI.File,
         pointer_type: *llvm.Type,
@@ -260,6 +260,7 @@ const Module = struct {
                 .handle = handle,
                 .context = context,
                 .builder = context.create_builder(),
+                .di_builder = maybe_di_builder,
                 .pointer_type = context.get_pointer_type(default_address_space).to_type(),
                 .intrinsic_table = .{
                     .trap = llvm.lookup_intrinsic_id("llvm.trap"),
@@ -2856,14 +2857,16 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
 
                         var debug_argument_type_buffer: [argument_buffer.len + 1]*llvm.DI.Type = undefined;
 
+                        const semantic_debug_argument_types = debug_argument_type_buffer[0 .. semantic_argument_count + 1];
                         const semantic_arguments = argument_buffer[0..semantic_argument_count];
                         const semantic_argument_types = module.arena.allocate(*Type, semantic_argument_count);
-                        for (semantic_arguments, semantic_argument_types) |argument, *argument_type| {
-                            argument_type.* = argument.type;
-                        }
-                        const semantic_debug_argument_types = debug_argument_type_buffer[0 .. semantic_argument_count + 1];
 
                         semantic_debug_argument_types[0] = semantic_return_type.llvm.debug;
+
+                        for (semantic_arguments, semantic_argument_types, semantic_debug_argument_types[1..]) |argument, *argument_type, *debug_argument_type| {
+                            argument_type.* = argument.type;
+                            debug_argument_type.* = argument.type.llvm.debug;
+                        }
 
                         var return_type_abi: Abi.Information = undefined;
                         var argument_type_abi_buffer: [64]Abi.Information = undefined;
@@ -3133,7 +3136,7 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                         });
 
                         var subroutine_type: *llvm.DI.Type.Subroutine = undefined;
-                        const current_scope: *llvm.DI.Scope = if (module.llvm.di_builder) |di_builder| blk: {
+                        const function_scope: *llvm.DI.Scope = if (module.llvm.di_builder) |di_builder| blk: {
                             const subroutine_type_flags = llvm.DI.Flags{};
                             subroutine_type = di_builder.create_subroutine_type(module.llvm.file, semantic_debug_argument_types, subroutine_type_flags);
                             const scope_line: u32 = @intCast(converter.line_offset + 1);
@@ -3185,7 +3188,7 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                                 true => .external_function,
                                 false => .{
                                     .function = .{
-                                        .current_scope = current_scope,
+                                        .current_scope = function_scope,
                                         .attributes = function_attributes,
                                         .return_pointer = undefined,
                                     },
@@ -3229,9 +3232,13 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                                 else => {},
                             }
 
+                            module.llvm.builder.set_current_debug_location(null);
+
                             if (semantic_arguments.len > 0) {
                                 const argument_variables = global.value.bb.function.arguments.add_many(semantic_argument_count);
                                 for (semantic_arguments, argument_type_abis, argument_variables, 0..) |semantic_argument, argument_abi, *argument_variable, argument_index| {
+                                    if (module.llvm.di_builder) |_| {}
+
                                     const argument_abi_count = argument_abi.indices[1] - argument_abi.indices[0];
                                     const LowerKind = union(enum) {
                                         direct,
@@ -3345,9 +3352,9 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                                     if (module.llvm.di_builder) |di_builder| {
                                         const always_preserve = true;
                                         const flags = llvm.DI.Flags{};
-                                        const parameter_variable = di_builder.create_parameter_variable(global.value.bb.function.current_scope, semantic_argument.name, @intCast(argument_index + 1), module.llvm.file, semantic_argument.line, semantic_argument.type.llvm.debug, always_preserve, flags);
+                                        const parameter_variable = di_builder.create_parameter_variable(function_scope, semantic_argument.name, @intCast(argument_index + 1), module.llvm.file, semantic_argument.line, semantic_argument.type.llvm.debug, always_preserve, flags);
                                         const inlined_at: ?*llvm.DI.Metadata = null; // TODO
-                                        const debug_location = llvm.DI.create_debug_location(module.llvm.context, semantic_argument.line, semantic_argument.column, global.value.bb.function.current_scope, inlined_at);
+                                        const debug_location = llvm.DI.create_debug_location(module.llvm.context, semantic_argument.line, semantic_argument.column, function_scope, inlined_at);
                                         _ = di_builder.insert_declare_record_at_end(llvm_storage, parameter_variable, di_builder.null_expression(), debug_location, module.current_basic_block());
                                     }
                                 }
