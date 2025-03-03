@@ -348,23 +348,11 @@ const Module = struct {
 
         for ([2]bool{ false, true }) |sign| {
             for (1..64 + 1) |bit_count| {
-                var name_buffer = [3]u8{ if (sign) 's' else 'u', 0, 0 };
-                var digit_buffer = [2]u8{ 0, 0 };
-
-                var it = bit_count;
-                var i: usize = 0;
-                while (it != 0) : (i += 1) {
-                    const digit: u8 = @intCast((it % 10) + '0');
-                    digit_buffer[i] = digit;
-                    it = it / 10;
-                }
-
-                name_buffer[1] = digit_buffer[1];
-                name_buffer[2] = digit_buffer[0];
-
+                const name_buffer = [3]u8{ if (sign) 's' else 'u', @intCast(if (bit_count < 10) bit_count % 10 + '0' else bit_count / 10 + '0'), if (bit_count > 9) @intCast(bit_count % 10 + '0') else 0 };
                 const name_length = @as(usize, 2) + @intFromBool(bit_count > 9);
 
                 const name = arena.duplicate_string(name_buffer[0..name_length]);
+
                 _ = module.types.add(.{
                     .name = name,
                     .bb = .{
