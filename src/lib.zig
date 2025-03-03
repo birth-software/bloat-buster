@@ -515,10 +515,11 @@ pub const os = struct {
         if (os.is_being_debugged()) {
             @trap();
         } else {
-            switch (is_test) {
-                true => @panic("aborting"),
-                false => libc.exit(1),
+            if (is_test) {
+                @import("std").debug.dumpCurrentStackTrace(@returnAddress());
             }
+
+            libc.exit(1);
         }
     }
 

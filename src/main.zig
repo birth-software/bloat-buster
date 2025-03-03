@@ -9,7 +9,7 @@ pub const panic = lib.panic_struct;
 
 pub fn main(argc: c_int, argv: [*:null]const ?[*:0]const u8) callconv(.C) c_int {
     if (argc != 2) {
-        lib.print_string("Failed to match argument count");
+        lib.print_string("Failed to match argument count\n");
         return 1;
     }
     const relative_file_path_pointer = argv[1] orelse return 1;
