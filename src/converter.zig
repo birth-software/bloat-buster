@@ -2751,6 +2751,9 @@ fn llvm_emit_function_site_attributes(module: *Module, value: *Value) void {
 }
 
 pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
+    const build_dir = "bb-cache";
+    os.make_directory(build_dir);
+
     var converter = Converter{
         .content = options.content,
         .offset = 0,
