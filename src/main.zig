@@ -31,7 +31,7 @@ pub fn main(argc: c_int, argv: [*:null]const ?[*:0]const u8) callconv(.C) c_int 
     const arena = lib.global.arena;
 
     const build_dir = "bb-cache";
-    const output_path_base = arena.join_string(&.{ build_dir, "/", base_name, "_", @tagName(lib.optimization_mode) });
+    const output_path_base = arena.join_string(&.{ build_dir, "/", base_name });
     const output_object_path = arena.join_string(&.{ output_path_base, ".o" });
     const output_executable_path = output_path_base;
 

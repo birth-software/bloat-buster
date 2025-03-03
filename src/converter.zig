@@ -1339,6 +1339,11 @@ const Converter = struct {
                             } else {
                                 // TODO: take ABI into account
                                 const return_value = converter.parse_value(module, current_function_global.value.type.bb.function.semantic_return_type, .value);
+
+                                if (module.llvm.di_builder) |_| {
+                                    module.llvm.builder.set_current_debug_location(statement_debug_location);
+                                }
+
                                 switch (current_function_type.return_type_abi.kind) {
                                     .direct => {
                                         module.llvm.builder.create_ret(return_value.llvm);
@@ -3603,12 +3608,13 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                             };
 
                             const field_bit_size = field_type.get_bit_size();
-                            field_bit_offset += field_bit_size;
 
                             if (module.llvm.di_builder) |di_builder| {
                                 const member_type = di_builder.create_bit_field_member_type(module.llvm.global_scope, field_name, module.llvm.file, field_line, field_bit_size, field_bit_offset, 0, .{}, backing_type.llvm.debug);
                                 llvm_debug_field_buffer[field_count] = member_type;
                             }
+
+                            field_bit_offset += field_bit_size;
 
                             converter.skip_space();
 
@@ -3692,7 +3698,6 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
         di_builder.finalize();
     }
 
-    // if (lib.optimization_mode == .Debug) {
     const verify_result = module.llvm.handle.verify();
     if (!verify_result.success) {
         lib.print_string(module.llvm.handle.to_string());
@@ -3701,11 +3706,10 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
         os.abort();
     }
 
-    // if (!lib.is_test) {
-    //     const module_string = module.llvm.handle.to_string();
-    //     lib.print_string_stderr(module_string);
-    // }
-    // }
+    if (!lib.is_test) {
+        const module_string = module.llvm.handle.to_string();
+        lib.print_string_stderr(module_string);
+    }
 
     var error_message: llvm.String = undefined;
     const target_machine = llvm.Target.Machine.create(.{
