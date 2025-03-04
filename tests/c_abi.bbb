@@ -280,7 +280,7 @@ require = fn (ok: u1) void
     require(x.a == 4);
     require(x.b == 155);
 
-    >res = c_modify_by_ref_param({ .val = 1, .arr = undefined, });
+    >res = c_modify_by_ref_param({ .val = 1, .arr = [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ] });
     require(res.val == 42);
 
     >function_pointer = &c_func_ptr_byval;

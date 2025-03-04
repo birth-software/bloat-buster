@@ -1,0 +1,11 @@
+foo = fn [cc(c)] () u1
+{
+    >result: u1 = 0;
+    return result;
+}
+
+[export] main = fn [cc(c)] () s32
+{
+    >result = foo();
+    return #extend(result);
+}

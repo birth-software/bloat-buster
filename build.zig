@@ -78,9 +78,11 @@ const LLVM = struct {
                 else => "HOME",
             };
             const home_path = env.get(home_env) orelse unreachable;
+            const is_ci = std.mem.eql(u8, (env.get("BB_CI") orelse "0"), "1");
             const download_dir = try std.mem.concat(b.allocator, u8, &.{ home_path, "/Downloads" });
             std.fs.makeDirAbsolute(download_dir) catch {};
-            const llvm_base = try std.mem.concat(b.allocator, u8, &.{ "llvm-", @tagName(target.result.cpu.arch), "-", @tagName(target.result.os.tag), "-", @tagName(CmakeBuildType.from_zig_build_type(optimize)) });
+            const cmake_build_type = if (is_ci) CmakeBuildType.from_zig_build_type(optimize) else CmakeBuildType.Release;
+            const llvm_base = try std.mem.concat(b.allocator, u8, &.{ "llvm-", @tagName(target.result.cpu.arch), "-", @tagName(target.result.os.tag), "-", @tagName(cmake_build_type) });
             const base = try std.mem.concat(b.allocator, u8, &.{ download_dir, "/", llvm_base });
             const full_path = try std.mem.concat(b.allocator, u8, &.{ base, "/bin/llvm-config" });
 
@@ -306,7 +308,7 @@ pub fn build(b: *std.Build) !void {
     env = try std.process.getEnvMap(b.allocator);
     target = b.standardTargetOptions(.{});
     optimize = b.standardOptimizeOption(.{});
-    system_llvm = b.option(bool, "system_llvm", "Link against system LLVM libraries") orelse true;
+    system_llvm = b.option(bool, "system_llvm", "Link against system LLVM libraries") orelse false;
     const path = env.get("PATH") orelse unreachable;
 
     const c_abi_module = b.createModule(.{
@@ -322,7 +324,7 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
     c_abi.addCSourceFiles(.{
-        .files = &.{"src/c_abi.c"},
+        .files = &.{"tests/c_abi.c"},
         .flags = &.{"-g"},
     });
 
@@ -363,8 +365,8 @@ pub fn build(b: *std.Build) !void {
 
     const exe_unit_tests = b.addTest(.{
         .root_module = exe_mod,
+        .link_libc = true,
     });
-    exe_unit_tests.linkLibC();
 
     llvm.link(exe);
 

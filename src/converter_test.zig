@@ -22,7 +22,7 @@ fn invoke(name: []const u8) !void {
 
     inline for (@typeInfo(BuildMode).@"enum".fields) |f| {
         const build_mode = @field(BuildMode, f.name);
-        inline for ([2]bool{ false, true }) |has_debug_info| {
+        inline for ([2]bool{ true, false }) |has_debug_info| {
             // Bootstrap
             {
                 var tmp_dir = std.testing.tmpDir(.{});
@@ -329,6 +329,30 @@ test "c_struct_with_array" {
     try invsrc(@src());
 }
 
+test "indirect" {
+    try invsrc(@src());
+}
+
+test "indirect_struct" {
+    try invsrc(@src());
+}
+
+test "u1_return" {
+    try invsrc(@src());
+}
+
+test "small_struct_ints" {
+    try invsrc(@src());
+}
+
+test "c_med_struct_ints" {
+    try invsrc(@src());
+}
+
 test "c_abi" {
     try invsrc(@src());
 }
+
+// test "varargs" {
+//     try invsrc(@src());
+// }

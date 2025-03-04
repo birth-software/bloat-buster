@@ -8,20 +8,14 @@ test {
     _ = @import("converter_test.zig");
 }
 
-const LexerResult = struct {
-    token: Token,
-    offset: u32,
-    character_count: u32,
-};
-
-const Token = enum {};
-
 const left_bracket = '[';
 const right_bracket = ']';
 const left_brace = '{';
 const right_brace = '}';
 const left_parenthesis = '(';
 const right_parenthesis = ')';
+
+const max_argument_count = 64;
 
 fn array_type_name(arena: *Arena, element_count: u64, noalias array: *const ArrayType) [:0]const u8 {
     var buffer: [256]u8 = undefined;
@@ -82,20 +76,34 @@ const FunctionKeyword = enum {
 };
 
 const CallingConvention = enum {
-    unknown,
     c,
 
     pub fn to_llvm(calling_convention: CallingConvention) llvm.CallingConvention {
         return switch (calling_convention) {
-            .unknown => .fast,
             .c => .c,
         };
     }
+
+    pub fn resolve(calling_convention: CallingConvention, target: Target) ResolvedCallingConvention {
+        return switch (calling_convention) {
+            .c => switch (target.cpu) {
+                .x86_64 => switch (target.os) {
+                    .linux => .system_v,
+                },
+            },
+        };
+    }
+};
+
+pub const ResolvedCallingConvention = enum {
+    system_v,
+    win64,
 };
 
 const Module = struct {
     arena: *Arena,
     llvm: LLVM,
+    target: Target,
     globals: Variable.Array = .{},
     types: Type.Array = .{},
     values: Value.Array = .{},
@@ -103,11 +111,416 @@ const Module = struct {
     debug_tag: c_uint = 0,
     void_type: *Type = undefined,
     noreturn_type: *Type = undefined,
+    va_list_type: ?*Type = null,
+    void_value: *Value = undefined,
     anonymous_pair_type_buffer: [64]u32 = undefined,
-    pointer_type_buffer: [64]u32 = undefined,
+    pointer_type_buffer: [128]u32 = undefined,
     pointer_type_count: u32 = 0,
     anonymous_pair_type_count: u32 = 0,
     arena_restore_position: u64,
+
+    pub fn dump(module: *Module) void {
+        lib.print_string(module.llvm.handle.to_string());
+    }
+
+    pub fn coerce_int_or_pointer_to_int_or_pointer(module: *Module, source: *llvm.Value, source_ty: *Type, destination_ty: *Type) *llvm.Value {
+        const source_type = source_ty;
+        var destination_type = destination_ty;
+        switch (source_type == destination_type) {
+            true => return source,
+            false => {
+                if (source_type.bb == .pointer and destination_type.bb == .pointer) {
+                    @trap();
+                } else {
+                    if (source_type.bb == .pointer) {
+                        @trap();
+                    }
+
+                    if (destination_type.bb == .pointer) {
+                        destination_type = module.integer_type(64, false);
+                    }
+
+                    if (source_type != destination_type) {
+                        @trap();
+                    }
+
+                    // This is the original destination type
+                    if (destination_ty.bb == .pointer) {
+                        @trap();
+                    }
+
+                    @trap();
+                }
+            },
+        }
+    }
+
+    pub fn create_coerced_load(module: *Module, source: *llvm.Value, source_ty: *Type, destination_type: *Type) *llvm.Value {
+        var source_pointer = source;
+        var source_type = source_ty;
+
+        const result = switch (source_type.is_abi_equal(destination_type)) {
+            true => module.create_load(.{
+                .type = destination_type,
+                .value = source_pointer,
+            }),
+            false => res: {
+                const destination_size = destination_type.get_byte_size();
+                if (source_type.bb == .structure) {
+                    const src = module.enter_struct_pointer_for_coerced_access(source_pointer, source_type, destination_size);
+                    source_pointer = src.value;
+                    source_type = src.type;
+                }
+
+                if (source_type.is_integer_backing() and destination_type.is_integer_backing()) {
+                    const load = module.create_load(.{
+                        .type = destination_type,
+                        .value = source_pointer,
+                    });
+                    const result = module.coerce_int_or_pointer_to_int_or_pointer(load, source_type, destination_type);
+                    return result;
+                } else {
+                    const source_size = source_type.get_byte_size();
+
+                    const is_source_type_scalable = false;
+                    const is_destination_type_scalable = false;
+                    if (!is_source_type_scalable and !is_destination_type_scalable and source_size >= destination_size) {
+                        const load = module.create_load(.{ .type = destination_type, .value = source, .alignment = source_type.get_byte_alignment() });
+                        break :res load;
+                    } else {
+                        const is_destination_scalable_vector_type = false;
+                        if (is_destination_scalable_vector_type) {
+                            @trap();
+                        }
+
+                        // Coercion through memory
+                        const original_destination_alignment = destination_type.get_byte_alignment();
+                        const source_alignment = source_type.get_byte_alignment();
+                        const destination_alignment = @max(original_destination_alignment, source_alignment);
+                        const destination_alloca = module.create_alloca(.{ .type = destination_type, .name = "coerce", .alignment = destination_alignment });
+                        _ = module.llvm.builder.create_memcpy(destination_alloca, destination_alignment, source, source_alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(source_size, @intFromBool(false)).to_value());
+                        const load = module.create_load(.{ .type = destination_type, .value = destination_alloca, .alignment = destination_alignment });
+                        return load;
+                    }
+                }
+            },
+        };
+        return result;
+    }
+
+    pub fn create_coerced_store(module: *Module, source_value: *llvm.Value, source_type: *Type, destination: *llvm.Value, destination_ty: *Type, destination_size: u64, destination_volatile: bool) void {
+        _ = destination_volatile;
+        var destination_type = destination_ty;
+        var destination_pointer = destination;
+        const source_size = source_type.get_byte_size();
+        if (!source_type.is_abi_equal(destination_type)) {
+            const r = module.enter_struct_pointer_for_coerced_access(destination_pointer, destination_type, source_size);
+            destination_pointer = r.value;
+            destination_type = r.type;
+        }
+
+        const is_scalable = false; // TODO
+        if (is_scalable or source_size <= destination_size) {
+            const destination_alignment = destination_type.get_byte_alignment();
+            if (source_type.bb == .integer and destination_type.bb == .pointer and source_size == lib.align_forward_u64(destination_size, destination_alignment)) {
+                @trap();
+            } else if (source_type.bb == .structure) {
+                for (source_type.bb.structure.fields, 0..) |field, field_index| {
+                    // TODO: volatile
+                    const gep = module.llvm.builder.create_struct_gep(source_type.llvm.handle.to_struct(), destination_pointer, @intCast(field_index));
+                    const field_value = module.llvm.builder.create_extract_value(source_value, @intCast(field_index));
+                    _ = module.create_store(.{
+                        .source_value = field_value,
+                        .source_type = field.type,
+                        .destination_value = gep,
+                        .destination_type = field.type,
+                        .alignment = destination_alignment,
+                    });
+                }
+            } else {
+                _ = module.create_store(.{
+                    .source_value = source_value,
+                    .source_type = source_type,
+                    .destination_value = destination_pointer,
+                    .destination_type = destination_type,
+                    .alignment = destination_alignment,
+                });
+            }
+            // TODO: is this valid for pointers too?
+        } else if (source_type.is_integer_backing()) {
+            @trap();
+        } else {
+            // Coercion through memory
+            const original_destination_alignment = destination_type.get_byte_alignment();
+            const source_alloca_alignment = @max(original_destination_alignment, source_type.get_byte_alignment());
+            const source_alloca = module.create_alloca(.{ .type = source_type, .alignment = source_alloca_alignment, .name = "coerce" });
+            _ = module.create_store(.{
+                .source_value = source_value,
+                .destination_value = source_alloca,
+                .source_type = source_type,
+                .destination_type = source_type,
+                .alignment = source_alloca_alignment,
+            });
+            _ = module.llvm.builder.create_memcpy(destination_pointer, original_destination_alignment, source_alloca, source_alloca_alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(destination_size, @intFromBool(false)).to_value());
+        }
+    }
+
+    pub fn enter_struct_pointer_for_coerced_access(module: *Module, source_value: *llvm.Value, source_ty: *Type, destination_size: u64) struct {
+        value: *llvm.Value,
+        type: *Type,
+    } {
+        _ = module;
+        var source_pointer = source_value;
+        var source_type = source_ty;
+        assert(source_type.bb == .structure and source_type.bb.structure.fields.len > 0);
+        const first_field_type = source_type.bb.structure.fields[0].type;
+        const first_field_size = first_field_type.get_byte_size();
+        const source_size = source_type.get_byte_size();
+
+        source_pointer = switch (first_field_size < destination_size and first_field_size < source_size) {
+            true => source_pointer,
+            false => @trap(), // TODO: make sure `source_type` is also updated here
+        };
+
+        return .{ .value = source_pointer, .type = source_type };
+    }
+
+    pub fn build_attribute_list(module: *Module, function_type: *const FunctionType, function_attributes: Function.Attributes, call_site: bool) *llvm.Attribute.List {
+        const return_attributes = llvm.Attribute.Argument{
+            .semantic_type = function_type.return_type_abi.semantic_type.llvm.handle,
+            .abi_type = function_type.abi_return_type.llvm.handle,
+            .dereferenceable_bytes = 0,
+            .alignment = 0,
+            .flags = .{
+                .no_alias = false,
+                .non_null = false,
+                .no_undef = false,
+                .sign_extend = function_type.return_type_abi.flags.kind == .extend and function_type.return_type_abi.flags.sign_extension,
+                .zero_extend = function_type.return_type_abi.flags.kind == .extend and !function_type.return_type_abi.flags.sign_extension,
+                .in_reg = false,
+                .no_fp_class = .{},
+                .struct_return = false,
+                .writable = false,
+                .dead_on_unwind = false,
+                .in_alloca = false,
+                .dereferenceable = false,
+                .dereferenceable_or_null = false,
+                .nest = false,
+                .by_value = false,
+                .by_reference = false,
+                .no_capture = false,
+            },
+        };
+        var argument_attribute_buffer: [128]llvm.Attribute.Argument = undefined;
+        const argument_attributes = argument_attribute_buffer[0..function_type.abi_argument_types.len];
+
+        if (function_type.return_type_abi.flags.kind == .indirect) {
+            const abi_index = @intFromBool(function_type.return_type_abi.flags.sret_after_this);
+            const argument_attribute = &argument_attributes[abi_index];
+            argument_attribute.* = .{
+                .semantic_type = function_type.return_type_abi.semantic_type.llvm.handle,
+                .abi_type = function_type.abi_argument_types[abi_index].llvm.handle,
+                .dereferenceable_bytes = 0,
+                .alignment = function_type.return_type_abi.semantic_type.get_byte_alignment(),
+                .flags = .{
+                    .no_alias = true,
+                    .non_null = false,
+                    .no_undef = false,
+                    .sign_extend = false,
+                    .zero_extend = false,
+                    .in_reg = function_type.return_type_abi.flags.in_reg,
+                    .no_fp_class = .{},
+                    .struct_return = true,
+                    .writable = true,
+                    .dead_on_unwind = true,
+                    .in_alloca = false,
+                    .dereferenceable = false,
+                    .dereferenceable_or_null = false,
+                    .nest = false,
+                    .by_value = false,
+                    .by_reference = false,
+                    .no_capture = false,
+                },
+            };
+        }
+
+        for (function_type.argument_type_abis) |argument_type_abi| {
+            for (argument_type_abi.abi_start..argument_type_abi.abi_start + argument_type_abi.abi_count) |abi_index| {
+                const argument_attribute = &argument_attributes[abi_index];
+                argument_attribute.* = .{
+                    .semantic_type = argument_type_abi.semantic_type.llvm.handle,
+                    .abi_type = function_type.abi_argument_types[abi_index].llvm.handle,
+                    .dereferenceable_bytes = 0,
+                    .alignment = if (argument_type_abi.flags.kind == .indirect) 8 else 0,
+                    .flags = .{
+                        .no_alias = false,
+                        .non_null = false,
+                        .no_undef = false,
+                        .sign_extend = argument_type_abi.flags.kind == .extend and argument_type_abi.flags.sign_extension,
+                        .zero_extend = argument_type_abi.flags.kind == .extend and !argument_type_abi.flags.sign_extension,
+                        .in_reg = argument_type_abi.flags.in_reg,
+                        .no_fp_class = .{},
+                        .struct_return = false,
+                        .writable = false,
+                        .dead_on_unwind = false,
+                        .in_alloca = false,
+                        .dereferenceable = false,
+                        .dereferenceable_or_null = false,
+                        .nest = false,
+                        .by_value = argument_type_abi.flags.indirect_by_value,
+                        .by_reference = false,
+                        .no_capture = false,
+                    },
+                };
+            }
+        }
+
+        return llvm.Attribute.List.build(module.llvm.context, llvm.Attribute.Function{
+            .prefer_vector_width = llvm.String{},
+            .stack_protector_buffer_size = llvm.String{},
+            .definition_probe_stack = llvm.String{},
+            .definition_stack_probe_size = llvm.String{},
+            .flags0 = .{
+                .noreturn = function_type.return_type_abi.semantic_type == module.noreturn_type,
+                .cmse_ns_call = false,
+                .returns_twice = false,
+                .cold = false,
+                .hot = false,
+                .no_duplicate = false,
+                .convergent = false,
+                .no_merge = false,
+                .will_return = false,
+                .no_caller_saved_registers = false,
+                .no_cf_check = false,
+                .no_callback = false,
+                .alloc_size = false, // TODO
+                .uniform_work_group_size = false,
+                .nounwind = true,
+                .aarch64_pstate_sm_body = false,
+                .aarch64_pstate_sm_enabled = false,
+                .aarch64_pstate_sm_compatible = false,
+                .aarch64_preserves_za = false,
+                .aarch64_in_za = false,
+                .aarch64_out_za = false,
+                .aarch64_inout_za = false,
+                .aarch64_preserves_zt0 = false,
+                .aarch64_in_zt0 = false,
+                .aarch64_out_zt0 = false,
+                .aarch64_inout_zt0 = false,
+                .optimize_for_size = false,
+                .min_size = false,
+                .no_red_zone = false,
+                .indirect_tls_seg_refs = false,
+                .no_implicit_floats = false,
+                .sample_profile_suffix_elision_policy = false,
+                .memory_none = false,
+                .memory_readonly = false,
+                .memory_inaccessible_or_arg_memory_only = false,
+                .memory_arg_memory_only = false,
+                .strict_fp = false,
+                .no_inline = function_attributes.inline_behavior == .no_inline,
+                .always_inline = function_attributes.inline_behavior == .always_inline,
+                .guard_no_cf = false,
+                // TODO: branch protection function attributes
+                // TODO: cpu features
+
+                // CALL-SITE ATTRIBUTES
+                .call_no_builtins = false,
+
+                // DEFINITION-SITE ATTRIBUTES
+                .definition_frame_pointer_kind = .none,
+                .definition_less_precise_fpmad = false,
+                .definition_null_pointer_is_valid = false,
+                .definition_no_trapping_fp_math = false,
+                .definition_no_infs_fp_math = false,
+                .definition_no_nans_fp_math = false,
+                .definition_approx_func_fp_math = false,
+                .definition_unsafe_fp_math = false,
+                .definition_use_soft_float = false,
+                .definition_no_signed_zeroes_fp_math = false,
+                .definition_stack_realignment = false,
+                .definition_backchain = false,
+                .definition_split_stack = false,
+                .definition_speculative_load_hardening = false,
+                .definition_zero_call_used_registers = .all,
+                // TODO: denormal builtins
+                .definition_non_lazy_bind = false,
+                .definition_cmse_nonsecure_entry = false,
+                .definition_unwind_table_kind = .none,
+            },
+            .flags1 = .{
+                .definition_disable_tail_calls = false,
+                .definition_stack_protect_strong = false,
+                .definition_stack_protect = false,
+                .definition_stack_protect_req = false,
+                .definition_aarch64_new_za = false,
+                .definition_aarch64_new_zt0 = false,
+                .definition_optimize_none = false,
+                .definition_naked = !call_site and function_attributes.naked,
+                .definition_inline_hint = !call_site and function_attributes.inline_behavior == .inline_hint,
+            },
+        }, return_attributes, argument_attributes, call_site);
+    }
+
+    pub fn get_va_list_type(module: *Module) *Type {
+        if (module.va_list_type) |va_list_type| {
+            @branchHint(.likely);
+            return va_list_type;
+        } else {
+            @branchHint(.unlikely);
+            const unsigned_int = module.integer_type(32, false);
+            const void_pointer = module.get_pointer_type(.{
+                .type = module.integer_type(8, false),
+            });
+            const llvm_parameter_types = [_]*llvm.Type{
+                unsigned_int.llvm.handle,
+                unsigned_int.llvm.handle,
+                void_pointer.llvm.handle,
+                void_pointer.llvm.handle,
+            };
+            const line = 1;
+            const bit_alignment = 0; // TODO
+            const flags = llvm.DI.Flags{};
+            const llvm_member_types = [_]*llvm.DI.Type.Derived{
+                if (module.llvm.di_builder) |di_builder| di_builder.create_member_type(module.llvm.global_scope, "gp_offset", module.llvm.file, line, 32, bit_alignment, 0, .{}, unsigned_int.llvm.debug) else undefined,
+                if (module.llvm.di_builder) |di_builder| di_builder.create_member_type(module.llvm.global_scope, "fp_offset", module.llvm.file, line, 32, bit_alignment, 32, .{}, unsigned_int.llvm.debug) else undefined,
+                if (module.llvm.di_builder) |di_builder| di_builder.create_member_type(module.llvm.global_scope, "overflow_arg_area", module.llvm.file, line, 64, bit_alignment, 64, .{}, void_pointer.llvm.debug) else undefined,
+                if (module.llvm.di_builder) |di_builder| di_builder.create_member_type(module.llvm.global_scope, "reg_save_area", module.llvm.file, line, 64, bit_alignment, 128, .{}, void_pointer.llvm.debug) else undefined,
+            };
+            const llvm_handle = module.llvm.context.get_struct_type(&llvm_parameter_types);
+            const bit_size = 24 * 8;
+            const va_list_name = "va_list";
+            const llvm_debug = if (module.llvm.di_builder) |di_builder| di_builder.create_struct_type(module.llvm.global_scope, va_list_name, module.llvm.file, line, bit_size, bit_alignment, flags, &llvm_member_types) else undefined;
+
+            const field_buffer = [_]Field{
+                .{ .name = "gp_offset", .type = unsigned_int, .bit_offset = 0, .byte_offset = 0 },
+                .{ .name = "fp_offset", .type = unsigned_int, .bit_offset = 32, .byte_offset = 4 },
+                .{ .name = "overflow_arg_area", .type = void_pointer, .bit_offset = 64, .byte_offset = 8 },
+                .{ .name = "reg_save_area", .type = void_pointer, .bit_offset = 128, .byte_offset = 16 },
+            };
+            const fields = module.arena.allocate(Field, 4);
+            @memcpy(fields, &field_buffer);
+
+            const result = module.types.add(.{
+                .llvm = .{
+                    .handle = llvm_handle.to_type(),
+                    .debug = llvm_debug.to_type(),
+                },
+                .name = va_list_name,
+                .bb = .{
+                    .structure = .{
+                        .bit_alignment = 64,
+                        .byte_alignment = 8,
+                        .byte_size = 24,
+                        .bit_size = 24 * 8,
+                        .fields = fields,
+                    },
+                },
+            });
+            module.va_list_type = result;
+            return result;
+        }
+    }
 
     const AllocaOptions = struct {
         type: *Type,
@@ -116,10 +529,34 @@ const Module = struct {
     };
 
     pub fn create_alloca(module: *Module, options: AllocaOptions) *llvm.Value {
-        const alignment: c_uint = if (options.alignment) |a| a else @intCast(options.type.get_byte_alignment());
-        const v = module.llvm.builder.create_alloca(options.type.llvm.handle, options.name);
+        const abi_type = switch (options.type.is_arbitrary_bit_integer()) {
+            true => module.align_integer_type(options.type),
+            false => options.type,
+        };
+        const alignment: c_uint = if (options.alignment) |a| a else @intCast(abi_type.get_byte_alignment());
+        const v = module.llvm.builder.create_alloca(abi_type.llvm.handle, options.name);
         v.set_alignment(alignment);
         return v;
+    }
+
+    const IntCast = struct {
+        source_type: *Type,
+        destination_type: *Type,
+        value: *llvm.Value,
+    };
+
+    pub fn raw_int_cast(module: *Module, options: IntCast) *llvm.Value {
+        assert(options.source_type != options.destination_type);
+        const source_size = options.source_type.get_bit_size();
+        const destination_size = options.destination_type.get_bit_size();
+        const result = switch (source_size < destination_size) {
+            true => switch (options.source_type.is_signed()) {
+                true => module.llvm.builder.create_sign_extend(options.value, options.destination_type.llvm.handle),
+                false => module.llvm.builder.create_zero_extend(options.value, options.destination_type.llvm.handle),
+            },
+            false => module.llvm.builder.create_truncate(options.value, options.destination_type.llvm.handle),
+        };
+        return result;
     }
 
     const LoadOptions = struct {
@@ -129,27 +566,52 @@ const Module = struct {
     };
 
     pub fn create_load(module: *Module, options: LoadOptions) *llvm.Value {
-        const alignment: c_uint = if (options.alignment) |a| a else @intCast(options.type.get_byte_alignment());
-        const v = module.llvm.builder.create_load(options.type.llvm.handle, options.value);
-        v.set_alignment(alignment);
-        return v;
+        switch (options.type.bb) {
+            .void, .noreturn, .forward_declaration => unreachable,
+            .array => unreachable,
+            .function => unreachable,
+            .vector => @trap(),
+            .bits, .float, .integer, .pointer, .enumerator, .structure => {
+                const storage_type = switch (options.type.is_arbitrary_bit_integer()) {
+                    true => module.align_integer_type(options.type),
+                    false => options.type,
+                };
+                const alignment: c_uint = if (options.alignment) |a| a else @intCast(storage_type.get_byte_alignment());
+                const v = module.llvm.builder.create_load(storage_type.llvm.handle, options.value);
+                v.set_alignment(alignment);
+                return switch (storage_type == options.type) {
+                    true => v,
+                    false => module.raw_int_cast(.{ .source_type = storage_type, .destination_type = options.type, .value = v }),
+                };
+            },
+        }
     }
 
     const StoreOptions = struct {
-        source: *llvm.Value,
-        destination: *llvm.Value,
-        alignment: c_uint,
+        source_value: *llvm.Value,
+        destination_value: *llvm.Value,
+        source_type: *Type,
+        destination_type: *Type,
+        alignment: ?c_uint = null,
     };
 
     pub fn create_store(module: *Module, options: StoreOptions) *llvm.Value {
-        const alignment = options.alignment;
-        const v = module.llvm.builder.create_store(options.source, options.destination);
+        const raw_store_type = switch (options.source_type.is_arbitrary_bit_integer()) {
+            true => module.align_integer_type(options.source_type),
+            false => options.source_type,
+        };
+        const source_value = switch (raw_store_type == options.source_type) {
+            true => options.source_value,
+            false => module.raw_int_cast(.{ .source_type = options.source_type, .destination_type = raw_store_type, .value = options.source_value }),
+        };
+        const alignment = if (options.alignment) |a| a else options.destination_type.get_byte_alignment();
+        const v = module.llvm.builder.create_store(source_value, options.destination_value);
         v.set_alignment(alignment);
         return v;
     }
 
     pub fn current_basic_block(module: *Module) *llvm.BasicBlock {
-        return module.llvm.builder.get_insert_block();
+        return module.llvm.builder.get_insert_block() orelse unreachable;
     }
 
     const LLVM = struct {
@@ -161,40 +623,19 @@ const Module = struct {
         file: *llvm.DI.File,
         pointer_type: *llvm.Type,
         intrinsic_table: IntrinsicTable,
-        attribute_table: AttributeTable,
-        attribute_kind_table: AttributeKindTable,
 
         const IntrinsicTable = struct {
             trap: llvm.Intrinsic.Id,
-        };
-
-        const AttributeTable = struct {
-            frame_pointer_all: *llvm.Attribute,
-            ssp: *llvm.Attribute,
-            @"stack-protector-buffer-size": *llvm.Attribute,
-            @"no-trapping-math": *llvm.Attribute,
-            alwaysinline: *llvm.Attribute,
-            @"noinline": *llvm.Attribute,
-            noreturn: *llvm.Attribute,
-            nounwind: *llvm.Attribute,
-            naked: *llvm.Attribute,
-            signext: *llvm.Attribute,
-            zeroext: *llvm.Attribute,
-            inreg: *llvm.Attribute,
-            @"noalias": *llvm.Attribute,
-        };
-
-        const AttributeKindTable = struct {
-            @"align": llvm.Attribute.Kind,
-            byval: llvm.Attribute.Kind,
-            sret: llvm.Attribute.Kind,
+            va_start: llvm.Intrinsic.Id,
+            va_end: llvm.Intrinsic.Id,
+            va_copy: llvm.Intrinsic.Id,
         };
     };
 
     pub fn get_anonymous_struct_pair(module: *Module, pair: [2]*Type) *Type {
         for (module.anonymous_pair_type_buffer[0..module.anonymous_pair_type_count]) |anonymous_type_index| {
             const anonymous_type = &module.types.get()[anonymous_type_index];
-            const fields = anonymous_type.bb.@"struct".fields;
+            const fields = anonymous_type.bb.structure.fields;
             if (fields.len == 2 and pair[0] == fields[0].type and pair[1] == fields[1].type) {
                 return anonymous_type;
             }
@@ -219,7 +660,7 @@ const Module = struct {
             const pair_type = module.types.add(.{
                 .name = "",
                 .bb = .{
-                    .@"struct" = .{
+                    .structure = .{
                         .bit_alignment = byte_alignment * 8,
                         .byte_alignment = byte_alignment,
                         .byte_size = byte_size,
@@ -265,6 +706,39 @@ const Module = struct {
         }
     }
 
+    pub fn align_integer_type(module: *Module, ty: *Type) *Type {
+        assert(ty.bb == .integer);
+        const bit_count = ty.get_bit_size();
+        const abi_bit_count: u32 = @intCast(@max(8, lib.next_power_of_two(bit_count)));
+        if (bit_count != abi_bit_count) {
+            const is_signed = ty.is_signed();
+            return module.integer_type(abi_bit_count, is_signed);
+        } else {
+            return ty;
+        }
+    }
+
+    pub fn load_arbitrary_integer_type(module: *Module, destination_type: *Type, value: *Value) *Value {
+        _ = module;
+        assert(value.type.bb == .pointer);
+        const appointee_type = value.type.bb.pointer.type;
+        assert(appointee_type != destination_type);
+        assert(destination_type.bb == .integer);
+        assert(appointee_type.bb == .integer);
+        assert(!appointee_type.is_arbitrary_bit_integer());
+        assert(destination_type.is_arbitrary_bit_integer());
+        // const bit_count = appointee_type.get_bit_size();
+        // const abi_bit_count: u32 = @intCast(@max(8, lib.next_power_of_two(bit_count)));
+        // const is_signed = appointee_type.is_signed();
+        _ = integer_type;
+        @trap();
+    }
+
+    pub fn store_arbitrary_integer_type(module: *Module) void {
+        _ = module;
+        @trap();
+    }
+
     pub fn initialize(arena: *Arena, options: ConvertOptions) *Module {
         const arena_restore_position = arena.position;
         const context = llvm.Context.create();
@@ -294,6 +768,7 @@ const Module = struct {
         const default_address_space = 0;
         module.* = .{
             .arena = arena,
+            .target = options.target,
             .llvm = .{
                 .global_scope = global_scope,
                 .file = file,
@@ -304,26 +779,9 @@ const Module = struct {
                 .pointer_type = context.get_pointer_type(default_address_space).to_type(),
                 .intrinsic_table = .{
                     .trap = llvm.lookup_intrinsic_id("llvm.trap"),
-                },
-                .attribute_table = .{
-                    .frame_pointer_all = context.create_string_attribute("frame-pointer", "all"),
-                    .ssp = context.create_enum_attribute(llvm.lookup_attribute_kind("ssp"), 0),
-                    .@"stack-protector-buffer-size" = context.create_string_attribute("stack-protector-buffer-size", "8"),
-                    .@"no-trapping-math" = context.create_string_attribute("no-trapping-math", "true"),
-                    .@"noinline" = context.create_enum_attribute(llvm.lookup_attribute_kind("noinline"), 0),
-                    .alwaysinline = context.create_enum_attribute(llvm.lookup_attribute_kind("alwaysinline"), 0),
-                    .noreturn = context.create_enum_attribute(llvm.lookup_attribute_kind("noreturn"), 0),
-                    .nounwind = context.create_enum_attribute(llvm.lookup_attribute_kind("nounwind"), 0),
-                    .naked = context.create_enum_attribute(llvm.lookup_attribute_kind("naked"), 0),
-                    .signext = context.create_enum_attribute(llvm.lookup_attribute_kind("signext"), 0),
-                    .zeroext = context.create_enum_attribute(llvm.lookup_attribute_kind("zeroext"), 0),
-                    .inreg = context.create_enum_attribute(llvm.lookup_attribute_kind("inreg"), 0),
-                    .@"noalias" = context.create_enum_attribute(llvm.lookup_attribute_kind("noalias"), 0),
-                },
-                .attribute_kind_table = .{
-                    .byval = llvm.lookup_attribute_kind("byval"),
-                    .sret = llvm.lookup_attribute_kind("sret"),
-                    .@"align" = llvm.lookup_attribute_kind("align"),
+                    .va_start = llvm.lookup_intrinsic_id("llvm.va_start"),
+                    .va_end = llvm.lookup_intrinsic_id("llvm.va_end"),
+                    .va_copy = llvm.lookup_intrinsic_id("llvm.va_copy"),
                 },
             },
             .arena_restore_position = arena_restore_position,
@@ -401,11 +859,13 @@ const Module = struct {
             .bb = .noreturn,
         });
 
-        const infer_or_ignore_value = module.values.add();
-        infer_or_ignore_value.* = .{
+        module.void_value = module.values.add();
+        module.void_value.* = .{
             .llvm = undefined,
             .bb = .infer_or_ignore,
-            .type = undefined,
+            .type = module.void_type,
+            .lvalue = false,
+            .dereference_to_assign = false,
         };
 
         return module;
@@ -417,25 +877,39 @@ const Module = struct {
         defer arena.restore(position);
     }
 
-    pub fn get_pointer_type(module: *Module, element_type: *Type) *Type {
+    const Pointer = struct {
+        type: *Type,
+        alignment: ?u32 = null,
+    };
+
+    pub fn get_pointer_type(module: *Module, pointer: Pointer) *Type {
+        const p = PointerType{
+            .type = pointer.type,
+            .alignment = if (pointer.alignment) |a| a else pointer.type.get_byte_alignment(),
+        };
         const all_types = module.types.get();
         const pointer_type = for (module.pointer_type_buffer[0..module.pointer_type_count]) |pointer_type_index| {
-            const pointer_type = &all_types[pointer_type_index];
-            if (pointer_type.bb.pointer == element_type) {
-                break pointer_type;
+            const ty = &all_types[pointer_type_index];
+            const pointer_type = &all_types[pointer_type_index].bb.pointer;
+            if (pointer_type.type == p.type and pointer_type.alignment == p.alignment) {
+                break ty;
             }
         } else blk: {
-            const pointer_name = if (element_type.name) |name| module.arena.join_string(&.{ "&", name }) else "unknownptr";
+            const pointer_name = if (p.type.name) |name| module.arena.join_string(&.{ "&", name }) else "unknownptr";
             const pointer_type = module.types.add(.{
                 .name = pointer_name,
                 .llvm = .{
                     .handle = module.llvm.pointer_type,
-                    .debug = if (module.llvm.di_builder) |di_builder| di_builder.create_pointer_type(element_type.llvm.debug, 64, 64, 0, pointer_name).to_type() else undefined,
+                    .debug = if (module.llvm.di_builder) |di_builder| di_builder.create_pointer_type(p.type.llvm.debug, 64, 64, 0, pointer_name).to_type() else undefined,
                 },
                 .bb = .{
-                    .pointer = element_type,
+                    .pointer = p,
                 },
             });
+
+            const index = pointer_type - module.types.get().ptr;
+            module.pointer_type_buffer[module.pointer_type_count] = @intCast(index);
+            module.pointer_type_count += 1;
             break :blk pointer_type;
         };
 
@@ -475,6 +949,9 @@ fn llvm_add_argument_attribute(value: *llvm.Value, attribute: *llvm.Attribute, i
 }
 
 pub const Function = struct {
+    return_alloca: *llvm.Value,
+    exit_block: ?*llvm.BasicBlock,
+    return_block: *llvm.BasicBlock,
     current_scope: *llvm.DI.Scope,
     return_pointer: *Value,
     attributes: Attributes,
@@ -486,6 +963,7 @@ pub const Function = struct {
             default,
             always_inline,
             no_inline,
+            inline_hint,
         } = .default,
         naked: bool = false,
     };
@@ -503,7 +981,9 @@ pub const Value = struct {
         global,
         argument,
         instruction,
-        struct_initialization,
+        struct_initialization: struct {
+            is_constant: bool,
+        },
         bits_initialization,
         infer_or_ignore,
         constant_integer: ConstantInteger,
@@ -512,6 +992,8 @@ pub const Value = struct {
     },
     type: *Type,
     llvm: *llvm.Value,
+    lvalue: bool,
+    dereference_to_assign: bool,
 
     const Array = struct {
         buffer: [1024]Value = undefined,
@@ -526,7 +1008,8 @@ pub const Value = struct {
 
     pub fn is_constant(value: *Value) bool {
         return switch (value.bb) {
-            .constant_integer => true,
+            .constant_integer, .constant_array => true,
+            .struct_initialization => |si| si.is_constant,
             else => @trap(),
         };
     }
@@ -541,22 +1024,12 @@ const Field = struct {
 
 const FunctionType = struct {
     return_type_abi: Abi.Information,
-    semantic_return_type: *Type,
-    semantic_argument_types: [*]const *Type,
-    argument_type_abis: [*]const Abi.Information,
-    abi_argument_types: [*]const *Type,
+    argument_type_abis: []const Abi.Information,
     abi_return_type: *Type,
-    semantic_argument_count: u32,
-    abi_argument_count: u32,
+    abi_argument_types: []const *Type,
     calling_convention: CallingConvention,
-
-    fn get_semantic_argument_types(function_type: *const FunctionType) []const *Type {
-        return function_type.semantic_argument_types[0..function_type.semantic_argument_count];
-    }
-
-    fn get_argument_type_abis(function_type: *const FunctionType) []const Abi.Information {
-        return function_type.argument_type_abis[0..function_type.semantic_argument_count];
-    }
+    // available_registers: Abi.RegisterCount,
+    is_var_args: bool,
 
     fn get_abi_argument_types(function_type: *const FunctionType) []const *Type {
         return function_type.abi_argument_types[0..function_type.abi_argument_count];
@@ -567,8 +1040,8 @@ const StructType = struct {
     fields: []const Field,
     bit_size: u64,
     byte_size: u64,
-    bit_alignment: u64,
-    byte_alignment: u64,
+    bit_alignment: u32,
+    byte_alignment: u32,
 };
 
 const Bits = struct {
@@ -581,74 +1054,178 @@ pub const ArrayType = struct {
     element_type: *Type,
 };
 
+pub const IntegerType = struct {
+    bit_count: u32,
+    signed: bool,
+};
+
+pub const FloatType = struct {
+    const Kind = enum {
+        half,
+        bfloat,
+        float,
+        double,
+        fp128,
+    };
+    kind: Kind,
+};
+
+pub const Enumerator = struct {};
+
+pub const PointerType = struct {
+    type: *Type,
+    alignment: u32,
+};
+
 pub const Type = struct {
     bb: BB,
     llvm: LLVM,
     name: ?[]const u8,
 
+    pub const EvaluationKind = enum {
+        scalar,
+        complex,
+        aggregate,
+    };
+
     pub const BB = union(enum) {
         void,
         noreturn,
         forward_declaration,
-        integer: struct {
-            bit_count: u32,
-            signed: bool,
-        },
-        @"struct": StructType,
+        integer: IntegerType,
+        float: FloatType,
+        structure: StructType,
         bits: Bits,
         function: FunctionType,
         array: ArrayType,
-        pointer: *Type,
+        pointer: PointerType,
+        enumerator: Enumerator,
+        vector,
     };
 
-    pub fn is_aggregate(ty: *const Type) bool {
+    pub fn is_aggregate_type_for_abi(ty: *Type) bool {
+        const ev_kind = ty.get_evaluation_kind();
+        const is_member_function_pointer_type = false; // TODO
+        return ev_kind != .scalar or is_member_function_pointer_type;
+    }
+
+    pub fn is_integer_backing(ty: *Type) bool {
         return switch (ty.bb) {
-            .@"struct" => true,
+            .enumerator, .integer, .bits, .pointer => true,
             else => false,
         };
+    }
+
+    pub fn is_abi_equal(ty: *const Type, other: *const Type) bool {
+        return ty == other or ty.llvm.handle == other.llvm.handle;
+    }
+
+    pub fn is_signed(ty: *const Type) bool {
+        return switch (ty.bb) {
+            .integer => |integer| integer.signed,
+            .bits => |bits| bits.backing_type.is_signed(),
+            else => @trap(),
+        };
+    }
+
+    pub fn is_integral_or_enumeration_type(ty: *Type) bool {
+        return switch (ty.bb) {
+            .integer => true,
+            .bits => true,
+            .structure => false,
+            // .integer => |integer| switch (integer.bit_count) {
+            //     1, 8, 16, 32, 64, 128 => true,
+            //     else => false,
+            // },
+            else => @trap(),
+        };
+    }
+
+    pub fn is_arbitrary_bit_integer(ty: *Type) bool {
+        return switch (ty.bb) {
+            .integer => |integer| switch (integer.bit_count) {
+                8, 16, 32, 64, 128 => false,
+                else => true,
+            },
+            .bits => |bits| bits.backing_type.is_arbitrary_bit_integer(),
+            else => false,
+        };
+    }
+
+    pub fn is_promotable_integer_type_for_abi(ty: *Type) bool {
+        return switch (ty.bb) {
+            .integer => |integer| integer.bit_count < 32,
+            .bits => |bits| bits.backing_type.is_promotable_integer_type_for_abi(),
+            else => @trap(),
+        };
+    }
+
+    pub fn get_evaluation_kind(ty: *const Type) EvaluationKind {
+        return switch (ty.bb) {
+            .structure, .array => .aggregate,
+            .integer, .bits, .pointer => .scalar,
+            else => @trap(),
+        };
+    }
+
+    pub fn get_byte_allocation_size(ty: *const Type) u64 {
+        return lib.align_forward_u64(ty.get_byte_size(), ty.get_byte_alignment());
     }
 
     pub fn get_bit_size(ty: *const Type) u64 {
         return switch (ty.bb) {
             .integer => |integer| integer.bit_count,
-            .@"struct" => |struct_type| struct_type.bit_size,
+            .structure => |struct_type| struct_type.bit_size,
             .bits => |bits| bits.backing_type.get_bit_size(),
             .void, .forward_declaration, .function, .noreturn => unreachable,
             .array => |*array| array.element_type.get_bit_size() * array.element_count.?,
             .pointer => 64,
+            .enumerator => @trap(),
+            .float => @trap(),
+            .vector => @trap(),
         };
     }
 
     pub fn get_byte_size(ty: *const Type) u64 {
         return switch (ty.bb) {
             .integer => |integer| @divExact(@max(8, lib.next_power_of_two(integer.bit_count)), 8),
-            .@"struct" => |struct_type| struct_type.byte_size,
+            .structure => |struct_type| struct_type.byte_size,
             .bits => |bits| bits.backing_type.get_byte_size(),
             .void, .forward_declaration, .function, .noreturn => unreachable,
             .array => |*array| array.element_type.get_byte_size() * array.element_count.?,
             .pointer => 8,
+            .enumerator => @trap(),
+            .float => @trap(),
+            .vector => @trap(),
         };
     }
 
-    pub fn get_bit_alignment(ty: *const Type) u64 {
+    pub fn get_bit_alignment(ty: *const Type) u32 {
         return switch (ty.bb) {
             .integer => |integer| integer.bit_count,
-            .@"struct" => |struct_type| struct_type.bit_alignment,
+            .structure => |struct_type| struct_type.bit_alignment,
             .bits => |bits| bits.backing_type.get_bit_alignment(),
             .void, .forward_declaration, .function, .noreturn => unreachable,
             .array => |*array| array.element_type.get_bit_alignment(),
             .pointer => 64,
+            .enumerator => @trap(),
+            .float => @trap(),
+            .vector => @trap(),
         };
     }
 
-    pub fn get_byte_alignment(ty: *const Type) u64 {
+    pub fn get_byte_alignment(ty: *const Type) u32 {
         return switch (ty.bb) {
-            .integer => |integer| @divExact(@max(8, lib.next_power_of_two(integer.bit_count)), 8),
-            .@"struct" => |struct_type| struct_type.byte_alignment,
+            .integer => |integer| @as(u32, @intCast(@divExact(@max(8, lib.next_power_of_two(integer.bit_count)), 8))),
+            .structure => |struct_type| struct_type.byte_alignment,
             .bits => |bits| bits.backing_type.get_byte_alignment(),
-            .void, .forward_declaration, .function, .noreturn => unreachable,
+            .function => 1,
+            .void, .forward_declaration, .noreturn => unreachable,
             .array => |*array| array.element_type.get_byte_alignment(),
             .pointer => 8,
+            .enumerator => @trap(),
+            .float => @trap(),
+            .vector => @trap(),
         };
     }
 
@@ -848,7 +1425,9 @@ const Converter = struct {
 
                 const element_type = converter.parse_type(module);
 
-                return module.get_pointer_type(element_type);
+                return module.get_pointer_type(.{
+                    .type = element_type,
+                });
             },
             else => @trap(),
         }
@@ -985,6 +1564,8 @@ const Converter = struct {
                     .signed = sign,
                 },
             },
+            .lvalue = false,
+            .dereference_to_assign = false,
         };
         return integer_value;
     }
@@ -995,83 +1576,51 @@ const Converter = struct {
         }
     }
 
-    fn emit_direct_coerce(module: *Module, ty: *Type, original_value: *Value) *llvm.Value {
-        const source_type = original_value.type;
-        const alloca = module.create_alloca(.{ .type = source_type });
-        _ = module.create_store(.{ .source = original_value.llvm, .destination = alloca, .alignment = @intCast(source_type.get_byte_alignment()) });
-
-        const target_type = ty;
-        const target_size = ty.get_byte_size();
-        const target_alignment = ty.get_byte_alignment();
-        const source_size = source_type.get_byte_size();
-        const source_alignment = source_type.get_byte_alignment();
-        const target_is_scalable_vector_type = false;
-        const source_is_scalable_vector_type = false;
-        if (source_size >= target_size and !source_is_scalable_vector_type and !target_is_scalable_vector_type) {
-            _ = source_alignment;
-            _ = target_alignment;
-            return module.create_load(.{ .type = target_type, .value = alloca });
-        } else {
-            @trap();
-            // const alignment = @max(target_alignment, source_alignment);
-            // const temporal = emit_local_symbol(analyzer, thread, .{
-            //     .name = 0,
-            //     .initial_value = null,
-            //     .type = args.coerced_type,
-            //     .line = 0,
-            //     .column = 0,
-            // });
-            // emit_memcpy(analyzer, thread, .{
-            //     .destination = &temporal.instruction.value,
-            //     .source = &local.instruction.value,
-            //     .destination_alignment = .{
-            //         .alignment = alignment,
-            //     },
-            //     .source_alignment = .{
-            //         .alignment = source_alignment,
-            //     },
-            //     .size = source_size,
-            //     .line = 0,
-            //     .column = 0,
-            //     .scope = analyzer.current_scope,
-            // });
-            //
-            // const load = emit_load(analyzer, thread, .{
-            //     .value = &temporal.instruction.value,
-            //     .type = args.coerced_type,
-            //     .line = 0,
-            //     .column = 0,
-            //     .scope = analyzer.current_scope,
-            // });
-            // return &load.instruction.value;
-        }
-    }
-
     fn parse_call(noalias converter: *Converter, noalias module: *Module, may_be_callable: *Value) *Value {
-        const llvm_callable = switch (may_be_callable.type.bb) {
-            .function => may_be_callable.llvm,
-            .pointer => module.create_load(.{ .type = may_be_callable.type, .value = may_be_callable.llvm }),
+        const child_type = may_be_callable.type.bb.pointer.type;
+        const pointer_type = switch (child_type.bb) {
+            .function => may_be_callable.type,
+            .pointer => |p| switch (p.type.bb) {
+                .function => child_type,
+                else => @trap(),
+            },
             else => @trap(),
+        };
+        const raw_function_type = pointer_type.bb.pointer.type;
+        const llvm_callable = switch (child_type == raw_function_type) {
+            true => may_be_callable.llvm,
+            else => module.create_load(.{ .type = pointer_type, .value = may_be_callable.llvm }),
         };
 
-        const raw_function_type = switch (may_be_callable.type.bb) {
-            .function => may_be_callable.type,
-            .pointer => may_be_callable.type.bb.pointer,
-            else => @trap(),
-        };
         const function_type = &raw_function_type.bb.function;
         const calling_convention = function_type.calling_convention;
         const llvm_calling_convention = calling_convention.to_llvm();
-        var llvm_abi_argument_value_buffer: [64]*llvm.Value = undefined;
-        var abi_argument_count: usize = 0;
+        var llvm_abi_argument_value_buffer: [max_argument_count]*llvm.Value = undefined;
+        var abi_argument_count: u32 = 0;
+        _ = &abi_argument_count;
+        var semantic_argument_count: u32 = 0;
+        const function_semantic_argument_count = function_type.argument_type_abis.len;
 
-        const llvm_indirect_return_value: *llvm.Value = switch (function_type.return_type_abi.kind) {
-            .indirect => |indirect| blk: {
-                if (indirect.alignment <= indirect.type.get_byte_alignment()) {
-                    const alloca = module.create_alloca(.{ .type = indirect.type });
-                    llvm_abi_argument_value_buffer[abi_argument_count] = alloca;
+        // TODO
+        const uses_in_alloca = false;
+        if (uses_in_alloca) {
+            @trap();
+        }
+
+        const llvm_indirect_return_value: *llvm.Value = switch (function_type.return_type_abi.flags.kind) {
+            .indirect, .in_alloca, .coerce_and_expand => blk: {
+                // TODO: handle edge cases:
+                // - virtual function pointer thunk
+                // - return alloca already exists
+
+                const temporal_alloca = module.create_alloca(.{ .type = function_type.return_type_abi.semantic_type, .name = "tmp" });
+                const has_sret = function_type.return_type_abi.flags.kind == .indirect;
+                if (has_sret) {
+                    llvm_abi_argument_value_buffer[abi_argument_count] = temporal_alloca;
                     abi_argument_count += 1;
-                    break :blk alloca;
+                    break :blk temporal_alloca;
+                } else if (function_type.return_type_abi.flags.kind == .in_alloca) {
+                    @trap();
                 } else {
                     @trap();
                 }
@@ -1079,8 +1628,8 @@ const Converter = struct {
             else => undefined,
         };
 
-        var semantic_argument_count: usize = 0;
-        const function_semantic_argument_count = function_type.semantic_argument_count;
+        // var available_registers = function_type.available_registers;
+        // _ = &available_registers;
 
         while (true) : (semantic_argument_count += 1) {
             converter.skip_space();
@@ -1090,125 +1639,271 @@ const Converter = struct {
             }
 
             const semantic_argument_index = semantic_argument_count;
-            if (semantic_argument_index >= function_semantic_argument_count) {
-                converter.report_error();
-            }
 
-            const semantic_argument_value = converter.parse_value(module, function_type.semantic_argument_types[semantic_argument_index], .value);
+            if (semantic_argument_index < function_semantic_argument_count or function_type.is_var_args) {
+                const expected_semantic_argument_type: ?*Type = if (semantic_argument_index < function_semantic_argument_count) function_type.argument_type_abis[semantic_argument_index].semantic_type else null;
+                const semantic_argument_value = converter.parse_value(module, expected_semantic_argument_type, .value);
 
-            _ = converter.consume_character_if_match(',');
+                _ = converter.consume_character_if_match(',');
 
-            const argument_abi = function_type.argument_type_abis[semantic_argument_index];
-            const semantic_argument_type = function_type.semantic_argument_types[semantic_argument_index];
+                const semantic_argument_type = if (semantic_argument_index < function_semantic_argument_count) function_type.argument_type_abis[semantic_argument_index].semantic_type else semantic_argument_value.type;
+                const argument_abi = if (semantic_argument_index < function_semantic_argument_count) function_type.argument_type_abis[semantic_argument_index] else @trap(); // Abi.SystemV.abi_from_semantic_type(module, &available_registers, semantic_argument_type);
 
-            switch (argument_abi.kind) {
-                .direct => {
-                    llvm_abi_argument_value_buffer[abi_argument_count] = semantic_argument_value.llvm;
-                    abi_argument_count += 1;
-                },
-                .ignore => unreachable,
-                .direct_pair => |pair| {
-                    const pair_struct_type = module.get_anonymous_struct_pair(pair);
+                if (argument_abi.padding.type) |padding_type| {
+                    _ = padding_type;
+                    @trap();
+                }
 
-                    if (pair_struct_type == semantic_argument_type) {
-                        @trap();
-                    } else {
-                        const alloca_type = if (semantic_argument_type.get_byte_alignment() < pair_struct_type.get_byte_alignment()) pair_struct_type else semantic_argument_type;
-                        const alloca = module.create_alloca(.{ .type = alloca_type });
-                        _ = module.create_store(.{ .source = semantic_argument_value.llvm, .destination = alloca, .alignment = @intCast(alloca_type.get_byte_alignment()) });
-                        for (0..2) |i| {
-                            const gep = module.llvm.builder.create_struct_gep(pair_struct_type.llvm.handle.to_struct(), alloca, @intCast(i));
-                            const load = module.create_load(.{ .type = pair[i], .value = gep });
-                            llvm_abi_argument_value_buffer[abi_argument_count] = load;
+                const argument_abi_start = argument_abi.abi_start;
+                const argument_abi_count = argument_abi.abi_count;
+                _ = argument_abi_start;
+                _ = argument_abi_count;
+
+                const argument_abi_kind = argument_abi.flags.kind;
+                switch (argument_abi_kind) {
+                    .direct, .extend => {
+                        const coerce_to_type = argument_abi.get_coerce_to_type();
+                        if (coerce_to_type.bb != .structure and semantic_argument_type.is_abi_equal(coerce_to_type) and argument_abi.attributes.direct.offset == 0) {
+                            var v = switch (argument_abi.semantic_type.get_evaluation_kind()) {
+                                .aggregate => @trap(),
+                                else => semantic_argument_value,
+                            };
+                            _ = &v;
+
+                            if (coerce_to_type != v.type) {
+                                switch (v.type) {
+                                    else => @trap(),
+                                }
+                            }
+
+                            // TODO: bitcast
+                            // if (argument_abi.abi_start < function_type.argument_type_abis.len and v.type.llvm.handle != abi_arguments
+                            llvm_abi_argument_value_buffer[abi_argument_count] = v.llvm;
                             abi_argument_count += 1;
-                        }
-                    }
-                },
-                .direct_coerce => |coerced_type| {
-                    const v = emit_direct_coerce(module, coerced_type, semantic_argument_value);
-                    llvm_abi_argument_value_buffer[abi_argument_count] = v;
-                    abi_argument_count += 1;
-                },
-                .direct_coerce_int => unreachable,
-                .expand_coerce => unreachable,
-                .direct_split_struct_i32 => unreachable,
-                .indirect => |indirect| {
-                    assert(semantic_argument_type == indirect.type);
-                    const direct = false; // TODO: compute properly
+                        } else {
+                            if (coerce_to_type.bb == .structure and argument_abi.flags.kind == .direct and !argument_abi.flags.can_be_flattened) {
+                                @trap();
+                            }
 
-                    if (direct) {
+                            const evaluation_kind = semantic_argument_type.get_evaluation_kind();
+                            var src = switch (evaluation_kind) {
+                                .aggregate => semantic_argument_value,
+                                .scalar => {
+                                    @trap();
+                                },
+                                .complex => @trap(),
+                            };
+
+                            src = switch (argument_abi.attributes.direct.offset > 0) {
+                                true => @trap(),
+                                false => src,
+                            };
+
+                            if (coerce_to_type.bb == .structure and argument_abi.flags.kind == .direct and argument_abi.flags.can_be_flattened) {
+                                const source_type_size_is_scalable = false; // TODO
+                                if (source_type_size_is_scalable) {
+                                    @trap();
+                                } else {
+                                    const destination_size = coerce_to_type.get_byte_size();
+                                    const source_size = argument_abi.semantic_type.get_byte_size();
+
+                                    const alignment = argument_abi.semantic_type.get_byte_alignment();
+                                    const source = switch (source_size < destination_size) {
+                                        true => blk: {
+                                            const temporal_alloca = module.create_alloca(.{ .type = coerce_to_type, .name = "coerce", .alignment = alignment });
+                                            const destination = temporal_alloca;
+                                            const source = semantic_argument_value.llvm;
+                                            _ = module.llvm.builder.create_memcpy(destination, alignment, source, alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(semantic_argument_type.get_byte_size(), @intFromBool(false)).to_value());
+                                            break :blk temporal_alloca;
+                                        },
+                                        false => src.llvm,
+                                    };
+
+                                    // TODO:
+                                    assert(argument_abi.attributes.direct.offset == 0);
+
+                                    for (coerce_to_type.bb.structure.fields, 0..) |field, field_index| {
+                                        const gep = module.llvm.builder.create_struct_gep(coerce_to_type.llvm.handle.to_struct(), source, @intCast(field_index));
+                                        const maybe_undef = false;
+                                        if (maybe_undef) {
+                                            @trap();
+                                        }
+                                        const load = module.create_load(.{ .value = gep, .type = field.type, .alignment = alignment });
+
+                                        llvm_abi_argument_value_buffer[abi_argument_count] = load;
+                                        abi_argument_count += 1;
+                                    }
+                                }
+                            } else {
+                                assert(argument_abi.abi_count == 1);
+                                assert(src.type.bb == .pointer);
+                                const source_type = src.type.bb.pointer.type;
+                                assert(source_type == argument_abi.semantic_type);
+                                const destination_type = argument_abi.get_coerce_to_type();
+                                const load = module.create_coerced_load(src.llvm, source_type, destination_type);
+
+                                const is_cmse_ns_call = false;
+                                if (is_cmse_ns_call) {
+                                    @trap();
+                                }
+                                const maybe_undef = false;
+                                if (maybe_undef) {
+                                    @trap();
+                                }
+
+                                llvm_abi_argument_value_buffer[abi_argument_count] = load;
+                                abi_argument_count += 1;
+                            }
+                        }
+                    },
+                    .indirect, .indirect_aliased => indirect: {
+                        if (semantic_argument_type.get_evaluation_kind() == .aggregate) {
+                            const same_address_space = true;
+                            assert(argument_abi.abi_start >= function_type.abi_argument_types.len or same_address_space);
+                            const indirect_alignment = argument_abi.attributes.indirect.alignment;
+                            const address_alignment = semantic_argument_type.get_byte_alignment();
+                            const get_or_enforce_known_alignment = indirect_alignment;
+                            // llvm::getOrEnforceKnownAlignment(Addr.emitRawPointer(*this),
+                            //      Align.getAsAlign(),
+                            //      *TD) < Align.getAsAlign()) {
+                            // TODO
+                            const need_copy = switch (address_alignment < indirect_alignment and get_or_enforce_known_alignment < indirect_alignment) {
+                                true => @trap(),
+                                false => b: {
+                                    const is_lvalue = !(semantic_argument_value.type.bb == .pointer and semantic_argument_type == semantic_argument_value.type.bb.pointer.type);
+                                    if (is_lvalue) {
+                                        var need_copy = false;
+                                        const is_by_val_or_by_ref = argument_abi.flags.kind == .indirect_aliased or argument_abi.flags.indirect_by_value;
+
+                                        const lv_alignment = semantic_argument_value.type.get_byte_alignment();
+                                        const arg_type_alignment = argument_abi.semantic_type.get_byte_alignment();
+                                        if (!is_by_val_or_by_ref or lv_alignment < arg_type_alignment) {
+                                            need_copy = true;
+                                        }
+
+                                        break :b need_copy;
+                                    } else {
+                                        break :b false;
+                                    }
+                                },
+                            };
+                            if (!need_copy) {
+                                llvm_abi_argument_value_buffer[abi_argument_count] = semantic_argument_value.llvm;
+                                abi_argument_count += 1;
+                                break :indirect;
+                            }
+                        }
+
                         @trap();
-                    } else {
-                        const alloca = module.create_alloca(.{ .type = semantic_argument_type });
-                        _ = module.create_store(.{ .source = semantic_argument_value.llvm, .destination = alloca, .alignment = @intCast(semantic_argument_type.get_byte_alignment()) });
-                        llvm_abi_argument_value_buffer[abi_argument_count] = alloca;
-                        abi_argument_count += 1;
-                    }
-                },
-                .expand => unreachable,
+                    },
+                    .ignore => unreachable,
+                    else => @trap(),
+                }
+            } else {
+                converter.report_error();
             }
         }
 
-        assert(abi_argument_count == function_type.abi_argument_count);
+        if (function_type.is_var_args) {
+            assert(abi_argument_count >= function_type.abi_argument_types.len);
+        } else {
+            // TODO
+            assert(abi_argument_count == function_type.abi_argument_types.len);
+        }
 
         const llvm_abi_argument_values = llvm_abi_argument_value_buffer[0..abi_argument_count];
         const llvm_call = module.llvm.builder.create_call(raw_function_type.llvm.handle.to_function(), llvm_callable, llvm_abi_argument_values);
 
-        llvm_call.to_instruction().to_call().set_calling_convention(llvm_calling_convention);
+        const attribute_list = module.build_attribute_list(function_type, .{}, false);
 
-        llvm_emit_function_attributes(module, llvm_call, function_type, Function.Attributes{}, .call);
+        const call_base = llvm_call.to_instruction().to_call_base();
+        call_base.set_calling_convention(llvm_calling_convention);
+        call_base.set_attributes(attribute_list);
 
-        for (function_type.get_argument_type_abis()) |argument_type_abi| {
-            if (argument_type_abi.attributes.zero_extend) {
-                llvm_add_argument_attribute(llvm_call, module.llvm.attribute_table.zeroext, argument_type_abi.indices[0] + 1, .call);
-            }
+        const return_type_abi = &function_type.return_type_abi;
+        const return_abi_kind = return_type_abi.flags.kind;
 
-            if (argument_type_abi.attributes.sign_extend) {
-                llvm_add_argument_attribute(llvm_call, module.llvm.attribute_table.signext, argument_type_abi.indices[0] + 1, .call);
-            }
+        switch (return_abi_kind) {
+            .ignore => {
+                assert(return_type_abi.semantic_type == module.noreturn_type or return_type_abi.semantic_type == module.void_type);
+                return module.void_value;
+            },
+            .direct, .extend => {
+                const coerce_to_type = return_type_abi.get_coerce_to_type();
 
-            switch (argument_type_abi.kind) {
-                .indirect => |indirect| {
-                    if (argument_type_abi.attributes.by_value) {
-                        const by_value_attribute = module.llvm.context.create_type_attribute(module.llvm.attribute_kind_table.byval, indirect.type.llvm.handle);
-                        llvm_add_argument_attribute(llvm_call, by_value_attribute, argument_type_abi.indices[0] + 1, .call);
+                if (return_type_abi.semantic_type.is_abi_equal(coerce_to_type) and return_type_abi.attributes.direct.offset == 0) {
+                    const coerce_to_type_kind = coerce_to_type.get_evaluation_kind();
+                    switch (coerce_to_type_kind) {
+                        .aggregate => {},
+                        .complex => @trap(),
+                        .scalar => {
+                            const value = module.values.add();
+                            value.* = .{
+                                .llvm = llvm_call,
+                                .bb = .instruction,
+                                .type = return_type_abi.semantic_type,
+                                .lvalue = false,
+                                .dereference_to_assign = false,
+                            };
+                            return value;
+                        },
                     }
+                }
 
-                    const align_attribute = module.llvm.context.create_enum_attribute(module.llvm.attribute_kind_table.@"align", indirect.alignment);
-                    llvm_add_argument_attribute(llvm_call, align_attribute, argument_type_abi.indices[0] + 1, .call);
-                    // TODO: alignment
-                },
-                else => {},
-            }
-        }
+                // TODO: if
+                const fixed_vector_type = false;
+                if (fixed_vector_type) {
+                    @trap();
+                }
 
-        const llvm_value = llvm_call;
-
-        switch (function_type.return_type_abi.kind) {
-            .indirect => |indirect| {
-                const sret_attribute = module.llvm.context.create_type_attribute(module.llvm.attribute_kind_table.sret, indirect.type.llvm.handle);
-                llvm_add_argument_attribute(llvm_call, sret_attribute, 1, .call);
-
-                const align_attribute = module.llvm.context.create_enum_attribute(module.llvm.attribute_kind_table.@"align", indirect.alignment);
-                llvm_add_argument_attribute(llvm_call, align_attribute, 1, .call);
-
-                const result = module.values.add();
-                result.* = .{
-                    .llvm = module.create_load(.{ .type = function_type.semantic_return_type, .value = llvm_indirect_return_value }),
-                    .type = function_type.semantic_return_type,
-                    .bb = .instruction,
+                const coerce_alloca = module.create_alloca(.{ .type = return_type_abi.semantic_type, .name = "coerce" });
+                var destination_pointer = switch (return_type_abi.attributes.direct.offset == 0) {
+                    true => coerce_alloca,
+                    false => @trap(),
                 };
-                return result;
-            },
-            else => {
-                const result = module.values.add();
-                result.* = .{
-                    .llvm = llvm_value,
-                    .type = function_type.semantic_return_type,
+                _ = &destination_pointer;
+
+                if (return_type_abi.semantic_type.bb.structure.fields.len > 0) {
+                    // CreateCoercedStore(
+                    // CI, StorePtr,
+                    // llvm::TypeSize::getFixed(DestSize - RetAI.getDirectOffset()),
+                    // DestIsVolatile);
+                    const source_value = llvm_call;
+                    const source_type = function_type.abi_return_type;
+                    // const source_size = source_type.get_byte_size();
+                    var destination_type = return_type_abi.semantic_type;
+                    const destination_size = destination_type.get_byte_size();
+                    // const destination_alignment = destination_type.get_byte_alignment();
+                    const left_destination_size = destination_size - return_type_abi.attributes.direct.offset;
+
+                    const is_destination_volatile = false; // TODO
+                    module.create_coerced_store(source_value, source_type, destination_pointer, destination_type, left_destination_size, is_destination_volatile);
+                } else {
+                    @trap();
+                }
+
+                const value = module.values.add();
+                value.* = .{
+                    .llvm = destination_pointer,
                     .bb = .instruction,
+                    .type = module.get_pointer_type(.{ .type = return_type_abi.semantic_type }),
+                    .lvalue = true,
+                    .dereference_to_assign = true,
                 };
-                return result;
+                return value;
             },
+            .indirect => {
+                const value = module.values.add();
+                value.* = .{
+                    .llvm = llvm_indirect_return_value,
+                    .bb = .instruction,
+                    .type = module.get_pointer_type(.{ .type = return_type_abi.semantic_type }),
+                    .lvalue = true,
+                    .dereference_to_assign = true,
+                };
+                return value;
+            },
+            else => @trap(),
         }
     }
 
@@ -1217,7 +1912,7 @@ const Converter = struct {
 
         const current_function_global = module.current_function orelse unreachable;
         const current_function = &current_function_global.value.bb.function;
-        const current_function_type = &current_function_global.value.type.bb.function;
+        const current_function_type = &current_function_global.value.type.bb.pointer.type.bb.function;
         const block_line = converter.get_line();
         const block_column = converter.get_column();
 
@@ -1271,7 +1966,7 @@ const Converter = struct {
 
                 converter.skip_space();
 
-                const local_type_inference: ?*Type = switch (has_type) {
+                const local_type_stated: ?*Type = switch (has_type) {
                     true => converter.parse_type(module),
                     false => null,
                 };
@@ -1280,14 +1975,54 @@ const Converter = struct {
 
                 converter.expect_character('=');
 
-                const value = converter.parse_value(module, local_type_inference, .value);
-                const local_type = local_type_inference orelse value.type;
+                const value = converter.parse_value(module, local_type_stated, .value);
                 const local_storage = module.values.add();
-                local_storage.* = .{
-                    .llvm = module.create_alloca(.{ .type = local_type, .name = local_name }),
-                    .type = local_type,
-                    .bb = .local,
+                const is_inferred = local_type_stated == null;
+                const is_inferred_pointer = is_inferred and value.dereference_to_assign;
+                const local_type = switch (is_inferred_pointer) {
+                    true => value.type.bb.pointer.type,
+                    false => if (local_type_stated) |t| t else value.type,
                 };
+                const local_pointer_type = switch (value.dereference_to_assign) {
+                    true => b: {
+                        assert(value.type != local_type);
+                        assert(value.type.bb == .pointer);
+                        break :b value.type;
+                    },
+                    false => b: {
+                        assert(value.type == local_type);
+                        const pointer_type = module.get_pointer_type(.{
+                            .type = local_type,
+                        });
+                        break :b pointer_type;
+                    },
+                };
+                const local_alignment = local_pointer_type.bb.pointer.alignment;
+                const llvm_alloca = module.create_alloca(.{ .type = local_type, .name = local_name, .alignment = local_alignment });
+                local_storage.* = .{
+                    .llvm = llvm_alloca,
+                    .type = local_pointer_type,
+                    .bb = .local,
+                    .lvalue = true,
+                    .dereference_to_assign = false,
+                };
+
+                // local_storage.* = switch (is_inferred) {
+                //     true => .{
+                //         .llvm = module.create_alloca(.{ .type = resolved_type.bb.pointer.type, .name = local_name }),
+                //         .type = resolved_type,
+                //         .bb = .local,
+                //         .lvalue = true,
+                //         .dereference_to_assign = false,
+                //     },
+                //     false => .{
+                //         .llvm = module.create_alloca(.{ .type = resolved_type, .name = local_name }),
+                //         .type = module.get_pointer_type(.{ .type = resolved_type }),
+                //         .bb = .local,
+                //         .lvalue = true,
+                //         .dereference_to_assign = false,
+                //     },
+                // };
 
                 if (module.llvm.di_builder) |di_builder| {
                     module.llvm.builder.set_current_debug_location(statement_debug_location);
@@ -1302,7 +2037,18 @@ const Converter = struct {
                     _ = di_builder.insert_declare_record_at_end(local_storage.llvm, local_variable, di_builder.null_expression(), debug_location, module.current_basic_block());
                     module.llvm.builder.set_current_debug_location(statement_debug_location);
                 }
-                _ = module.create_store(.{ .source = value.llvm, .destination = local_storage.llvm, .alignment = @intCast(local_type.get_byte_alignment()) });
+
+                const alignment: u32 = @intCast(local_type.get_byte_alignment());
+                const destination = local_storage.llvm;
+                const source = value.llvm;
+                switch (local_type.get_evaluation_kind()) {
+                    .aggregate => {
+                        _ = module.llvm.builder.create_memcpy(destination, alignment, source, alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(local_type.get_byte_size(), @intFromBool(false)).to_value());
+                    },
+                    else => {
+                        _ = module.create_store(.{ .source_value = source, .destination_value = destination, .source_type = local_type, .destination_type = local_type });
+                    },
+                }
 
                 const local = current_function.locals.add();
                 local.* = .{
@@ -1322,57 +2068,85 @@ const Converter = struct {
                     switch (statement_start_keyword) {
                         .@"return" => {
                             converter.skip_space();
-                            if (converter.consume_character_if_match(';')) {
+
+                            const abi_return_type = current_function_type.abi_return_type;
+                            _ = abi_return_type;
+                            const return_type_abi = &current_function_type.return_type_abi;
+                            const returns_nothing = converter.consume_character_if_match(';');
+                            if (returns_nothing) {
                                 @trap();
                             } else {
                                 // TODO: take ABI into account
-                                const return_value = converter.parse_value(module, current_function_global.value.type.bb.function.semantic_return_type, .value);
+                                const return_value = converter.parse_value(module, return_type_abi.semantic_type, .value);
 
                                 if (module.llvm.di_builder) |_| {
                                     module.llvm.builder.set_current_debug_location(statement_debug_location);
                                 }
 
-                                switch (current_function_type.return_type_abi.kind) {
-                                    .direct => {
-                                        module.llvm.builder.create_ret(return_value.llvm);
-                                    },
-                                    .indirect => |indirect| {
-                                        _ = module.create_store(.{ .source = return_value.llvm, .destination = current_function.return_pointer.llvm, .alignment = indirect.alignment });
-                                        _ = module.llvm.builder.create_ret_void();
-                                    },
-                                    .direct_coerce => |coerced_type| {
-                                        //assert(return_value.type != coerced_type);
-                                        const abi_return_value = emit_direct_coerce(module, coerced_type, return_value);
-                                        module.llvm.builder.create_ret(abi_return_value);
-                                    },
-                                    .direct_pair => |pair| {
-                                        const anon_pair_type = module.get_anonymous_struct_pair(pair);
-                                        assert(return_value.type != anon_pair_type);
-
-                                        const alloca = module.create_alloca(.{ .type = return_value.type });
-                                        _ = module.create_store(.{ .source = return_value.llvm, .destination = alloca, .alignment = @intCast(return_value.type.get_byte_alignment()) });
-
-                                        const source_is_scalable_vector_type = false;
-                                        const target_is_scalable_vector_type = false;
-                                        if (return_value.type.get_byte_size() >= anon_pair_type.get_byte_size() and !source_is_scalable_vector_type and !target_is_scalable_vector_type) {
-                                            const load = module.create_load(.{ .type = anon_pair_type, .value = alloca });
-                                            module.llvm.builder.create_ret(load);
-                                        } else {
-                                            const alignment = @max(return_value.type.get_byte_alignment(), anon_pair_type.get_byte_alignment());
-                                            const temporal = module.create_alloca(.{ .type = anon_pair_type });
-                                            const size = module.integer_type(64, false).llvm.handle.to_integer().get_constant(return_value.type.get_byte_size(), @intFromBool(false));
-                                            _ = module.llvm.builder.create_memcpy(temporal, @intCast(alignment), alloca, @intCast(anon_pair_type.get_byte_alignment()), size.to_value());
-                                            const load = module.create_load(.{ .type = anon_pair_type, .value = temporal });
-                                            module.llvm.builder.create_ret(load);
+                                // Clang equivalent: CodeGenFunction::EmitReturnStmt
+                                switch (return_type_abi.semantic_type.get_evaluation_kind()) {
+                                    .scalar => {
+                                        switch (return_type_abi.flags.kind) {
+                                            .indirect => {
+                                                @trap();
+                                            },
+                                            else => {
+                                                const return_alloca = current_function.return_alloca;
+                                                _ = module.create_store(.{
+                                                    .source_value = return_value.llvm,
+                                                    .destination_value = return_alloca,
+                                                    .source_type = return_type_abi.semantic_type,
+                                                    .destination_type = current_function_type.abi_return_type,
+                                                });
+                                            },
                                         }
                                     },
-                                    else => @trap(),
+                                    .aggregate => {
+                                        // TODO: handcoded code, might be wrong
+                                        const return_alloca = current_function.return_alloca;
+                                        const abi_alignment = current_function_type.return_type_abi.semantic_type.get_byte_alignment();
+                                        const abi_size = current_function_type.return_type_abi.semantic_type.get_byte_size();
+                                        switch (return_type_abi.flags.kind) {
+                                            .indirect => {
+                                                _ = module.llvm.builder.create_memcpy(return_alloca, abi_alignment, return_value.llvm, abi_alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(abi_size, @intFromBool(false)).to_value());
+                                            },
+                                            else => {
+                                                switch (current_function_type.abi_return_type.get_evaluation_kind()) {
+                                                    .aggregate => {
+                                                        assert(abi_alignment == return_type_abi.semantic_type.get_byte_alignment());
+                                                        assert(abi_size == return_type_abi.semantic_type.get_byte_size());
+                                                        _ = module.llvm.builder.create_memcpy(return_alloca, abi_alignment, return_value.llvm, abi_alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(abi_size, @intFromBool(false)).to_value());
+                                                    },
+                                                    .scalar => {
+                                                        const destination_type = current_function_type.return_type_abi.semantic_type;
+                                                        const source_type = current_function_type.return_type_abi.semantic_type;
+                                                        assert(return_value.type == source_type);
+                                                        const rv = switch (return_value.type.bb) {
+                                                            .pointer => return_value.llvm,
+                                                            // TODO: this feels hacky
+                                                            else => switch (return_value.lvalue) {
+                                                                true => module.create_load(.{ .type = return_value.type, .value = return_value.llvm }),
+                                                                false => return_value.llvm,
+                                                            },
+                                                        };
+                                                        _ = module.create_store(.{ .source_value = rv, .source_type = source_type, .destination_value = return_alloca, .destination_type = destination_type });
+                                                    },
+                                                    .complex => @trap(),
+                                                }
+                                            },
+                                        }
+                                    },
+                                    .complex => @trap(),
                                 }
                             }
+
+                            _ = module.llvm.builder.create_branch(current_function.return_block);
+                            _ = module.llvm.builder.clear_insertion_position();
                         },
                         .@"if" => {
-                            const taken_block = module.llvm.context.create_basic_block("", current_function_global.value.llvm.to_function());
-                            const not_taken_block = module.llvm.context.create_basic_block("", current_function_global.value.llvm.to_function());
+                            const taken_block = module.llvm.context.create_basic_block("if.true", current_function_global.value.llvm.to_function());
+                            const not_taken_block = module.llvm.context.create_basic_block("if.false", current_function_global.value.llvm.to_function());
+                            const exit_block = module.llvm.context.create_basic_block("if.end", null);
 
                             converter.skip_space();
 
@@ -1387,12 +2161,14 @@ const Converter = struct {
                             _ = module.llvm.builder.create_conditional_branch(condition.llvm, taken_block, not_taken_block);
                             module.llvm.builder.position_at_end(taken_block);
 
+                            const previous_exit_block = current_function.exit_block;
+                            defer current_function.exit_block = previous_exit_block;
+
+                            current_function.exit_block = exit_block;
+
                             converter.parse_block(module);
 
-                            const is_first_block_terminated = module.current_basic_block().get_terminator() != null;
-                            if (!is_first_block_terminated) {
-                                @trap();
-                            }
+                            const if_final_block = module.llvm.builder.get_insert_block();
 
                             converter.skip_space();
 
@@ -1408,20 +2184,41 @@ const Converter = struct {
                             var is_second_block_terminated = false;
                             module.llvm.builder.position_at_end(not_taken_block);
                             if (is_else) {
+                                current_function.exit_block = exit_block;
                                 converter.parse_block(module);
-                                is_second_block_terminated = module.current_basic_block().get_terminator() != null;
+                                is_second_block_terminated = module.llvm.builder.get_insert_block() == null;
+                            } else {
+                                if (if_final_block) |final_block| {
+                                    const current_insert_block = module.llvm.builder.get_insert_block();
+                                    defer if (current_insert_block) |block| {
+                                        module.llvm.builder.position_at_end(block);
+                                    };
+                                    module.llvm.builder.position_at_end(final_block);
+                                    _ = module.llvm.builder.create_branch(not_taken_block);
+                                    module.llvm.builder.clear_insertion_position();
+                                }
+
+                                assert(exit_block.to_value().use_empty());
+                                not_taken_block.to_value().set_name("if.end");
+                                assert(exit_block.get_parent() == null);
+                                exit_block.delete();
                             }
 
-                            if (!(is_first_block_terminated and is_second_block_terminated)) {
-                                if (!is_first_block_terminated) {
-                                    @trap();
+                            if (!(if_final_block == null and is_second_block_terminated)) {
+                                if (if_final_block != null) {
+                                    // @trap();
                                 }
 
                                 if (!is_second_block_terminated) {
-                                    if (is_else) {
-                                        @trap();
-                                    } else {}
+                                    // if (is_else) {
+                                    //     @trap();
+                                    // } else {}
                                 }
+                            } else {
+                                assert(exit_block.get_parent() == null);
+                                // TODO:
+                                // if call `exit_block.erase_from_paren()`, it crashes, investigate
+                                exit_block.delete();
                             }
 
                             require_semicolon = false;
@@ -1445,10 +2242,16 @@ const Converter = struct {
                             if (left.type.bb != .pointer) {
                                 converter.report_error();
                             }
-                            const store_type = left.type.bb.pointer;
+                            const store_alignment = left.type.bb.pointer.alignment;
+                            const store_type = left.type.bb.pointer.type;
                             const right = converter.parse_value(module, store_type, .value);
 
-                            _ = module.create_store(.{ .source = right.llvm, .destination = left.llvm, .alignment = @intCast(store_type.get_byte_alignment()) });
+                            switch (store_type.get_evaluation_kind()) {
+                                .aggregate => {
+                                    @trap();
+                                },
+                                else => _ = module.create_store(.{ .source_value = right.llvm, .destination_value = left.llvm, .source_type = store_type, .destination_type = store_type, .alignment = store_alignment }),
+                            }
                         },
                         ';' => {
                             const is_noreturn = v.type.bb == .noreturn;
@@ -1536,26 +2339,29 @@ const Converter = struct {
 
             converter.skip_space();
 
-            const left = previous_value;
-            const right = current_value;
+            const left = switch (value_state) {
+                .none => undefined,
+                else => previous_value.?.llvm,
+            };
+            const right = current_value.llvm;
             const next_ty = if (previous_value) |pv| pv.type else current_value.type;
 
             const llvm_value = switch (value_state) {
                 .none => current_value.llvm,
-                .sub => module.llvm.builder.create_sub(left.?.llvm, right.llvm),
-                .add => module.llvm.builder.create_add(left.?.llvm, right.llvm),
-                .mul => module.llvm.builder.create_mul(left.?.llvm, right.llvm),
-                .sdiv => module.llvm.builder.create_sdiv(left.?.llvm, right.llvm),
-                .udiv => module.llvm.builder.create_udiv(left.?.llvm, right.llvm),
-                .srem => module.llvm.builder.create_srem(left.?.llvm, right.llvm),
-                .urem => module.llvm.builder.create_urem(left.?.llvm, right.llvm),
-                .shl => module.llvm.builder.create_shl(left.?.llvm, right.llvm),
-                .ashr => module.llvm.builder.create_ashr(left.?.llvm, right.llvm),
-                .lshr => module.llvm.builder.create_lshr(left.?.llvm, right.llvm),
-                .@"and" => module.llvm.builder.create_and(left.?.llvm, right.llvm),
-                .@"or" => module.llvm.builder.create_or(left.?.llvm, right.llvm),
-                .xor => module.llvm.builder.create_xor(left.?.llvm, right.llvm),
-                .icmp_ne, .icmp_eq => |icmp| module.llvm.builder.create_compare(icmp.to_int_predicate(), left.?.llvm, right.llvm),
+                .sub => module.llvm.builder.create_sub(left, right),
+                .add => module.llvm.builder.create_add(left, right),
+                .mul => module.llvm.builder.create_mul(left, right),
+                .sdiv => module.llvm.builder.create_sdiv(left, right),
+                .udiv => module.llvm.builder.create_udiv(left, right),
+                .srem => module.llvm.builder.create_srem(left, right),
+                .urem => module.llvm.builder.create_urem(left, right),
+                .shl => module.llvm.builder.create_shl(left, right),
+                .ashr => module.llvm.builder.create_ashr(left, right),
+                .lshr => module.llvm.builder.create_lshr(left, right),
+                .@"and" => module.llvm.builder.create_and(left, right),
+                .@"or" => module.llvm.builder.create_or(left, right),
+                .xor => module.llvm.builder.create_xor(left, right),
+                .icmp_ne, .icmp_eq => |icmp| module.llvm.builder.create_compare(icmp.to_int_predicate(), left, right),
             };
 
             switch (value_state) {
@@ -1583,6 +2389,8 @@ const Converter = struct {
                             => next_ty,
                         },
                         .bb = .instruction,
+                        .lvalue = false,
+                        .dereference_to_assign = false,
                     };
                 },
             }
@@ -1703,6 +2511,10 @@ const Converter = struct {
         extend,
         trap,
         truncate,
+        va_start,
+        va_end,
+        va_copy,
+        va_arg,
     };
 
     fn parse_intrinsic(noalias converter: *Converter, noalias module: *Module, expected_type: ?*Type) *Value {
@@ -1734,6 +2546,8 @@ const Converter = struct {
                         .llvm = module.llvm.builder.create_ptr_to_int(source_value.llvm, destination_type.llvm.handle),
                         .type = destination_type,
                         .bb = .instruction,
+                        .lvalue = false,
+                        .dereference_to_assign = false,
                     };
                     return value;
                 } else {
@@ -1746,7 +2560,9 @@ const Converter = struct {
                 converter.expect_character(right_parenthesis);
                 const source_type = source_value.type;
                 const destination_type = expected_type orelse converter.report_error();
-                if (source_type.get_bit_size() >= destination_type.get_bit_size()) {
+                if (source_type.get_bit_size() > destination_type.get_bit_size()) {
+                    converter.report_error();
+                } else if (source_type.get_bit_size() == destination_type.get_bit_size() and source_type.is_signed() == destination_type.is_signed()) {
                     converter.report_error();
                 }
 
@@ -1759,6 +2575,8 @@ const Converter = struct {
                     .llvm = extension_instruction,
                     .type = destination_type,
                     .bb = .instruction,
+                    .lvalue = false,
+                    .dereference_to_assign = false,
                 };
 
                 return value;
@@ -1767,19 +2585,22 @@ const Converter = struct {
                 converter.expect_character(right_parenthesis);
 
                 // TODO: lookup in advance
-                const intrinsic_id = llvm.lookup_intrinsic_id("llvm.trap");
+                const intrinsic_id = module.llvm.intrinsic_table.trap;
                 const argument_types: []const *llvm.Type = &.{};
                 const argument_values: []const *llvm.Value = &.{};
                 const intrinsic_function = module.llvm.handle.get_intrinsic_declaration(intrinsic_id, argument_types);
                 const intrinsic_function_type = module.llvm.context.get_intrinsic_type(intrinsic_id, argument_types);
                 const llvm_call = module.llvm.builder.create_call(intrinsic_function_type, intrinsic_function, argument_values);
                 _ = module.llvm.builder.create_unreachable();
+                module.llvm.builder.clear_insertion_position();
 
                 const value = module.values.add();
                 value.* = .{
                     .llvm = llvm_call,
                     .type = module.noreturn_type,
                     .bb = .instruction,
+                    .lvalue = false,
+                    .dereference_to_assign = false,
                 };
 
                 return value;
@@ -1796,9 +2617,120 @@ const Converter = struct {
                     .llvm = truncate,
                     .type = destination_type,
                     .bb = .instruction,
+                    .lvalue = false,
+                    .dereference_to_assign = false,
                 };
 
                 return value;
+            },
+            .va_start => {
+                converter.expect_character(right_parenthesis);
+
+                const va_list_type = module.get_va_list_type();
+                const alloca = module.create_alloca(.{ .type = va_list_type });
+                const intrinsic_id = module.llvm.intrinsic_table.va_start;
+                const argument_types: []const *llvm.Type = &.{module.llvm.pointer_type};
+                const intrinsic_function = module.llvm.handle.get_intrinsic_declaration(intrinsic_id, argument_types);
+                const intrinsic_function_type = module.llvm.context.get_intrinsic_type(intrinsic_id, argument_types);
+                const argument_values: []const *llvm.Value = &.{alloca};
+                _ = module.llvm.builder.create_call(intrinsic_function_type, intrinsic_function, argument_values);
+
+                const load = module.create_load(.{ .type = va_list_type, .value = alloca });
+
+                const value = module.values.add();
+                value.* = .{
+                    .llvm = load,
+                    .type = va_list_type,
+                    .bb = .instruction,
+                    .lvalue = false,
+                    .dereference_to_assign = false,
+                };
+
+                return value;
+            },
+            .va_end => {
+                const va_list = converter.parse_value(module, module.get_pointer_type(.{ .type = module.get_va_list_type() }), .pointer);
+                converter.skip_space();
+                converter.expect_character(right_parenthesis);
+                const intrinsic_id = module.llvm.intrinsic_table.va_end;
+                const argument_types: []const *llvm.Type = &.{module.llvm.pointer_type};
+                const intrinsic_function = module.llvm.handle.get_intrinsic_declaration(intrinsic_id, argument_types);
+                const intrinsic_function_type = module.llvm.context.get_intrinsic_type(intrinsic_id, argument_types);
+                const argument_values: []const *llvm.Value = &.{va_list.llvm};
+                const llvm_value = module.llvm.builder.create_call(intrinsic_function_type, intrinsic_function, argument_values);
+                const value = module.values.add();
+                value.* = .{
+                    .llvm = llvm_value,
+                    .type = module.void_type,
+                    .bb = .instruction,
+                    .lvalue = false,
+                    .dereference_to_assign = false,
+                };
+
+                return value;
+            },
+            .va_copy => @trap(),
+            .va_arg => {
+                const va_list = converter.parse_value(module, module.get_pointer_type(.{ .type = module.get_va_list_type() }), .pointer);
+
+                converter.skip_space();
+
+                converter.expect_character(',');
+
+                converter.skip_space();
+
+                const arg_type = converter.parse_type(module);
+                converter.skip_space();
+
+                converter.expect_character(right_parenthesis);
+
+                const byte_size = arg_type.get_byte_size();
+                const aligned_size = lib.align_forward_u64(byte_size, 8);
+                const gpr_size = 48;
+                if (aligned_size < gpr_size) {
+                    const gpr_offset: u32 = @intCast(gpr_size - aligned_size);
+                    const gpr_offset_gep = module.llvm.builder.create_struct_gep(module.get_va_list_type().llvm.handle.to_struct(), va_list.llvm, 0);
+                    const gpr_offset_type = module.integer_type(32, false);
+                    const gpr_offset_load = module.create_load(.{
+                        .value = gpr_offset_gep,
+                        .type = gpr_offset_type,
+                    });
+                    const fits_in_gpr = module.llvm.builder.create_compare(.ule, gpr_offset_load, gpr_offset_type.llvm.handle.to_integer().get_constant(gpr_offset, @intFromBool(false)).to_value());
+                    const current_function = module.current_function orelse unreachable;
+                    const reg_block = module.llvm.context.create_basic_block("fits_in_register", current_function.value.llvm.to_function());
+                    const mem_block = module.llvm.context.create_basic_block("fits_in_memory", current_function.value.llvm.to_function());
+                    const end_block = module.llvm.context.create_basic_block("va_arg.end", current_function.value.llvm.to_function());
+
+                    _ = module.llvm.builder.create_conditional_branch(fits_in_gpr, reg_block, mem_block);
+
+                    module.llvm.builder.position_at_end(reg_block);
+
+                    module.llvm.builder.position_at_end(mem_block);
+
+                    module.llvm.builder.position_at_end(end_block);
+                    _ = @trap();
+                } else {
+                    @trap();
+                }
+                // const va_arg = module.llvm.builder.create_vaarg(va_list.llvm, arg_type.llvm.handle);
+                //
+                // const value = module.values.add();
+                // if (given_arg_type.bb == .@"struct") {
+                //     const load = module.create_load(.{ .type = given_arg_type, .value = va_arg });
+                //     value.* = .{
+                //         .llvm = load,
+                //         .type = given_arg_type,
+                //         .bb = .instruction,
+                //     };
+                // } else {
+                //     value.* = .{
+                //         .llvm = va_arg,
+                //         .type = arg_type,
+                //         .bb = .instruction,
+                //     };
+                // }
+                //
+                // return value;
             },
         }
     }
@@ -1836,13 +2768,14 @@ const Converter = struct {
                 const ty = expected_type orelse converter.report_error();
 
                 switch (ty.bb) {
-                    .@"struct" => |*struct_type| {
-                        var field_count: usize = 0;
+                    .structure => |*struct_type| {
+                        var field_count: u32 = 0;
 
-                        var llvm_value = switch (must_be_constant) {
-                            true => @trap(),
-                            false => ty.llvm.handle.get_poison(),
-                        };
+                        var field_value_buffer: [64]*Value = undefined;
+                        var field_index_buffer: [64]u32 = undefined;
+
+                        var is_ordered = true;
+                        var is_constant = true;
 
                         while (converter.consume_character_if_match('.')) : (field_count += 1) {
                             converter.skip_space();
@@ -1854,6 +2787,7 @@ const Converter = struct {
                                 }
                             } else converter.report_error();
 
+                            is_ordered = is_ordered and field_index == field_count;
                             const field = struct_type.fields[field_index];
 
                             converter.skip_space();
@@ -1863,15 +2797,15 @@ const Converter = struct {
                             converter.skip_space();
 
                             const field_value = converter.parse_value(module, field.type, .value);
-
-                            if (must_be_constant) {
-                                if (field_index != field_count) {
-                                    converter.report_error();
-                                }
+                            if (field.type != field_value.type) {
                                 @trap();
-                            } else {
-                                llvm_value = module.llvm.builder.create_insert_value(llvm_value, field_value.llvm, field_index);
                             }
+                            if (field.type.llvm.handle != field_value.type.llvm.handle) {
+                                @trap();
+                            }
+                            is_constant = is_constant and field_value.is_constant();
+                            field_value_buffer[field_count] = field_value;
+                            field_index_buffer[field_count] = field_index;
 
                             converter.skip_space();
 
@@ -1880,18 +2814,89 @@ const Converter = struct {
                             converter.skip_space();
                         }
 
+                        converter.expect_character(right_brace);
+
+                        if (must_be_constant and !is_constant) {
+                            @trap();
+                        }
+
                         if (field_count != struct_type.fields.len) {
                             // expect: 'zero' keyword
                             @trap();
                         }
 
-                        converter.expect_character(right_brace);
+                        const llvm_value = switch (is_constant and is_ordered) {
+                            true => blk: {
+                                var llvm_value_buffer: [64]*llvm.Constant = undefined;
+                                var llvm_gc_value_buffer = [1]?*llvm.GlobalVariable{null} ** 64;
+                                const llvm_values = llvm_value_buffer[0..field_count];
+                                const llvm_gc_values = llvm_gc_value_buffer[0..field_count];
+                                for (field_value_buffer[0..field_count], llvm_gc_values, llvm_values, struct_type.fields) |field_value, *llvm_gc_value, *llvm_field_value, *field| {
+                                    llvm_field_value.* = switch (field.type.llvm.handle == field_value.llvm.get_type()) {
+                                        true => field_value.llvm.to_constant(),
+                                        false => switch (field.type.bb) {
+                                            .array => b: {
+                                                const global_variable = field_value.llvm.to_global_variable();
+                                                const initializer = global_variable.get_initializer();
+                                                const use_empty = field_value.llvm.use_empty();
+                                                if (use_empty) {
+                                                    llvm_gc_value.* = global_variable;
+                                                }
+                                                break :b initializer;
+                                            },
+                                            .structure => b: {
+                                                assert(field_value.lvalue);
+                                                assert(field.type == field_value.type);
+                                                const global_variable = field_value.llvm.to_global_variable();
+                                                const initializer = global_variable.get_initializer();
+                                                const use_empty = field_value.llvm.use_empty();
+                                                if (use_empty) {
+                                                    llvm_gc_value.* = global_variable;
+                                                }
+                                                break :b initializer;
+                                            },
+                                            else => @trap(),
+                                        },
+                                    };
+                                }
+
+                                const constant_struct = ty.llvm.handle.to_struct().get_constant(llvm_values);
+                                const result = switch (module.current_function == null) {
+                                    true => constant_struct.to_value(),
+                                    false => b: {
+                                        const global_variable = module.llvm.handle.create_global_variable(.{
+                                            .linkage = .InternalLinkage,
+                                            .name = module.arena.join_string(&.{ "__const.", module.current_function.?.name, if (ty.name) |n| n else "" }),
+                                            .initial_value = constant_struct,
+                                            .type = ty.llvm.handle,
+                                        });
+                                        break :b global_variable.to_value();
+                                    },
+                                };
+
+                                for (llvm_gc_values) |maybe_gc_value| {
+                                    if (maybe_gc_value) |gc_value| {
+                                        gc_value.erase_from_parent();
+                                        // gc_value.delete();
+                                    }
+                                }
+
+                                break :blk result;
+                            },
+                            false => @trap(),
+                        };
 
                         const value = module.values.add();
                         value.* = .{
                             .llvm = llvm_value,
                             .type = ty,
-                            .bb = .struct_initialization,
+                            .bb = .{
+                                .struct_initialization = .{
+                                    .is_constant = is_constant,
+                                },
+                            },
+                            .lvalue = true,
+                            .dereference_to_assign = false,
                         };
 
                         return value;
@@ -1945,14 +2950,14 @@ const Converter = struct {
                             .llvm = llvm_value,
                             .type = ty,
                             .bb = .bits_initialization,
+                            .lvalue = false,
+                            .dereference_to_assign = false,
                         };
 
                         return value;
                     },
                     else => converter.report_error(),
                 }
-
-                @trap();
             },
             left_bracket => {
                 converter.offset += 1;
@@ -1989,12 +2994,26 @@ const Converter = struct {
 
                         const array_elements = element_buffer[0..element_count];
                         if (elements_are_constant) {
-                            const array_constant = array.element_type.llvm.handle.get_constant_array(@ptrCast(array_elements));
+                            const constant_array = array.element_type.llvm.handle.get_constant_array(@ptrCast(array_elements));
+                            const global = switch (module.current_function == null) {
+                                true => constant_array.to_value(),
+                                false => b: {
+                                    const global_variable = module.llvm.handle.create_global_variable(.{
+                                        .linkage = .InternalLinkage,
+                                        .name = module.arena.join_string(&.{ "__const.", module.current_function.?.name, if (ty.name) |n| n else "" }),
+                                        .initial_value = constant_array,
+                                        .type = ty.llvm.handle,
+                                    });
+                                    break :b global_variable.to_value();
+                                },
+                            };
                             const value = module.values.add();
                             value.* = .{
-                                .llvm = array_constant.to_value(),
+                                .llvm = global,
                                 .type = ty,
                                 .bb = .constant_array,
+                                .lvalue = true,
+                                .dereference_to_assign = false,
                             };
                             return value;
                         } else {
@@ -2037,22 +3056,17 @@ const Converter = struct {
                             .llvm = expected_ty.llvm.handle.get_poison(),
                             .type = expected_ty,
                             .bb = .instruction, // TODO
+                            .lvalue = false,
+                            .dereference_to_assign = false,
                         };
                         return value;
                     } else {
-                        const variable = blk: {
-                            if (current_function.value.bb.function.locals.find(identifier)) |local| {
-                                break :blk local;
-                            } else if (current_function.value.bb.function.arguments.find(identifier)) |argument| {
-                                break :blk argument;
-                            } else if (module.globals.find(identifier)) |global| {
-                                break :blk global;
-                            } else {
-                                converter.report_error();
-                            }
-                        };
+                        const variable = if (current_function.value.bb.function.locals.find(identifier)) |local| local else if (current_function.value.bb.function.arguments.find(identifier)) |argument| argument else if (module.globals.find(identifier)) |global| global else converter.report_error();
 
                         converter.skip_space();
+
+                        assert(variable.value.type.bb == .pointer);
+                        const appointee_type = variable.value.type.bb.pointer.type;
 
                         if (converter.consume_character_if_match(left_parenthesis)) {
                             if (value_kind == .pointer) {
@@ -2063,8 +3077,8 @@ const Converter = struct {
                         } else if (converter.consume_character_if_match('.')) {
                             converter.skip_space();
 
-                            switch (variable.value.type.bb) {
-                                .@"struct" => |*struct_type| {
+                            switch (appointee_type.bb) {
+                                .structure => |*struct_type| {
                                     const field_name = converter.parse_identifier();
                                     const field_index: u32 = for (struct_type.fields, 0..) |field, field_index| {
                                         if (lib.string.equal(field.name, field_name)) {
@@ -2072,7 +3086,7 @@ const Converter = struct {
                                         }
                                     } else converter.report_error();
                                     const field = struct_type.fields[field_index];
-                                    const gep = module.llvm.builder.create_struct_gep(variable.value.type.llvm.handle.to_struct(), variable.value.llvm, field_index);
+                                    const gep = module.llvm.builder.create_struct_gep(appointee_type.llvm.handle.to_struct(), variable.value.llvm, field_index);
 
                                     switch (value_kind) {
                                         .pointer, .maybe_pointer => {
@@ -2084,6 +3098,8 @@ const Converter = struct {
                                                 .llvm = module.create_load(.{ .type = field.type, .value = gep }),
                                                 .type = field.type,
                                                 .bb = .instruction,
+                                                .lvalue = false,
+                                                .dereference_to_assign = false,
                                             };
                                             break :b load;
                                         },
@@ -2111,26 +3127,54 @@ const Converter = struct {
                                         .type = bits.backing_type,
                                         .llvm = bitfield_masked,
                                         .bb = .instruction,
+                                        .lvalue = false,
+                                        .dereference_to_assign = false,
                                     };
 
                                     break :b value;
                                 },
-                                .pointer => {
-                                    converter.expect_character('&');
-
-                                    switch (value_kind) {
-                                        .pointer, .maybe_pointer => {
-                                            break :b variable.value;
-                                        },
-                                        .value => {
-                                            const load = module.values.add();
-                                            load.* = .{
-                                                .llvm = module.create_load(.{ .type = variable.value.type, .value = variable.value.llvm }),
-                                                .type = variable.value.type,
-                                                .bb = .instruction,
-                                            };
-                                            break :b load;
-                                        },
+                                .pointer => |pointer_type| {
+                                    const element_type = pointer_type.type;
+                                    if (converter.consume_character_if_match('&')) {
+                                        const load = module.values.add();
+                                        load.* = .{
+                                            .llvm = module.create_load(.{ .type = appointee_type, .value = variable.value.llvm }),
+                                            .type = appointee_type,
+                                            .bb = .instruction,
+                                            .lvalue = false,
+                                            .dereference_to_assign = false,
+                                        };
+                                        break :b load;
+                                    } else {
+                                        switch (element_type.bb) {
+                                            .structure => |*struct_type| {
+                                                const field_name = converter.parse_identifier();
+                                                const field_index: u32 = for (struct_type.fields, 0..) |field, field_index| {
+                                                    if (lib.string.equal(field.name, field_name)) {
+                                                        break @intCast(field_index);
+                                                    }
+                                                } else converter.report_error();
+                                                const field = struct_type.fields[field_index];
+                                                const gep = module.llvm.builder.create_struct_gep(element_type.llvm.handle.to_struct(), variable.value.llvm, field_index);
+                                                switch (value_kind) {
+                                                    .pointer, .maybe_pointer => {
+                                                        @trap();
+                                                    },
+                                                    .value => {
+                                                        const load = module.values.add();
+                                                        load.* = .{
+                                                            .llvm = module.create_load(.{ .type = field.type, .value = gep }),
+                                                            .type = field.type,
+                                                            .bb = .instruction,
+                                                            .lvalue = false,
+                                                            .dereference_to_assign = false,
+                                                        };
+                                                        break :b load;
+                                                    },
+                                                }
+                                            },
+                                            else => @trap(),
+                                        }
                                     }
                                 },
                                 else => @trap(),
@@ -2146,7 +3190,7 @@ const Converter = struct {
                             converter.skip_space();
                             converter.expect_character(right_bracket);
 
-                            const gep = module.llvm.builder.create_gep(variable.value.type.llvm.handle, variable.value.llvm, &.{ zero_index, index.llvm });
+                            const gep = module.llvm.builder.create_gep(appointee_type.llvm.handle, variable.value.llvm, &.{ zero_index, index.llvm });
 
                             switch (value_kind) {
                                 .pointer, .maybe_pointer => {
@@ -2154,38 +3198,33 @@ const Converter = struct {
                                 },
                                 .value => {
                                     const load = module.values.add();
-                                    const load_type = variable.value.type.bb.array.element_type;
+                                    const load_type = appointee_type.bb.array.element_type;
                                     load.* = .{
                                         .llvm = module.create_load(.{ .type = load_type, .value = gep }),
                                         .type = load_type,
                                         .bb = .instruction,
+                                        .lvalue = false,
+                                        .dereference_to_assign = false,
                                     };
                                     break :b load;
                                 },
                             }
                         } else {
                             switch (value_kind) {
-                                .pointer, .maybe_pointer => switch (variable.value.bb) {
-                                    .external_function, .function => {
-                                        const pointer_type = module.get_pointer_type(variable.value.type);
-                                        const value = module.values.add();
-                                        value.* = .{
-                                            .llvm = variable.value.llvm,
-                                            .type = pointer_type,
-                                            .bb = .global,
+                                .pointer, .maybe_pointer => break :b variable.value,
+                                .value => switch (appointee_type.get_evaluation_kind()) {
+                                    .aggregate => break :b variable.value,
+                                    else => {
+                                        const load = module.values.add();
+                                        load.* = .{
+                                            .llvm = module.create_load(.{ .type = appointee_type, .value = variable.value.llvm }),
+                                            .type = appointee_type,
+                                            .bb = .instruction,
+                                            .lvalue = false,
+                                            .dereference_to_assign = false,
                                         };
-                                        break :b value;
+                                        break :b load;
                                     },
-                                    else => break :b variable.value,
-                                },
-                                .value => {
-                                    const load = module.values.add();
-                                    load.* = .{
-                                        .llvm = module.create_load(.{ .type = variable.value.type, .value = variable.value.llvm }),
-                                        .type = variable.value.type,
-                                        .bb = .instruction,
-                                    };
-                                    break :b load;
                                 },
                             }
                         }
@@ -2197,7 +3236,6 @@ const Converter = struct {
             '0'...'9' => converter.parse_integer(module, expected_type.?, prefix == .negative),
             else => os.abort(),
         };
-        _ = &value;
 
         switch (prefix) {
             .none,
@@ -2209,6 +3247,8 @@ const Converter = struct {
                     .llvm = llvm_value,
                     .bb = .instruction,
                     .type = module.integer_type(1, false),
+                    .lvalue = false,
+                    .dereference_to_assign = false,
                 };
             },
         }
@@ -2268,9 +3308,11 @@ pub const BuildMode = enum {
 const CPUArchitecture = enum {
     x86_64,
 };
+
 const OperatingSystem = enum {
     linux,
 };
+
 pub const Target = struct {
     cpu: CPUArchitecture,
     os: OperatingSystem,
@@ -2291,33 +3333,246 @@ pub const Target = struct {
 };
 
 pub const Abi = struct {
-    const Kind = union(enum) {
+    const Kind = enum(u3) {
         ignore,
         direct,
-        direct_pair: [2]*Type,
-        direct_coerce: *Type,
-        direct_coerce_int,
-        direct_split_struct_i32,
-        expand_coerce,
-        indirect: struct {
-            type: *Type,
-            alignment: u32,
-        },
+        extend,
+        indirect,
+        indirect_aliased,
         expand,
+        coerce_and_expand,
+        in_alloca,
     };
 
-    const Attributes = struct {
-        by_reg: bool = false,
-        zero_extend: bool = false,
-        sign_extend: bool = false,
-        realign: bool = false,
-        by_value: bool = false,
+    const RegisterCount = union {
+        system_v: Abi.SystemV.RegisterCount,
+    };
+
+    const Flags = packed struct {
+        kind: Kind,
+        padding_in_reg: bool = false,
+        in_alloca_sret: bool = false,
+        in_alloca_indirect: bool = false,
+        indirect_by_value: bool = false,
+        indirect_realign: bool = false,
+        sret_after_this: bool = false,
+        in_reg: bool = false,
+        can_be_flattened: bool = false,
+        sign_extension: bool = false,
     };
 
     const Information = struct {
-        kind: Kind,
-        indices: [2]u16 = .{ 0, 0 },
-        attributes: Abi.Attributes = .{},
+        semantic_type: *Type,
+        coerce_to_type: ?*Type = null,
+        padding: union {
+            type: ?*Type,
+            unpadded_coerce_and_expand_type: ?*Type,
+        } = .{ .type = null },
+        padding_arg_index: u16 = 0,
+        attributes: union {
+            direct: DirectAttributes,
+            indirect: IndirectAttributes,
+            alloca_field_index: u32,
+        } = .{
+            .direct = .{
+                .offset = 0,
+                .alignment = 0,
+            },
+        },
+        flags: Abi.Flags,
+        abi_start: u16 = 0,
+        abi_count: u16 = 0,
+
+        const DirectAttributes = struct {
+            offset: u32,
+            alignment: u32,
+        };
+
+        const IndirectAttributes = struct {
+            alignment: u32,
+            address_space: u32,
+        };
+
+        const Direct = struct {
+            semantic_type: *Type,
+            type: *Type,
+            padding: ?*Type = null,
+            offset: u32 = 0,
+            alignment: u32 = 0,
+            can_be_flattened: bool = true,
+        };
+
+        pub fn get_direct(direct: Direct) Information {
+            var result = Information{
+                .semantic_type = direct.semantic_type,
+                .flags = .{
+                    .kind = .direct,
+                },
+            };
+            result.set_coerce_to_type(direct.type);
+            result.set_padding_type(direct.padding);
+            result.set_direct_offset(direct.offset);
+            result.set_direct_alignment(direct.alignment);
+            result.set_can_be_flattened(direct.can_be_flattened);
+            return result;
+        }
+
+        pub const Ignore = struct {
+            semantic_type: *Type,
+        };
+
+        pub fn get_ignore(ignore: Ignore) Information {
+            return Information{
+                .semantic_type = ignore.semantic_type,
+                .flags = .{
+                    .kind = .ignore,
+                },
+            };
+        }
+
+        const Extend = struct {
+            semantic_type: *Type,
+            type: ?*Type = null,
+            sign: bool,
+        };
+
+        pub fn get_extend(extend: Extend) Information {
+            assert(extend.semantic_type.is_integral_or_enumeration_type());
+            var result = Information{
+                .semantic_type = extend.semantic_type,
+                .flags = .{
+                    .kind = .extend,
+                },
+            };
+            result.set_coerce_to_type(if (extend.type) |t| t else extend.semantic_type);
+            result.set_padding_type(null);
+            result.set_direct_offset(0);
+            result.set_direct_alignment(0);
+            result.flags.sign_extension = extend.sign;
+            return result;
+        }
+
+        const NaturalAlignIndirect = struct {
+            semantic_type: *Type,
+            padding_type: ?*Type = null,
+            by_value: bool = true,
+            realign: bool = false,
+        };
+
+        pub fn get_natural_align_indirect(nai: NaturalAlignIndirect) Abi.Information {
+            const alignment = nai.semantic_type.get_byte_alignment();
+            return get_indirect(.{
+                .semantic_type = nai.semantic_type,
+                .alignment = alignment,
+                .by_value = nai.by_value,
+                .realign = nai.realign,
+                .padding_type = nai.padding_type,
+            });
+        }
+
+        pub const Indirect = struct {
+            semantic_type: *Type,
+            padding_type: ?*Type = null,
+            alignment: u32,
+            by_value: bool = true,
+            realign: bool = false,
+        };
+
+        pub fn get_indirect(indirect: Indirect) Abi.Information {
+            var result = Abi.Information{
+                .semantic_type = indirect.semantic_type,
+                .attributes = .{
+                    .indirect = .{
+                        .address_space = 0,
+                        .alignment = 0,
+                    },
+                },
+                .flags = .{
+                    .kind = .indirect,
+                },
+            };
+            result.set_indirect_align(indirect.alignment);
+            result.set_indirect_by_value(indirect.by_value);
+            result.set_indirect_realign(indirect.realign);
+            result.set_sret_after_this(false);
+            result.set_padding_type(indirect.padding_type);
+            return result;
+        }
+
+        fn set_sret_after_this(abi: *Abi.Information, sret_after_this: bool) void {
+            assert(abi.flags.kind == .indirect);
+            abi.flags.sret_after_this = sret_after_this;
+        }
+
+        fn set_indirect_realign(abi: *Abi.Information, realign: bool) void {
+            assert(abi.flags.kind == .indirect);
+            abi.flags.indirect_realign = realign;
+        }
+
+        fn set_indirect_by_value(abi: *Abi.Information, by_value: bool) void {
+            assert(abi.flags.kind == .indirect);
+            abi.flags.indirect_by_value = by_value;
+        }
+
+        fn set_indirect_align(abi: *Abi.Information, alignment: u32) void {
+            assert(abi.flags.kind == .indirect or abi.flags.kind == .indirect_aliased);
+            abi.attributes.indirect.alignment = alignment;
+        }
+
+        fn set_coerce_to_type(info: *Information, coerce_to_type: *Type) void {
+            assert(info.can_have_coerce_to_type());
+            info.coerce_to_type = coerce_to_type;
+        }
+
+        fn get_coerce_to_type(info: *const Information) *Type {
+            assert(info.can_have_coerce_to_type());
+            return info.coerce_to_type.?;
+        }
+
+        fn can_have_coerce_to_type(info: *const Information) bool {
+            return switch (info.flags.kind) {
+                .direct, .extend, .coerce_and_expand => true,
+                else => false,
+            };
+        }
+
+        fn set_padding_type(info: *Information, padding_type: ?*Type) void {
+            assert(info.can_have_padding_type());
+            info.padding = .{
+                .type = padding_type,
+            };
+        }
+
+        fn can_have_padding_type(info: *const Information) bool {
+            return switch (info.flags.kind) {
+                .direct, .extend, .indirect, .indirect_aliased, .expand => true,
+                else => false,
+            };
+        }
+
+        fn get_padding_type(info: *const Information) ?*Type {
+            return if (info.can_have_padding_type()) info.padding.type else null;
+        }
+
+        fn set_direct_offset(info: *Information, offset: u32) void {
+            assert(info.flags.kind == .direct or info.flags.kind == .extend);
+            info.attributes.direct.offset = offset;
+        }
+
+        fn set_direct_alignment(info: *Information, alignment: u32) void {
+            assert(info.flags.kind == .direct or info.flags.kind == .extend);
+            info.attributes.direct.alignment = alignment;
+        }
+
+        fn set_can_be_flattened(info: *Information, can_be_flattened: bool) void {
+            assert(info.flags.kind == .direct);
+            info.flags.can_be_flattened = can_be_flattened;
+        }
+
+        fn get_can_be_flattened(info: *const Information) bool {
+            assert(info.flags.kind == .direct);
+            return info.flags.can_be_flattened;
+        }
     };
 
     pub const SystemV = struct {
@@ -2325,64 +3580,95 @@ pub const Abi = struct {
             gpr: u32,
             sse: u32,
         };
+
         pub const Class = enum {
-            none,
-            memory,
             integer,
             sse,
             sseup,
+            x87,
+            x87up,
+            complex_x87,
+            none,
+            memory,
 
             fn merge(accumulator: Class, field: Class) Class {
-                assert(accumulator != .memory);
-                if (accumulator == field) {
-                    return accumulator;
-                } else {
-                    var a = accumulator;
-                    var f = field;
-                    if (@intFromEnum(accumulator) > @intFromEnum(field)) {
-                        a = field;
-                        f = accumulator;
-                    }
+                // AMD64-ABI 3.2.3p2: Rule 4. Each field of an object is
+                // classified recursively so that always two fields are
+                // considered. The resulting class is calculated according to
+                // the classes of the fields in the eightbyte:
+                //
+                // (a) If both classes are equal, this is the resulting class.
+                //
+                // (b) If one of the classes is NO_CLASS, the resulting class is
+                // the other class.
+                //
+                // (c) If one of the classes is MEMORY, the result is the MEMORY
+                // class.
+                //
+                // (d) If one of the classes is INTEGER, the result is the
+                // INTEGER.
+                //
+                // (e) If one of the classes is X87, X87UP, COMPLEX_X87 class,
+                // MEMORY is used as class.
+                //
+                // (f) Otherwise class SSE is used.
 
-                    return switch (a) {
-                        .none => f,
-                        .memory => .memory,
-                        .integer => .integer,
-                        .sse, .sseup => .sse,
-                    };
+                // Accum should never be memory (we should have returned) or
+                // ComplexX87 (because this cannot be passed in a structure).
+
+                assert(accumulator != .memory and accumulator != .complex_x87);
+                if (accumulator == field or field == .none) {
+                    return accumulator;
                 }
+
+                if (field == .memory) {
+                    return .memory;
+                }
+
+                if (accumulator == .none) {
+                    return field;
+                }
+
+                if (accumulator == .integer or field == .integer) {
+                    return .integer;
+                }
+
+                if (field == .x87 or field == .x87up or field == .complex_x87 or accumulator == .x87 or accumulator == .x87up) {
+                    return .memory;
+                }
+
+                return .sse;
             }
         };
 
-        fn classify(ty: *Type, base_offset: u64) [2]Class {
-            var result: [2]Class = undefined;
-            const is_memory = base_offset >= 8;
+        const ClassifyOptions = struct {
+            base_offset: u64,
+            is_named_argument: bool,
+            is_register_call: bool = false,
+        };
+
+        fn classify(ty: *Type, options: ClassifyOptions) [2]Class {
+            var result = [2]Class{ .none, .none };
+
+            const is_memory = options.base_offset >= 8;
             const current_index = @intFromBool(is_memory);
             const not_current_index = @intFromBool(!is_memory);
             assert(current_index != not_current_index);
-            result[current_index] = .memory;
-            result[not_current_index] = .none;
 
             switch (ty.bb) {
-                .void, .noreturn => result[current_index] = .none,
+                .void, .noreturn => {},
                 .bits => result[current_index] = .integer,
-                .integer => result[current_index] = .integer, // TODO: weird cases
-                //     const integer_index = ty.get_integer_index();
-                //     switch (integer_index) {
-                //         8 - 1,
-                //         16 - 1,
-                //         32 - 1,
-                //         64 - 1,
-                //         64 + 8 - 1,
-                //         64 + 16 - 1,
-                //         64 + 32 - 1,
-                //         64 + 64 - 1,
-                //         => result[current_index] = .integer,
-                //         else => unreachable,
-                //     }
-                // },
                 .pointer => result[current_index] = .integer,
-                .@"struct" => |struct_type| {
+                .integer => |integer| {
+                    if (integer.bit_count <= 64) {
+                        result[current_index] = .integer;
+                    } else if (integer.bit_count == 128) {
+                        @trap();
+                    } else {
+                        @trap();
+                    }
+                },
+                .structure => |struct_type| {
                     if (struct_type.byte_size <= 64) {
                         const has_variable_array = false;
                         if (!has_variable_array) {
@@ -2391,7 +3677,7 @@ pub const Abi = struct {
                             const is_union = false;
                             var member_offset: u32 = 0;
                             for (struct_type.fields) |field| {
-                                const offset = base_offset + member_offset;
+                                const offset = options.base_offset + member_offset;
                                 const member_size = field.type.get_byte_size();
                                 const member_alignment = field.type.get_byte_alignment();
                                 member_offset = @intCast(lib.align_forward_u64(member_offset + member_size, ty.get_byte_alignment()));
@@ -2408,7 +3694,10 @@ pub const Abi = struct {
                                     return r;
                                 }
 
-                                const member_classes = classify(field.type, offset);
+                                const member_classes = classify(field.type, .{
+                                    .base_offset = offset,
+                                    .is_named_argument = false,
+                                });
                                 for (&result, member_classes) |*r, m| {
                                     const merge_result = r.merge(m);
                                     r.* = merge_result;
@@ -2424,17 +3713,20 @@ pub const Abi = struct {
                 },
                 .array => |*array_type| {
                     if (ty.get_byte_size() <= 64) {
-                        if (base_offset % ty.get_byte_alignment() == 0) {
+                        if (options.base_offset % ty.get_byte_alignment() == 0) {
                             result[current_index] = .none;
 
                             const vector_size = 16;
                             if (ty.get_byte_size() > 16 and (ty.get_byte_size() != array_type.element_type.get_byte_size() or ty.get_byte_size() > vector_size)) {
                                 unreachable;
                             } else {
-                                var offset = base_offset;
+                                var offset = options.base_offset;
 
                                 for (0..array_type.element_count.?) |_| {
-                                    const element_classes = classify(array_type.element_type, offset);
+                                    const element_classes = classify(array_type.element_type, .{
+                                        .base_offset = offset,
+                                        .is_named_argument = false,
+                                    });
                                     offset += array_type.element_type.get_byte_size();
                                     const merge_result = [2]Class{ result[0].merge(element_classes[0]), result[1].merge(element_classes[1]) };
                                     result = merge_result;
@@ -2450,22 +3742,52 @@ pub const Abi = struct {
                         }
                     }
                 },
-                else => |t| @panic(@tagName(t)),
+                else => @trap(),
             }
 
             return result;
         }
 
-        fn classify_post_merge(size: u64, classes: [2]Class) [2]Class {
-            if (classes[1] == .memory) {
-                return .{ .memory, .memory };
-            } else if (size > 16 and (classes[0] != .sse or classes[1] != .sseup)) {
-                return .{ .memory, classes[1] };
-            } else if (classes[1] == .sseup and classes[0] != .sse and classes[0] != .sseup) {
-                return .{ classes[0], .sse };
-            } else {
-                return classes;
+        fn classify_post_merge(aggregate_size: u64, classes: [2]Class) [2]Class {
+            // AMD64-ABI 3.2.3p2: Rule 5. Then a post merger cleanup is done:
+            //
+            // (a) If one of the classes is Memory, the whole argument is passed in
+            //     memory.
+            //
+            // (b) If X87UP is not preceded by X87, the whole argument is passed in
+            //     memory.
+            //
+            // (c) If the size of the aggregate exceeds two eightbytes and the first
+            //     eightbyte isn't SSE or any other eightbyte isn't SSEUP, the whole
+            //     argument is passed in memory. NOTE: This is necessary to keep the
+            //     ABI working for processors that don't support the __m256 type.
+            //
+            // (d) If SSEUP is not preceded by SSE or SSEUP, it is converted to SSE.
+            //
+            // Some of these are enforced by the merging logic.  Others can arise
+            // only with unions; for example:
+            //   union { _Complex double; unsigned; }
+            //
+            // Note that clauses (b) and (c) were added in 0.98.
+
+            var result = classes;
+            if (result[1] == .memory) {
+                result[0] = .memory;
             }
+
+            if (result[1] == .x87up) {
+                @trap();
+            }
+
+            if (aggregate_size > 16 and (result[0] != .sse or result[1] != .sseup)) {
+                result[0] = .memory;
+            }
+
+            if (result[1] == .sseup and result[0] != .sse) {
+                result[0] = .sse;
+            }
+
+            return result;
         }
 
         fn get_int_type_at_offset(module: *Module, ty: *Type, offset: u32, source_type: *Type, source_offset: u32) *Type {
@@ -2484,11 +3806,11 @@ pub const Abi = struct {
                                 return ty;
                             }
                         },
-                        else => unreachable,
+                        else => return module.integer_type(@intCast(@min(ty.get_byte_size() - source_offset, 8) * 8), integer_type.signed),
                     }
                 },
                 .pointer => return if (offset == 0) ty else @trap(),
-                .@"struct" => {
+                .structure => {
                     if (get_member_at_offset(ty, offset)) |field| {
                         return get_int_type_at_offset(module, field.type, @intCast(offset - field.byte_offset), source_type, source_offset);
                     }
@@ -2510,8 +3832,6 @@ pub const Abi = struct {
                 const bit_count = byte_count * 8;
                 return module.integer_type(@intCast(bit_count), false);
             }
-
-            unreachable;
         }
 
         fn get_member_at_offset(ty: *Type, offset: u32) ?*const Field {
@@ -2522,7 +3842,7 @@ pub const Abi = struct {
             var offset_it: u32 = 0;
             var last_match: ?*const Field = null;
 
-            const struct_type = &ty.bb.@"struct";
+            const struct_type = &ty.bb.structure;
             for (struct_type.fields) |*field| {
                 if (offset_it > offset) {
                     break;
@@ -2542,7 +3862,7 @@ pub const Abi = struct {
             }
 
             switch (ty.bb) {
-                .@"struct" => |*struct_type| {
+                .structure => |*struct_type| {
                     var offset: u64 = 0;
 
                     for (struct_type.fields) |field| {
@@ -2569,78 +3889,230 @@ pub const Abi = struct {
             }
         }
 
-        fn get_argument_pair(types: [2]*Type) Abi.Information {
-            const low_size = types[0].get_byte_size();
-            const high_alignment = types[1].get_byte_alignment();
-            const high_start = lib.align_forward_u64(low_size, high_alignment);
-            assert(high_start == 8);
-            return .{
-                .kind = .{
-                    .direct_pair = types,
+        const ArgumentOptions = struct {
+            available_gpr: u32,
+            is_named_argument: bool,
+            is_reg_call: bool,
+        };
+
+        pub fn classify_argument_type(module: *Module, argument_type: *Type, options: ArgumentOptions) struct { Abi.Information, Abi.SystemV.RegisterCount } {
+            const classes = classify(argument_type, .{
+                .base_offset = 0,
+                .is_named_argument = true,
+            });
+            assert(classes[1] != .memory or classes[0] == .memory);
+            assert(classes[1] != .sseup or classes[0] == .sse);
+            var needed_registers = Abi.SystemV.RegisterCount{
+                .gpr = 0,
+                .sse = 0,
+            };
+
+            var low: ?*Type = null;
+            switch (classes[0]) {
+                .integer => {
+                    needed_registers.gpr += 1;
+
+                    const low_ty = Abi.SystemV.get_int_type_at_offset(module, argument_type, 0, argument_type, 0);
+                    low = low_ty;
+
+                    if (classes[1] == .none and low_ty.bb == .integer) {
+                        if (argument_type.bb == .enumerator) {
+                            @trap();
+                        }
+
+                        if (argument_type.is_integral_or_enumeration_type() and argument_type.is_promotable_integer_type_for_abi()) {
+                            return .{
+                                Abi.Information.get_extend(.{
+                                    .semantic_type = argument_type,
+                                    .sign = argument_type.is_signed(),
+                                }),
+                                needed_registers,
+                            };
+                        }
+                    }
                 },
+                .memory, .x87, .complex_x87 => {
+                    // TODO: CXX ABI: RAA_Indirect
+                    return .{ get_indirect_result(argument_type, options.available_gpr), needed_registers };
+                },
+                else => @trap(),
+            }
+
+            var high: ?*Type = null;
+            switch (classes[1]) {
+                .none => {},
+                .integer => {
+                    needed_registers.gpr += 1;
+                    const high_ty = Abi.SystemV.get_int_type_at_offset(module, argument_type, 8, argument_type, 8);
+                    high = high_ty;
+
+                    if (classes[0] == .none) {
+                        @trap();
+                    }
+                },
+                else => @trap(),
+            }
+
+            const result_type = if (high) |hi| get_by_val_argument_pair(module, low orelse unreachable, hi) else low orelse unreachable;
+            return .{
+                Abi.Information.get_direct(.{
+                    .semantic_type = argument_type,
+                    .type = result_type,
+                }),
+                needed_registers,
             };
         }
 
-        fn indirect_argument(ty: *Type, free_integer_registers: u32) Abi.Information {
-            const is_illegal_vector = false;
-            if (!ty.is_aggregate() and !is_illegal_vector) {
-                if (ty.bb == .integer and ty.get_bit_size() < 32) {
-                    unreachable;
-                } else {
-                    return .{
-                        .kind = .direct,
-                    };
-                }
-            } else {
-                if (free_integer_registers == 0) {
-                    if (ty.get_byte_alignment() <= 8 and ty.get_byte_size() <= 8) {
-                        unreachable;
-                    }
-                }
+        pub fn get_by_val_argument_pair(module: *Module, low: *Type, high: *Type) *Type {
+            const low_size = low.get_byte_allocation_size();
+            const high_alignment = high.get_byte_alignment();
+            const high_start = lib.align_forward_u64(low_size, high_alignment);
+            assert(high_start != 0 and high_start <= 8);
 
-                if (ty.get_byte_alignment() < 8) {
-                    return .{
-                        .kind = .{
-                            .indirect = .{
-                                .type = ty,
-                                .alignment = 8,
-                            },
-                        },
-                        .attributes = .{
-                            .realign = true,
-                            .by_value = true,
-                        },
-                    };
-                } else {
-                    return .{
-                        .kind = .{
-                            .indirect = .{
-                                .type = ty,
-                                .alignment = @intCast(ty.get_byte_alignment()),
-                            },
-                        },
-                        .attributes = .{
-                            .by_value = true,
-                        },
-                    };
-                }
-            }
-            unreachable;
+            const new_low = if (high_start != 8) {
+                @trap();
+            } else low;
+            const result = module.get_anonymous_struct_pair(.{ new_low, high });
+            assert(result.bb.structure.fields[1].byte_offset == 8);
+            return result;
         }
 
-        fn indirect_return(ty: *Type) Abi.Information {
-            if (ty.is_aggregate()) {
-                return .{
-                    .kind = .{
-                        .indirect = .{
-                            .type = ty,
-                            .alignment = @intCast(ty.get_byte_alignment()),
-                        },
-                    },
+        pub fn classify_return_type(module: *Module, return_type: *Type) Abi.Information {
+            const classes = classify(return_type, .{
+                .base_offset = 0,
+                .is_named_argument = true,
+            });
+            assert(classes[1] != .memory or classes[0] == .memory);
+            assert(classes[1] != .sseup or classes[0] == .sse);
+
+            var low: ?*Type = null;
+
+            switch (classes[0]) {
+                .none => {
+                    if (classes[1] == .none) {
+                        return Abi.Information.get_ignore(.{
+                            .semantic_type = return_type,
+                        });
+                    }
+
+                    @trap();
+                },
+                .integer => {
+                    const low_ty = Abi.SystemV.get_int_type_at_offset(module, return_type, 0, return_type, 0);
+                    low = low_ty;
+
+                    if (classes[1] == .none and low_ty.bb == .integer) {
+                        if (return_type.bb == .enumerator) {
+                            @trap();
+                        }
+
+                        if (return_type.is_integral_or_enumeration_type() and return_type.is_promotable_integer_type_for_abi()) {
+                            return Abi.Information.get_extend(.{
+                                .semantic_type = return_type,
+                                .sign = return_type.is_signed(),
+                            });
+                        }
+                    }
+                },
+                .memory => {
+                    return Abi.SystemV.get_indirect_return_result(.{ .type = return_type });
+                },
+                else => @trap(),
+            }
+
+            var high: ?*Type = null;
+            _ = &high;
+
+            switch (classes[1]) {
+                .none => {},
+                .integer => {
+                    const high_offset = 8;
+                    const high_ty = Abi.SystemV.get_int_type_at_offset(module, return_type, high_offset, return_type, high_offset);
+                    high = high_ty;
+                    if (classes[0] == .none) {
+                        return Abi.Information.get_direct(.{
+                            .semantic_type = return_type,
+                            .type = high_ty,
+                            .offset = high_offset,
+                        });
+                    }
+                },
+                else => @trap(),
+            }
+
+            if (high) |hi| {
+                low = Abi.SystemV.get_byval_argument_pair(module, .{ low orelse unreachable, hi });
+            }
+
+            return Abi.Information.get_direct(.{
+                .semantic_type = return_type,
+                .type = low orelse unreachable,
+            });
+        }
+
+        pub fn get_byval_argument_pair(module: *Module, pair: [2]*Type) *Type {
+            const low_size = pair[0].get_byte_size();
+            const high_alignment = pair[1].get_byte_alignment();
+            const high_offset = lib.align_forward_u64(low_size, high_alignment);
+            assert(high_offset != 0 and high_offset <= 8);
+            const low = if (high_offset != 8)
+                if ((pair[0].bb == .float and pair[0].bb.float.kind == .half) or (pair[0].bb == .float and pair[0].bb.float.kind == .float)) {
+                    @trap();
+                } else {
+                    assert(pair[0].is_integer_backing());
+                    @trap();
+                }
+            else
+                pair[0];
+            const high = pair[1];
+            const struct_type = module.get_anonymous_struct_pair(.{ low, high });
+            assert(struct_type.bb.structure.fields[1].byte_offset == 8);
+
+            return struct_type;
+        }
+
+        const IndirectReturn = struct {
+            type: *Type,
+        };
+
+        pub fn get_indirect_return_result(indirect: IndirectReturn) Abi.Information {
+            if (indirect.type.is_aggregate_type_for_abi()) {
+                return Abi.Information.get_natural_align_indirect(.{
+                    .semantic_type = indirect.type,
+                });
+            } else {
+                @trap();
+            }
+        }
+
+        pub fn get_indirect_result(ty: *Type, free_gpr: u32) Abi.Information {
+            if (!ty.is_aggregate_type_for_abi() and !is_illegal_vector_type(ty) and !ty.is_arbitrary_bit_integer()) {
+                return switch (ty.is_promotable_integer_type_for_abi()) {
+                    true => @trap(),
+                    false => Abi.Information.get_direct(.{
+                        .semantic_type = ty,
+                        .type = ty,
+                    }),
                 };
             } else {
-                unreachable;
+                // TODO CXX ABI
+                const alignment = @max(ty.get_byte_alignment(), 8);
+                const size = ty.get_byte_size();
+                return switch (free_gpr == 0 and alignment == 8 and size <= 8) {
+                    true => @trap(),
+                    false => Abi.Information.get_indirect(.{
+                        .semantic_type = ty,
+                        .alignment = alignment,
+                    }),
+                };
             }
+        }
+
+        pub fn is_illegal_vector_type(ty: *Type) bool {
+            return switch (ty.bb) {
+                .vector => @trap(),
+                else => false,
+            };
         }
     };
 };
@@ -2655,93 +4127,6 @@ const ConvertOptions = struct {
     objects: []const [:0]const u8,
     target: Target,
 };
-
-fn llvm_emit_function_attributes(module: *Module, value: *llvm.Value, function_type: *FunctionType, function_attributes: Function.Attributes, container_type: AttributeContainerType) void {
-    const enable_frame_pointer = true;
-
-    if (enable_frame_pointer) {
-        llvm_add_function_attribute(value, module.llvm.attribute_table.frame_pointer_all, container_type);
-        llvm_add_function_attribute(value, module.llvm.attribute_table.ssp, container_type);
-    }
-
-    llvm_add_function_attribute(value, module.llvm.attribute_table.@"stack-protector-buffer-size", container_type);
-    llvm_add_function_attribute(value, module.llvm.attribute_table.@"no-trapping-math", container_type);
-    llvm_add_function_attribute(value, module.llvm.attribute_table.nounwind, container_type);
-
-    switch (function_attributes.inline_behavior) {
-        .default => {},
-        .no_inline => llvm_add_function_attribute(value, module.llvm.attribute_table.@"noinline", container_type),
-        .always_inline => llvm_add_function_attribute(value, module.llvm.attribute_table.alwaysinline, container_type),
-    }
-
-    if (function_attributes.naked) {
-        llvm_add_function_attribute(value, module.llvm.attribute_table.naked, container_type);
-    }
-
-    if (function_type.abi_return_type == module.noreturn_type) {
-        llvm_add_function_attribute(value, module.llvm.attribute_table.noreturn, container_type);
-    }
-}
-
-fn llvm_emit_function_site_argument_attributes(noalias module: *Module, function: *llvm.Value, argument_abi: Abi.Information, is_return: bool) void {
-
-    // assert(argument_abi.indices[1] == argument_abi.indices[0] or argument_abi.kind == .direct_pair or argument_abi.kind == .direct or argument_abi.kind == .ignore or argument_abi.kind == .expand or argument_abi.kind == .direct_coerce or argument_abi.kind == .direct_coerce_int or argument_abi.kind == .expand_coerce or argument_abi.kind == .direct_split_struct_i32);
-
-    if (argument_abi.attributes.zero_extend) {
-        llvm_add_argument_attribute(function, module.llvm.attribute_table.zeroext, argument_abi.indices[0] + @intFromBool(!is_return), .function);
-    }
-
-    if (argument_abi.attributes.sign_extend) {
-        llvm_add_argument_attribute(function, module.llvm.attribute_table.signext, argument_abi.indices[0] + @intFromBool(!is_return), .function);
-    }
-
-    if (argument_abi.attributes.by_reg) {
-        @trap();
-    }
-
-    switch (argument_abi.kind) {
-        .direct => {},
-        .indirect => |indirect| {
-            const attribute_index = if (is_return) 1 else argument_abi.indices[0] + 1;
-            const align_attribute = module.llvm.context.create_enum_attribute(module.llvm.attribute_kind_table.@"align", indirect.alignment);
-
-            switch (is_return) {
-                true => {
-                    const sret_attribute = module.llvm.context.create_type_attribute(module.llvm.attribute_kind_table.sret, indirect.type.llvm.handle);
-                    llvm_add_argument_attribute(function, sret_attribute, attribute_index, .function);
-                    llvm_add_argument_attribute(function, module.llvm.attribute_table.@"noalias", attribute_index, .function);
-                    llvm_add_argument_attribute(function, align_attribute, attribute_index, .function);
-                },
-                false => {
-                    if (argument_abi.attributes.by_value) {
-                        const by_value_attribute = module.llvm.context.create_type_attribute(module.llvm.attribute_kind_table.byval, indirect.type.llvm.handle);
-                        llvm_add_argument_attribute(function, by_value_attribute, attribute_index, .function);
-                    }
-
-                    llvm_add_argument_attribute(function, align_attribute, attribute_index, .function);
-                },
-            }
-        },
-        else => {},
-    }
-}
-
-fn llvm_emit_function_site_attributes(module: *Module, value: *Value) void {
-    const llvm_value = value.llvm;
-    const function_type = &value.type.bb.function;
-    const function_attributes = switch (value.bb) {
-        .function => value.bb.function.attributes,
-        else => Function.Attributes{},
-    };
-
-    llvm_emit_function_attributes(module, llvm_value, function_type, function_attributes, .function);
-
-    llvm_emit_function_site_argument_attributes(module, llvm_value, function_type.return_type_abi, true);
-
-    for (function_type.get_argument_type_abis()) |argument_type_abi| {
-        llvm_emit_function_site_argument_attributes(module, llvm_value, argument_type_abi, false);
-    }
-}
 
 pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
     const build_dir = "bb-cache";
@@ -2823,9 +4208,9 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
             if (string_to_enum(GlobalKind, global_string)) |global_kind| {
                 switch (global_kind) {
                     .@"fn" => {
-                        var calling_convention = CallingConvention.unknown;
-                        var function_attributes = Function.Attributes{};
-                        _ = &function_attributes;
+                        var calling_convention = CallingConvention.c;
+                        const function_attributes = Function.Attributes{};
+                        var is_var_args = false;
 
                         if (converter.consume_character_if_match(left_bracket)) {
                             while (converter.offset < converter.content.len) {
@@ -2867,13 +4252,12 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
 
                         converter.expect_character(left_parenthesis);
 
-                        const Argument = struct {
+                        var argument_buffer: [max_argument_count]struct {
                             name: []const u8,
                             type: *Type,
                             line: u32,
                             column: u32,
-                        };
-                        var argument_buffer: [64]Argument = undefined;
+                        } = undefined;
                         var semantic_argument_count: u32 = 0;
 
                         while (converter.offset < converter.content.len and converter.content[converter.offset] != right_parenthesis) : (semantic_argument_count += 1) {
@@ -2881,6 +4265,25 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
 
                             const argument_line = converter.get_line();
                             const argument_column = converter.get_column();
+
+                            if (converter.consume_character_if_match('.')) {
+                                if (converter.consume_character_if_match('.')) {
+                                    converter.expect_character('.');
+                                    converter.skip_space();
+
+                                    if (converter.content[converter.offset] == ')') {
+                                        if (calling_convention != .c) {
+                                            converter.report_error();
+                                        }
+                                        is_var_args = true;
+                                        break;
+                                    } else {
+                                        @trap();
+                                    }
+                                } else {
+                                    @trap();
+                                }
+                            }
 
                             const argument_name = converter.parse_identifier();
 
@@ -2893,7 +4296,6 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                             const argument_type = converter.parse_type(module);
 
                             converter.skip_space();
-
                             _ = converter.consume_character_if_match(',');
 
                             argument_buffer[semantic_argument_count] = .{
@@ -2911,329 +4313,190 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                         const semantic_return_type = converter.parse_type(module);
                         const linkage_name = global_name;
 
-                        var debug_argument_type_buffer: [argument_buffer.len + 1]*llvm.DI.Type = undefined;
-
-                        const semantic_debug_argument_types = debug_argument_type_buffer[0 .. semantic_argument_count + 1];
                         const semantic_arguments = argument_buffer[0..semantic_argument_count];
-                        const semantic_argument_types = module.arena.allocate(*Type, semantic_argument_count);
-
-                        semantic_debug_argument_types[0] = semantic_return_type.llvm.debug;
-
-                        for (semantic_arguments, semantic_argument_types, semantic_debug_argument_types[1..]) |argument, *argument_type, *debug_argument_type| {
-                            argument_type.* = argument.type;
-                            debug_argument_type.* = argument.type.llvm.debug;
-                        }
+                        const argument_type_abis = module.arena.allocate(Abi.Information, semantic_arguments.len);
 
                         var return_type_abi: Abi.Information = undefined;
-                        var argument_type_abi_buffer: [64]Abi.Information = undefined;
 
-                        switch (calling_convention) {
-                            .unknown => {
-                                return_type_abi = .{ .kind = .direct };
+                        const resolved_calling_convention = calling_convention.resolve(module.target);
+                        const is_reg_call = resolved_calling_convention == .system_v and false; // TODO: regcall calling_convention
 
-                                for (0..semantic_argument_count) |i| {
-                                    argument_type_abi_buffer[i] = .{
-                                        .kind = .direct,
-                                        .indices = .{ @intCast(i), @intCast(i + 1) },
-                                    };
-                                }
-                            },
-                            .c => {
-                                // Return type abi
-                                switch (options.target.cpu) {
-                                    .x86_64 => switch (options.target.os) {
-                                        .linux => {
-                                            return_type_abi = ret_ty_abi: {
-                                                const type_classes = Abi.SystemV.classify(semantic_return_type, 0);
-                                                assert(type_classes[1] != .memory or type_classes[0] == .memory);
-                                                assert(type_classes[1] != .sseup or type_classes[0] == .sse);
-
-                                                const result_type = switch (type_classes[0]) {
-                                                    .none => switch (type_classes[1]) {
-                                                        .none => break :ret_ty_abi .{
-                                                            .kind = .ignore,
-                                                        },
-                                                        else => |t| @panic(@tagName(t)),
-                                                    },
-                                                    .integer => b: {
-                                                        const result_type = Abi.SystemV.get_int_type_at_offset(module, semantic_return_type, 0, semantic_return_type, 0);
-                                                        if (type_classes[1] == .none and semantic_return_type.get_bit_size() < 32) {
-                                                            const signed = switch (semantic_return_type.bb) {
-                                                                .integer => |integer_type| integer_type.signed,
-                                                                .bits => false,
-                                                                else => |t| @panic(@tagName(t)),
-                                                            };
-                                                            // _ = signed;
-                                                            break :ret_ty_abi .{
-                                                                .kind = .{
-                                                                    .direct_coerce = semantic_return_type,
-                                                                },
-                                                                .attributes = .{
-                                                                    .sign_extend = signed,
-                                                                    .zero_extend = !signed,
-                                                                },
-                                                            };
-                                                        }
-
-                                                        break :b result_type;
-                                                    },
-                                                    .memory => break :ret_ty_abi Abi.SystemV.indirect_return(semantic_return_type),
-                                                    else => |t| @panic(@tagName(t)),
-                                                };
-
-                                                const high_part: ?*Type = switch (type_classes[1]) {
-                                                    .none, .memory => null,
-                                                    .integer => b: {
-                                                        assert(type_classes[0] != .none);
-                                                        const high_part = Abi.SystemV.get_int_type_at_offset(module, semantic_return_type, 8, semantic_return_type, 8);
-                                                        break :b high_part;
-                                                    },
-                                                    else => |t| @panic(@tagName(t)),
-                                                };
-
-                                                if (high_part) |hp| {
-                                                    const expected_result = Abi.SystemV.get_argument_pair(.{ result_type, hp });
-                                                    break :ret_ty_abi expected_result;
-                                                } else {
-                                                    // TODO
-                                                    const is_type = true;
-                                                    if (is_type) {
-                                                        if (result_type == semantic_return_type) {
-                                                            break :ret_ty_abi Abi.Information{
-                                                                .kind = .direct,
-                                                            };
-                                                        } else {
-                                                            break :ret_ty_abi Abi.Information{
-                                                                .kind = .{
-                                                                    .direct_coerce = result_type,
-                                                                },
-                                                            };
-                                                        }
-                                                    } else {
-                                                        unreachable;
-                                                    }
-                                                }
-                                            };
-
-                                            var available_registers = Abi.SystemV.RegisterCount{
-                                                .gpr = 6,
-                                                .sse = 8,
-                                            };
-
-                                            if (return_type_abi.kind == .indirect) {
-                                                available_registers.gpr -= 1;
-                                            }
-
-                                            const return_by_reference = false;
-                                            if (return_by_reference) {
-                                                @trap();
-                                            }
-
-                                            for (semantic_arguments, argument_type_abi_buffer[0..semantic_arguments.len]) |semantic_argument, *argument_type_abi| {
-                                                const semantic_argument_type = semantic_argument.type;
-                                                var needed_registers = Abi.SystemV.RegisterCount{
-                                                    .gpr = 0,
-                                                    .sse = 0,
-                                                };
-                                                const argument_type_abi_classification: Abi.Information = ata: {
-                                                    const type_classes = Abi.SystemV.classify(semantic_argument_type, 0);
-                                                    assert(type_classes[1] != .memory or type_classes[0] == .memory);
-                                                    assert(type_classes[1] != .sseup or type_classes[0] == .sse);
-
-                                                    const result_type = switch (type_classes[0]) {
-                                                        .integer => b: {
-                                                            needed_registers.gpr += 1;
-                                                            const result_type = Abi.SystemV.get_int_type_at_offset(module, semantic_argument_type, 0, semantic_argument_type, 0);
-                                                            if (type_classes[1] == .none and semantic_argument_type.get_bit_size() < 32) {
-                                                                const signed = switch (semantic_argument_type.bb) {
-                                                                    .integer => |integer_type| integer_type.signed,
-                                                                    .bits => false, // TODO: signedness?
-                                                                    else => |t| @panic(@tagName(t)),
-                                                                };
-
-                                                                break :ata .{
-                                                                    .kind = .{
-                                                                        .direct_coerce = result_type,
-                                                                    },
-                                                                    .attributes = .{
-                                                                        .sign_extend = signed,
-                                                                        .zero_extend = !signed,
-                                                                    },
-                                                                };
-                                                            }
-
-                                                            break :b result_type;
-                                                        },
-                                                        .memory => break :ata Abi.SystemV.indirect_argument(semantic_argument_type, available_registers.gpr),
-                                                        else => |t| @panic(@tagName(t)),
-                                                    };
-                                                    const high_part: ?*Type = switch (type_classes[1]) {
-                                                        .none, .memory => null,
-                                                        .integer => b: {
-                                                            assert(type_classes[0] != .none);
-                                                            needed_registers.gpr += 1;
-                                                            const high_part = Abi.SystemV.get_int_type_at_offset(module, semantic_argument_type, 8, semantic_argument_type, 8);
-                                                            break :b high_part;
-                                                        },
-                                                        else => |t| @panic(@tagName(t)),
-                                                    };
-
-                                                    if (high_part) |hp| {
-                                                        break :ata Abi.SystemV.get_argument_pair(.{ result_type, hp });
-                                                    } else {
-                                                        // TODO
-                                                        const is_type = true;
-                                                        if (is_type) {
-                                                            if (result_type == semantic_argument_type) {
-                                                                break :ata Abi.Information{
-                                                                    .kind = .direct,
-                                                                };
-                                                            } else if (result_type.bb == .integer and semantic_argument_type.bb == .integer and semantic_argument_type.get_byte_size() == result_type.get_byte_size()) {
-                                                                unreachable;
-                                                            } else {
-                                                                break :ata Abi.Information{
-                                                                    .kind = .{
-                                                                        .direct_coerce = result_type,
-                                                                    },
-                                                                };
-                                                            }
-                                                        }
-                                                        unreachable;
-                                                    }
-                                                };
-                                                argument_type_abi.* = if (available_registers.sse < needed_registers.sse or available_registers.gpr < needed_registers.gpr) b: {
-                                                    break :b Abi.SystemV.indirect_argument(semantic_argument_type, available_registers.gpr);
-                                                } else b: {
-                                                    available_registers.gpr -= needed_registers.gpr;
-                                                    available_registers.sse -= needed_registers.sse;
-                                                    break :b argument_type_abi_classification;
-                                                };
-                                            }
+                        const function_type = switch (resolved_calling_convention) {
+                            .system_v => ft: {
+                                var available_registers: Abi.RegisterCount = switch (resolved_calling_convention) {
+                                    .system_v => .{
+                                        .system_v = .{
+                                            .gpr = if (is_reg_call) 11 else 6,
+                                            .sse = if (is_reg_call) 16 else 8,
                                         },
                                     },
+                                    .win64 => @trap(),
+                                };
+                                var abi_return_type: *Type = undefined;
+                                var abi_argument_type_count: u16 = 0;
+                                var llvm_abi_argument_type_buffer: [max_argument_count]*llvm.Type = undefined;
+                                var abi_argument_type_buffer: [max_argument_count]*Type = undefined;
+
+                                return_type_abi = Abi.SystemV.classify_return_type(module, semantic_return_type);
+                                const return_abi_kind = return_type_abi.flags.kind;
+                                abi_return_type = switch (return_abi_kind) {
+                                    .direct, .extend => return_type_abi.coerce_to_type.?,
+                                    .ignore, .indirect => module.void_type,
+                                    else => |t| @panic(@tagName(t)),
+                                };
+
+                                if (return_type_abi.flags.kind == .indirect) {
+                                    assert(!return_type_abi.flags.sret_after_this);
+                                    available_registers.system_v.gpr -= 1;
+                                    const indirect_type = module.get_pointer_type(.{ .type = return_type_abi.semantic_type });
+                                    abi_argument_type_buffer[abi_argument_type_count] = indirect_type;
+                                    llvm_abi_argument_type_buffer[abi_argument_type_count] = indirect_type.llvm.handle;
+                                    abi_argument_type_count += 1;
                                 }
+
+                                const required_arguments = semantic_argument_count;
+
+                                for (argument_type_abis, semantic_arguments, 0..) |*argument_type_abi, semantic_argument, semantic_argument_index| {
+                                    const semantic_argument_type = semantic_argument.type;
+                                    const is_named_argument = semantic_argument_index < required_arguments;
+
+                                    const result = if (is_reg_call) @trap() else Abi.SystemV.classify_argument_type(module, semantic_argument_type, .{
+                                        .is_named_argument = is_named_argument,
+                                        .is_reg_call = is_reg_call,
+                                        .available_gpr = available_registers.system_v.gpr,
+                                    });
+                                    const abi = result[0];
+                                    const needed_registers = result[1];
+
+                                    argument_type_abi.* = switch (available_registers.system_v.gpr >= needed_registers.gpr and available_registers.system_v.sse >= needed_registers.sse) {
+                                        true => blk: {
+                                            available_registers.system_v.gpr -= needed_registers.gpr;
+                                            available_registers.system_v.sse -= needed_registers.sse;
+                                            break :blk abi;
+                                        },
+                                        false => Abi.SystemV.get_indirect_result(semantic_argument_type, available_registers.system_v.gpr),
+                                    };
+                                    if (argument_type_abi.get_padding_type() != null) {
+                                        @trap();
+                                    }
+
+                                    argument_type_abi.abi_start = abi_argument_type_count;
+
+                                    const count = switch (argument_type_abi.flags.kind) {
+                                        .direct, .extend => blk: {
+                                            const coerce_to_type = argument_type_abi.get_coerce_to_type();
+                                            const flattened_struct = argument_type_abi.flags.kind == .direct and argument_type_abi.get_can_be_flattened() and coerce_to_type.bb == .structure;
+
+                                            const count: u16 = switch (flattened_struct) {
+                                                false => 1,
+                                                true => @intCast(argument_type_abi.get_coerce_to_type().bb.structure.fields.len),
+                                            };
+
+                                            switch (flattened_struct) {
+                                                false => {
+                                                    llvm_abi_argument_type_buffer[argument_type_abi.abi_start] = coerce_to_type.llvm.handle;
+                                                    abi_argument_type_buffer[argument_type_abi.abi_start] = coerce_to_type;
+                                                },
+                                                true => {
+                                                    for (coerce_to_type.bb.structure.fields, 0..) |field, field_index| {
+                                                        const index = argument_type_abi.abi_start + field_index;
+                                                        llvm_abi_argument_type_buffer[index] = field.type.llvm.handle;
+                                                        abi_argument_type_buffer[index] = field.type;
+                                                    }
+                                                },
+                                            }
+
+                                            break :blk count;
+                                        },
+                                        .indirect => blk: {
+                                            const indirect_type = module.get_pointer_type(.{ .type = argument_type_abi.semantic_type });
+                                            abi_argument_type_buffer[argument_type_abi.abi_start] = indirect_type;
+                                            llvm_abi_argument_type_buffer[argument_type_abi.abi_start] = indirect_type.llvm.handle;
+                                            break :blk 1;
+                                        },
+                                        else => |t| @panic(@tagName(t)),
+                                    };
+
+                                    argument_type_abi.abi_count = count;
+
+                                    abi_argument_type_count += count;
+                                }
+
+                                const abi_argument_types = module.arena.allocate(*Type, abi_argument_type_count);
+                                @memcpy(abi_argument_types, abi_argument_type_buffer[0..abi_argument_types.len]);
+
+                                const llvm_abi_argument_types = llvm_abi_argument_type_buffer[0..abi_argument_type_count];
+                                const llvm_function_type = llvm.Type.Function.get(abi_return_type.llvm.handle, llvm_abi_argument_types, is_var_args);
+
+                                const subroutine_type_flags = llvm.DI.Flags{};
+                                const subroutine_type = if (module.llvm.di_builder) |di_builder| blk: {
+                                    var debug_argument_type_buffer: [max_argument_count + 1]*llvm.DI.Type = undefined;
+                                    const semantic_debug_argument_types = debug_argument_type_buffer[0 .. argument_type_abis.len + 1 + @intFromBool(is_var_args)];
+                                    semantic_debug_argument_types[0] = return_type_abi.semantic_type.llvm.debug;
+
+                                    for (argument_type_abis, semantic_debug_argument_types[1..][0..argument_type_abis.len]) |argument_abi, *debug_argument_type| {
+                                        debug_argument_type.* = argument_abi.semantic_type.llvm.debug;
+                                    }
+
+                                    if (is_var_args) {
+                                        semantic_debug_argument_types[argument_type_abis.len + 1] = module.void_type.llvm.debug;
+                                    }
+
+                                    const subroutine_type = di_builder.create_subroutine_type(module.llvm.file, semantic_debug_argument_types, subroutine_type_flags);
+                                    break :blk subroutine_type;
+                                } else undefined;
+
+                                const result = module.types.add(.{
+                                    .bb = .{
+                                        .function = .{
+                                            .return_type_abi = return_type_abi,
+                                            .calling_convention = calling_convention,
+                                            .is_var_args = is_var_args,
+                                            .argument_type_abis = argument_type_abis,
+                                            .abi_return_type = abi_return_type,
+                                            .abi_argument_types = abi_argument_types,
+                                        },
+                                    },
+                                    .llvm = .{
+                                        .handle = llvm_function_type.to_type(),
+                                        .debug = subroutine_type.to_type(),
+                                    },
+                                    .name = null,
+                                });
+                                break :ft result;
                             },
-                        }
-
-                        const argument_type_abis = module.arena.allocate(Abi.Information, semantic_arguments.len);
-                        @memcpy(argument_type_abis, argument_type_abi_buffer[0..semantic_arguments.len]);
-
-                        var abi_argument_type_buffer: [64]*Type = undefined;
-                        var abi_argument_type_count: usize = 0;
-
-                        var llvm_abi_argument_type_buffer: [64]*llvm.Type = undefined;
-
-                        const abi_return_type = switch (return_type_abi.kind) {
-                            .ignore, .direct => semantic_return_type,
-                            .direct_coerce => |coerced_type| coerced_type,
-                            .indirect => |indirect| b: {
-                                const indirect_pointer_type = module.get_pointer_type(indirect.type);
-                                abi_argument_type_buffer[abi_argument_type_count] = indirect_pointer_type;
-                                llvm_abi_argument_type_buffer[abi_argument_type_count] = indirect_pointer_type.llvm.handle;
-                                abi_argument_type_count += 1;
-                                break :b module.void_type;
+                            .win64 => {
+                                @trap();
                             },
-                            .direct_pair => |pair| module.get_anonymous_struct_pair(pair),
-                            else => |t| @panic(@tagName(t)),
                         };
 
-                        for (argument_type_abis, semantic_argument_types) |*argument_abi, original_argument_type| {
-                            const start: u16 = @intCast(abi_argument_type_count);
-                            switch (argument_abi.kind) {
-                                .direct => {
-                                    abi_argument_type_buffer[abi_argument_type_count] = original_argument_type;
-                                    llvm_abi_argument_type_buffer[abi_argument_type_count] = original_argument_type.llvm.handle;
-                                    abi_argument_type_count += 1;
-                                },
-                                .direct_coerce => |coerced_type| {
-                                    abi_argument_type_buffer[abi_argument_type_count] = coerced_type;
-                                    llvm_abi_argument_type_buffer[abi_argument_type_count] = coerced_type.llvm.handle;
-                                    abi_argument_type_count += 1;
-                                },
-                                .direct_pair => |pair| {
-                                    abi_argument_type_buffer[abi_argument_type_count] = pair[0];
-                                    llvm_abi_argument_type_buffer[abi_argument_type_count] = pair[0].llvm.handle;
-                                    abi_argument_type_count += 1;
-                                    abi_argument_type_buffer[abi_argument_type_count] = pair[1];
-                                    llvm_abi_argument_type_buffer[abi_argument_type_count] = pair[1].llvm.handle;
-                                    abi_argument_type_count += 1;
-                                },
-                                .indirect => |indirect| {
-                                    const indirect_pointer_type = module.get_pointer_type(indirect.type);
-                                    abi_argument_type_buffer[abi_argument_type_count] = indirect_pointer_type;
-                                    llvm_abi_argument_type_buffer[abi_argument_type_count] = indirect_pointer_type.llvm.handle;
-                                    abi_argument_type_count += 1;
-                                },
-                                else => |t| @panic(@tagName(t)),
-                            }
-
-                            const end: u16 = @intCast(abi_argument_type_count);
-                            argument_abi.indices = .{ start, end };
-                        }
-
-                        const abi_argument_types = module.arena.allocate(*Type, abi_argument_type_count);
-                        @memcpy(abi_argument_types, abi_argument_type_buffer[0..abi_argument_type_count]);
-                        const llvm_abi_argument_types = llvm_abi_argument_type_buffer[0..abi_argument_type_count];
-
-                        const llvm_function_type = llvm.Type.Function.get(abi_return_type.llvm.handle, llvm_abi_argument_types, false);
                         const llvm_handle = module.llvm.handle.create_function(.{
                             .name = global_name,
                             .linkage = switch (is_export or is_extern) {
                                 true => .ExternalLinkage,
                                 false => .InternalLinkage,
                             },
-                            .type = llvm_function_type,
-                        });
-
-                        var subroutine_type: *llvm.DI.Type.Subroutine = undefined;
-                        const function_scope: *llvm.DI.Scope = if (module.llvm.di_builder) |di_builder| blk: {
-                            const subroutine_type_flags = llvm.DI.Flags{};
-                            subroutine_type = di_builder.create_subroutine_type(module.llvm.file, semantic_debug_argument_types, subroutine_type_flags);
-                            const scope_line: u32 = @intCast(converter.line_offset + 1);
-                            const local_to_unit = !is_export and !is_extern;
-                            const flags = llvm.DI.Flags{};
-                            const is_definition = !is_extern;
-                            const subprogram = di_builder.create_function(module.llvm.global_scope, global_name, linkage_name, module.llvm.file, global_line, subroutine_type, local_to_unit, is_definition, scope_line, flags, options.build_mode.is_optimized());
-                            llvm_handle.set_subprogram(subprogram);
-
-                            break :blk @ptrCast(subprogram);
-                        } else undefined;
-
-                        const function_type = module.types.add(.{
-                            .name = null,
-                            .llvm = .{
-                                .handle = llvm_function_type.to_type(),
-                                .debug = subroutine_type.to_type(),
-                            },
-                            .bb = .{
-                                .function = .{
-                                    .calling_convention = calling_convention,
-                                    .semantic_return_type = semantic_return_type,
-                                    .semantic_argument_types = blk: {
-                                        const sema_arg_types = module.arena.allocate(*Type, semantic_argument_count);
-                                        for (semantic_arguments, sema_arg_types) |argument, *argument_type| {
-                                            argument_type.* = argument.type;
-                                        }
-
-                                        break :blk sema_arg_types.ptr;
-                                    },
-                                    .semantic_argument_count = semantic_argument_count,
-                                    .abi_argument_count = @intCast(abi_argument_type_count),
-                                    .abi_argument_types = abi_argument_types.ptr,
-                                    .abi_return_type = abi_return_type,
-                                    .argument_type_abis = argument_type_abis.ptr,
-                                    .return_type_abi = return_type_abi,
-                                },
-                            },
+                            .type = function_type.llvm.handle.to_function(),
                         });
 
                         llvm_handle.set_calling_convention(calling_convention.to_llvm());
                         const has_semicolon = converter.consume_character_if_match(';');
 
+                        const function_scope: *llvm.DI.Scope = if (module.llvm.di_builder) |di_builder| blk: {
+                            const scope_line: u32 = @intCast(converter.line_offset + 1);
+                            const local_to_unit = !is_export and !is_extern;
+                            const flags = llvm.DI.Flags{};
+                            const is_definition = !is_extern;
+                            const subprogram = di_builder.create_function(module.llvm.global_scope, global_name, linkage_name, module.llvm.file, global_line, function_type.llvm.debug.to_subroutine(), local_to_unit, is_definition, scope_line, flags, options.build_mode.is_optimized());
+                            llvm_handle.set_subprogram(subprogram);
+
+                            break :blk @ptrCast(subprogram);
+                        } else undefined;
+
                         const value = module.values.add();
                         value.* = .{
                             .llvm = llvm_handle.to_value(),
-                            .type = function_type,
+                            .type = module.get_pointer_type(.{ .type = function_type }),
                             .bb = switch (has_semicolon) {
                                 true => .external_function,
                                 false => .{
@@ -3241,9 +4504,14 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                                         .current_scope = function_scope,
                                         .attributes = function_attributes,
                                         .return_pointer = undefined,
+                                        .return_alloca = undefined,
+                                        .exit_block = null,
+                                        .return_block = undefined,
                                     },
                                 },
                             },
+                            .lvalue = true,
+                            .dereference_to_assign = false,
                         };
 
                         const global = module.globals.add();
@@ -3252,171 +4520,315 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                             .name = global_name,
                         };
 
-                        llvm_emit_function_site_attributes(module, value);
+                        const attribute_list = module.build_attribute_list(&function_type.bb.function, function_attributes, false);
+                        llvm_handle.set_attributes(attribute_list);
 
                         if (!has_semicolon) {
                             const entry_block = module.llvm.context.create_basic_block("entry", llvm_handle);
-                            module.llvm.builder.position_at_end(entry_block);
+                            value.bb.function.return_block = module.llvm.context.create_basic_block("ret_block", null);
 
-                            var llvm_argument_buffer: [argument_buffer.len]*llvm.Argument = undefined;
-                            llvm_handle.get_arguments(&llvm_argument_buffer);
-                            const llvm_arguments = llvm_argument_buffer[0..abi_argument_type_count];
+                            module.llvm.builder.position_at_end(entry_block);
+                            module.llvm.builder.set_current_debug_location(null);
+
+                            // function prologue
+
+                            var llvm_abi_argument_buffer: [argument_buffer.len]*llvm.Argument = undefined;
+                            llvm_handle.get_arguments(&llvm_abi_argument_buffer);
+                            const llvm_abi_arguments = llvm_abi_argument_buffer[0..function_type.bb.function.abi_argument_types.len];
 
                             module.current_function = global;
                             defer module.current_function = null;
 
-                            switch (return_type_abi.kind) {
-                                .indirect => |indirect| {
-                                    if (indirect.alignment <= indirect.type.get_byte_alignment()) {
-                                        const return_pointer_value = module.values.add();
-                                        return_pointer_value.* = .{
-                                            .llvm = llvm_arguments[0].to_value(),
-                                            .type = indirect.type,
-                                            .bb = .instruction,
-                                        };
-                                        value.bb.function.return_pointer = return_pointer_value;
-                                    } else {
+                            switch (return_type_abi.flags.kind) {
+                                .ignore => {},
+                                .indirect => {
+                                    const indirect_argument_index = @intFromBool(return_type_abi.flags.sret_after_this);
+                                    if (return_type_abi.flags.sret_after_this) {
+                                        @trap();
+                                    }
+                                    value.bb.function.return_alloca = llvm_abi_arguments[indirect_argument_index].to_value();
+                                    if (!return_type_abi.flags.indirect_by_value) {
                                         @trap();
                                     }
                                 },
-                                else => {},
+                                .in_alloca => {
+                                    @trap();
+                                },
+                                else => {
+                                    const alloca = module.create_alloca(.{ .type = return_type_abi.semantic_type, .name = "retval" });
+                                    value.bb.function.return_alloca = alloca;
+                                },
                             }
 
-                            module.llvm.builder.set_current_debug_location(null);
-
-                            if (semantic_arguments.len > 0) {
-                                const argument_variables = global.value.bb.function.arguments.add_many(semantic_argument_count);
-                                for (semantic_arguments, argument_type_abis, argument_variables, 0..) |semantic_argument, argument_abi, *argument_variable, argument_index| {
-                                    if (module.llvm.di_builder) |_| {}
-
-                                    const argument_abi_count = argument_abi.indices[1] - argument_abi.indices[0];
-                                    const LowerKind = union(enum) {
-                                        direct,
-                                        direct_pair: [2]*Type,
-                                        direct_coerce: *Type,
-                                        indirect,
-                                    };
-                                    const lower_kind: LowerKind = switch (argument_abi.kind) {
-                                        .direct => .direct,
-                                        .direct_coerce => |coerced_type| if (semantic_argument.type == coerced_type) .direct else .{ .direct_coerce = coerced_type },
-                                        .direct_pair => |pair| .{ .direct_pair = pair },
-                                        .indirect => .indirect,
-                                        else => @trap(),
-                                    };
-
-                                    const argument_alloca = if (lower_kind == .indirect) llvm_arguments[argument_abi.indices[0]].to_value() else module.create_alloca(.{ .type = semantic_argument.type, .name = semantic_argument.name });
-                                    const argument_alloca_alignment: c_uint = @intCast(semantic_argument.type.get_byte_alignment());
-                                    switch (lower_kind) {
-                                        .direct => {
-                                            assert(argument_abi_count == 1);
-                                            const abi_argument_index = argument_abi.indices[0];
-                                            const llvm_argument = llvm_arguments[abi_argument_index];
-                                            _ = module.create_store(.{ .source = llvm_argument.to_value(), .destination = argument_alloca, .alignment = argument_alloca_alignment });
-                                        },
-                                        .direct_pair => |pair| {
-                                            assert(argument_abi_count == 2);
-                                            const abi_argument_index = argument_abi.indices[0];
-                                            const direct_pair_args = llvm_arguments[abi_argument_index..][0..2];
-                                            _ = module.create_store(.{ .source = direct_pair_args[0].to_value(), .destination = argument_alloca, .alignment = argument_alloca_alignment });
-                                            const llvm_index_type = module.integer_type(32, false).llvm.handle.to_integer();
-                                            const struct_type = module.get_anonymous_struct_pair(pair);
-                                            const zero_index = llvm_index_type.get_constant(0, @intFromBool(false)).to_value();
-                                            const index = llvm_index_type.get_constant(1, @intFromBool(false)).to_value();
-                                            const gep = module.llvm.builder.create_gep(struct_type.llvm.handle, argument_alloca, &.{ zero_index, index });
-                                            _ = module.create_store(.{ .source = direct_pair_args[1].to_value(), .destination = gep, .alignment = argument_alloca_alignment });
-                                        },
-                                        .indirect => {
-                                            assert(argument_abi_count == 1);
-                                        },
-                                        .direct_coerce => |coerced_type| {
-                                            assert(coerced_type != semantic_argument.type);
-                                            assert(argument_abi_count == 1);
-
-                                            switch (semantic_argument.type.bb) {
-                                                .@"struct" => |*struct_type| {
-                                                    const is_vector = false;
-                                                    _ = struct_type;
-
-                                                    if (coerced_type.get_byte_size() <= semantic_argument.type.get_byte_size() and !is_vector) {
-                                                        assert(argument_abi_count == 1);
-                                                        _ = module.create_store(.{ .source = llvm_arguments[argument_abi.indices[0]].to_value(), .destination = argument_alloca, .alignment = argument_alloca_alignment });
-                                                    } else {
-                                                        @trap();
-                                                        // const temporal = emit_local_symbol(&analyzer, thread, .{
-                                                        //     .name = 0,
-                                                        //     .initial_value = &argument_abi_instructions.slice()[0].value,
-                                                        //     .type = coerced_type,
-                                                        //     .line = 0,
-                                                        //     .column = 0,
-                                                        // });
-                                                        // emit_memcpy(&analyzer, thread, .{
-                                                        //     .destination = &argument_symbol.instruction.value,
-                                                        //     .source = &temporal.instruction.value,
-                                                        //     .destination_alignment = .{
-                                                        //         .type = argument_symbol.type,
-                                                        //     },
-                                                        //     .source_alignment = .{
-                                                        //         .type = temporal.type,
-                                                        //     },
-                                                        //     .size = argument.type.size,
-                                                        //     .line = 0,
-                                                        //     .column = 0,
-                                                        //     .scope = analyzer.current_scope,
-                                                        // });
-                                                    }
-                                                },
-                                                .bits => |bits| {
-                                                    // TODO: this should not be happening, figure out what's going on
-                                                    if (bits.backing_type == coerced_type) {
-                                                        const abi_argument_index = argument_abi.indices[0];
-                                                        const llvm_argument = llvm_arguments[abi_argument_index];
-                                                        _ = module.create_store(.{ .source = llvm_argument.to_value(), .destination = argument_alloca, .alignment = argument_alloca_alignment });
-                                                    } else {
-                                                        @trap();
-                                                    }
-                                                },
-                                                else => @trap(),
+                            const argument_variables = global.value.bb.function.arguments.add_many(semantic_argument_count);
+                            for (semantic_arguments, argument_type_abis, argument_variables, 0..) |semantic_argument, argument_abi, *argument_variable, argument_index| {
+                                const abi_arguments = llvm_abi_arguments[argument_abi.abi_start..][0..argument_abi.abi_count];
+                                assert(argument_abi.flags.kind == .ignore or argument_abi.abi_count != 0);
+                                const argument_abi_kind = argument_abi.flags.kind;
+                                const semantic_argument_storage = switch (argument_abi_kind) {
+                                    .direct, .extend => blk: {
+                                        const first_argument = abi_arguments[0];
+                                        const coerce_to_type = argument_abi.get_coerce_to_type();
+                                        if (coerce_to_type.bb != .structure and coerce_to_type.is_abi_equal(argument_abi.semantic_type) and argument_abi.attributes.direct.offset == 0) {
+                                            assert(argument_abi.abi_count == 1);
+                                            const is_promoted = false;
+                                            var v = first_argument.to_value();
+                                            v = switch (coerce_to_type.llvm.handle == v.get_type()) {
+                                                true => v,
+                                                false => @trap(),
+                                            };
+                                            if (is_promoted) {
+                                                @trap();
                                             }
-                                        },
-                                    }
 
-                                    const argument_value = module.values.add();
-                                    argument_value.* = .{
-                                        .llvm = argument_alloca,
-                                        .type = semantic_argument.type,
-                                        .bb = .argument,
-                                    };
-                                    argument_variable.* = .{
-                                        .value = argument_value,
-                                        .name = semantic_argument.name,
-                                    };
+                                            switch (argument_abi.semantic_type.is_arbitrary_bit_integer()) {
+                                                true => {
+                                                    const bit_count = argument_abi.semantic_type.get_bit_size();
+                                                    const abi_bit_count: u32 = @intCast(@max(8, lib.next_power_of_two(bit_count)));
+                                                    const is_signed = argument_abi.semantic_type.is_signed();
+                                                    const destination_type = module.align_integer_type(argument_abi.semantic_type);
+                                                    const alloca = module.create_alloca(.{ .type = destination_type, .name = semantic_argument.name });
+                                                    const result = switch (bit_count < abi_bit_count) {
+                                                        true => switch (is_signed) {
+                                                            true => module.llvm.builder.create_sign_extend(first_argument.to_value(), destination_type.llvm.handle),
+                                                            false => module.llvm.builder.create_zero_extend(first_argument.to_value(), destination_type.llvm.handle),
+                                                        },
+                                                        false => @trap(),
+                                                    };
+                                                    _ = module.create_store(.{ .source_value = result, .destination_value = alloca, .source_type = destination_type, .destination_type = destination_type });
+                                                    break :blk alloca;
+                                                },
+                                                false => { // TODO: ExtVectorBoolType
+                                                    const alloca = module.create_alloca(.{ .type = argument_abi.semantic_type, .name = semantic_argument.name });
+                                                    _ = module.create_store(.{ .source_value = first_argument.to_value(), .destination_value = alloca, .source_type = argument_abi.semantic_type, .destination_type = argument_abi.semantic_type });
+                                                    break :blk alloca;
+                                                },
+                                            }
+                                        } else {
+                                            const is_fixed_vector_type = false;
+                                            if (is_fixed_vector_type) {
+                                                @trap();
+                                            }
 
-                                    if (module.llvm.di_builder) |di_builder| {
-                                        const always_preserve = true;
-                                        const flags = llvm.DI.Flags{};
-                                        const parameter_variable = di_builder.create_parameter_variable(function_scope, semantic_argument.name, @intCast(argument_index + 1), module.llvm.file, semantic_argument.line, semantic_argument.type.llvm.debug, always_preserve, flags);
-                                        const inlined_at: ?*llvm.DI.Metadata = null; // TODO
-                                        const debug_location = llvm.DI.create_debug_location(module.llvm.context, semantic_argument.line, semantic_argument.column, function_scope, inlined_at);
-                                        _ = di_builder.insert_declare_record_at_end(argument_alloca, parameter_variable, di_builder.null_expression(), debug_location, module.current_basic_block());
-                                    }
+                                            if (coerce_to_type.bb == .structure and coerce_to_type.bb.structure.fields.len > 1 and argument_abi.flags.kind == .direct and !argument_abi.flags.can_be_flattened) {
+                                                const contains_homogeneous_scalable_vector_types = false;
+                                                if (contains_homogeneous_scalable_vector_types) {
+                                                    @trap();
+                                                }
+                                            }
+
+                                            const alloca = module.create_alloca(.{ .type = argument_abi.semantic_type });
+                                            const pointer = switch (argument_abi.attributes.direct.offset > 0) {
+                                                true => @trap(),
+                                                false => alloca,
+                                            };
+                                            const pointer_type = switch (argument_abi.attributes.direct.offset > 0) {
+                                                true => @trap(),
+                                                false => argument_abi.semantic_type,
+                                            };
+
+                                            if (coerce_to_type.bb == .structure and coerce_to_type.bb.structure.fields.len > 1 and argument_abi.flags.kind == .direct and argument_abi.flags.can_be_flattened) {
+                                                const struct_size = coerce_to_type.get_byte_size();
+                                                const pointer_element_size = pointer_type.get_byte_size(); // TODO: fix
+                                                const is_scalable = false;
+
+                                                switch (is_scalable) {
+                                                    true => @trap(),
+                                                    false => {
+                                                        const source_size = struct_size;
+                                                        const destination_size = pointer_element_size;
+                                                        const address_alignment = argument_abi.semantic_type.get_byte_alignment();
+                                                        const address = switch (source_size <= destination_size) {
+                                                            true => alloca,
+                                                            false => module.create_alloca(.{ .type = coerce_to_type, .alignment = address_alignment, .name = "coerce" }),
+                                                        };
+                                                        assert(coerce_to_type.bb.structure.fields.len == argument_abi.abi_count);
+                                                        for (coerce_to_type.bb.structure.fields, abi_arguments, 0..) |field, abi_argument, field_index| {
+                                                            const gep = module.llvm.builder.create_struct_gep(coerce_to_type.llvm.handle.to_struct(), address, @intCast(field_index));
+                                                            // TODO: check if alignment is right
+                                                            _ = module.create_store(.{ .source_value = abi_argument.to_value(), .destination_value = gep, .source_type = field.type, .destination_type = field.type });
+                                                        }
+
+                                                        if (source_size > destination_size) {
+                                                            _ = module.llvm.builder.create_memcpy(pointer, pointer_type.get_byte_alignment(), address, address_alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(destination_size, @intFromBool(false)).to_value());
+                                                        }
+                                                    },
+                                                }
+                                            } else {
+                                                assert(argument_abi.abi_count == 1);
+                                                const abi_argument_type = function_type.bb.function.abi_argument_types[argument_abi.abi_start];
+                                                const destination_size = pointer_type.get_byte_size() - argument_abi.attributes.direct.offset;
+                                                const is_volatile = false;
+                                                module.create_coerced_store(abi_arguments[0].to_value(), abi_argument_type, pointer, pointer_type, destination_size, is_volatile);
+                                            }
+
+                                            switch (argument_abi.semantic_type.get_evaluation_kind()) {
+                                                .scalar => @trap(),
+                                                else => {
+                                                    // TODO
+                                                },
+                                            }
+
+                                            break :blk alloca;
+                                        }
+                                    },
+                                    .indirect, .indirect_aliased => blk: {
+                                        assert(argument_abi.abi_count == 1);
+                                        switch (argument_abi.semantic_type.get_evaluation_kind()) {
+                                            .scalar => @trap(),
+                                            else => {
+                                                if (argument_abi.flags.indirect_realign or argument_abi.flags.kind == .indirect_aliased) {
+                                                    @trap();
+                                                }
+
+                                                const use_indirect_debug_address = !argument_abi.flags.indirect_by_value;
+                                                if (use_indirect_debug_address) {
+                                                    @trap();
+                                                }
+
+                                                const llvm_argument = abi_arguments[0];
+                                                break :blk llvm_argument.to_value();
+                                            },
+                                        }
+                                    },
+                                    else => @trap(),
+                                };
+
+                                const argument_value = module.values.add();
+                                argument_value.* = .{
+                                    .llvm = semantic_argument_storage,
+                                    .type = module.get_pointer_type(.{ .type = semantic_argument.type }),
+                                    .bb = .argument,
+                                    .lvalue = true,
+                                    .dereference_to_assign = false,
+                                };
+                                argument_variable.* = .{
+                                    .value = argument_value,
+                                    .name = semantic_argument.name,
+                                };
+
+                                if (module.llvm.di_builder) |di_builder| {
+                                    const always_preserve = true;
+                                    const flags = llvm.DI.Flags{};
+                                    const parameter_variable = di_builder.create_parameter_variable(function_scope, semantic_argument.name, @intCast(argument_index + 1), module.llvm.file, semantic_argument.line, semantic_argument.type.llvm.debug, always_preserve, flags);
+                                    const inlined_at: ?*llvm.DI.Metadata = null; // TODO
+                                    const debug_location = llvm.DI.create_debug_location(module.llvm.context, semantic_argument.line, semantic_argument.column, function_scope, inlined_at);
+                                    _ = di_builder.insert_declare_record_at_end(semantic_argument_storage, parameter_variable, di_builder.null_expression(), debug_location, module.current_basic_block());
                                 }
                             }
 
                             converter.parse_block(module);
 
-                            const is_final_block_terminated = module.current_basic_block().get_terminator() != null;
-                            if (!is_final_block_terminated) {
-                                switch (abi_return_type.bb) {
-                                    .void => {
-                                        module.llvm.builder.create_ret_void();
-                                    },
-                                    else => @trap(),
+                            // Handle jump to the return block
+                            const return_block = value.bb.function.return_block;
+
+                            if (module.llvm.builder.get_insert_block()) |current_basic_block| {
+                                assert(current_basic_block.get_terminator() == null);
+
+                                if (current_basic_block.is_empty() or current_basic_block.to_value().use_empty()) {
+                                    return_block.to_value().replace_all_uses_with(current_basic_block.to_value());
+                                    return_block.delete();
+                                } else {
+                                    @trap();
+                                }
+                            } else {
+                                var is_reachable = false;
+
+                                if (return_block.to_value().has_one_use()) {
+                                    if (llvm.Value.to_branch(return_block.user_begin())) |branch| {
+                                        is_reachable = !branch.is_conditional() and branch.get_successor(0) == return_block;
+
+                                        if (is_reachable) {
+                                            module.llvm.builder.position_at_end(branch.to_instruction().get_parent());
+                                            branch.to_instruction().erase_from_parent();
+                                            return_block.delete();
+                                        }
+                                    }
+                                }
+
+                                if (!is_reachable) {
+                                    const maybe_current_block = module.llvm.builder.get_insert_block();
+
+                                    var emit_branch = false;
+                                    if (maybe_current_block) |current_block| {
+                                        emit_branch = current_block.get_terminator() == null;
+                                    }
+
+                                    if (emit_branch) {
+                                        _ = module.llvm.builder.create_branch(return_block);
+                                    }
+
+                                    module.llvm.builder.clear_insertion_position();
+
+                                    if (maybe_current_block) |current_block| {
+                                        _ = current_block;
+                                        @trap();
+                                    } else {
+                                        llvm_handle.append_basic_block(return_block);
+                                    }
+
+                                    module.llvm.builder.position_at_end(return_block);
                                 }
                             }
-                        }
 
-                        if (module.llvm.di_builder) |di_builder| {
-                            di_builder.finalize_subprogram(llvm_handle.get_subprogram());
+                            // End function debug info
+                            if (module.llvm.di_builder) |di_builder| {
+                                if (llvm_handle.get_subprogram()) |subprogram| {
+                                    di_builder.finalize_subprogram(subprogram);
+                                }
+                            }
+
+                            if (return_type_abi.semantic_type == module.noreturn_type or value.bb.function.attributes.naked) {
+                                @trap();
+                            } else if (return_type_abi.semantic_type == module.void_type) {
+                                module.llvm.builder.create_ret_void();
+                            } else {
+                                const abi_kind = return_type_abi.flags.kind;
+                                const return_value: ?*llvm.Value = switch (abi_kind) {
+                                    .direct, .extend => blk: {
+                                        const coerce_to_type = return_type_abi.get_coerce_to_type();
+                                        const return_alloca = value.bb.function.return_alloca;
+
+                                        if (return_type_abi.semantic_type.is_abi_equal(coerce_to_type) and return_type_abi.attributes.direct.offset == 0) {
+                                            if (module.llvm.builder.find_return_value_dominating_store(return_alloca, return_type_abi.semantic_type.llvm.handle)) |store| {
+                                                const store_instruction = store.to_instruction();
+                                                const return_value = store_instruction.to_value().get_operand(0);
+                                                const alloca = store_instruction.to_value().get_operand(1);
+                                                assert(alloca == return_alloca);
+                                                store_instruction.erase_from_parent();
+                                                assert(alloca.use_empty());
+                                                alloca.to_instruction().erase_from_parent();
+                                                break :blk return_value;
+                                            } else {
+                                                const load_value = module.create_load(.{ .type = return_type_abi.semantic_type, .value = return_alloca });
+                                                break :blk load_value;
+                                            }
+                                        } else {
+                                            const source = switch (return_type_abi.attributes.direct.offset == 0) {
+                                                true => return_alloca,
+                                                false => @trap(),
+                                            };
+
+                                            const source_type = return_type_abi.semantic_type;
+                                            const destination_type = coerce_to_type;
+                                            const result = module.create_coerced_load(source, source_type, destination_type);
+                                            break :blk result;
+                                        }
+                                    },
+                                    .indirect => switch (return_type_abi.semantic_type.get_evaluation_kind()) {
+                                        .complex => @trap(),
+                                        .aggregate => null,
+                                        .scalar => @trap(),
+                                    },
+                                    else => @trap(),
+                                };
+
+                                if (return_value) |rv| {
+                                    module.llvm.builder.create_ret(rv);
+                                } else {
+                                    module.llvm.builder.create_ret_void();
+                                }
+                            }
                         }
 
                         if (!has_semicolon and lib.optimization_mode == .Debug) {
@@ -3441,12 +4853,11 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                             @trap();
                         }
 
-                        const llvm_struct_type = module.llvm.context.create_forward_declared_struct_type(global_name);
                         const struct_type = module.types.add(.{
                             .name = global_name,
                             .bb = .forward_declaration,
                             .llvm = .{
-                                .handle = llvm_struct_type.to_type(),
+                                .handle = undefined,
                                 .debug = if (module.llvm.di_builder) |di_builder| blk: {
                                     const r = di_builder.create_replaceable_composite_type(module.debug_tag, global_name, module.llvm.global_scope, module.llvm.file, global_line);
                                     module.debug_tag += 1;
@@ -3460,8 +4871,8 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                         var llvm_debug_member_type_buffer: [field_buffer.len]*llvm.DI.Type.Derived = undefined;
                         var field_count: usize = 0;
                         var byte_offset: u64 = 0;
-                        var byte_alignment: u64 = 1;
-                        var bit_alignment: u64 = 1;
+                        var byte_alignment: u32 = 1;
+                        var bit_alignment: u32 = 1;
 
                         while (true) {
                             converter.skip_space();
@@ -3528,7 +4939,7 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                         @memcpy(fields, field_buffer[0..field_count]);
 
                         const element_types = llvm_field_type_buffer[0..field_count];
-                        llvm_struct_type.set_body(element_types);
+                        struct_type.llvm.handle = module.llvm.context.get_struct_type(element_types).to_type();
 
                         if (module.llvm.di_builder) |di_builder| {
                             const member_types = llvm_debug_member_type_buffer[0..field_count];
@@ -3539,7 +4950,7 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                         }
 
                         struct_type.bb = .{
-                            .@"struct" = .{
+                            .structure = .{
                                 .bit_size = byte_size * 8,
                                 .byte_size = byte_size,
                                 .bit_alignment = bit_alignment,
@@ -3667,8 +5078,10 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                 const global_value = module.values.add();
                 global_value.* = .{
                     .llvm = global_variable.to_value(),
-                    .type = expected_type,
+                    .type = module.get_pointer_type(.{ .type = expected_type }),
                     .bb = .global,
+                    .lvalue = true,
+                    .dereference_to_assign = false,
                 };
 
                 const global = module.globals.add();
@@ -3714,7 +5127,7 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
     };
 
     const object_generate_result = llvm.object_generate(module.llvm.handle, target_machine, .{
-        .optimize_when_possible = @intFromBool(@intFromEnum(options.build_mode) > @intFromEnum(BuildMode.soft_optimize)),
+        .optimize_when_possible = @intFromEnum(options.build_mode) > @intFromEnum(BuildMode.soft_optimize),
         .debug_info = options.has_debug_info,
         .optimization_level = if (options.build_mode != .debug_none) options.build_mode.to_llvm_ir() else null,
         .path = options.objects[0],

@@ -5,8 +5,19 @@ SplitStructInt = struct
     c: u32,
 }
 
+require = fn (ok: u1) void
+{
+    if (!ok)
+    {
+        #trap();
+    }
+}
+
 bb_split_struct_ints = fn [cc(c)] (x: SplitStructInt) void
 {
+    require(x.a == 1234);
+    require(x.b == 100);
+    require(x.c == 1337);
 }
 
 [export] main = fn [cc(c)] () s32
@@ -20,6 +31,6 @@ bb_split_struct_ints = fn [cc(c)] (x: SplitStructInt) void
     bb_split_struct_ints(split);
     >a: s32 = #truncate(split.a);
     >b: s32 = #extend(split.b);
-    >c: s32 = split.c;
+    >c: s32 = #extend(split.c);
     return a + b + 3 - c;
 }

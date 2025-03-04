@@ -1,0 +1,46 @@
+Struct_u64_u64 = struct
+{
+    a: u64,
+    b: u64,
+}
+
+require = fn (ok: u1) void
+{
+    if (!ok)
+    {
+        #trap();
+    }
+}
+
+c_struct_u64_u64_5 = fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: u64, s: Struct_u64_u64) void
+{
+    require(s.a == 33);
+    require(s.b == 34);
+}
+
+c_struct_u64_u64_6 = fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, s: Struct_u64_u64) void
+{
+    require(s.a == 35);
+    require(s.b == 36);
+}
+
+c_struct_u64_u64_7 = fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, s: Struct_u64_u64) void
+{
+    require(s.a == 37);
+    require(s.b == 38);
+}
+
+c_struct_u64_u64_8 = fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u64, s: Struct_u64_u64) void
+{
+    require(s.a == 39);
+    require(s.b == 40);
+}
+
+[export] main = fn [cc(c)] () s32
+{
+    c_struct_u64_u64_5(0, 0, 0, 0, 0, { .a = 33, .b = 34, });
+    c_struct_u64_u64_6(0, 0, 0, 0, 0, 0, { .a = 35, .b = 36, });
+    c_struct_u64_u64_7(0, 0, 0, 0, 0, 0, 0, { .a = 37, .b = 38, });
+    c_struct_u64_u64_8(0, 0, 0, 0, 0, 0, 0, 0, { .a = 39, .b = 40, });
+    return 0;
+}

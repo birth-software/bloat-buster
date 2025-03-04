@@ -7,6 +7,7 @@ typedef uint64_t u64;
 
 #define EXPORT extern "C"
 #define fn static
+#define array_length(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 #include "llvm/Config/llvm-config.h"
 
@@ -70,6 +71,11 @@ EXPORT void llvm_global_variable_add_debug_info(GlobalVariable& global_variable,
     global_variable.addDebugInfo(debug_global_variable);
 }
 
+EXPORT void llvm_global_variable_delete(GlobalVariable* global_variable)
+{
+    delete global_variable;
+}
+
 EXPORT Function* llvm_module_create_function(Module* module, FunctionType* function_type, GlobalValue::LinkageTypes linkage_type, unsigned address_space, BBLLVMString name)
 {
     auto* function = Function::Create(function_type, linkage_type, address_space, name.string_ref(), module);
@@ -102,11 +108,822 @@ EXPORT BasicBlock* llvm_context_create_basic_block(LLVMContext& context, BBLLVMS
     return basic_block;
 }
 
+EXPORT bool llvm_value_has_one_use(Value& value)
+{
+    auto result = value.hasOneUse();
+    return result;
+}
+
+EXPORT Value* llvm_basic_block_user_begin(BasicBlock* basic_block)
+{
+    Value* value = *basic_block->user_begin();
+    return value;
+}
+
+EXPORT void llvm_basic_block_delete(BasicBlock* basic_block)
+{
+    delete basic_block;
+}
+
+EXPORT BranchInst* llvm_value_to_branch(Value* value)
+{
+    auto* result = dyn_cast<BranchInst>(value);
+    return result;
+}
+
+// If there are multiple uses of the return-value slot, just check
+// for something immediately preceding the IP.  Sometimes this can
+// happen with how we generate implicit-returns; it can also happen
+// with noreturn cleanups.
+fn StoreInst* get_store_if_valid(User* user, Value* return_alloca, Type* element_type)
+{
+    auto *SI = dyn_cast<llvm::StoreInst>(user);
+    if (!SI || SI->getPointerOperand() != return_alloca ||
+        SI->getValueOperand()->getType() != element_type)
+      return nullptr;
+    // These aren't actually possible for non-coerced returns, and we
+    // only care about non-coerced returns on this code path.
+    // All memory instructions inside __try block are volatile.
+    assert(!SI->isAtomic() &&
+           (!SI->isVolatile()
+            //|| CGF.currentFunctionUsesSEHTry())
+          ));
+    return SI;
+}
+
+// copy of static llvm::StoreInst *findDominatingStoreToReturnValue(CodeGenFunction &CGF) {
+// in clang/lib/CodeGen/CGCall.cpp:3526 in LLVM 19
+EXPORT StoreInst* llvm_find_return_value_dominating_store(IRBuilder<>& builder, Value* return_alloca, Type* element_type)
+{
+  // Check if a User is a store which pointerOperand is the ReturnValue.
+  // We are looking for stores to the ReturnValue, not for stores of the
+  // ReturnValue to some other location.
+  if (!return_alloca->hasOneUse()) {
+    llvm::BasicBlock *IP = builder.GetInsertBlock();
+    if (IP->empty()) return nullptr;
+
+    // Look at directly preceding instruction, skipping bitcasts and lifetime
+    // markers.
+    for (llvm::Instruction &I : make_range(IP->rbegin(), IP->rend())) {
+      if (isa<llvm::BitCastInst>(&I))
+        continue;
+      if (auto *II = dyn_cast<llvm::IntrinsicInst>(&I))
+        if (II->getIntrinsicID() == llvm::Intrinsic::lifetime_end)
+          continue;
+
+      return get_store_if_valid(&I, return_alloca, element_type);
+    }
+    return nullptr;
+  }
+
+  llvm::StoreInst *store = get_store_if_valid(return_alloca->user_back(), return_alloca, element_type);
+  if (!store) return nullptr;
+
+  // Now do a first-and-dirty dominance check: just walk up the
+  // single-predecessors chain from the current insertion point.
+  llvm::BasicBlock *StoreBB = store->getParent();
+  llvm::BasicBlock *IP = builder.GetInsertBlock();
+  llvm::SmallPtrSet<llvm::BasicBlock *, 4> SeenBBs;
+  while (IP != StoreBB) {
+    if (!SeenBBs.insert(IP).second || !(IP = IP->getSinglePredecessor()))
+      return nullptr;
+  }
+
+  // Okay, the store's basic block dominates the insertion point; we
+  // can do our thing.
+  return store;
+}
+
+EXPORT bool llvm_value_use_empty(Value& value)
+{
+    return value.use_empty();
+}
+
+EXPORT bool llvm_basic_block_is_empty(BasicBlock& basic_block)
+{
+    return basic_block.empty();
+}
+
 EXPORT AllocaInst* llvm_builder_create_alloca(IRBuilder<>& builder, Type* type, unsigned address_space, BBLLVMString name)
 {   
     const DataLayout &data_layout = builder.GetInsertBlock()->getDataLayout();
     Align alignment = data_layout.getABITypeAlign(type);
     return builder.Insert(new AllocaInst(type, address_space, 0, alignment), name.string_ref());
+}
+
+enum class BBLLVMAttributeFramePointerKind : u8
+{
+    None = 0,
+    Reserved = 1,
+    NonLeaf = 2,
+    All = 3,
+};
+
+const unsigned BB_LLVM_ONLY_USED = 1U << 1;
+const unsigned BB_LLVM_ONLY_GPR = 1U << 2;
+const unsigned BB_LLVM_ONLY_ARG = 1U << 3;
+
+enum class BBLLVMZeroCallUsedRegsKind : unsigned int
+{
+    // Don't zero any call-used regs.
+    Skip = 1U << 0,
+    // Only zeros call-used GPRs used in the fn and pass args.
+    UsedGPRArg = BB_LLVM_ONLY_USED | BB_LLVM_ONLY_GPR | BB_LLVM_ONLY_ARG,
+    // Only zeros call-used GPRs used in the fn.
+    UsedGPR = BB_LLVM_ONLY_USED | BB_LLVM_ONLY_GPR,
+    // Only zeros call-used regs used in the fn and pass args.
+    UsedArg = BB_LLVM_ONLY_USED | BB_LLVM_ONLY_ARG,
+    // Only zeros call-used regs used in the fn.
+    Used = BB_LLVM_ONLY_USED,
+    // Zeros all call-used GPRs that pass args.
+    AllGPRArg = BB_LLVM_ONLY_GPR | BB_LLVM_ONLY_ARG,
+    // Zeros all call-used GPRs.
+    AllGPR = BB_LLVM_ONLY_GPR,
+    // Zeros all call-used regs that pass args.
+    AllArg = BB_LLVM_ONLY_ARG,
+    // Zeros all call-used regs.
+    All = 0,
+};
+
+enum class BBLLVMFPClassTest : unsigned
+{
+    None = 0,
+
+    SNan = 0x0001,
+    QNan = 0x0002,
+    NegInf = 0x0004,
+    NegNormal = 0x0008,
+    NegSubnormal = 0x0010,
+    NegZero = 0x0020,
+    PosZero = 0x0040,
+    PosSubnormal = 0x0080,
+    PosNormal = 0x0100,
+    PosInf = 0x0200,
+
+    Nan = SNan | QNan,
+    Inf = PosInf | NegInf,
+    Normal = PosNormal | NegNormal,
+    Subnormal = PosSubnormal | NegSubnormal,
+    Zero = PosZero | NegZero,
+    PosFinite = PosNormal | PosSubnormal | PosZero,
+    NegFinite = NegNormal | NegSubnormal | NegZero,
+    Finite = PosFinite | NegFinite,
+    Positive = PosFinite | PosInf,
+    Negative = NegFinite | NegInf,
+
+    AllFlags = Nan | Inf | Finite,
+};
+
+enum class BBLLVMUWTableKind
+{
+    None = 0,  ///< No unwind table requested
+    Sync = 1,  ///< "Synchronous" unwind tables
+    Async = 2, ///< "Asynchronous" unwind tables (instr precise)
+    Default = 2,
+};
+
+struct BBLLVMArgumentAttributes
+{
+    Type* semantic_type;
+    Type* abi_type;
+    u64 dereferenceable_bytes;
+    u32 alignment;
+    u32 no_alias:1;
+    u32 non_null:1;
+    u32 no_undef:1;
+    u32 sign_extend:1;
+    u32 zero_extend:1;
+    u32 in_reg:1;
+    u32 no_fp_class:10;
+    u32 struct_return:1;
+    u32 writable:1;
+    u32 dead_on_unwind:1;
+    u32 in_alloca:1;
+    u32 dereferenceable:1;
+    u32 dereferenceable_or_null:1;
+    u32 nest:1;
+    u32 by_value:1;
+    u32 by_reference:1;
+    u32 no_capture:1;
+    u32 _:6;
+};
+
+static_assert(sizeof(BBLLVMArgumentAttributes) == 2 * sizeof(Type*) + 2 * sizeof(u64));
+
+fn AttributeSet build_argument_attributes(LLVMContext& context, const BBLLVMArgumentAttributes& attributes)
+{
+    AttrBuilder builder(context);
+
+    if (attributes.alignment)
+    {
+        builder.addAlignmentAttr(attributes.alignment);
+    }
+
+    if (attributes.no_alias)
+    {
+        builder.addAttribute(Attribute::NoAlias);
+    }
+
+    if (attributes.non_null)
+    {
+        builder.addAttribute(Attribute::NonNull);
+    }
+
+    if (attributes.no_undef)
+    {
+        builder.addAttribute(Attribute::NoUndef);
+    }
+
+    if (attributes.sign_extend)
+    {
+        builder.addAttribute(Attribute::SExt);
+    }
+
+    if (attributes.zero_extend)
+    {
+        builder.addAttribute(Attribute::ZExt);
+    }
+
+    if (attributes.in_reg)
+    {
+        builder.addAttribute(Attribute::InReg);
+    }
+
+    if (attributes.no_fp_class)
+    {
+        __builtin_trap(); // TODO
+    }
+
+    if (attributes.struct_return)
+    {
+        builder.addStructRetAttr(attributes.semantic_type);
+    }
+
+    if (attributes.writable)
+    {
+        builder.addAttribute(Attribute::Writable);
+    }
+
+    if (attributes.dead_on_unwind)
+    {
+        builder.addAttribute(Attribute::DeadOnUnwind);
+    }
+
+    if (attributes.in_alloca)
+    {
+        __builtin_trap(); // TODO
+    }
+
+    if (attributes.dereferenceable)
+    {
+        builder.addDereferenceableAttr(attributes.dereferenceable_bytes);
+    }
+
+    if (attributes.dereferenceable_or_null)
+    {
+        builder.addDereferenceableOrNullAttr(attributes.dereferenceable_bytes);
+    }
+
+    if (attributes.nest)
+    {
+        builder.addAttribute(Attribute::Nest);
+    }
+
+    if (attributes.by_value)
+    {
+        builder.addByValAttr(attributes.semantic_type);
+    }
+
+    if (attributes.by_reference)
+    {
+        builder.addByRefAttr(attributes.semantic_type);
+    }
+
+    if (attributes.no_capture)
+    {
+        builder.addAttribute(Attribute::NoCapture);
+    }
+
+    auto attribute_set = AttributeSet::get(context, builder);
+    return attribute_set;
+}
+
+struct BBLLVMFunctionAttributesFlags0
+{
+    u64 noreturn:1;
+    u64 cmse_ns_call:1;
+    u64 nounwind:1;
+    u64 returns_twice:1;
+    u64 cold:1;
+    u64 hot:1;
+    u64 no_duplicate:1;
+    u64 convergent:1;
+    u64 no_merge:1;
+    u64 will_return:1;
+    u64 no_caller_saved_registers:1;
+    u64 no_cf_check:1;
+    u64 no_callback:1;
+    u64 alloc_size:1;
+    u64 uniform_work_group_size:1;
+    u64 aarch64_pstate_sm_body:1;
+    u64 aarch64_pstate_sm_enabled:1;
+    u64 aarch64_pstate_sm_compatible:1;
+    u64 aarch64_preserves_za:1;
+    u64 aarch64_in_za:1;
+    u64 aarch64_out_za:1;
+    u64 aarch64_inout_za:1;
+    u64 aarch64_preserves_zt0:1;
+    u64 aarch64_in_zt0:1;
+    u64 aarch64_out_zt0:1;
+    u64 aarch64_inout_zt0:1;
+    u64 optimize_for_size:1;
+    u64 min_size:1;
+    u64 no_red_zone:1;
+    u64 indirect_tls_seg_refs:1;
+    u64 no_implicit_floats:1;
+    u64 sample_profile_suffix_elision_policy:1;
+    u64 memory_none:1;
+    u64 memory_readonly:1;
+    u64 memory_inaccessible_or_arg_memory_only:1;
+    u64 memory_arg_memory_only:1;
+    u64 strict_fp:1;
+    u64 no_inline:1;
+    u64 always_inline:1;
+    u64 guard_no_cf:1;
+
+    // TODO: branch protection function attributes
+    // TODO: cpu features
+
+    // Call-site begin
+    u64 call_no_builtins:1;
+
+    u64 definition_frame_pointer_kind:2;
+    u64 definition_less_precise_fpmad:1;
+    u64 definition_null_pointer_is_valid:1;
+    u64 definition_no_trapping_fp_math:1;
+    u64 definition_no_infs_fp_math:1;
+    u64 definition_no_nans_fp_math:1;
+    u64 definition_approx_func_fp_math:1;
+    u64 definition_unsafe_fp_math:1;
+    u64 definition_use_soft_float:1;
+    u64 definition_no_signed_zeroes_fp_math:1;
+    u64 definition_stack_realignment:1;
+    u64 definition_backchain:1;
+    u64 definition_split_stack:1;
+    u64 definition_speculative_load_hardening:1;
+    u64 definition_zero_call_used_registers:4;
+    // TODO: denormal builtins
+    u64 definition_non_lazy_bind:1;
+    u64 definition_cmse_nonsecure_entry:1;
+    u64 definition_unwind_table_kind:2;
+};
+
+static_assert(sizeof(BBLLVMFunctionAttributesFlags0) == sizeof(u64));
+
+struct BBLLVMFunctionAttributesFlags1
+{
+    u64 definition_disable_tail_calls:1;
+    u64 definition_stack_protect_strong:1;
+    u64 definition_stack_protect:1;
+    u64 definition_stack_protect_req:1;
+    u64 definition_aarch64_new_za:1;
+    u64 definition_aarch64_new_zt0:1;
+    u64 definition_optimize_none:1;
+    u64 definition_naked:1;
+    u64 definition_inline_hint:1;
+    u64 _:55;
+};
+
+static_assert(sizeof(BBLLVMFunctionAttributesFlags1) == sizeof(u64));
+
+struct BBLLVMFunctionAttributes
+{
+    BBLLVMString prefer_vector_width;
+    BBLLVMString stack_protector_buffer_size;
+    BBLLVMString definition_probe_stack;
+    BBLLVMString definition_stack_probe_size;
+
+    BBLLVMFunctionAttributesFlags0 flags0;
+    BBLLVMFunctionAttributesFlags1 flags1;
+};
+
+static_assert(sizeof(BBLLVMFunctionAttributes) == 10 * sizeof(u64));
+
+struct BBLLVMAttributeList
+{
+    BBLLVMFunctionAttributes function;
+    BBLLVMArgumentAttributes return_;
+    const BBLLVMArgumentAttributes* argument_pointer;
+    u64 argument_count;
+};
+
+static_assert(sizeof(BBLLVMAttributeList) == sizeof(BBLLVMFunctionAttributes) + sizeof(BBLLVMArgumentAttributes) + sizeof(void*) + sizeof(u64));
+
+typedef void* BBLLVMAttributeListHandle;
+
+EXPORT BBLLVMAttributeListHandle llvm_attribute_list_build(LLVMContext& context, const BBLLVMAttributeList& attributes, bool call_site)
+{
+    AttrBuilder function_attribute_builder(context);
+
+    if (attributes.function.prefer_vector_width.length)
+    {
+        function_attribute_builder.addAttribute("prefer-vector-width", attributes.function.prefer_vector_width.string_ref());
+    }
+
+    if (attributes.function.stack_protector_buffer_size.length)
+    {
+        function_attribute_builder.addAttribute("stack-protector-buffer-size", attributes.function.stack_protector_buffer_size.string_ref());
+    }
+
+    if (attributes.function.flags0.noreturn)
+    {
+        function_attribute_builder.addAttribute(Attribute::NoReturn);
+    }
+
+    if (attributes.function.flags0.cmse_ns_call)
+    {
+        function_attribute_builder.addAttribute("cmse_nonsecure_call");
+    }
+
+    if (attributes.function.flags0.nounwind)
+    {
+        function_attribute_builder.addAttribute(Attribute::NoUnwind);
+    }
+
+    if (attributes.function.flags0.returns_twice)
+    {
+        function_attribute_builder.addAttribute(Attribute::ReturnsTwice);
+    }
+
+    if (attributes.function.flags0.cold)
+    {
+        function_attribute_builder.addAttribute(Attribute::Cold);
+    }
+
+    if (attributes.function.flags0.hot)
+    {
+        function_attribute_builder.addAttribute(Attribute::Hot);
+    }
+
+    if (attributes.function.flags0.no_duplicate)
+    {
+        function_attribute_builder.addAttribute(Attribute::NoDuplicate);
+    }
+
+    if (attributes.function.flags0.convergent)
+    {
+        function_attribute_builder.addAttribute(Attribute::Convergent);
+    }
+
+    if (attributes.function.flags0.no_merge)
+    {
+        function_attribute_builder.addAttribute(Attribute::NoMerge);
+    }
+
+    if (attributes.function.flags0.will_return)
+    {
+        function_attribute_builder.addAttribute(Attribute::WillReturn);
+    }
+
+    if (attributes.function.flags0.no_caller_saved_registers)
+    {
+        function_attribute_builder.addAttribute("no-caller-saved-registers");
+    }
+
+    if (attributes.function.flags0.no_cf_check)
+    {
+        function_attribute_builder.addAttribute(Attribute::NoCfCheck);
+    }
+
+    if (attributes.function.flags0.no_callback)
+    {
+        function_attribute_builder.addAttribute(Attribute::NoCallback);
+    }
+
+    if (attributes.function.flags0.alloc_size)
+    {
+        __builtin_trap(); // TODO
+    }
+
+    if (attributes.function.flags0.uniform_work_group_size)
+    {
+        __builtin_trap(); // TODO
+    }
+
+    if (attributes.function.flags0.aarch64_pstate_sm_body)
+    {
+        function_attribute_builder.addAttribute("aarch64_pstate_sm_body");
+    }
+
+    if (attributes.function.flags0.aarch64_pstate_sm_enabled)
+    {
+        function_attribute_builder.addAttribute("aarch64_pstate_sm_enabled");
+    }
+
+    if (attributes.function.flags0.aarch64_pstate_sm_compatible)
+    {
+        function_attribute_builder.addAttribute("aarch64_pstate_sm_compatible");
+    }
+
+    if (attributes.function.flags0.aarch64_preserves_za)
+    {
+        function_attribute_builder.addAttribute("aarch64_preserves_za");
+    }
+
+    if (attributes.function.flags0.aarch64_in_za)
+    {
+        function_attribute_builder.addAttribute("aarch64_in_za");
+    }
+
+    if (attributes.function.flags0.aarch64_out_za)
+    {
+        function_attribute_builder.addAttribute("aarch64_out_za");
+    }
+
+    if (attributes.function.flags0.aarch64_inout_za)
+    {
+        function_attribute_builder.addAttribute("aarch64_inout_za");
+    }
+
+    if (attributes.function.flags0.aarch64_preserves_zt0)
+    {
+        function_attribute_builder.addAttribute("aarch64_preserves_zt0");
+    }
+
+    if (attributes.function.flags0.aarch64_in_zt0)
+    {
+        function_attribute_builder.addAttribute("aarch64_in_zt0");
+    }
+
+    if (attributes.function.flags0.aarch64_out_zt0)
+    {
+        function_attribute_builder.addAttribute("aarch64_out_zt0");
+    }
+
+    if (attributes.function.flags0.aarch64_inout_zt0)
+    {
+        function_attribute_builder.addAttribute("aarch64_inout_zt0");
+    }
+
+    if (attributes.function.flags0.optimize_for_size)
+    {
+        function_attribute_builder.addAttribute(Attribute::OptimizeForSize);
+    }
+
+    if (attributes.function.flags0.min_size)
+    {
+        function_attribute_builder.addAttribute(Attribute::MinSize);
+    }
+
+    if (attributes.function.flags0.no_red_zone)
+    {
+        function_attribute_builder.addAttribute(Attribute::NoRedZone);
+    }
+
+    if (attributes.function.flags0.indirect_tls_seg_refs)
+    {
+        function_attribute_builder.addAttribute("indirect-tls-seg-refs");
+    }
+
+    if (attributes.function.flags0.no_implicit_floats)
+    {
+        function_attribute_builder.addAttribute(Attribute::NoImplicitFloat);
+    }
+    
+    if (attributes.function.flags0.sample_profile_suffix_elision_policy)
+    {
+        function_attribute_builder.addAttribute("sample-profile-suffix-elision-policy", "selected");
+    }
+
+    if (attributes.function.flags0.memory_none)
+    {
+        function_attribute_builder.addMemoryAttr(llvm::MemoryEffects::none());
+    }
+
+    if (attributes.function.flags0.memory_readonly)
+    {
+        function_attribute_builder.addMemoryAttr(llvm::MemoryEffects::readOnly());
+    }
+    
+    if (attributes.function.flags0.memory_inaccessible_or_arg_memory_only)
+    {
+        function_attribute_builder.addMemoryAttr(llvm::MemoryEffects::inaccessibleOrArgMemOnly());
+    }
+
+    if (attributes.function.flags0.memory_arg_memory_only)
+    {
+        Attribute attribute = function_attribute_builder.getAttribute(Attribute::Memory);
+        function_attribute_builder.addMemoryAttr(attribute.getMemoryEffects() | llvm::MemoryEffects::argMemOnly());
+    }
+    
+    // TODO: branch protection function attributes
+    
+    // TODO: cpu features
+
+    if (call_site)
+    {
+        if (attributes.function.flags0.call_no_builtins)
+        {
+            function_attribute_builder.addAttribute(Attribute::NoBuiltin);
+        }
+    }
+    else
+    {
+        if (attributes.function.definition_probe_stack.length)
+        {
+            function_attribute_builder.addAttribute("probe-stack", attributes.function.definition_probe_stack.string_ref());
+        }
+
+        if (attributes.function.definition_stack_probe_size.length)
+        {
+            function_attribute_builder.addAttribute("stack-probe-size", attributes.function.definition_stack_probe_size.string_ref());
+        }
+
+        StringRef frame_pointer_kind_name;
+        switch ((BBLLVMAttributeFramePointerKind) attributes.function.flags0.definition_frame_pointer_kind)
+        {
+            case BBLLVMAttributeFramePointerKind::None: frame_pointer_kind_name = "none"; break;
+            case BBLLVMAttributeFramePointerKind::Reserved: frame_pointer_kind_name = "reserved"; break;
+            case BBLLVMAttributeFramePointerKind::NonLeaf: frame_pointer_kind_name = "non-leaf"; break;
+            case BBLLVMAttributeFramePointerKind::All: frame_pointer_kind_name = "all"; break;
+        }
+        function_attribute_builder.addAttribute("frame-pointer", frame_pointer_kind_name);
+
+        if (attributes.function.flags0.definition_less_precise_fpmad)
+        {
+            function_attribute_builder.addAttribute("less-precise-fp-mad", "true");
+        }
+
+        if (attributes.function.flags0.definition_null_pointer_is_valid)
+        {
+            function_attribute_builder.addAttribute(Attribute::NullPointerIsValid);
+        }
+
+        if (attributes.function.flags0.definition_no_trapping_fp_math)
+        {
+            function_attribute_builder.addAttribute("no-trapping-math", "true");
+        }
+
+        if (attributes.function.flags0.definition_no_infs_fp_math)
+        {
+            function_attribute_builder.addAttribute("no-infs-fp-math", "true");
+        }
+
+        if (attributes.function.flags0.definition_no_nans_fp_math)
+        {
+            function_attribute_builder.addAttribute("no-nans-fp-math", "true");
+        }
+
+        if (attributes.function.flags0.definition_approx_func_fp_math)
+        {
+            function_attribute_builder.addAttribute("approx-func-fp-math", "true");
+        }
+
+        if (attributes.function.flags0.definition_unsafe_fp_math)
+        {
+            function_attribute_builder.addAttribute("unsafe-fp-math", "true");
+        }
+
+        if (attributes.function.flags0.definition_use_soft_float)
+        {
+            function_attribute_builder.addAttribute("use-soft-float", "true");
+        }
+
+        if (attributes.function.flags0.definition_no_signed_zeroes_fp_math)
+        {
+            function_attribute_builder.addAttribute("no-signed-zeros-fp-math", "true");
+        }
+
+        if (attributes.function.flags0.definition_stack_realignment)
+        {
+            function_attribute_builder.addAttribute("stackrealign");
+        }
+
+        if (attributes.function.flags0.definition_backchain)
+        {
+            function_attribute_builder.addAttribute("backchain");
+        }
+
+        if (attributes.function.flags0.definition_split_stack)
+        {
+            function_attribute_builder.addAttribute("split-stack");
+        }
+
+        if (attributes.function.flags0.definition_speculative_load_hardening)
+        {
+            function_attribute_builder.addAttribute("split-stack");
+        }
+
+        if (attributes.function.flags0.definition_zero_call_used_registers)
+        {
+            __builtin_trap(); // TODO
+        }
+
+        // TODO: denormal builtins
+
+        if (attributes.function.flags0.definition_non_lazy_bind)
+        {
+            function_attribute_builder.addAttribute(Attribute::NonLazyBind);
+        }
+
+        if (attributes.function.flags0.definition_cmse_nonsecure_entry)
+        {
+            function_attribute_builder.addAttribute("cmse_nonsecure_entry");
+        }
+
+        UWTableKind unwind_table_kind;
+        switch ((BBLLVMUWTableKind)attributes.function.flags0.definition_unwind_table_kind)
+        {
+            case BBLLVMUWTableKind::None: unwind_table_kind = UWTableKind::None; break;
+            case BBLLVMUWTableKind::Sync: unwind_table_kind = UWTableKind::Sync; break;
+            case BBLLVMUWTableKind::Async: unwind_table_kind = UWTableKind::Async; break;
+        }
+
+        function_attribute_builder.addUWTableAttr(unwind_table_kind);
+
+        if (attributes.function.flags1.definition_disable_tail_calls)
+        {
+            function_attribute_builder.addAttribute("disable-tail-calls", "true");
+        }
+
+        if (attributes.function.flags1.definition_stack_protect_strong)
+        {
+            function_attribute_builder.addAttribute(Attribute::StackProtectStrong);
+        }
+
+        if (attributes.function.flags1.definition_stack_protect)
+        {
+            function_attribute_builder.addAttribute(Attribute::StackProtect);
+        }
+
+        if (attributes.function.flags1.definition_stack_protect_req)
+        {
+            function_attribute_builder.addAttribute(Attribute::StackProtectReq);
+        }
+
+        if (attributes.function.flags1.definition_aarch64_new_za)
+        {
+            function_attribute_builder.addAttribute("aarch64_new_za");
+        }
+
+        if (attributes.function.flags1.definition_aarch64_new_zt0)
+        {
+            function_attribute_builder.addAttribute("aarch64_new_zt0");
+        }
+
+        if (attributes.function.flags1.definition_optimize_none)
+        {
+            function_attribute_builder.addAttribute(Attribute::OptimizeNone);
+        }
+
+        if (attributes.function.flags1.definition_naked)
+        {
+            function_attribute_builder.addAttribute(Attribute::Naked);
+        }
+
+        if (attributes.function.flags1.definition_inline_hint)
+        {
+            function_attribute_builder.addAttribute(Attribute::InlineHint);
+        }
+    }
+
+    auto function_attributes = AttributeSet::get(context, function_attribute_builder);
+
+    auto return_attributes = build_argument_attributes(context, attributes.return_);
+
+    AttributeSet argument_attribute_buffer[128];
+    assert(attributes.argument_count < array_length(argument_attribute_buffer));
+
+    for (u64 i = 0; i < attributes.argument_count; i += 1)
+    {
+        auto attribute_set = build_argument_attributes(context, attributes.argument_pointer[i]);
+        argument_attribute_buffer[i] = attribute_set;
+    }
+
+    ArrayRef<AttributeSet> argument_attributes = ArrayRef(argument_attribute_buffer, attributes.argument_count);
+
+    auto attribute_list = AttributeList::get(context, function_attributes, return_attributes, argument_attributes);
+
+    static_assert(sizeof(AttributeList) == sizeof(uintptr_t));
+
+    return *(BBLLVMAttributeListHandle*)&attribute_list;
+}
+
+EXPORT bool llvm_instruction_is_call_base(Instruction* instruction)
+{
+    return isa<CallBase>(instruction);
+}
+
+EXPORT void llvm_function_set_attributes(Function& function, BBLLVMAttributeListHandle attribute_list_handle)
+{
+    auto attribute_list = *(AttributeList*)&attribute_list_handle;
+    function.setAttributes(attribute_list);
+}
+
+EXPORT void llvm_call_base_set_attributes(CallBase& call, BBLLVMAttributeListHandle attribute_list_handle)
+{
+    auto attribute_list = *(AttributeList*)&attribute_list_handle;
+    call.setAttributes(attribute_list);
 }
 
 fn BBLLVMString stream_to_string(raw_string_ostream& stream)
@@ -149,7 +966,6 @@ EXPORT bool llvm_function_verify(Function& function, BBLLVMString* error_message
     // We invert the condition because LLVM conventions are just stupid
     return !result;
 }
-
 
 EXPORT bool llvm_module_verify(const Module& module, BBLLVMString* error_message)
 {
@@ -396,7 +1212,7 @@ struct BBLLVMTargetOptions
     u64 no_nans_fp_math:1;
     u64 no_trapping_fp_math:1;
     u64 no_signed_zeroes_fp_math:1;
-    u64 approx_func_fp_match:1;
+    u64 approx_func_fp_math:1;
     u64 enable_aix_extended_altivec_abi:1;
     u64 honor_sign_dependent_rounding_fp_math:1;
     u64 no_zeroes_in_bss:1;
@@ -525,7 +1341,7 @@ EXPORT TargetMachine* llvm_create_target_machine(const BBLLVMTargetMachineCreate
         target_options.NoNaNsFPMath = create.target_options.no_nans_fp_math;
         target_options.NoTrappingFPMath = create.target_options.no_trapping_fp_math;
         target_options.NoSignedZerosFPMath = create.target_options.no_signed_zeroes_fp_math;
-        target_options.ApproxFuncFPMath = create.target_options.approx_func_fp_match;
+        target_options.ApproxFuncFPMath = create.target_options.approx_func_fp_math;
         target_options.EnableAIXExtendedAltivecABI = create.target_options.enable_aix_extended_altivec_abi;
         target_options.HonorSignDependentRoundingFPMathOption = create.target_options.honor_sign_dependent_rounding_fp_math;
         target_options.NoZerosInBSS = create.target_options.no_zeroes_in_bss;

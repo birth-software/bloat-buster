@@ -7,5 +7,5 @@ modify = fn (v: &s32) void
 {
     >value: s32 = 0;
     modify(&value);
-    return #extend(value == 1);
+    return #extend(value == 0);
 }

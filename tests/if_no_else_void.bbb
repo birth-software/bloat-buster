@@ -1,4 +1,4 @@
-require = fn (ok: u1) void
+require = fn [cc(c)] (ok: u1) void
 {
     if (!ok)
     {

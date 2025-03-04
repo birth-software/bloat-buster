@@ -33,6 +33,28 @@ pub const Intrinsic = enum {
 };
 
 pub const Attribute = opaque {
+    pub const List = opaque {
+        pub const Options = extern struct {
+            function: Attribute.Function,
+            @"return": Attribute.Argument,
+            argument_pointer: [*]const Attribute.Argument,
+            argument_length: u64,
+
+            comptime {
+                assert(@sizeOf(Options) == @sizeOf(Attribute.Function) + @sizeOf(Attribute.Argument) + @sizeOf([*]const Attribute.Argument) + @sizeOf(u64));
+            }
+        };
+
+        pub fn build(context: *Context, function_attributes: Attribute.Function, return_attributes: Attribute.Argument, argument_attributes: []const Attribute.Argument, call_site: bool) *Attribute.List {
+            return api.llvm_attribute_list_build(context, &Options{
+                .function = function_attributes,
+                .@"return" = return_attributes,
+                .argument_pointer = argument_attributes.ptr,
+                .argument_length = argument_attributes.len,
+            }, call_site);
+        }
+    };
+
     pub const Index = enum(c_uint) {
         @"return" = 0,
         function = 0xffff_ffff,
@@ -41,6 +63,172 @@ pub const Attribute = opaque {
 
     pub const Kind = enum(c_uint) {
         _,
+    };
+
+    pub const FramePointerKind = enum(u2) {
+        none = 0,
+        reserved = 1,
+        non_leaf = 2,
+        all = 3,
+    };
+
+    pub const ZeroCallUsedRegsKind = enum(u4) {
+        all = 0,
+        skip = 1 << 0,
+        used_gpr_arg = only_used | only_gpr | only_arg,
+        used_gpr = only_used | only_gpr,
+        used_arg = only_used | only_arg,
+        used = only_used,
+        all_gpr_arg = only_gpr | only_arg,
+        all_gpr = only_gpr,
+        all_arg = only_arg,
+
+        const only_used = 1 << 1;
+        const only_gpr = 1 << 2;
+        const only_arg = 1 << 3;
+    };
+
+    pub const FPClassTest = packed struct(u10) {
+        s_nan: bool = false,
+        q_nan: bool = false,
+        neg_inf: bool = false,
+        neg_normal: bool = false,
+        neg_subnormal: bool = false,
+        neg_zero: bool = false,
+        pos_zero: bool = false,
+        pos_subnormal: bool = false,
+        pos_normal: bool = false,
+        pos_inf: bool = false,
+    };
+
+    pub const UnwindTableKind = enum(u2) {
+        none = 0,
+        sync = 1,
+        @"async" = 2,
+
+        pub const default = UnwindTableKind.@"async";
+    };
+
+    pub const Argument = extern struct {
+        semantic_type: *Type,
+        abi_type: *Type,
+        dereferenceable_bytes: u64,
+        alignment: u32,
+        flags: packed struct(u32) {
+            no_alias: bool,
+            non_null: bool,
+            no_undef: bool,
+            sign_extend: bool,
+            zero_extend: bool,
+            in_reg: bool,
+            no_fp_class: FPClassTest,
+            struct_return: bool,
+            writable: bool,
+            dead_on_unwind: bool,
+            in_alloca: bool,
+            dereferenceable: bool,
+            dereferenceable_or_null: bool,
+            nest: bool,
+            by_value: bool,
+            by_reference: bool,
+            no_capture: bool,
+            _: u6 = 0,
+        },
+
+        comptime {
+            assert(@sizeOf(Attribute.Argument) == 2 * @sizeOf(*Type) + 2 * @sizeOf(u64));
+        }
+    };
+
+    pub const Function = extern struct {
+        prefer_vector_width: String,
+        stack_protector_buffer_size: String,
+        definition_probe_stack: String,
+        definition_stack_probe_size: String,
+        flags0: packed struct(u64) {
+            noreturn: bool,
+            cmse_ns_call: bool,
+            nounwind: bool,
+            returns_twice: bool,
+            cold: bool,
+            hot: bool,
+            no_duplicate: bool,
+            convergent: bool,
+            no_merge: bool,
+            will_return: bool,
+            no_caller_saved_registers: bool,
+            no_cf_check: bool,
+            no_callback: bool,
+            alloc_size: bool,
+            uniform_work_group_size: bool,
+            aarch64_pstate_sm_body: bool,
+            aarch64_pstate_sm_enabled: bool,
+            aarch64_pstate_sm_compatible: bool,
+            aarch64_preserves_za: bool,
+            aarch64_in_za: bool,
+            aarch64_out_za: bool,
+            aarch64_inout_za: bool,
+            aarch64_preserves_zt0: bool,
+            aarch64_in_zt0: bool,
+            aarch64_out_zt0: bool,
+            aarch64_inout_zt0: bool,
+            optimize_for_size: bool,
+            min_size: bool,
+            no_red_zone: bool,
+            indirect_tls_seg_refs: bool,
+            no_implicit_floats: bool,
+            sample_profile_suffix_elision_policy: bool,
+            memory_none: bool,
+            memory_readonly: bool,
+            memory_inaccessible_or_arg_memory_only: bool,
+            memory_arg_memory_only: bool,
+            strict_fp: bool,
+            no_inline: bool,
+            always_inline: bool,
+            guard_no_cf: bool,
+            // TODO: branch protection function attributes
+            // TODO: cpu features
+
+            // CALL-SITE ATTRIBUTES
+            call_no_builtins: bool,
+
+            // DEFINITION-SITE ATTRIBUTES
+            definition_frame_pointer_kind: FramePointerKind,
+            definition_less_precise_fpmad: bool,
+            definition_null_pointer_is_valid: bool,
+            definition_no_trapping_fp_math: bool,
+            definition_no_infs_fp_math: bool,
+            definition_no_nans_fp_math: bool,
+            definition_approx_func_fp_math: bool,
+            definition_unsafe_fp_math: bool,
+            definition_use_soft_float: bool,
+            definition_no_signed_zeroes_fp_math: bool,
+            definition_stack_realignment: bool,
+            definition_backchain: bool,
+            definition_split_stack: bool,
+            definition_speculative_load_hardening: bool,
+            definition_zero_call_used_registers: ZeroCallUsedRegsKind,
+            // TODO: denormal builtins
+            definition_non_lazy_bind: bool,
+            definition_cmse_nonsecure_entry: bool,
+            definition_unwind_table_kind: UnwindTableKind,
+        },
+        flags1: packed struct(u64) {
+            definition_disable_tail_calls: bool,
+            definition_stack_protect_strong: bool,
+            definition_stack_protect: bool,
+            definition_stack_protect_req: bool,
+            definition_aarch64_new_za: bool,
+            definition_aarch64_new_zt0: bool,
+            definition_optimize_none: bool,
+            definition_naked: bool,
+            definition_inline_hint: bool,
+            reserved: u55 = 0,
+        },
+
+        comptime {
+            assert(@sizeOf(Attribute.Function) == 10 * @sizeOf(u64));
+        }
     };
 };
 
@@ -74,19 +262,19 @@ pub const Target = opaque {
     /// This is ABI-compatible with C++
     pub const Options = extern struct {
         flags0: packed struct(u64) {
-            unsafe_fp_math: u1,
-            no_infs_fp_math: u1,
-            no_nans_fp_math: u1,
-            no_trapping_fp_math: u1,
-            no_signed_zeroes_fp_math: u1,
-            approx_func_fp_match: u1,
-            enable_aix_extended_altivec_abi: u1,
-            honor_sign_dependent_rounding_fp_math: u1,
-            no_zeroes_in_bss: u1,
-            guaranteed_tail_call_optimization: u1,
-            stack_symbol_ordering: u1,
-            enable_fast_isel: u1,
-            enable_global_isel: u1,
+            unsafe_fp_math: bool,
+            no_infs_fp_math: bool,
+            no_nans_fp_math: bool,
+            no_trapping_fp_math: bool,
+            no_signed_zeroes_fp_math: bool,
+            approx_func_fp_math: bool,
+            enable_aix_extended_altivec_abi: bool,
+            honor_sign_dependent_rounding_fp_math: bool,
+            no_zeroes_in_bss: bool,
+            guaranteed_tail_call_optimization: bool,
+            stack_symbol_ordering: bool,
+            enable_fast_isel: bool,
+            enable_global_isel: bool,
             global_isel_abort_mode: enum(u2) {
                 disable = 0,
                 enable = 1,
@@ -97,27 +285,27 @@ pub const Target = opaque {
                 always = 1,
                 never = 2,
             },
-            use_init_array: u1,
-            disable_integrated_assembler: u1,
-            function_sections: u1,
-            data_sections: u1,
-            ignore_xcoff_visibility: u1,
-            xcoff_traceback_table: u1,
-            unique_section_names: u1,
-            unique_basic_block_section_names: u1,
-            separate_named_sections: u1,
-            trap_unreachable: u1,
-            no_trap_after_noreturn: u1,
+            use_init_array: bool,
+            disable_integrated_assembler: bool,
+            function_sections: bool,
+            data_sections: bool,
+            ignore_xcoff_visibility: bool,
+            xcoff_traceback_table: bool,
+            unique_section_names: bool,
+            unique_basic_block_section_names: bool,
+            separate_named_sections: bool,
+            trap_unreachable: bool,
+            no_trap_after_noreturn: bool,
             tls_size: u8,
-            emulated_tls: u1,
-            enable_tls_descriptors: u1,
-            enable_ipra: u1,
-            emit_stack_size_section: u1,
-            enable_machine_outliner: u1,
-            enable_machine_function_splitter: u1,
-            supports_default_outlining: u1,
-            emit_address_significance_table: u1,
-            bb_address_map: u1,
+            emulated_tls: bool,
+            enable_tls_descriptors: bool,
+            enable_ipra: bool,
+            emit_stack_size_section: bool,
+            enable_machine_outliner: bool,
+            enable_machine_function_splitter: bool,
+            supports_default_outlining: bool,
+            emit_address_significance_table: bool,
+            bb_address_map: bool,
             bb_sections: enum(u3) {
                 all = 0,
                 list = 1,
@@ -125,19 +313,19 @@ pub const Target = opaque {
                 preset = 3,
                 none = 4,
             },
-            emit_call_site_information: u1,
-            supports_debug_entry_values: u1,
-            enable_debug_entry_values: u1,
-            value_tracking_variable_locations: u1,
-            force_dwarf_frame_section: u1,
-            xray_function_index: u1,
-            debug_strict_dwarf: u1,
-            hotpatch: u1,
-            ppc_gen_scalar_mass_entries: u1,
-            jmc_instrument: u1,
-            enable_cfi_fixup: u1,
-            mis_expect: u1,
-            xcoff_read_only_pointers: u1,
+            emit_call_site_information: bool,
+            supports_debug_entry_values: bool,
+            enable_debug_entry_values: bool,
+            value_tracking_variable_locations: bool,
+            force_dwarf_frame_section: bool,
+            xray_function_index: bool,
+            debug_strict_dwarf: bool,
+            hotpatch: bool,
+            ppc_gen_scalar_mass_entries: bool,
+            jmc_instrument: bool,
+            enable_cfi_fixup: bool,
+            mis_expect: bool,
+            xcoff_read_only_pointers: bool,
             float_abi: enum(u2) {
                 default = 0,
                 soft = 1,
@@ -200,56 +388,56 @@ pub const Target = opaque {
             return .{
                 .binutils_version = .{ 0, 0 },
                 .flags0 = .{
-                    .unsafe_fp_math = 0,
-                    .no_infs_fp_math = 0,
-                    .no_nans_fp_math = 0,
-                    .no_trapping_fp_math = 1,
-                    .no_signed_zeroes_fp_math = 0,
-                    .approx_func_fp_match = 0,
-                    .enable_aix_extended_altivec_abi = 0,
-                    .honor_sign_dependent_rounding_fp_math = 0,
-                    .no_zeroes_in_bss = 0,
-                    .guaranteed_tail_call_optimization = 0,
-                    .stack_symbol_ordering = 1,
-                    .enable_fast_isel = 0,
-                    .enable_global_isel = 0,
+                    .unsafe_fp_math = false,
+                    .no_infs_fp_math = false,
+                    .no_nans_fp_math = false,
+                    .no_trapping_fp_math = true,
+                    .no_signed_zeroes_fp_math = false,
+                    .approx_func_fp_math = false,
+                    .enable_aix_extended_altivec_abi = false,
+                    .honor_sign_dependent_rounding_fp_math = false,
+                    .no_zeroes_in_bss = false,
+                    .guaranteed_tail_call_optimization = false,
+                    .stack_symbol_ordering = true,
+                    .enable_fast_isel = false,
+                    .enable_global_isel = false,
                     .global_isel_abort_mode = .enable,
                     .swift_async_frame_pointer = .always,
-                    .use_init_array = 0,
-                    .disable_integrated_assembler = 0,
-                    .function_sections = 0,
-                    .data_sections = 0,
-                    .ignore_xcoff_visibility = 0,
-                    .xcoff_traceback_table = 1,
-                    .unique_section_names = 1,
-                    .unique_basic_block_section_names = 0,
-                    .separate_named_sections = 0,
-                    .trap_unreachable = 0,
-                    .no_trap_after_noreturn = 0,
+                    .use_init_array = false,
+                    .disable_integrated_assembler = false,
+                    .function_sections = false,
+                    .data_sections = false,
+                    .ignore_xcoff_visibility = false,
+                    .xcoff_traceback_table = true,
+                    .unique_section_names = true,
+                    .unique_basic_block_section_names = false,
+                    .separate_named_sections = false,
+                    .trap_unreachable = false,
+                    .no_trap_after_noreturn = false,
                     .tls_size = 0,
-                    .emulated_tls = 0,
-                    .enable_tls_descriptors = 0,
-                    .enable_ipra = 0,
-                    .emit_stack_size_section = 0,
-                    .enable_machine_outliner = 0,
-                    .enable_machine_function_splitter = 0,
-                    .supports_default_outlining = 0,
-                    .emit_address_significance_table = 0,
-                    .bb_address_map = 0,
+                    .emulated_tls = false,
+                    .enable_tls_descriptors = false,
+                    .enable_ipra = false,
+                    .emit_stack_size_section = false,
+                    .enable_machine_outliner = false,
+                    .enable_machine_function_splitter = false,
+                    .supports_default_outlining = false,
+                    .emit_address_significance_table = false,
+                    .bb_address_map = false,
                     .bb_sections = .none,
-                    .emit_call_site_information = 0,
-                    .supports_debug_entry_values = 0,
-                    .enable_debug_entry_values = 0,
-                    .value_tracking_variable_locations = 0,
-                    .force_dwarf_frame_section = 0,
-                    .xray_function_index = 1,
-                    .debug_strict_dwarf = 0,
-                    .hotpatch = 0,
-                    .ppc_gen_scalar_mass_entries = 0,
-                    .jmc_instrument = 0,
-                    .enable_cfi_fixup = 0,
-                    .mis_expect = 0,
-                    .xcoff_read_only_pointers = 0,
+                    .emit_call_site_information = false,
+                    .supports_debug_entry_values = false,
+                    .enable_debug_entry_values = false,
+                    .value_tracking_variable_locations = false,
+                    .force_dwarf_frame_section = false,
+                    .xray_function_index = true,
+                    .debug_strict_dwarf = false,
+                    .hotpatch = false,
+                    .ppc_gen_scalar_mass_entries = false,
+                    .jmc_instrument = false,
+                    .enable_cfi_fixup = false,
+                    .mis_expect = false,
+                    .xcoff_read_only_pointers = false,
                     .float_abi = .default,
                     .thread_model = .posix,
                 },
@@ -271,28 +459,28 @@ pub const Target = opaque {
                     .integrated_assembler_search_path_pointer = null,
                     .integrated_assembler_search_path_count = 0,
                     .flags = .{
-                        .relax_all = 0,
-                        .no_exec_stack = 0,
-                        .fatal_warnings = 0,
-                        .no_warn = 0,
-                        .no_deprecated_warn = 0,
-                        .no_type_check = 0,
-                        .save_temp_labels = 0,
-                        .incremental_linker_compatible = 0,
-                        .fdpic = 0,
-                        .show_mc_encoding = 0,
-                        .show_mc_inst = 0,
-                        .asm_verbose = 0,
-                        .preserve_asm_comments = 1,
-                        .dwarf64 = 0,
-                        .crel = 0,
-                        .x86_relax_relocations = 1,
-                        .x86_sse2_avx = 0,
+                        .relax_all = false,
+                        .no_exec_stack = false,
+                        .fatal_warnings = false,
+                        .no_warn = false,
+                        .no_deprecated_warn = false,
+                        .no_type_check = false,
+                        .save_temp_labels = false,
+                        .incremental_linker_compatible = false,
+                        .fdpic = false,
+                        .show_mc_encoding = false,
+                        .show_mc_inst = false,
+                        .asm_verbose = false,
+                        .preserve_asm_comments = true,
+                        .dwarf64 = false,
+                        .crel = false,
+                        .x86_relax_relocations = true,
+                        .x86_sse2_avx = false,
                         .emit_dwarf_unwind = .default,
                         .use_dwarf_directory = .default,
                         .debug_compression_type = .none,
-                        .emit_compact_unwind_non_canonical = 0,
-                        .ppc_use_full_register_names = 0,
+                        .emit_compact_unwind_non_canonical = false,
+                        .ppc_use_full_register_names = false,
                     },
                 },
             };
@@ -337,23 +525,23 @@ pub const MCTargetOptions = extern struct {
     integrated_assembler_search_path_pointer: ?[*]const String,
     integrated_assembler_search_path_count: u64,
     flags: packed struct(u32) {
-        relax_all: u1,
-        no_exec_stack: u1,
-        fatal_warnings: u1,
-        no_warn: u1,
-        no_deprecated_warn: u1,
-        no_type_check: u1,
-        save_temp_labels: u1,
-        incremental_linker_compatible: u1,
-        fdpic: u1,
-        show_mc_encoding: u1,
-        show_mc_inst: u1,
-        asm_verbose: u1,
-        preserve_asm_comments: u1,
-        dwarf64: u1,
-        crel: u1,
-        x86_relax_relocations: u1,
-        x86_sse2_avx: u1,
+        relax_all: bool,
+        no_exec_stack: bool,
+        fatal_warnings: bool,
+        no_warn: bool,
+        no_deprecated_warn: bool,
+        no_type_check: bool,
+        save_temp_labels: bool,
+        incremental_linker_compatible: bool,
+        fdpic: bool,
+        show_mc_encoding: bool,
+        show_mc_inst: bool,
+        asm_verbose: bool,
+        preserve_asm_comments: bool,
+        dwarf64: bool,
+        crel: bool,
+        x86_relax_relocations: bool,
+        x86_sse2_avx: bool,
         emit_dwarf_unwind: enum(u2) {
             always = 0,
             no_compact_unwind = 1,
@@ -369,8 +557,8 @@ pub const MCTargetOptions = extern struct {
             zlib = 1,
             zstd = 2,
         },
-        emit_compact_unwind_non_canonical: u1,
-        ppc_use_full_register_names: u1,
+        emit_compact_unwind_non_canonical: bool,
+        ppc_use_full_register_names: bool,
         reserved: PaddingType = 0,
     },
 
@@ -410,16 +598,16 @@ pub const OptimizationLevel = enum(u3) {
 /// This is ABI-compatible with C++
 pub const OptimizationPipelineOptions = packed struct(u64) {
     optimization_level: OptimizationLevel,
-    debug_info: u1,
-    loop_unrolling: u1,
-    loop_interleaving: u1,
-    loop_vectorization: u1,
-    slp_vectorization: u1,
-    merge_functions: u1,
-    call_graph_profile: u1,
-    unified_lto: u1,
-    assignment_tracking: u1,
-    verify_module: u1,
+    debug_info: bool,
+    loop_unrolling: bool,
+    loop_interleaving: bool,
+    loop_vectorization: bool,
+    slp_vectorization: bool,
+    merge_functions: bool,
+    call_graph_profile: bool,
+    unified_lto: bool,
+    assignment_tracking: bool,
+    verify_module: bool,
     reserved: PaddingType = 0,
 
     const padding_bit_count = 51;
@@ -437,10 +625,10 @@ pub const OptimizationPipelineOptions = packed struct(u64) {
 
     const Create = packed struct {
         optimization_level: OptimizationLevel,
-        debug_info: u1,
+        debug_info: bool,
     };
     pub fn default(create: Create) OptimizationPipelineOptions {
-        const pref_speed = @intFromBool(create.optimization_level.prefers_speed());
+        const pref_speed = create.optimization_level.prefers_speed();
         return .{
             .optimization_level = create.optimization_level,
             .debug_info = create.debug_info,
@@ -449,10 +637,10 @@ pub const OptimizationPipelineOptions = packed struct(u64) {
             .loop_vectorization = pref_speed,
             .slp_vectorization = pref_speed,
             .merge_functions = pref_speed,
-            .call_graph_profile = 0,
-            .unified_lto = 0,
+            .call_graph_profile = false,
+            .unified_lto = false,
             .assignment_tracking = create.debug_info,
-            .verify_module = @intFromBool(lib.optimization_mode == .ReleaseSafe or lib.optimization_mode == .Debug),
+            .verify_module = lib.optimization_mode == .ReleaseSafe or lib.optimization_mode == .Debug,
         };
     }
 };
@@ -467,8 +655,8 @@ pub const CodeGenerationPipelineOptions = extern struct {
             object_file = 1,
             null = 2,
         },
-        optimize_when_possible: u1,
-        verify_module: u1,
+        optimize_when_possible: bool,
+        verify_module: bool,
         reserved: PaddingType = 0,
     },
 
@@ -515,7 +703,7 @@ pub const Context = opaque {
 
     pub const create_builder = api.LLVMCreateBuilderInContext;
 
-    pub fn create_basic_block(context: *Context, name: []const u8, parent: *Function) *BasicBlock {
+    pub fn create_basic_block(context: *Context, name: []const u8, parent: ?*Function) *BasicBlock {
         return api.llvm_context_create_basic_block(context, String.from_slice(name), parent);
     }
 
@@ -541,16 +729,30 @@ pub const Context = opaque {
         return api.LLVMIntrinsicGetType(context, intrinsic_id, parameter_types.ptr, parameter_types.len);
     }
 
-    pub fn create_string_attribute(context: *Context, attribute_name: []const u8, attribute_value: []const u8) *Attribute {
-        return api.LLVMCreateStringAttribute(context, attribute_name.ptr, @intCast(attribute_name.len), attribute_value.ptr, @intCast(attribute_value.len));
+    pub fn get_anonymous_constant_struct(context: *Context, constant_values: []const *Constant, is_packed: bool) *Constant {
+        return api.LLVMConstStructInContext(context, constant_values.ptr, @intCast(constant_values.len), @intFromBool(is_packed));
     }
 
-    pub const create_enum_attribute = api.LLVMCreateEnumAttribute;
-    pub const create_type_attribute = api.LLVMCreateTypeAttribute;
+    // pub fn create_string_attribute(context: *Context, attribute_name: []const u8, attribute_value: []const u8) *Attribute {
+    //     return api.LLVMCreateStringAttribute(context, attribute_name.ptr, @intCast(attribute_name.len), attribute_value.ptr, @intCast(attribute_value.len));
+    // }
+    //
+    // pub const create_enum_attribute = api.LLVMCreateEnumAttribute;
+    // pub const create_type_attribute = api.LLVMCreateTypeAttribute;
 };
 
 pub const BasicBlock = opaque {
+    pub const delete = api.llvm_basic_block_delete;
+    pub const erase_from_parent = api.LLVMDeleteBasicBlock;
     pub const get_terminator = api.LLVMGetBasicBlockTerminator;
+    pub const is_empty = api.llvm_basic_block_is_empty;
+    pub const user_begin = api.llvm_basic_block_user_begin;
+    pub const get_next = api.LLVMGetNextBasicBlock;
+    pub const get_parent = api.LLVMGetBasicBlockParent;
+
+    pub fn to_value(basic_block: *BasicBlock) *Value {
+        return @ptrCast(basic_block);
+    }
 };
 
 pub const Module = opaque {
@@ -610,6 +812,7 @@ pub const VerifyResult = struct {
 
 pub const Builder = opaque {
     pub const position_at_end = api.LLVMPositionBuilderAtEnd;
+    pub const clear_insertion_position = api.LLVMClearInsertionPosition;
     pub const get_insert_block = api.LLVMGetInsertBlock;
 
     pub const create_ret = api.LLVMBuildRet;
@@ -690,6 +893,7 @@ pub const Builder = opaque {
         return api.LLVMBuildICmp(builder, predicate, left, right, "");
     }
 
+    pub const create_branch = api.LLVMBuildBr;
     pub const create_conditional_branch = api.LLVMBuildCondBr;
 
     pub fn create_call(builder: *Builder, function_type: *Type.Function, function_value: *Value, arguments: []const *Value) *Value {
@@ -706,6 +910,10 @@ pub const Builder = opaque {
 
     pub fn create_insert_value(builder: *Builder, aggregate: *Value, element: *Value, index: c_uint) *Value {
         return api.LLVMBuildInsertValue(builder, aggregate, element, index, "");
+    }
+
+    pub fn create_extract_value(builder: *Builder, aggregate: *Value, index: c_uint) *Value {
+        return api.LLVMBuildExtractValue(builder, aggregate, index, "");
     }
 
     pub fn create_zero_extend(builder: *Builder, value: *Value, destination_type: *Type) *Value {
@@ -731,6 +939,12 @@ pub const Builder = opaque {
     pub const create_unreachable = api.LLVMBuildUnreachable;
 
     pub const create_memcpy = api.LLVMBuildMemCpy;
+
+    pub fn create_vaarg(builder: *Builder, va_list: *Value, arg_type: *Type) *Value {
+        return api.LLVMBuildVAArg(builder, va_list, arg_type, "");
+    }
+
+    pub const find_return_value_dominating_store = api.llvm_find_return_value_dominating_store;
 };
 
 pub const GlobalValue = opaque {
@@ -739,6 +953,10 @@ pub const GlobalValue = opaque {
 
 pub const GlobalVariable = opaque {
     pub const add_debug_info = api.llvm_global_variable_add_debug_info;
+    pub const get_initializer = api.LLVMGetInitializer;
+    pub const set_initializer = api.LLVMSetInitializer;
+    pub const erase_from_parent = api.LLVMDeleteGlobal;
+    pub const delete = api.llvm_global_variable_delete;
     pub fn to_value(global_variable: *GlobalVariable) *Value {
         return @ptrCast(global_variable);
     }
@@ -776,11 +994,18 @@ pub const Function = opaque {
 
     pub const get_arguments = api.LLVMGetParams;
 
-    pub const add_attribute = api.LLVMAddAttributeAtIndex;
+    pub const set_attributes = api.llvm_function_set_attributes;
+    pub const get_last_basic_block = api.LLVMGetLastBasicBlock;
+    pub const append_basic_block = api.LLVMAppendExistingBasicBlock;
 };
 
 pub const Constant = opaque {
     pub fn to_value(constant: *Constant) *Value {
+        return @ptrCast(constant);
+    }
+
+    pub fn to_global_variable(constant: *Constant) *GlobalVariable {
+        assert(constant.to_value().get_kind() == .global_variable);
         return @ptrCast(constant);
     }
 
@@ -790,11 +1015,8 @@ pub const Constant = opaque {
         }
     };
 
-    pub const Array = opaque {
-        pub fn to_value(constant: *Constant.Array) *Value {
-            return @ptrCast(constant);
-        }
-    };
+    pub const get_sign_extended_value = api.LLVMConstIntGetSExtValue;
+    pub const get_zero_extended_value = api.LLVMConstIntGetZExtValue;
 };
 
 pub const Argument = opaque {
@@ -808,7 +1030,20 @@ pub const Value = opaque {
     pub const get_kind = api.LLVMGetValueKind;
     pub const set_alignment = api.LLVMSetAlignment;
 
+    pub fn set_name(value: *Value, name: []const u8) void {
+        api.LLVMSetValueName2(value, name.ptr, name.len);
+    }
+
+    // The operand API is from the User class, but it would work nonetheless
+    pub const get_operand = api.LLVMGetOperand;
+
     pub const is_call_instruction = api.LLVMIsACallInst;
+    pub const use_empty = api.llvm_value_use_empty;
+    pub const has_one_use = api.llvm_value_has_one_use;
+
+    pub const replace_all_uses_with = api.LLVMReplaceAllUsesWith;
+
+    pub const to_branch = api.llvm_value_to_branch;
 
     pub fn is_constant(value: *Value) bool {
         return api.LLVMIsConstant(value) != 0;
@@ -829,19 +1064,9 @@ pub const Value = opaque {
         return @ptrCast(value);
     }
 
-    pub fn get_calling_convention(value: *Value) CallingConvention {
-        const kind = value.get_kind();
-        switch (kind) {
-            .Instruction => {
-                const call = value.to_instruction().to_call();
-                return call.get_calling_convention();
-            },
-            .Function => {
-                const function = value.to_function();
-                return function.get_calling_convention();
-            },
-            else => unreachable,
-        }
+    pub fn to_global_variable(value: *Value) *GlobalVariable {
+        assert(value.get_kind() == .GlobalVariable);
+        return @ptrCast(value);
     }
 
     pub const Kind = enum(c_uint) {
@@ -884,14 +1109,35 @@ pub const Instruction = opaque {
     pub fn to_value(instruction: *Instruction) *Value {
         return @ptrCast(instruction);
     }
-    pub fn to_call(instruction: *Instruction) *Instruction.Call {
-        assert(instruction.to_value().is_call_instruction() != null);
+
+    pub fn to_call_base(instruction: *Instruction) *Instruction.CallBase {
+        assert(instruction.is_call_base());
         return @ptrCast(instruction);
     }
-    pub const Call = opaque {
+
+    pub const is_call_base = api.llvm_instruction_is_call_base;
+
+    pub const erase_from_parent = api.LLVMInstructionEraseFromParent;
+    pub const get_parent = api.LLVMGetInstructionParent;
+
+    pub const Branch = opaque {
+        pub const is_conditional = api.LLVMIsConditional;
+        pub const get_successor = api.LLVMGetSuccessor;
+
+        pub fn to_instruction(branch: *Branch) *Instruction {
+            return @ptrCast(branch);
+        }
+    };
+
+    pub const CallBase = opaque {
         pub const set_calling_convention = api.LLVMSetInstructionCallConv;
-        pub const get_calling_convention = api.LLVMGetInstructionCallConv;
-        pub const add_attribute = api.LLVMAddCallSiteAttribute;
+        pub const set_attributes = api.llvm_call_base_set_attributes;
+    };
+
+    pub const Store = opaque {
+        pub fn to_instruction(store: *Store) *Instruction {
+            return @ptrCast(store);
+        }
     };
 };
 
@@ -999,6 +1245,10 @@ pub const DI = struct {
     pub const Record = opaque {};
 
     pub const Type = opaque {
+        // TODO: typecheck
+        pub fn to_subroutine(ty: *DI.Type) *Subroutine {
+            return @ptrCast(ty);
+        }
         pub const Subroutine = opaque {
             pub fn to_type(subroutine: *Subroutine) *DI.Type {
                 return @ptrCast(subroutine);
@@ -1126,6 +1376,10 @@ pub const Type = opaque {
     };
 
     pub const Struct = opaque {
+        pub fn get_constant(struct_type: *Type.Struct, constant_values: []const *Constant) *Constant {
+            return api.LLVMConstNamedStruct(struct_type, constant_values.ptr, @intCast(constant_values.len));
+        }
+
         pub fn to_type(struct_type: *Type.Struct) *Type {
             return @ptrCast(struct_type);
         }
@@ -1152,9 +1406,12 @@ pub const Type = opaque {
         return api.LLVMArrayType2(element_type, element_count);
     }
 
-    pub fn get_constant_array(element_type: *Type, values: []const *Constant) *Constant.Array {
+    pub fn get_constant_array(element_type: *Type, values: []const *Constant) *Constant {
         return api.LLVMConstArray2(element_type, values.ptr, values.len);
     }
+
+    pub const get_size = api.LLVMSizeOf;
+    pub const get_alignment = api.LLVMAlignOf;
 };
 
 pub const Dwarf = struct {
@@ -1285,9 +1542,9 @@ pub fn lookup_intrinsic_id(name: []const u8) Intrinsic.Id {
     return api.LLVMLookupIntrinsicID(name.ptr, name.len);
 }
 
-pub fn lookup_attribute_kind(name: []const u8) Attribute.Kind {
-    return api.LLVMGetEnumAttributeKindForName(name.ptr, name.len);
-}
+// pub fn lookup_attribute_kind(name: []const u8) Attribute.Kind {
+//     return api.LLVMGetEnumAttributeKindForName(name.ptr, name.len);
+// }
 
 pub const IntPredicate = enum(c_int) {
     eq = 32,
@@ -1429,14 +1686,14 @@ pub const ObjectGenerate = struct {
     path: []const u8,
     optimization_level: ?OptimizationLevel,
     debug_info: bool,
-    optimize_when_possible: u1,
+    optimize_when_possible: bool,
 };
 
 pub fn object_generate(module: *Module, target_machine: *Target.Machine, generate: ObjectGenerate) CodeGenerationPipelineResult {
     module.set_target(target_machine);
 
     if (generate.optimization_level) |optimization_level| {
-        module.run_optimization_pipeline(target_machine, OptimizationPipelineOptions.default(.{ .optimization_level = optimization_level, .debug_info = @intFromBool(generate.debug_info) }));
+        module.run_optimization_pipeline(target_machine, OptimizationPipelineOptions.default(.{ .optimization_level = optimization_level, .debug_info = generate.debug_info }));
     }
 
     // const mod_string = module.to_string();
@@ -1448,7 +1705,7 @@ pub fn object_generate(module: *Module, target_machine: *Target.Machine, generat
         .flags = .{
             .code_generation_file_type = .object_file,
             .optimize_when_possible = generate.optimize_when_possible,
-            .verify_module = 1,
+            .verify_module = true,
         },
     });
 

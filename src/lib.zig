@@ -122,7 +122,6 @@ pub const file = struct {
         }, .{
             .read = 1,
         });
-        defer fd.close();
         var result: []u8 = undefined;
         const ptr = @as(*[2]u64, @ptrCast(&result));
         ptr[0] = 0;
@@ -133,6 +132,7 @@ pub const file = struct {
             const file_buffer = arena.allocate_bytes(file_size, 1);
             result = file_buffer[0..file_size];
             fd.read(result, file_size);
+            fd.close();
         }
 
         return result;
@@ -2504,7 +2504,18 @@ pub fn format_va(buffer: []u8, format_string: [*:0]const u8, variable_arguments:
                     switch (next_ch) {
                         left_brace => os.abort(),
                         'c' => {
-                            os.abort();
+                            read_byte_count += 1;
+                            assert(format_string[read_byte_count] == 's');
+                            read_byte_count += 1;
+                            assert(format_string[read_byte_count] == 't');
+                            read_byte_count += 1;
+                            assert(format_string[read_byte_count] == 'r');
+                            read_byte_count += 1;
+
+                            const c_string = @cVaArg(variable_arguments, [*:0]const u8);
+                            const str = cstring.to_slice(c_string);
+                            @memcpy(buffer[written_byte_count..][0..str.len], str);
+                            written_byte_count += str.len;
                         },
                         'f' => {
                             os.abort();
@@ -2653,12 +2664,12 @@ test "parse integer hexadecimal" {
 
 fn vprint(format_string: [*:0]const u8, args: *VariableArguments) void {
     var buffer: [16 * 1024]u8 = undefined;
-    const slice = format_va(&buffer, format_string, args);
-    print_string(slice);
+    const byte_count = format_va(&buffer, format_string, args);
+    print_string(buffer[0..byte_count]);
 }
 
 pub fn print(format_string: [*:0]const u8, ...) callconv(.C) void {
-    const args = @cVaStart();
+    var args = @cVaStart();
     vprint(format_string, &args);
     @cVaEnd(&args);
 }
