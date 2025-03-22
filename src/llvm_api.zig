@@ -20,6 +20,7 @@ pub extern fn LLVMDeleteBasicBlock(basic_block: *llvm.BasicBlock) void;
 pub extern fn LLVMGetLastBasicBlock(function: *llvm.Function) *llvm.BasicBlock;
 pub extern fn LLVMGetBasicBlockParent(basic_block: *llvm.BasicBlock) ?*llvm.BasicBlock;
 pub extern fn LLVMAppendExistingBasicBlock(function: *llvm.Function, basic_block: *llvm.BasicBlock) void;
+pub extern fn LLVMInsertExistingBasicBlockAfterInsertBlock(builder: *llvm.Builder, basic_block: *llvm.BasicBlock) void;
 
 pub extern fn LLVMSetValueName2(value: *llvm.Value, name_pointer: [*]const u8, name_length: usize) void;
 pub extern fn llvm_value_use_empty(value: *llvm.Value) bool;
@@ -82,12 +83,15 @@ pub extern fn LLVMBuildStore(builder: *llvm.Builder, value: *llvm.Value, pointer
 pub extern fn LLVMBuildLoad2(builder: *llvm.Builder, ty: *llvm.Type, pointer: *llvm.Value, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildCall2(builder: *llvm.Builder, ty: *llvm.Type.Function, pointer: *llvm.Value, argument_pointer: [*]const *llvm.Value, argument_count: c_uint, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildStructGEP2(builder: *llvm.Builder, struct_type: *llvm.Type.Struct, pointer: *llvm.Value, index: c_uint, name: [*:0]const u8) *llvm.Value;
+pub extern fn LLVMBuildGEP2(builder: *llvm.Builder, ty: *llvm.Type, aggregate: *llvm.Value, index_pointer: [*]const *llvm.Value, index_count: c_uint, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildInBoundsGEP2(builder: *llvm.Builder, ty: *llvm.Type, aggregate: *llvm.Value, index_pointer: [*]const *llvm.Value, index_count: c_uint, name: [*:0]const u8) *llvm.Value;
 
 pub extern fn LLVMBuildInsertValue(builder: *llvm.Builder, aggregate: *llvm.Value, element: *llvm.Value, index: c_uint, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildExtractValue(builder: *llvm.Builder, aggregate: *llvm.Value, index: c_uint, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildUnreachable(builder: *llvm.Builder) *llvm.Value;
 pub extern fn LLVMBuildMemCpy(builder: *llvm.Builder, destination: *llvm.Value, destination_alignment: c_uint, source: *llvm.Value, source_alignment: c_uint, size: *llvm.Value) *llvm.Value;
+pub extern fn LLVMBuildPhi(builder: *llvm.Builder, ty: *llvm.Type, name: [*:0]const u8) *llvm.Instruction.Phi;
+pub extern fn LLVMAddIncoming(phi: *llvm.Instruction.Phi, incoming_value_pointer: [*]const *llvm.Value, incoming_basic_block_pointer: [*]const *llvm.BasicBlock, incoming_count: c_uint) void;
 
 pub extern fn LLVMBuildVAArg(builder: *llvm.Builder, va_list: *llvm.Value, arg_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
 

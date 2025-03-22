@@ -17,21 +17,21 @@ const right_parenthesis = ')';
 
 const max_argument_count = 64;
 
-fn array_type_name(arena: *Arena, element_count: u64, noalias array: *const ArrayType) [:0]const u8 {
+fn array_type_name(arena: *Arena, array_type: ArrayType) [:0]const u8 {
     var buffer: [256]u8 = undefined;
     var i: usize = 0;
     buffer[i] = left_bracket;
     i += 1;
-    i += lib.string_format.integer_decimal(buffer[i..], element_count);
+    i += lib.string_format.integer_decimal(buffer[i..], array_type.element_count.?);
     buffer[i] = right_bracket;
     i += 1;
-    const element_name = array.element_type.name.?;
+    const element_name = array_type.element_type.name.?;
     @memcpy(buffer[i..][0..element_name.len], element_name);
     i += element_name.len;
     return arena.duplicate_string(buffer[0..i]);
 }
 
-fn array_type_llvm(noalias module: *Module, noalias array: *const ArrayType) Type.LLVM {
+fn array_type_llvm(noalias module: *Module, array: ArrayType) Type.LLVM {
     const element_count = array.element_count.?;
     return .{
         .handle = array.element_type.llvm.handle.get_array_type(element_count).to_type(),
@@ -118,6 +118,27 @@ const Module = struct {
     pointer_type_count: u32 = 0,
     anonymous_pair_type_count: u32 = 0,
     arena_restore_position: u64,
+
+    pub fn emit_block(module: *Module, block: *llvm.BasicBlock) void {
+        const maybe_current_block = module.llvm.builder.get_insert_block();
+
+        var emit_branch = false;
+        if (maybe_current_block) |current_block| {
+            emit_branch = current_block.get_terminator() == null;
+        }
+
+        if (emit_branch) {
+            _ = module.llvm.builder.create_branch(block);
+        }
+
+        if (maybe_current_block != null and maybe_current_block.?.get_parent() != null) {
+            module.llvm.builder.insert_basic_block_after_insert_block(block);
+        } else {
+            module.current_function.?.value.llvm.to_function().append_basic_block(block);
+        }
+
+        module.llvm.builder.position_at_end(block);
+    }
 
     pub fn dump(module: *Module) void {
         lib.print_string(module.llvm.handle.to_string());
@@ -285,18 +306,27 @@ const Module = struct {
         return .{ .value = source_pointer, .type = source_type };
     }
 
-    pub fn build_attribute_list(module: *Module, function_type: *const FunctionType, function_attributes: Function.Attributes, call_site: bool) *llvm.Attribute.List {
+    const AttributeBuildOptions = struct {
+        return_type_abi: Abi.Information,
+        abi_argument_types: []const *Type,
+        argument_type_abis: []const Abi.Information,
+        abi_return_type: *Type,
+        attributes: Function.Attributes,
+        call_site: bool,
+    };
+
+    pub fn build_attribute_list(module: *Module, options: AttributeBuildOptions) *llvm.Attribute.List {
         const return_attributes = llvm.Attribute.Argument{
-            .semantic_type = function_type.return_type_abi.semantic_type.llvm.handle,
-            .abi_type = function_type.abi_return_type.llvm.handle,
+            .semantic_type = options.return_type_abi.semantic_type.llvm.handle,
+            .abi_type = options.abi_return_type.llvm.handle,
             .dereferenceable_bytes = 0,
             .alignment = 0,
             .flags = .{
                 .no_alias = false,
                 .non_null = false,
                 .no_undef = false,
-                .sign_extend = function_type.return_type_abi.flags.kind == .extend and function_type.return_type_abi.flags.sign_extension,
-                .zero_extend = function_type.return_type_abi.flags.kind == .extend and !function_type.return_type_abi.flags.sign_extension,
+                .sign_extend = options.return_type_abi.flags.kind == .extend and options.return_type_abi.flags.sign_extension,
+                .zero_extend = options.return_type_abi.flags.kind == .extend and !options.return_type_abi.flags.sign_extension,
                 .in_reg = false,
                 .no_fp_class = .{},
                 .struct_return = false,
@@ -312,23 +342,23 @@ const Module = struct {
             },
         };
         var argument_attribute_buffer: [128]llvm.Attribute.Argument = undefined;
-        const argument_attributes = argument_attribute_buffer[0..function_type.abi_argument_types.len];
+        const argument_attributes = argument_attribute_buffer[0..options.abi_argument_types.len];
 
-        if (function_type.return_type_abi.flags.kind == .indirect) {
-            const abi_index = @intFromBool(function_type.return_type_abi.flags.sret_after_this);
+        if (options.return_type_abi.flags.kind == .indirect) {
+            const abi_index = @intFromBool(options.return_type_abi.flags.sret_after_this);
             const argument_attribute = &argument_attributes[abi_index];
             argument_attribute.* = .{
-                .semantic_type = function_type.return_type_abi.semantic_type.llvm.handle,
-                .abi_type = function_type.abi_argument_types[abi_index].llvm.handle,
+                .semantic_type = options.return_type_abi.semantic_type.llvm.handle,
+                .abi_type = options.abi_argument_types[abi_index].llvm.handle,
                 .dereferenceable_bytes = 0,
-                .alignment = function_type.return_type_abi.semantic_type.get_byte_alignment(),
+                .alignment = options.return_type_abi.semantic_type.get_byte_alignment(),
                 .flags = .{
                     .no_alias = true,
                     .non_null = false,
                     .no_undef = false,
                     .sign_extend = false,
                     .zero_extend = false,
-                    .in_reg = function_type.return_type_abi.flags.in_reg,
+                    .in_reg = options.return_type_abi.flags.in_reg,
                     .no_fp_class = .{},
                     .struct_return = true,
                     .writable = true,
@@ -344,12 +374,12 @@ const Module = struct {
             };
         }
 
-        for (function_type.argument_type_abis) |argument_type_abi| {
+        for (options.argument_type_abis) |argument_type_abi| {
             for (argument_type_abi.abi_start..argument_type_abi.abi_start + argument_type_abi.abi_count) |abi_index| {
                 const argument_attribute = &argument_attributes[abi_index];
                 argument_attribute.* = .{
                     .semantic_type = argument_type_abi.semantic_type.llvm.handle,
-                    .abi_type = function_type.abi_argument_types[abi_index].llvm.handle,
+                    .abi_type = options.abi_argument_types[abi_index].llvm.handle,
                     .dereferenceable_bytes = 0,
                     .alignment = if (argument_type_abi.flags.kind == .indirect) 8 else 0,
                     .flags = .{
@@ -381,7 +411,7 @@ const Module = struct {
             .definition_probe_stack = llvm.String{},
             .definition_stack_probe_size = llvm.String{},
             .flags0 = .{
-                .noreturn = function_type.return_type_abi.semantic_type == module.noreturn_type,
+                .noreturn = options.return_type_abi.semantic_type == module.noreturn_type,
                 .cmse_ns_call = false,
                 .returns_twice = false,
                 .cold = false,
@@ -418,8 +448,8 @@ const Module = struct {
                 .memory_inaccessible_or_arg_memory_only = false,
                 .memory_arg_memory_only = false,
                 .strict_fp = false,
-                .no_inline = function_attributes.inline_behavior == .no_inline,
-                .always_inline = function_attributes.inline_behavior == .always_inline,
+                .no_inline = options.attributes.inline_behavior == .no_inline,
+                .always_inline = options.attributes.inline_behavior == .always_inline,
                 .guard_no_cf = false,
                 // TODO: branch protection function attributes
                 // TODO: cpu features
@@ -456,10 +486,10 @@ const Module = struct {
                 .definition_aarch64_new_za = false,
                 .definition_aarch64_new_zt0 = false,
                 .definition_optimize_none = false,
-                .definition_naked = !call_site and function_attributes.naked,
-                .definition_inline_hint = !call_site and function_attributes.inline_behavior == .inline_hint,
+                .definition_naked = !options.call_site and options.attributes.naked,
+                .definition_inline_hint = !options.call_site and options.attributes.inline_behavior == .inline_hint,
             },
-        }, return_attributes, argument_attributes, call_site);
+        }, return_attributes, argument_attributes, options.call_site);
     }
 
     pub fn get_va_list_type(module: *Module) *Type {
@@ -510,15 +540,27 @@ const Module = struct {
                 .bb = .{
                     .structure = .{
                         .bit_alignment = 64,
-                        .byte_alignment = 8,
+                        .byte_alignment = 16,
                         .byte_size = 24,
                         .bit_size = 24 * 8,
                         .fields = fields,
                     },
                 },
             });
-            module.va_list_type = result;
-            return result;
+
+            const array = ArrayType{
+                .element_count = 1,
+                .element_type = result,
+            };
+            const ty = module.types.add(.{
+                .name = array_type_name(module.arena, array),
+                .llvm = array_type_llvm(module, array),
+                .bb = .{
+                    .array = array,
+                },
+            });
+            module.va_list_type = ty;
+            return ty;
         }
     }
 
@@ -1028,7 +1070,7 @@ const FunctionType = struct {
     abi_return_type: *Type,
     abi_argument_types: []const *Type,
     calling_convention: CallingConvention,
-    // available_registers: Abi.RegisterCount,
+    available_registers: Abi.RegisterCount,
     is_var_args: bool,
 
     fn get_abi_argument_types(function_type: *const FunctionType) []const *Type {
@@ -1409,8 +1451,8 @@ const Converter = struct {
                         .element_type = element_type,
                     };
                     const ty = module.types.add(.{
-                        .name = array_type_name(module.arena, element_count, &array),
-                        .llvm = array_type_llvm(module, &array),
+                        .name = array_type_name(module.arena, array),
+                        .llvm = array_type_llvm(module, array),
                         .bb = .{
                             .array = array,
                         },
@@ -1596,8 +1638,11 @@ const Converter = struct {
         const calling_convention = function_type.calling_convention;
         const llvm_calling_convention = calling_convention.to_llvm();
         var llvm_abi_argument_value_buffer: [max_argument_count]*llvm.Value = undefined;
-        var abi_argument_count: u32 = 0;
-        _ = &abi_argument_count;
+        var llvm_abi_argument_type_buffer: [max_argument_count]*llvm.Type = undefined;
+        var abi_argument_type_buffer: [max_argument_count]*Type = undefined;
+        var argument_type_abi_buffer: [max_argument_count]Abi.Information = undefined;
+
+        var abi_argument_count: u16 = 0;
         var semantic_argument_count: u32 = 0;
         const function_semantic_argument_count = function_type.argument_type_abis.len;
 
@@ -1617,6 +1662,8 @@ const Converter = struct {
                 const has_sret = function_type.return_type_abi.flags.kind == .indirect;
                 if (has_sret) {
                     llvm_abi_argument_value_buffer[abi_argument_count] = temporal_alloca;
+                    abi_argument_type_buffer[abi_argument_count] = module.void_type;
+                    llvm_abi_argument_type_buffer[abi_argument_count] = module.void_type.llvm.handle;
                     abi_argument_count += 1;
                     break :blk temporal_alloca;
                 } else if (function_type.return_type_abi.flags.kind == .in_alloca) {
@@ -1628,8 +1675,7 @@ const Converter = struct {
             else => undefined,
         };
 
-        // var available_registers = function_type.available_registers;
-        // _ = &available_registers;
+        var available_registers = function_type.available_registers;
 
         while (true) : (semantic_argument_count += 1) {
             converter.skip_space();
@@ -1639,26 +1685,40 @@ const Converter = struct {
             }
 
             const semantic_argument_index = semantic_argument_count;
-
-            if (semantic_argument_index < function_semantic_argument_count or function_type.is_var_args) {
-                const expected_semantic_argument_type: ?*Type = if (semantic_argument_index < function_semantic_argument_count) function_type.argument_type_abis[semantic_argument_index].semantic_type else null;
+            const is_named_argument = semantic_argument_index < function_semantic_argument_count;
+            if (is_named_argument or function_type.is_var_args) {
+                const expected_semantic_argument_type: ?*Type = if (is_named_argument) function_type.argument_type_abis[semantic_argument_index].semantic_type else null;
                 const semantic_argument_value = converter.parse_value(module, expected_semantic_argument_type, .value);
 
                 _ = converter.consume_character_if_match(',');
 
-                const semantic_argument_type = if (semantic_argument_index < function_semantic_argument_count) function_type.argument_type_abis[semantic_argument_index].semantic_type else semantic_argument_value.type;
-                const argument_abi = if (semantic_argument_index < function_semantic_argument_count) function_type.argument_type_abis[semantic_argument_index] else @trap(); // Abi.SystemV.abi_from_semantic_type(module, &available_registers, semantic_argument_type);
+                const semantic_argument_type = switch (is_named_argument) {
+                    true => function_type.argument_type_abis[semantic_argument_index].semantic_type,
+                    false => if (semantic_argument_value.lvalue and semantic_argument_value.dereference_to_assign) blk: {
+                        const t = semantic_argument_value.type;
+                        assert(t.bb == .pointer);
+                        assert(t.bb.pointer.type.bb == .structure);
+                        break :blk t.bb.pointer.type;
+                    } else semantic_argument_value.type,
+                };
+                const argument_abi = if (is_named_argument) function_type.argument_type_abis[semantic_argument_index] else Abi.SystemV.classify_argument(module, &available_registers, &llvm_abi_argument_type_buffer, &abi_argument_type_buffer, .{
+                    .type = semantic_argument_type,
+                    .abi_start = abi_argument_count,
+                    .is_named_argument = true,
+                });
+                if (is_named_argument) {
+                    for (llvm_abi_argument_type_buffer[argument_abi.abi_start..][0..argument_abi.abi_count], abi_argument_type_buffer[argument_abi.abi_start..][0..argument_abi.abi_count], function_type.abi_argument_types[argument_abi.abi_start..][0..argument_abi.abi_count]) |*llvm_t, *t, abi_argument_type| {
+                        llvm_t.* = abi_argument_type.llvm.handle;
+                        t.* = abi_argument_type;
+                    }
+                }
+                argument_type_abi_buffer[semantic_argument_index] = argument_abi;
 
                 if (argument_abi.padding.type) |padding_type| {
                     _ = padding_type;
                     @trap();
                 }
-
-                const argument_abi_start = argument_abi.abi_start;
-                const argument_abi_count = argument_abi.abi_count;
-                _ = argument_abi_start;
-                _ = argument_abi_count;
-
+                assert(abi_argument_count == argument_abi.abi_start);
                 const argument_abi_kind = argument_abi.flags.kind;
                 switch (argument_abi_kind) {
                     .direct, .extend => {
@@ -1678,6 +1738,8 @@ const Converter = struct {
 
                             // TODO: bitcast
                             // if (argument_abi.abi_start < function_type.argument_type_abis.len and v.type.llvm.handle != abi_arguments
+
+                            // TODO: fill types
                             llvm_abi_argument_value_buffer[abi_argument_count] = v.llvm;
                             abi_argument_count += 1;
                         } else {
@@ -1787,6 +1849,7 @@ const Converter = struct {
                                     }
                                 },
                             };
+
                             if (!need_copy) {
                                 llvm_abi_argument_value_buffer[abi_argument_count] = semantic_argument_value.llvm;
                                 abi_argument_count += 1;
@@ -1799,6 +1862,8 @@ const Converter = struct {
                     .ignore => unreachable,
                     else => @trap(),
                 }
+
+                assert(abi_argument_count == argument_abi.abi_start + argument_abi.abi_count);
             } else {
                 converter.report_error();
             }
@@ -1814,7 +1879,14 @@ const Converter = struct {
         const llvm_abi_argument_values = llvm_abi_argument_value_buffer[0..abi_argument_count];
         const llvm_call = module.llvm.builder.create_call(raw_function_type.llvm.handle.to_function(), llvm_callable, llvm_abi_argument_values);
 
-        const attribute_list = module.build_attribute_list(function_type, .{}, false);
+        const attribute_list = module.build_attribute_list(.{
+            .return_type_abi = function_type.return_type_abi,
+            .abi_return_type = function_type.abi_return_type,
+            .abi_argument_types = abi_argument_type_buffer[0..abi_argument_count],
+            .argument_type_abis = argument_type_abi_buffer[0..semantic_argument_count],
+            .attributes = .{},
+            .call_site = true,
+        });
 
         const call_base = llvm_call.to_instruction().to_call_base();
         call_base.set_calling_convention(llvm_calling_convention);
@@ -2006,23 +2078,6 @@ const Converter = struct {
                     .lvalue = true,
                     .dereference_to_assign = false,
                 };
-
-                // local_storage.* = switch (is_inferred) {
-                //     true => .{
-                //         .llvm = module.create_alloca(.{ .type = resolved_type.bb.pointer.type, .name = local_name }),
-                //         .type = resolved_type,
-                //         .bb = .local,
-                //         .lvalue = true,
-                //         .dereference_to_assign = false,
-                //     },
-                //     false => .{
-                //         .llvm = module.create_alloca(.{ .type = resolved_type, .name = local_name }),
-                //         .type = module.get_pointer_type(.{ .type = resolved_type }),
-                //         .bb = .local,
-                //         .lvalue = true,
-                //         .dereference_to_assign = false,
-                //     },
-                // };
 
                 if (module.llvm.di_builder) |di_builder| {
                     module.llvm.builder.set_current_debug_location(statement_debug_location);
@@ -2635,15 +2690,13 @@ const Converter = struct {
                 const argument_values: []const *llvm.Value = &.{alloca};
                 _ = module.llvm.builder.create_call(intrinsic_function_type, intrinsic_function, argument_values);
 
-                const load = module.create_load(.{ .type = va_list_type, .value = alloca });
-
                 const value = module.values.add();
                 value.* = .{
-                    .llvm = load,
-                    .type = va_list_type,
+                    .llvm = alloca,
+                    .type = module.get_pointer_type(.{ .type = va_list_type }),
                     .bb = .instruction,
-                    .lvalue = false,
-                    .dereference_to_assign = false,
+                    .lvalue = true,
+                    .dereference_to_assign = true,
                 };
 
                 return value;
@@ -2671,7 +2724,13 @@ const Converter = struct {
             },
             .va_copy => @trap(),
             .va_arg => {
-                const va_list = converter.parse_value(module, module.get_pointer_type(.{ .type = module.get_va_list_type() }), .pointer);
+                const va_list_type = module.get_va_list_type();
+                const raw_va_list = converter.parse_value(module, module.get_pointer_type(.{ .type = va_list_type }), .pointer);
+                const va_list = module.llvm.builder.create_gep(.{
+                    .type = va_list_type.llvm.handle,
+                    .aggregate = raw_va_list.llvm,
+                    .indices = &([1]*llvm.Value{module.integer_type(64, false).llvm.handle.to_integer().get_constant(0, @intFromBool(false)).to_value()} ** 2),
+                });
 
                 converter.skip_space();
 
@@ -2683,54 +2742,117 @@ const Converter = struct {
                 converter.skip_space();
 
                 converter.expect_character(right_parenthesis);
+                const r = Abi.SystemV.classify_argument_type(module, arg_type, .{
+                    .available_gpr = 0,
+                    .is_named_argument = false,
+                    .is_reg_call = false,
+                });
+                const abi = r[0];
+                const needed_register_count = r[1];
 
-                const byte_size = arg_type.get_byte_size();
-                const aligned_size = lib.align_forward_u64(byte_size, 8);
-                const gpr_size = 48;
-                if (aligned_size < gpr_size) {
-                    const gpr_offset: u32 = @intCast(gpr_size - aligned_size);
-                    const gpr_offset_gep = module.llvm.builder.create_struct_gep(module.get_va_list_type().llvm.handle.to_struct(), va_list.llvm, 0);
-                    const gpr_offset_type = module.integer_type(32, false);
-                    const gpr_offset_load = module.create_load(.{
-                        .value = gpr_offset_gep,
-                        .type = gpr_offset_type,
-                    });
-                    const fits_in_gpr = module.llvm.builder.create_compare(.ule, gpr_offset_load, gpr_offset_type.llvm.handle.to_integer().get_constant(gpr_offset, @intFromBool(false)).to_value());
-                    const current_function = module.current_function orelse unreachable;
-                    const reg_block = module.llvm.context.create_basic_block("fits_in_register", current_function.value.llvm.to_function());
-                    const mem_block = module.llvm.context.create_basic_block("fits_in_memory", current_function.value.llvm.to_function());
-                    const end_block = module.llvm.context.create_basic_block("va_arg.end", current_function.value.llvm.to_function());
+                const abi_kind = abi.flags.kind;
+                assert(abi_kind != .ignore);
 
-                    _ = module.llvm.builder.create_conditional_branch(fits_in_gpr, reg_block, mem_block);
+                const va_list_struct = va_list_type.bb.array.element_type;
+                const llvm_address = switch (needed_register_count.gpr == 0 and needed_register_count.sse == 0) {
+                    true => Abi.SystemV.emit_va_arg_from_memory(module, va_list, va_list_struct, arg_type),
+                    false => blk: {
+                        const va_list_struct_llvm = va_list_struct.llvm.handle.to_struct();
+                        const gpr_offset_pointer = if (needed_register_count.gpr != 0) module.llvm.builder.create_struct_gep(va_list_struct_llvm, va_list, 0) else undefined;
+                        const gpr_offset = if (needed_register_count.gpr != 0) module.create_load(.{ .type = va_list_struct.bb.structure.fields[0].type, .value = gpr_offset_pointer, .alignment = 16 }) else undefined;
+                        const raw_in_regs = 48 - needed_register_count.gpr * 8;
+                        const int32 = module.integer_type(32, false);
+                        const int32_llvm = int32.llvm.handle.to_integer();
+                        var in_regs = if (needed_register_count.gpr != 0) int32_llvm.get_constant(raw_in_regs, @intFromBool(false)).to_value() else @trap();
+                        in_regs = if (needed_register_count.gpr != 0) module.llvm.builder.create_compare(.ule, gpr_offset, in_regs) else in_regs;
 
-                    module.llvm.builder.position_at_end(reg_block);
+                        const fp_offset_pointer = if (needed_register_count.sse != 0) module.llvm.builder.create_struct_gep(va_list_struct_llvm, va_list, 1) else undefined;
+                        const fp_offset = if (needed_register_count.sse != 0) module.create_load(.{ .type = va_list_struct.bb.structure.fields[1].type, .value = fp_offset_pointer }) else undefined;
+                        const raw_fits_in_fp = 176 - needed_register_count.sse * 16;
+                        var fits_in_fp = if (needed_register_count.sse != 0) int32_llvm.get_constant(raw_fits_in_fp, @intFromBool(false)).to_value() else undefined;
+                        fits_in_fp = if (needed_register_count.sse != 0) module.llvm.builder.create_compare(.ule, fp_offset, fits_in_fp) else undefined;
+                        in_regs = if (needed_register_count.sse != 0 and needed_register_count.gpr != 0) @trap() else in_regs;
 
-                    module.llvm.builder.position_at_end(mem_block);
+                        const in_reg_block = module.llvm.context.create_basic_block("va_arg.in_reg", null);
+                        const in_mem_block = module.llvm.context.create_basic_block("va_arg.in_mem", null);
+                        const end_block = module.llvm.context.create_basic_block("va_arg.end", null);
+                        _ = module.llvm.builder.create_conditional_branch(in_regs, in_reg_block, in_mem_block);
+                        module.emit_block(in_reg_block);
 
-                    module.llvm.builder.position_at_end(end_block);
-                    _ = @trap();
-                } else {
-                    @trap();
+                        const reg_save_area = module.create_load(.{ .type = va_list_struct.bb.structure.fields[3].type, .value = module.llvm.builder.create_struct_gep(va_list_struct_llvm, va_list, 3), .alignment = 16 });
+
+                        const register_address = if (needed_register_count.gpr != 0 and needed_register_count.sse != 0) {
+                            @trap();
+                        } else if (needed_register_count.gpr != 0) b: {
+                            const register_address = module.llvm.builder.create_gep(.{
+                                .type = va_list_struct.bb.structure.fields[3].type.bb.pointer.type.llvm.handle,
+                                .aggregate = reg_save_area,
+                                .indices = &.{gpr_offset},
+                                .inbounds = false,
+                            });
+                            if (arg_type.get_byte_alignment() > 8) {
+                                @trap();
+                            }
+                            break :b register_address;
+                        } else if (needed_register_count.sse == 1) {
+                            @trap();
+                        } else {
+                            assert(needed_register_count.sse == 2);
+                            @trap();
+                        };
+
+                        if (needed_register_count.gpr != 0) {
+                            const raw_offset = needed_register_count.gpr * 8;
+                            const new_offset = module.llvm.builder.create_add(gpr_offset, int32_llvm.get_constant(raw_offset, @intFromBool(false)).to_value());
+                            _ = module.create_store(.{ .destination_value = gpr_offset_pointer, .source_value = new_offset, .source_type = int32, .destination_type = int32, .alignment = 16 });
+                        }
+
+                        if (needed_register_count.sse != 0) {
+                            @trap();
+                        }
+
+                        _ = module.llvm.builder.create_branch(end_block);
+
+                        module.emit_block(in_mem_block);
+
+                        const memory_address = Abi.SystemV.emit_va_arg_from_memory(module, va_list, va_list_struct, arg_type);
+                        module.emit_block(end_block);
+
+                        const values = &.{ register_address, memory_address };
+                        const blocks = &.{ in_reg_block, in_mem_block };
+                        const phi = module.llvm.builder.create_phi(module.llvm.pointer_type);
+                        phi.add_incoming(values, blocks);
+                        break :blk phi.to_value();
+                    },
+                };
+
+                switch (arg_type.get_evaluation_kind()) {
+                    .aggregate => {
+                        const result_type = module.get_pointer_type(.{ .type = arg_type });
+                        const value = module.values.add();
+                        value.* = .{
+                            .type = result_type,
+                            .bb = .instruction,
+                            .llvm = llvm_address,
+                            .lvalue = true,
+                            .dereference_to_assign = true,
+                        };
+                        return value;
+                    },
+                    .scalar => {
+                        const value = module.values.add();
+                        const load = module.create_load(.{ .type = arg_type, .value = llvm_address });
+                        value.* = .{
+                            .type = arg_type,
+                            .bb = .instruction,
+                            .llvm = load,
+                            .lvalue = false,
+                            .dereference_to_assign = false,
+                        };
+                        return value;
+                    },
+                    .complex => @trap(),
                 }
-                // const va_arg = module.llvm.builder.create_vaarg(va_list.llvm, arg_type.llvm.handle);
-                //
-                // const value = module.values.add();
-                // if (given_arg_type.bb == .@"struct") {
-                //     const load = module.create_load(.{ .type = given_arg_type, .value = va_arg });
-                //     value.* = .{
-                //         .llvm = load,
-                //         .type = given_arg_type,
-                //         .bb = .instruction,
-                //     };
-                // } else {
-                //     value.* = .{
-                //         .llvm = va_arg,
-                //         .type = arg_type,
-                //         .bb = .instruction,
-                //     };
-                // }
-                //
-                // return value;
             },
         }
     }
@@ -2988,8 +3110,8 @@ const Converter = struct {
 
                         if (array.element_count == null) {
                             array.element_count = element_count;
-                            ty.llvm = array_type_llvm(module, array);
-                            ty.name = array_type_name(module.arena, element_count, array);
+                            ty.llvm = array_type_llvm(module, array.*);
+                            ty.name = array_type_name(module.arena, array.*);
                         }
 
                         const array_elements = element_buffer[0..element_count];
@@ -3190,7 +3312,11 @@ const Converter = struct {
                             converter.skip_space();
                             converter.expect_character(right_bracket);
 
-                            const gep = module.llvm.builder.create_gep(appointee_type.llvm.handle, variable.value.llvm, &.{ zero_index, index.llvm });
+                            const gep = module.llvm.builder.create_gep(.{
+                                .type = appointee_type.llvm.handle,
+                                .aggregate = variable.value.llvm,
+                                .indices = &.{ zero_index, index.llvm },
+                            });
 
                             switch (value_kind) {
                                 .pointer, .maybe_pointer => {
@@ -3213,7 +3339,17 @@ const Converter = struct {
                             switch (value_kind) {
                                 .pointer, .maybe_pointer => break :b variable.value,
                                 .value => switch (appointee_type.get_evaluation_kind()) {
-                                    .aggregate => break :b variable.value,
+                                    .aggregate => {
+                                        const value_address = module.values.add();
+                                        value_address.* = .{
+                                            .llvm = variable.value.llvm,
+                                            .type = variable.value.type,
+                                            .bb = .instruction,
+                                            .lvalue = true,
+                                            .dereference_to_assign = true,
+                                        };
+                                        break :b value_address;
+                                    },
                                     else => {
                                         const load = module.values.add();
                                         load.* = .{
@@ -3654,9 +3790,10 @@ pub const Abi = struct {
             const current_index = @intFromBool(is_memory);
             const not_current_index = @intFromBool(!is_memory);
             assert(current_index != not_current_index);
+            result[current_index] = .memory;
 
             switch (ty.bb) {
-                .void, .noreturn => {},
+                .void, .noreturn => result[current_index] = .none,
                 .bits => result[current_index] = .integer,
                 .pointer => result[current_index] = .integer,
                 .integer => |integer| {
@@ -3898,7 +4035,7 @@ pub const Abi = struct {
         pub fn classify_argument_type(module: *Module, argument_type: *Type, options: ArgumentOptions) struct { Abi.Information, Abi.SystemV.RegisterCount } {
             const classes = classify(argument_type, .{
                 .base_offset = 0,
-                .is_named_argument = true,
+                .is_named_argument = options.is_named_argument,
             });
             assert(classes[1] != .memory or classes[0] == .memory);
             assert(classes[1] != .sseup or classes[0] == .sse);
@@ -3961,6 +4098,78 @@ pub const Abi = struct {
                 }),
                 needed_registers,
             };
+        }
+
+        const ClassifyArgument = struct {
+            type: *Type,
+            abi_start: u16,
+            is_reg_call: bool = false,
+            is_named_argument: bool,
+        };
+
+        pub fn classify_argument(module: *Module, available_registers: *Abi.RegisterCount, llvm_abi_argument_type_buffer: []*llvm.Type, abi_argument_type_buffer: []*Type, options: ClassifyArgument) Abi.Information {
+            const semantic_argument_type = options.type;
+            const result = if (options.is_reg_call) @trap() else Abi.SystemV.classify_argument_type(module, semantic_argument_type, .{
+                .is_named_argument = options.is_named_argument,
+                .is_reg_call = options.is_reg_call,
+                .available_gpr = available_registers.system_v.gpr,
+            });
+            const abi = result[0];
+            const needed_registers = result[1];
+
+            var argument_type_abi = switch (available_registers.system_v.gpr >= needed_registers.gpr and available_registers.system_v.sse >= needed_registers.sse) {
+                true => blk: {
+                    available_registers.system_v.gpr -= needed_registers.gpr;
+                    available_registers.system_v.sse -= needed_registers.sse;
+                    break :blk abi;
+                },
+                false => Abi.SystemV.get_indirect_result(semantic_argument_type, available_registers.system_v.gpr),
+            };
+
+            if (argument_type_abi.get_padding_type() != null) {
+                @trap();
+            }
+
+            argument_type_abi.abi_start = options.abi_start;
+
+            const count = switch (argument_type_abi.flags.kind) {
+                .direct, .extend => blk: {
+                    const coerce_to_type = argument_type_abi.get_coerce_to_type();
+                    const flattened_struct = argument_type_abi.flags.kind == .direct and argument_type_abi.get_can_be_flattened() and coerce_to_type.bb == .structure;
+
+                    const count: u16 = switch (flattened_struct) {
+                        false => 1,
+                        true => @intCast(argument_type_abi.get_coerce_to_type().bb.structure.fields.len),
+                    };
+
+                    switch (flattened_struct) {
+                        false => {
+                            llvm_abi_argument_type_buffer[argument_type_abi.abi_start] = coerce_to_type.llvm.handle;
+                            abi_argument_type_buffer[argument_type_abi.abi_start] = coerce_to_type;
+                        },
+                        true => {
+                            for (coerce_to_type.bb.structure.fields, 0..) |field, field_index| {
+                                const index = argument_type_abi.abi_start + field_index;
+                                llvm_abi_argument_type_buffer[index] = field.type.llvm.handle;
+                                abi_argument_type_buffer[index] = field.type;
+                            }
+                        },
+                    }
+
+                    break :blk count;
+                },
+                .indirect => blk: {
+                    const indirect_type = module.get_pointer_type(.{ .type = argument_type_abi.semantic_type });
+                    abi_argument_type_buffer[argument_type_abi.abi_start] = indirect_type;
+                    llvm_abi_argument_type_buffer[argument_type_abi.abi_start] = indirect_type.llvm.handle;
+                    break :blk 1;
+                },
+                else => |t| @panic(@tagName(t)),
+            };
+
+            argument_type_abi.abi_count = count;
+
+            return argument_type_abi;
         }
 
         pub fn get_by_val_argument_pair(module: *Module, low: *Type, high: *Type) *Type {
@@ -4113,6 +4322,26 @@ pub const Abi = struct {
                 .vector => @trap(),
                 else => false,
             };
+        }
+
+        pub fn emit_va_arg_from_memory(module: *Module, va_list_pointer: *llvm.Value, va_list_struct: *Type, arg_type: *Type) *llvm.Value {
+            const overflow_arg_area_pointer = module.llvm.builder.create_struct_gep(va_list_struct.llvm.handle.to_struct(), va_list_pointer, 2);
+            const overflow_arg_area_type = va_list_struct.bb.structure.fields[2].type;
+            const overflow_arg_area = module.create_load(.{ .type = overflow_arg_area_type, .value = overflow_arg_area_pointer });
+            if (arg_type.get_byte_alignment() > 8) {
+                @trap();
+            }
+            const arg_type_size = arg_type.get_byte_size();
+            const raw_offset = lib.align_forward_u64(arg_type_size, 8);
+            const offset = module.integer_type(32, false).llvm.handle.to_integer().get_constant(raw_offset, @intFromBool(false));
+            const new_overflow_arg_area = module.llvm.builder.create_gep(.{
+                .type = module.integer_type(8, false).llvm.handle,
+                .aggregate = overflow_arg_area,
+                .indices = &.{offset.to_value()},
+                .inbounds = false,
+            });
+            _ = module.create_store(.{ .destination_type = overflow_arg_area_type, .source_type = overflow_arg_area_type, .source_value = new_overflow_arg_area, .destination_value = overflow_arg_area_pointer });
+            return overflow_arg_area;
         }
     };
 };
@@ -4359,67 +4588,15 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                                 for (argument_type_abis, semantic_arguments, 0..) |*argument_type_abi, semantic_argument, semantic_argument_index| {
                                     const semantic_argument_type = semantic_argument.type;
                                     const is_named_argument = semantic_argument_index < required_arguments;
+                                    assert(is_named_argument);
 
-                                    const result = if (is_reg_call) @trap() else Abi.SystemV.classify_argument_type(module, semantic_argument_type, .{
+                                    argument_type_abi.* = Abi.SystemV.classify_argument(module, &available_registers, &llvm_abi_argument_type_buffer, &abi_argument_type_buffer, .{
+                                        .type = semantic_argument_type,
+                                        .abi_start = abi_argument_type_count,
                                         .is_named_argument = is_named_argument,
-                                        .is_reg_call = is_reg_call,
-                                        .available_gpr = available_registers.system_v.gpr,
                                     });
-                                    const abi = result[0];
-                                    const needed_registers = result[1];
 
-                                    argument_type_abi.* = switch (available_registers.system_v.gpr >= needed_registers.gpr and available_registers.system_v.sse >= needed_registers.sse) {
-                                        true => blk: {
-                                            available_registers.system_v.gpr -= needed_registers.gpr;
-                                            available_registers.system_v.sse -= needed_registers.sse;
-                                            break :blk abi;
-                                        },
-                                        false => Abi.SystemV.get_indirect_result(semantic_argument_type, available_registers.system_v.gpr),
-                                    };
-                                    if (argument_type_abi.get_padding_type() != null) {
-                                        @trap();
-                                    }
-
-                                    argument_type_abi.abi_start = abi_argument_type_count;
-
-                                    const count = switch (argument_type_abi.flags.kind) {
-                                        .direct, .extend => blk: {
-                                            const coerce_to_type = argument_type_abi.get_coerce_to_type();
-                                            const flattened_struct = argument_type_abi.flags.kind == .direct and argument_type_abi.get_can_be_flattened() and coerce_to_type.bb == .structure;
-
-                                            const count: u16 = switch (flattened_struct) {
-                                                false => 1,
-                                                true => @intCast(argument_type_abi.get_coerce_to_type().bb.structure.fields.len),
-                                            };
-
-                                            switch (flattened_struct) {
-                                                false => {
-                                                    llvm_abi_argument_type_buffer[argument_type_abi.abi_start] = coerce_to_type.llvm.handle;
-                                                    abi_argument_type_buffer[argument_type_abi.abi_start] = coerce_to_type;
-                                                },
-                                                true => {
-                                                    for (coerce_to_type.bb.structure.fields, 0..) |field, field_index| {
-                                                        const index = argument_type_abi.abi_start + field_index;
-                                                        llvm_abi_argument_type_buffer[index] = field.type.llvm.handle;
-                                                        abi_argument_type_buffer[index] = field.type;
-                                                    }
-                                                },
-                                            }
-
-                                            break :blk count;
-                                        },
-                                        .indirect => blk: {
-                                            const indirect_type = module.get_pointer_type(.{ .type = argument_type_abi.semantic_type });
-                                            abi_argument_type_buffer[argument_type_abi.abi_start] = indirect_type;
-                                            llvm_abi_argument_type_buffer[argument_type_abi.abi_start] = indirect_type.llvm.handle;
-                                            break :blk 1;
-                                        },
-                                        else => |t| @panic(@tagName(t)),
-                                    };
-
-                                    argument_type_abi.abi_count = count;
-
-                                    abi_argument_type_count += count;
+                                    abi_argument_type_count += argument_type_abi.abi_count;
                                 }
 
                                 const abi_argument_types = module.arena.allocate(*Type, abi_argument_type_count);
@@ -4455,6 +4632,7 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                                             .argument_type_abis = argument_type_abis,
                                             .abi_return_type = abi_return_type,
                                             .abi_argument_types = abi_argument_types,
+                                            .available_registers = available_registers,
                                         },
                                     },
                                     .llvm = .{
@@ -4520,7 +4698,15 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                             .name = global_name,
                         };
 
-                        const attribute_list = module.build_attribute_list(&function_type.bb.function, function_attributes, false);
+                        const attribute_list = module.build_attribute_list(.{
+                            .abi_return_type = function_type.bb.function.abi_return_type,
+                            .abi_argument_types = function_type.bb.function.abi_argument_types,
+                            .argument_type_abis = function_type.bb.function.argument_type_abis,
+                            .return_type_abi = function_type.bb.function.return_type_abi,
+                            .attributes = function_attributes,
+                            .call_site = false,
+                        });
+
                         llvm_handle.set_attributes(attribute_list);
 
                         if (!has_semicolon) {
@@ -4729,7 +4915,7 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                                     return_block.to_value().replace_all_uses_with(current_basic_block.to_value());
                                     return_block.delete();
                                 } else {
-                                    @trap();
+                                    module.emit_block(return_block);
                                 }
                             } else {
                                 var is_reachable = false;
@@ -4747,27 +4933,7 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                                 }
 
                                 if (!is_reachable) {
-                                    const maybe_current_block = module.llvm.builder.get_insert_block();
-
-                                    var emit_branch = false;
-                                    if (maybe_current_block) |current_block| {
-                                        emit_branch = current_block.get_terminator() == null;
-                                    }
-
-                                    if (emit_branch) {
-                                        _ = module.llvm.builder.create_branch(return_block);
-                                    }
-
-                                    module.llvm.builder.clear_insertion_position();
-
-                                    if (maybe_current_block) |current_block| {
-                                        _ = current_block;
-                                        @trap();
-                                    } else {
-                                        llvm_handle.append_basic_block(return_block);
-                                    }
-
-                                    module.llvm.builder.position_at_end(return_block);
+                                    module.emit_block(return_block);
                                 }
                             }
 

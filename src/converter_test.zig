@@ -353,6 +353,18 @@ test "c_abi" {
     try invsrc(@src());
 }
 
-// test "varargs" {
-//     try invsrc(@src());
-// }
+test "basic_varargs" {
+    try invsrc(@src());
+}
+
+test "struct_varargs" {
+    try invsrc(@src());
+}
+
+test "indirect_varargs" {
+    try invsrc(@src());
+}
+
+test "varargs" {
+    try invsrc(@src());
+}

@@ -814,6 +814,7 @@ pub const Builder = opaque {
     pub const position_at_end = api.LLVMPositionBuilderAtEnd;
     pub const clear_insertion_position = api.LLVMClearInsertionPosition;
     pub const get_insert_block = api.LLVMGetInsertBlock;
+    pub const insert_basic_block_after_insert_block = api.LLVMInsertExistingBasicBlockAfterInsertBlock;
 
     pub const create_ret = api.LLVMBuildRet;
 
@@ -904,8 +905,18 @@ pub const Builder = opaque {
         return api.LLVMBuildStructGEP2(builder, struct_type, pointer, index, "");
     }
 
-    pub fn create_gep(builder: *Builder, ty: *Type, aggregate: *Value, indices: []const *Value) *Value {
-        return api.LLVMBuildInBoundsGEP2(builder, ty, aggregate, indices.ptr, @intCast(indices.len), "");
+    const GEP = struct {
+        type: *Type,
+        aggregate: *Value,
+        indices: []const *Value,
+        inbounds: bool = true,
+    };
+    pub fn create_gep(builder: *Builder, gep: GEP) *Value {
+        const gep_function = switch (gep.inbounds) {
+            true => &api.LLVMBuildInBoundsGEP2,
+            false => &api.LLVMBuildGEP2,
+        };
+        return gep_function(builder, gep.type, gep.aggregate, gep.indices.ptr, @intCast(gep.indices.len), "");
     }
 
     pub fn create_insert_value(builder: *Builder, aggregate: *Value, element: *Value, index: c_uint) *Value {
@@ -945,6 +956,10 @@ pub const Builder = opaque {
     }
 
     pub const find_return_value_dominating_store = api.llvm_find_return_value_dominating_store;
+
+    pub fn create_phi(builder: *Builder, ty: *Type) *Instruction.Phi {
+        return api.LLVMBuildPhi(builder, ty, "");
+    }
 };
 
 pub const GlobalValue = opaque {
@@ -1137,6 +1152,16 @@ pub const Instruction = opaque {
     pub const Store = opaque {
         pub fn to_instruction(store: *Store) *Instruction {
             return @ptrCast(store);
+        }
+    };
+
+    pub const Phi = opaque {
+        pub fn to_value(phi: *Phi) *Value {
+            return @ptrCast(phi);
+        }
+        pub fn add_incoming(phi: *Phi, values: []const *Value, basic_blocks: []const *BasicBlock) void {
+            assert(values.len == basic_blocks.len);
+            return api.LLVMAddIncoming(phi, values.ptr, basic_blocks.ptr, @intCast(values.len));
         }
     };
 };
