@@ -1447,6 +1447,7 @@ pub const Type = opaque {
 
     pub const get_size = api.LLVMSizeOf;
     pub const get_alignment = api.LLVMAlignOf;
+    pub const get_zero = api.LLVMConstNull;
 };
 
 pub const Dwarf = struct {

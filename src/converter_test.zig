@@ -388,3 +388,7 @@ test "return_type_builtin" {
 test "bits_zero" {
     try invsrc(@src());
 }
+
+test "struct_zero" {
+    try invsrc(@src());
+}

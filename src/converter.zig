@@ -120,6 +120,60 @@ const Module = struct {
     anonymous_pair_type_count: u32 = 0,
     arena_restore_position: u64,
 
+    fn get_zero_value(module: *Module, ty: *Type) *Value {
+        const value = module.values.add();
+        value.* = switch (ty.bb) {
+            .bits => |bits| .{
+                .llvm = bits.backing_type.llvm.handle.to_integer().get_constant(0, @intFromBool(false)).to_value(),
+                .lvalue = false,
+                .dereference_to_assign = false,
+                .type = ty,
+                .bb = .bits_initialization,
+            },
+            .structure => str: {
+                const constant_struct = ty.llvm.handle.get_zero();
+                const llvm_value = switch (module.current_function == null) {
+                    true => constant_struct.to_value(),
+                    false => blk: {
+                        const global_variable = module.llvm.handle.create_global_variable(.{
+                            .linkage = .InternalLinkage,
+                            .name = module.arena.join_string(&.{ "__const.", module.current_function.?.name, if (ty.name) |n| n else "" }),
+                            .initial_value = constant_struct,
+                            .type = ty.llvm.handle,
+                        });
+                        break :blk global_variable.to_value();
+                    },
+                };
+
+                break :str .{
+                    .llvm = llvm_value,
+                    .type = ty,
+                    .bb = .{
+                        .struct_initialization = .{
+                            .is_constant = true,
+                        },
+                    },
+                    .lvalue = true,
+                    .dereference_to_assign = false,
+                };
+            },
+            .integer => .{
+                .llvm = ty.llvm.handle.to_integer().get_constant(0, @intFromBool(false)).to_value(),
+                .lvalue = false,
+                .dereference_to_assign = false,
+                .type = ty,
+                .bb = .{
+                    .constant_integer = .{
+                        .value = 0,
+                        .signed = false,
+                    },
+                },
+            },
+            else => @trap(),
+        };
+        return value;
+    }
+
     pub fn emit_block(module: *Module, block: *llvm.BasicBlock) void {
         const maybe_current_block = module.llvm.builder.get_insert_block();
 
@@ -2997,48 +3051,84 @@ const Converter = struct {
 
                         var is_ordered = true;
                         var is_constant = true;
+                        var zero = false;
 
-                        while (converter.consume_character_if_match('.')) : (field_count += 1) {
+                        while (true) : (field_count += 1) {
                             converter.skip_space();
 
-                            const field_name = converter.parse_identifier();
-                            const field_index: u32 = for (struct_type.fields, 0..) |*field, field_index| {
-                                if (lib.string.equal(field.name, field_name)) {
-                                    break @intCast(field_index);
+                            if (converter.consume_character_if_match(right_brace)) {
+                                break;
+                            } else if (converter.consume_character_if_match('.')) {
+                                const field_name = converter.parse_identifier();
+                                const field_index: u32 = for (struct_type.fields, 0..) |*field, field_index| {
+                                    if (lib.string.equal(field.name, field_name)) {
+                                        break @intCast(field_index);
+                                    }
+                                } else converter.report_error();
+
+                                is_ordered = is_ordered and field_index == field_count;
+                                const field = struct_type.fields[field_index];
+
+                                converter.skip_space();
+
+                                converter.expect_character('=');
+
+                                converter.skip_space();
+
+                                const field_value = converter.parse_value(module, field.type, .value);
+                                if (field.type != field_value.type) {
+                                    @trap();
                                 }
-                            } else converter.report_error();
+                                if (field.type.llvm.handle != field_value.type.llvm.handle) {
+                                    @trap();
+                                }
+                                is_constant = is_constant and field_value.is_constant();
+                                field_value_buffer[field_count] = field_value;
+                                field_index_buffer[field_count] = field_index;
 
-                            is_ordered = is_ordered and field_index == field_count;
-                            const field = struct_type.fields[field_index];
+                                converter.skip_space();
 
-                            converter.skip_space();
+                                _ = converter.consume_character_if_match(',');
 
-                            converter.expect_character('=');
-
-                            converter.skip_space();
-
-                            const field_value = converter.parse_value(module, field.type, .value);
-                            if (field.type != field_value.type) {
-                                @trap();
+                                converter.skip_space();
+                            } else {
+                                const identifier = converter.parse_identifier();
+                                if (string_to_enum(ValueKeyword, identifier)) |value_keyword| switch (value_keyword) {
+                                    ._ => converter.report_error(),
+                                    .undefined => @trap(),
+                                    .zero => {
+                                        zero = true;
+                                        converter.skip_space();
+                                        _ = converter.consume_character_if_match(',');
+                                        converter.skip_space();
+                                        converter.expect_character(right_brace);
+                                        // We need to break here otherwise `field_count` would be incremented
+                                        break;
+                                    },
+                                } else {
+                                    converter.report_error();
+                                }
                             }
-                            if (field.type.llvm.handle != field_value.type.llvm.handle) {
-                                @trap();
-                            }
-                            is_constant = is_constant and field_value.is_constant();
-                            field_value_buffer[field_count] = field_value;
-                            field_index_buffer[field_count] = field_index;
-
-                            converter.skip_space();
-
-                            _ = converter.consume_character_if_match(',');
-
-                            converter.skip_space();
                         }
-
-                        converter.expect_character(right_brace);
 
                         if (must_be_constant and !is_constant) {
                             @trap();
+                        }
+
+                        if (zero) {
+                            if (field_count == struct_type.fields.len) {
+                                converter.report_error();
+                            }
+                            if (is_ordered and is_constant) {
+                                const zero_fields = struct_type.fields[field_count..];
+                                const zero_field_values = field_value_buffer[field_count..][0..zero_fields.len];
+                                for (zero_fields, zero_field_values) |zero_field, *zero_field_value| {
+                                    zero_field_value.* = module.get_zero_value(zero_field.type);
+                                    field_count += 1;
+                                }
+                            } else {
+                                @trap();
+                            }
                         }
 
                         if (field_count != struct_type.fields.len) {
@@ -3172,6 +3262,7 @@ const Converter = struct {
                                         _ = converter.consume_character_if_match(',');
                                         converter.skip_space();
                                         converter.expect_character(right_brace);
+                                        // We need to break here otherwise `field_count` would be incremented
                                         break;
                                     },
                                 } else {
@@ -3340,18 +3431,8 @@ const Converter = struct {
                         },
                         .zero => {
                             const ty = expected_type orelse converter.report_error();
-                            const value = module.values.add();
-                            value.* = switch (ty.bb) {
-                                .bits => |bits| .{
-                                    .llvm = bits.backing_type.llvm.handle.to_integer().get_constant(0, @intFromBool(false)).to_value(),
-                                    .lvalue = false,
-                                    .dereference_to_assign = false,
-                                    .type = ty,
-                                    .bb = .bits_initialization,
-                                },
-                                else => @trap(),
-                            };
-                            return value;
+
+                            return module.get_zero_value(ty);
                         },
                     } else {
                         const variable = if (current_function.value.bb.function.locals.find(identifier)) |local| local else if (current_function.value.bb.function.arguments.find(identifier)) |argument| argument else if (module.globals.find(identifier)) |global| global else converter.report_error();

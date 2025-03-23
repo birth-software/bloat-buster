@@ -183,6 +183,7 @@ pub extern fn llvm_integer_type_get_bit_count(integer_type: *llvm.Type.Integer) 
 
 // VALUES
 pub extern fn LLVMGetPoison(type: *llvm.Type) *llvm.Value;
+pub extern fn LLVMConstNull(type: *llvm.Type) *llvm.Constant;
 pub extern fn LLVMConstInt(type: *llvm.Type.Integer, value: c_ulonglong, sign_extend: Bool) *llvm.Constant.Integer;
 pub extern fn LLVMConstIntGetZExtValue(constant: *llvm.Constant) u64;
 pub extern fn LLVMConstIntGetSExtValue(constant: *llvm.Constant) i64;
