@@ -2950,6 +2950,12 @@ const Converter = struct {
         @trap();
     }
 
+    const ValueKeyword = enum {
+        @"_",
+        undefined,
+        zero,
+    };
+
     fn parse_single_value(noalias converter: *Converter, noalias module: *Module, expected_type: ?*Type, value_kind: ValueKind) *Value {
         converter.skip_space();
 
@@ -3121,44 +3127,67 @@ const Converter = struct {
 
                         var llvm_value = bits.backing_type.llvm.handle.to_integer().get_constant(0, @intFromBool(false)).to_value();
 
-                        while (converter.consume_character_if_match('.')) : (field_count += 1) {
+                        var zero = false;
+                        while (true) : (field_count += 1) {
                             converter.skip_space();
 
-                            const field_name = converter.parse_identifier();
-                            const field_index: u32 = for (bits.fields, 0..) |*field, field_index| {
-                                if (lib.string.equal(field.name, field_name)) {
-                                    break @intCast(field_index);
+                            if (converter.consume_character_if_match(right_brace)) {
+                                break;
+                            } else if (converter.consume_character_if_match('.')) {
+                                const field_name = converter.parse_identifier();
+                                const field_index: u32 = for (bits.fields, 0..) |*field, field_index| {
+                                    if (lib.string.equal(field.name, field_name)) {
+                                        break @intCast(field_index);
+                                    }
+                                } else converter.report_error();
+
+                                const field = bits.fields[field_index];
+
+                                converter.skip_space();
+
+                                converter.expect_character('=');
+
+                                converter.skip_space();
+
+                                const field_value = converter.parse_value(module, field.type, .value);
+
+                                const extended_field_value = module.llvm.builder.create_zero_extend(field_value.llvm, bits.backing_type.llvm.handle);
+                                const shifted_value = module.llvm.builder.create_shl(extended_field_value, bits.backing_type.llvm.handle.to_integer().get_constant(field.bit_offset, @intFromBool(false)).to_value());
+                                const or_value = module.llvm.builder.create_or(llvm_value, shifted_value);
+                                llvm_value = or_value;
+
+                                converter.skip_space();
+
+                                _ = converter.consume_character_if_match(',');
+
+                                converter.skip_space();
+                            } else {
+                                const identifier = converter.parse_identifier();
+                                if (string_to_enum(ValueKeyword, identifier)) |value_keyword| switch (value_keyword) {
+                                    ._ => converter.report_error(),
+                                    .undefined => @trap(),
+                                    .zero => {
+                                        zero = true;
+                                        converter.skip_space();
+                                        _ = converter.consume_character_if_match(',');
+                                        converter.skip_space();
+                                        converter.expect_character(right_brace);
+                                        break;
+                                    },
+                                } else {
+                                    converter.report_error();
                                 }
-                            } else converter.report_error();
-
-                            const field = bits.fields[field_index];
-
-                            converter.skip_space();
-
-                            converter.expect_character('=');
-
-                            converter.skip_space();
-
-                            const field_value = converter.parse_value(module, field.type, .value);
-
-                            const extended_field_value = module.llvm.builder.create_zero_extend(field_value.llvm, bits.backing_type.llvm.handle);
-                            const shifted_value = module.llvm.builder.create_shl(extended_field_value, bits.backing_type.llvm.handle.to_integer().get_constant(field.bit_offset, @intFromBool(false)).to_value());
-                            const or_value = module.llvm.builder.create_or(llvm_value, shifted_value);
-                            llvm_value = or_value;
-
-                            converter.skip_space();
-
-                            _ = converter.consume_character_if_match(',');
-
-                            converter.skip_space();
+                            }
                         }
 
                         if (field_count != bits.fields.len) {
                             // expect: 'zero' keyword
-                            @trap();
+                            if (zero) {
+                                // TODO: should we do anything?
+                            } else {
+                                @trap();
+                            }
                         }
-
-                        converter.expect_character(right_brace);
 
                         const value = module.values.add();
                         value.* = .{
@@ -3293,20 +3322,37 @@ const Converter = struct {
             'a'...'z', 'A'...'Z', '_' => b: {
                 if (module.current_function) |current_function| {
                     const identifier = converter.parse_identifier();
-                    if (lib.string.equal(identifier, "_")) {
-                        return module.get_infer_or_ignore_value();
-                    } else if (lib.string.equal(identifier, "undefined")) {
-                        const expected_ty = expected_type orelse converter.report_error();
-                        // TODO: cache poison
-                        const value = module.values.add();
-                        value.* = .{
-                            .llvm = expected_ty.llvm.handle.get_poison(),
-                            .type = expected_ty,
-                            .bb = .instruction, // TODO
-                            .lvalue = false,
-                            .dereference_to_assign = false,
-                        };
-                        return value;
+
+                    if (string_to_enum(ValueKeyword, identifier)) |value_keyword| switch (value_keyword) {
+                        ._ => return module.get_infer_or_ignore_value(),
+                        .undefined => {
+                            const expected_ty = expected_type orelse converter.report_error();
+                            // TODO: cache poison
+                            const value = module.values.add();
+                            value.* = .{
+                                .llvm = expected_ty.llvm.handle.get_poison(),
+                                .type = expected_ty,
+                                .bb = .instruction, // TODO
+                                .lvalue = false,
+                                .dereference_to_assign = false,
+                            };
+                            return value;
+                        },
+                        .zero => {
+                            const ty = expected_type orelse converter.report_error();
+                            const value = module.values.add();
+                            value.* = switch (ty.bb) {
+                                .bits => |bits| .{
+                                    .llvm = bits.backing_type.llvm.handle.to_integer().get_constant(0, @intFromBool(false)).to_value(),
+                                    .lvalue = false,
+                                    .dereference_to_assign = false,
+                                    .type = ty,
+                                    .bb = .bits_initialization,
+                                },
+                                else => @trap(),
+                            };
+                            return value;
+                        },
                     } else {
                         const variable = if (current_function.value.bb.function.locals.find(identifier)) |local| local else if (current_function.value.bb.function.arguments.find(identifier)) |argument| argument else if (module.globals.find(identifier)) |global| global else converter.report_error();
 

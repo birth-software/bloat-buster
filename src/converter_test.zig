@@ -384,3 +384,7 @@ test "basic_enum" {
 test "return_type_builtin" {
     try invsrc(@src());
 }
+
+test "bits_zero" {
+    try invsrc(@src());
+}
