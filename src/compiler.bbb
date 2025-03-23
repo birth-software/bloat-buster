@@ -1,3 +1,14 @@
+Arena = struct
+{
+    reserved_size: u64,
+    position: u64,
+    os_position: u64,
+    granularity: u64,
+    reserved: [32]u8,
+}
+
+minimum_position: u64 = #byte_size(Arena);
+
 [export] main = fn [cc(c)] () s32
 {
     return 0;

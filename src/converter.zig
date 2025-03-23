@@ -2561,6 +2561,7 @@ const Converter = struct {
     };
 
     const Intrinsic = enum {
+        byte_size,
         cast,
         cast_to,
         extend,
@@ -2584,6 +2585,30 @@ const Converter = struct {
         converter.skip_space();
 
         switch (intrinsic_keyword) {
+            .byte_size => {
+                const ty = converter.parse_type(module);
+                converter.skip_space();
+                converter.expect_character(')');
+                const byte_size = ty.get_byte_size();
+                const destination_type = expected_type orelse converter.report_error();
+                if (destination_type.bb != .integer) {
+                    converter.report_error();
+                }
+                const value = module.values.add();
+                value.* = .{
+                    .llvm = destination_type.llvm.handle.to_integer().get_constant(byte_size, @intFromBool(false)).to_value(),
+                    .bb = .{
+                        .constant_integer = .{
+                            .value = byte_size,
+                            .signed = false,
+                        },
+                    },
+                    .type = destination_type,
+                    .lvalue = false,
+                    .dereference_to_assign = false,
+                };
+                return value;
+            },
             .cast => {
                 @trap();
             },

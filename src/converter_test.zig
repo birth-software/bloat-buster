@@ -368,3 +368,7 @@ test "indirect_varargs" {
 test "varargs" {
     try invsrc(@src());
 }
+
+test "byte_size" {
+    try invsrc(@src());
+}
