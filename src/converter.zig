@@ -1231,7 +1231,7 @@ pub const Type = struct {
             .void, .forward_declaration, .function, .noreturn => unreachable,
             .array => |*array| array.element_type.get_bit_size() * array.element_count.?,
             .pointer => 64,
-            .enumerator => @trap(),
+            .enumerator => |enumerator| enumerator.backing_type.get_bit_size(),
             .float => @trap(),
             .vector => @trap(),
         };
@@ -1480,6 +1480,7 @@ const Converter = struct {
                     .type = element_type,
                 });
             },
+            '#' => return converter.parse_type_intrinsic(module),
             else => @trap(),
         }
     }
@@ -2126,7 +2127,7 @@ const Converter = struct {
                     .value = local_storage,
                 };
             } else if (statement_start_ch == '#') {
-                const intrinsic = converter.parse_intrinsic(module, null);
+                const intrinsic = converter.parse_value_intrinsic(module, null);
                 switch (intrinsic.type.bb) {
                     .void, .noreturn => {},
                     else => @trap(),
@@ -2575,7 +2576,7 @@ const Converter = struct {
         not_zero,
     };
 
-    const Intrinsic = enum {
+    const ValueIntrinsic = enum {
         byte_size,
         cast,
         cast_to,
@@ -2589,11 +2590,11 @@ const Converter = struct {
         va_arg,
     };
 
-    fn parse_intrinsic(noalias converter: *Converter, noalias module: *Module, expected_type: ?*Type) *Value {
+    fn parse_value_intrinsic(noalias converter: *Converter, noalias module: *Module, expected_type: ?*Type) *Value {
         converter.expect_character('#');
         converter.skip_space();
         const intrinsic_name = converter.parse_identifier();
-        const intrinsic_keyword = string_to_enum(Intrinsic, intrinsic_name) orelse converter.report_error();
+        const intrinsic_keyword = string_to_enum(ValueIntrinsic, intrinsic_name) orelse converter.report_error();
         converter.skip_space();
 
         converter.expect_character(left_parenthesis);
@@ -2921,6 +2922,34 @@ const Converter = struct {
         }
     }
 
+    const TypeIntrinsic = enum {
+        ReturnType,
+    };
+
+    fn parse_type_intrinsic(noalias converter: *Converter, noalias module: *Module) *Type {
+        converter.expect_character('#');
+        converter.skip_space();
+        const intrinsic_name = converter.parse_identifier();
+        const intrinsic_keyword = string_to_enum(TypeIntrinsic, intrinsic_name) orelse converter.report_error();
+        converter.skip_space();
+
+        converter.expect_character(left_parenthesis);
+
+        converter.skip_space();
+
+        switch (intrinsic_keyword) {
+            .ReturnType => {
+                converter.skip_space();
+                converter.expect_character(right_parenthesis);
+                const current_function_variable = module.current_function orelse converter.report_error();
+                const return_type = current_function_variable.value.type.bb.pointer.type.bb.function.return_type_abi.semantic_type;
+                return return_type;
+            },
+        }
+
+        @trap();
+    }
+
     fn parse_single_value(noalias converter: *Converter, noalias module: *Module, expected_type: ?*Type, value_kind: ValueKind) *Value {
         converter.skip_space();
 
@@ -3211,7 +3240,7 @@ const Converter = struct {
                     else => @trap(),
                 }
             },
-            '#' => return converter.parse_intrinsic(module, expected_type),
+            '#' => return converter.parse_value_intrinsic(module, expected_type),
             '&' => {
                 converter.offset += 1;
                 return converter.parse_value(module, expected_type, .pointer);

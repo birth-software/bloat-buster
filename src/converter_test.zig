@@ -380,3 +380,7 @@ test "bits_no_backing_type" {
 test "basic_enum" {
     try invsrc(@src());
 }
+
+test "return_type_builtin" {
+    try invsrc(@src());
+}

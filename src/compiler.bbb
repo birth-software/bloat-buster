@@ -1,4 +1,4 @@
-Linux_PROT = bits u32
+OS_Linux_PROT = bits u32
 {
     read: u1,
     write: u1,
@@ -7,14 +7,45 @@ Linux_PROT = bits u32
     _: u28,
 }
 
-OSProtectionFlags = bits
+OS_Linux_MAP_Type = enum u4
+{
+    shared = 0x1,
+    private = 0x2,
+    shared_validate = 0x3,
+}
+
+OS_Linux_MAP = bits u32
+{
+    type: OS_Linux_MAP_Type,
+    fixed: u1,
+    anonymous: u1,
+    bit_32: u1,
+    _: u1,
+    grows_down: u1,
+    _: u2,
+    deny_write: u1,
+    executable: u1,
+    locked: u1,
+    no_reserve: u1,
+    populate: u1,
+    non_block: u1,
+    stack: u1,
+    huge_tlb: u1,
+    sync: u1,
+    fixed_noreplace: u1,
+    _: u5,
+    uninitialized: u1,
+    _: u5,
+}
+
+OS_ProtectionFlags = bits
 {
     read: u1,
     write: u1,
     execute: u1,
 }
 
-OSMapFlags = bits
+OS_MapFlags = bits
 {
     private: u1,
     anonymous: u1,
@@ -22,7 +53,11 @@ OSMapFlags = bits
     populate: u1,
 }
 
-os_reserve = fn (base: u64, protection: OSProtectionFlags, map: OSMapFlags) &u8
+os_linux_map_flags = fn(map_flags: OS_MapFlags) OS_Linux_MAP
+{
+}
+
+os_reserve = fn (base: u64, protection: OS_ProtectionFlags, map: OS_MapFlags) &u8
 {
 }
 
