@@ -5151,22 +5151,18 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                         };
                     },
                     .bits => {
-                        // TODO: allow implicit backing type?
-                        const backing_type = converter.parse_type(module);
-                        if (backing_type.bb != .integer) {
-                            converter.report_error();
-                        }
-
-                        if (backing_type.get_bit_size() > 64) {
-                            converter.report_error();
-                        }
+                        const allow_implicit_type = converter.content[converter.offset] == left_brace;
+                        const maybe_backing_type: ?*Type = switch (allow_implicit_type) {
+                            true => null,
+                            false => converter.parse_type(module),
+                        };
 
                         converter.skip_space();
 
                         converter.expect_character(left_brace);
 
                         var field_buffer: [128]Field = undefined;
-                        var llvm_debug_field_buffer: [128]*llvm.DI.Type.Derived = undefined;
+                        var field_line_buffer: [128]u32 = undefined;
                         var field_count: usize = 0;
 
                         var field_bit_offset: u64 = 0;
@@ -5179,6 +5175,7 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                             }
 
                             const field_line = converter.get_line();
+                            field_line_buffer[field_count] = field_line;
 
                             const field_name = converter.parse_identifier();
 
@@ -5199,10 +5196,9 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
 
                             const field_bit_size = field_type.get_bit_size();
 
-                            if (module.llvm.di_builder) |di_builder| {
-                                const member_type = di_builder.create_bit_field_member_type(module.llvm.global_scope, field_name, module.llvm.file, field_line, field_bit_size, field_bit_offset, 0, .{}, backing_type.llvm.debug);
-                                llvm_debug_field_buffer[field_count] = member_type;
-                            }
+                            // if (module.llvm.di_builder) |di_builder| {
+                            //     llvm_debug_field_buffer[field_count] = member_type;
+                            // }
 
                             field_bit_offset += field_bit_size;
 
@@ -5216,10 +5212,28 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                         const fields = module.arena.allocate(Field, field_count);
                         @memcpy(fields, field_buffer[0..field_count]);
 
+                        const field_lines = field_line_buffer[0..field_count];
+
+                        const backing_type = if (maybe_backing_type) |bt| bt else module.integer_type(@intCast(@max(8, lib.next_power_of_two(field_bit_offset))), false);
+                        if (backing_type.bb != .integer) {
+                            converter.report_error();
+                        }
+
+                        if (backing_type.get_bit_size() > 64) {
+                            converter.report_error();
+                        }
+
                         const bit_size = backing_type.get_bit_size();
                         const bit_alignment = backing_type.get_bit_alignment();
 
+                        var llvm_debug_field_buffer: [128]*llvm.DI.Type.Derived = undefined;
                         const debug_member_types = llvm_debug_field_buffer[0..field_count];
+
+                        if (module.llvm.di_builder) |di_builder| {
+                            for (fields, debug_member_types, field_lines) |field, *debug_member_type, field_line| {
+                                debug_member_type.* = di_builder.create_bit_field_member_type(module.llvm.global_scope, field.name, module.llvm.file, field_line, field.type.get_bit_size(), field_bit_offset, 0, .{}, backing_type.llvm.debug);
+                            }
+                        }
 
                         _ = module.types.add(.{
                             .name = global_name,

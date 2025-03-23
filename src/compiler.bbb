@@ -1,3 +1,18 @@
+OSProtectionFlags = bits
+{
+    read: u1,
+    write: u1,
+    execute: u1,
+}
+
+OSMapFlags = bits
+{
+    private: u1,
+    anonymous: u1,
+    no_reserve: u1,
+    populate: u1,
+}
+
 Arena = struct
 {
     reserved_size: u64,
@@ -8,6 +23,17 @@ Arena = struct
 }
 
 minimum_position: u64 = #byte_size(Arena);
+
+ArenaInitialization = struct
+{
+    reserved_size: u64,
+    granularity: u64,
+    initial_size: u64,
+}
+
+arena_initialize = fn (initialization: ArenaInitialization) &Arena
+{
+}
 
 [export] main = fn [cc(c)] () s32
 {

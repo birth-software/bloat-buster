@@ -372,3 +372,7 @@ test "varargs" {
 test "byte_size" {
     try invsrc(@src());
 }
+
+test "bits_no_backing_type" {
+    try invsrc(@src());
+}
