@@ -1,3 +1,12 @@
+Linux_PROT = bits u32
+{
+    read: u1,
+    write: u1,
+    exec: u1,
+    sem: u1,
+    _: u28,
+}
+
 OSProtectionFlags = bits
 {
     read: u1,
@@ -11,6 +20,10 @@ OSMapFlags = bits
     anonymous: u1,
     no_reserve: u1,
     populate: u1,
+}
+
+os_reserve = fn (base: u64, protection: OSProtectionFlags, map: OSMapFlags) &u8
+{
 }
 
 Arena = struct

@@ -376,3 +376,7 @@ test "byte_size" {
 test "bits_no_backing_type" {
     try invsrc(@src());
 }
+
+test "basic_enum" {
+    try invsrc(@src());
+}

@@ -1245,6 +1245,14 @@ pub const DI = struct {
         pub fn create_pointer_type(builder: *DI.Builder, element_type: *DI.Type, bit_size: u64, align_in_bits: u32, address_space: c_uint, name: []const u8) *DI.Type.Derived {
             return api.LLVMDIBuilderCreatePointerType(builder, element_type, bit_size, align_in_bits, address_space, name.ptr, name.len);
         }
+
+        pub fn create_enumerator(builder: *DI.Builder, name: []const u8, value: i64, is_signed: bool) *DI.Enumerator {
+            return api.LLVMDIBuilderCreateEnumerator(builder, name.ptr, name.len, value, @intFromBool(is_signed));
+        }
+
+        pub fn create_enumeration_type(builder: *DI.Builder, scope: *DI.Scope, name: []const u8, file: *DI.File, line: c_uint, bit_size: u64, align_in_bits: u32, enumeration_types: []const *DI.Enumerator, backing_type: *DI.Type) *DI.Type.Composite {
+            return api.LLVMDIBuilderCreateEnumerationType(builder, scope, name.ptr, name.len, file, line, bit_size, align_in_bits, enumeration_types.ptr, @intCast(enumeration_types.len), backing_type);
+        }
     };
 
     pub const create_debug_location = api.LLVMDIBuilderCreateDebugLocation;
@@ -1292,6 +1300,8 @@ pub const DI = struct {
             }
         };
     };
+
+    pub const Enumerator = opaque {};
 
     pub const Flags = packed struct(u32) {
         visibility: Visibility = .none,

@@ -216,6 +216,8 @@ pub extern fn LLVMDIBuilderCreateStructType(builder: *llvm.DI.Builder, scope: *l
 pub extern fn LLVMDIBuilderCreateMemberType(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, name_pointer: [*]const u8, name_length: usize, file: *llvm.DI.File, line: c_uint, bit_size: u64, align_in_bits: u32, bit_offset: u64, flags: llvm.DI.Flags, member_type: *llvm.DI.Type) *llvm.DI.Type.Derived;
 pub extern fn LLVMDIBuilderCreateBitFieldMemberType(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, name_pointer: [*]const u8, name_length: usize, file: *llvm.DI.File, line: c_uint, bit_size: u64, bit_offset: u64, bit_storage_offset: u64, flags: llvm.DI.Flags, member_type: *llvm.DI.Type) *llvm.DI.Type.Derived;
 pub extern fn LLVMDIBuilderCreatePointerType(builder: *llvm.DI.Builder, element_type: *llvm.DI.Type, bit_size: u64, align_in_bits: u32, address_space: c_uint, name_pointer: [*]const u8, name_length: usize) *llvm.DI.Type.Derived;
+pub extern fn LLVMDIBuilderCreateEnumerator(builder: *llvm.DI.Builder, name_pointer: [*]const u8, name_length: usize, value: i64, is_unsigned: Bool) *llvm.DI.Enumerator;
+pub extern fn LLVMDIBuilderCreateEnumerationType(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, name_pointer: [*]const u8, name_length: usize, file: *llvm.DI.File, line: c_uint, bit_size: u64, align_in_bits: u32, enumerator_pointer: [*]const *llvm.DI.Enumerator, enumerator_count: c_uint, backing_type: *llvm.DI.Type) *llvm.DI.Type.Composite;
 
 pub extern fn LLVMMetadataReplaceAllUsesWith(forward: *llvm.DI.Type.Composite, complete: *llvm.DI.Type.Composite) void;
 
