@@ -1144,6 +1144,7 @@ const StructType = struct {
 const Bits = struct {
     fields: []const Field,
     backing_type: *Type,
+    implicit_backing_type: bool,
 };
 
 pub const ArrayType = struct {
@@ -1170,6 +1171,7 @@ pub const FloatType = struct {
 pub const Enumerator = struct {
     fields: []const Enumerator.Field,
     backing_type: *Type,
+    implicit_backing_type: bool,
 
     pub const Field = struct {
         name: []const u8,
@@ -2758,9 +2760,11 @@ const Converter = struct {
             },
             .select => {
                 const condition_value = converter.parse_value(module, null, .value);
+
                 if (condition_value.type.bb != .integer) {
                     converter.report_error();
                 }
+
                 if (condition_value.type.bb.integer.bit_count != 1) {
                     converter.report_error();
                 }
@@ -3257,7 +3261,7 @@ const Converter = struct {
 
                         return value;
                     },
-                    .bits => |*bits| {
+                    .bits => |bits| {
                         var field_count: usize = 0;
 
                         var llvm_value = bits.backing_type.llvm.handle.to_integer().get_constant(0, @intFromBool(false)).to_value();
@@ -3318,7 +3322,7 @@ const Converter = struct {
 
                         if (field_count != bits.fields.len) {
                             // expect: 'zero' keyword
-                            if (zero) {
+                            if (zero or bits.implicit_backing_type) {
                                 // TODO: should we do anything?
                             } else {
                                 @trap();
@@ -3542,10 +3546,18 @@ const Converter = struct {
                                     }
 
                                     const value = module.values.add();
+
                                     value.* = .{
-                                        .type = bits.backing_type,
-                                        .llvm = bitfield_masked,
                                         .bb = .instruction,
+                                        .llvm = switch (bits.backing_type == field.type) {
+                                            true => bitfield_masked,
+                                            false => blk: {
+                                                assert(bits.backing_type.get_bit_size() > field.type.get_bit_size());
+                                                const trunc = module.llvm.builder.create_truncate(bitfield_masked, field.type.llvm.handle);
+                                                break :blk trunc;
+                                            },
+                                        },
+                                        .type = field.type,
                                         .lvalue = false,
                                         .dereference_to_assign = false,
                                     };
@@ -5516,6 +5528,7 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                             .bits = .{
                                 .fields = fields,
                                 .backing_type = backing_type,
+                                .implicit_backing_type = is_implicit_type,
                             },
                         },
                     });
@@ -5604,6 +5617,7 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                             .enumerator = .{
                                 .backing_type = backing_type,
                                 .fields = fields,
+                                .implicit_backing_type = is_implicit_type,
                             },
                         },
                         .llvm = .{

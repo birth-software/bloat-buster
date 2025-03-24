@@ -70,6 +70,7 @@ os_linux_map_flags = fn(map_flags: OS_MapFlags) OS_Linux_MAP
         .anonymous = map_flags.anonymous,
         .no_reserve = map_flags.no_reserve,
         .populate = map_flags.populate,
+        zero,
     };
 }
 

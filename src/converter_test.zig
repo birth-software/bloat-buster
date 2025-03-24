@@ -396,3 +396,7 @@ test "struct_zero" {
 test "select" {
     try invsrc(@src());
 }
+
+test "bits_return_u1" {
+    try invsrc(@src());
+}
