@@ -955,6 +955,7 @@ pub const Builder = opaque {
     pub const create_unreachable = api.LLVMBuildUnreachable;
 
     pub const create_memcpy = api.LLVMBuildMemCpy;
+    pub const create_memset = api.LLVMBuildMemSet;
 
     pub fn create_vaarg(builder: *Builder, va_list: *Value, arg_type: *Type) *Value {
         return api.LLVMBuildVAArg(builder, va_list, arg_type, "");

@@ -140,13 +140,13 @@ arena_initialize = fn (initialization: ArenaInitialization) &Arena
         zero,
     });
 
-    //arena.& = {
-    //    .reserved_size = initialization.reserved_size,
-    //    .os_position = initialization.initial_size,
-    //    .position = minimum_position,
-    //    .granularity = initialization.granularity,
-    //    zero,
-    //};
+    arena.& = {
+        .reserved_size = initialization.reserved_size,
+        .position = minimum_position,
+        .os_position = initialization.initial_size,
+        .granularity = initialization.granularity,
+        zero,
+    };
 
     return arena;
 }

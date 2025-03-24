@@ -412,3 +412,7 @@ test "unreachable" {
 test "pointer_cast" {
     try invsrc(@src());
 }
+
+test "struct_assignment" {
+    try invsrc(@src());
+}

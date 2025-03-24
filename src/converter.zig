@@ -2382,7 +2382,11 @@ const Converter = struct {
 
                             switch (store_type.get_evaluation_kind()) {
                                 .aggregate => {
-                                    @trap();
+                                    if (left.type.bb.pointer.type != right.type) {
+                                        converter.report_error();
+                                    }
+                                    assert(right.lvalue);
+                                    _ = module.llvm.builder.create_memcpy(left.llvm, left.type.bb.pointer.alignment, right.llvm, right.type.get_byte_alignment(), module.integer_type(64, false).llvm.handle.to_integer().get_constant(right.type.get_byte_size(), @intFromBool(false)).to_value());
                                 },
                                 else => _ = module.create_store(.{ .source_value = right.llvm, .destination_value = left.llvm, .source_type = store_type, .destination_type = store_type, .alignment = store_alignment }),
                             }
@@ -3258,6 +3262,7 @@ const Converter = struct {
                             @trap();
                         }
 
+                        var zero_until_end = false;
                         if (zero) {
                             if (field_count == struct_type.fields.len) {
                                 converter.report_error();
@@ -3270,15 +3275,21 @@ const Converter = struct {
                                     zero_field_value.* = module.get_zero_value(zero_field.type);
                                     field_count += 1;
                                 }
+                            } else if (is_ordered) {
+                                zero_until_end = true;
                             } else {
                                 @trap();
                             }
                         }
 
                         if (field_count != struct_type.fields.len) {
-                            // expect: 'zero' keyword
-                            @trap();
+                            if (!zero_until_end) {
+                                @trap();
+                            }
                         }
+
+                        const field_values = field_value_buffer[0..field_count];
+                        const field_indices = field_index_buffer[0..field_count];
 
                         const llvm_value = switch (is_constant and is_ordered) {
                             true => blk: {
@@ -3286,7 +3297,7 @@ const Converter = struct {
                                 var llvm_gc_value_buffer = [1]?*llvm.GlobalVariable{null} ** 64;
                                 const llvm_values = llvm_value_buffer[0..field_count];
                                 const llvm_gc_values = llvm_gc_value_buffer[0..field_count];
-                                for (field_value_buffer[0..field_count], llvm_gc_values, llvm_values, struct_type.fields) |field_value, *llvm_gc_value, *llvm_field_value, *field| {
+                                for (field_values, llvm_gc_values, llvm_values, struct_type.fields) |field_value, *llvm_gc_value, *llvm_field_value, *field| {
                                     llvm_field_value.* = switch (field.type.llvm.handle == field_value.llvm.get_type()) {
                                         true => field_value.llvm.to_constant(),
                                         false => switch (field.type.bb) {
@@ -3338,7 +3349,36 @@ const Converter = struct {
 
                                 break :blk result;
                             },
-                            false => @trap(),
+                            false => blk: {
+                                const alloca = module.create_alloca(.{ .type = ty, .name = "compound_literal" });
+                                const llvm_struct = ty.llvm.handle.to_struct();
+                                const fields = struct_type.fields[0..field_count];
+
+                                for (fields, field_indices, field_values) |field, field_index, field_value| {
+                                    const gep = module.llvm.builder.create_struct_gep(llvm_struct, alloca, field_index);
+                                    assert(field_value.type == field.type);
+                                    // TODO: consider more store types
+                                    _ = module.create_store(.{
+                                        .destination_type = field.type,
+                                        .source_type = field_value.type,
+                                        .source_value = field_value.llvm,
+                                        .destination_value = gep,
+                                    });
+                                }
+
+                                if (zero_until_end) {
+                                    // const zero_field_values = field_value_buffer[field_count..][0..zero_fields.len];
+                                    const zero_gep = module.llvm.builder.create_struct_gep(llvm_struct, alloca, field_count);
+                                    const zero_value = module.integer_type(8, false).llvm.handle.to_integer().get_constant(0, @intFromBool(false)).to_value();
+                                    const raw_byte_count = ty.get_byte_size() - struct_type.fields[field_count].byte_offset;
+                                    const byte_count = module.integer_type(64, false).llvm.handle.to_integer().get_constant(raw_byte_count, @intFromBool(false)).to_value();
+                                    _ = module.llvm.builder.create_memset(zero_gep, zero_value, byte_count, 1);
+                                } else {
+                                    assert(field_count == struct_type.fields.len);
+                                }
+
+                                break :blk alloca;
+                            },
                         };
 
                         const value = module.values.add();

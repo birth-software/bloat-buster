@@ -90,6 +90,7 @@ pub extern fn LLVMBuildInsertValue(builder: *llvm.Builder, aggregate: *llvm.Valu
 pub extern fn LLVMBuildExtractValue(builder: *llvm.Builder, aggregate: *llvm.Value, index: c_uint, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildUnreachable(builder: *llvm.Builder) *llvm.Value;
 pub extern fn LLVMBuildMemCpy(builder: *llvm.Builder, destination: *llvm.Value, destination_alignment: c_uint, source: *llvm.Value, source_alignment: c_uint, size: *llvm.Value) *llvm.Value;
+pub extern fn LLVMBuildMemSet(builder: *llvm.Builder, pointer: *llvm.Value, value: *llvm.Value, value_count: *llvm.Value, alignment: c_uint) *llvm.Value;
 pub extern fn LLVMBuildPhi(builder: *llvm.Builder, ty: *llvm.Type, name: [*:0]const u8) *llvm.Instruction.Phi;
 pub extern fn LLVMAddIncoming(phi: *llvm.Instruction.Phi, incoming_value_pointer: [*]const *llvm.Value, incoming_basic_block_pointer: [*]const *llvm.BasicBlock, incoming_count: c_uint) void;
 pub extern fn LLVMBuildSelect(builder: *llvm.Builder, condition: *llvm.Value, true_value: *llvm.Value, false_value: *llvm.Value, name: [*:0]const u8) *llvm.Value;
