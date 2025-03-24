@@ -2,7 +2,7 @@ OS_Linux_PROT = bits u32
 {
     read: u1,
     write: u1,
-    exec: u1,
+    execute: u1,
     sem: u1,
     _: u28,
 }
@@ -53,8 +53,24 @@ OS_MapFlags = bits
     populate: u1,
 }
 
+os_linux_protection_flags = fn(map_flags: OS_ProtectionFlags) OS_Linux_PROT
+{
+    return {
+        .read = map_flags.read,
+        .write = map_flags.write,
+        .execute = map_flags.execute,
+        zero,
+    };
+}
+
 os_linux_map_flags = fn(map_flags: OS_MapFlags) OS_Linux_MAP
 {
+    return {
+        .type = #select(map_flags.private, .private, .shared),
+        .anonymous = map_flags.anonymous,
+        .no_reserve = map_flags.no_reserve,
+        .populate = map_flags.populate,
+    };
 }
 
 os_reserve = fn (base: u64, protection: OS_ProtectionFlags, map: OS_MapFlags) &u8

@@ -2636,6 +2636,7 @@ const Converter = struct {
         cast_to,
         extend,
         int_from_enum,
+        select,
         trap,
         truncate,
         va_start,
@@ -2753,6 +2754,50 @@ const Converter = struct {
                 const value = module.values.add();
                 value.* = source_value.*;
                 value.type = target_type;
+                return value;
+            },
+            .select => {
+                const condition_value = converter.parse_value(module, null, .value);
+                if (condition_value.type.bb != .integer) {
+                    converter.report_error();
+                }
+                if (condition_value.type.bb.integer.bit_count != 1) {
+                    converter.report_error();
+                }
+
+                converter.skip_space();
+                converter.expect_character(',');
+                converter.skip_space();
+
+                const true_value = converter.parse_value(module, expected_type, .value);
+
+                converter.skip_space();
+                converter.expect_character(',');
+                converter.skip_space();
+
+                const expected_ty = expected_type orelse true_value.type;
+
+                const false_value = converter.parse_value(module, expected_ty, .value);
+
+                converter.skip_space();
+                converter.expect_character(right_parenthesis);
+
+                if (true_value.type != expected_ty) {
+                    converter.report_error();
+                }
+
+                if (false_value.type != expected_ty) {
+                    converter.report_error();
+                }
+
+                const value = module.values.add();
+                value.* = .{
+                    .llvm = module.llvm.builder.create_select(condition_value.llvm, true_value.llvm, false_value.llvm),
+                    .bb = .instruction,
+                    .type = expected_ty,
+                    .lvalue = false,
+                    .dereference_to_assign = false,
+                };
                 return value;
             },
             .trap => {

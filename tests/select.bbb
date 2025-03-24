@@ -1,0 +1,7 @@
+[export] main = fn [cc(c)] () s32
+{
+    >boolean: u1 = 1;
+    >true_value: s32 = 0;
+    >false_value: s32 = 1;
+    return #select(boolean, true_value, false_value);
+}
