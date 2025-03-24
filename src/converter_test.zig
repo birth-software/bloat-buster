@@ -416,3 +416,7 @@ test "pointer_cast" {
 test "struct_assignment" {
     try invsrc(@src());
 }
+
+test "global_struct" {
+    try invsrc(@src());
+}

@@ -151,7 +151,31 @@ arena_initialize = fn (initialization: ArenaInitialization) &Arena
     return arena;
 }
 
+arena_initialize_default = fn (initial_size: u64) &Arena
+{
+    return arena_initialize({
+        .reserved_size = 4 * 1024 * 1024 * 1024,
+        .granularity = 4 * 1024,
+        .initial_size = initial_size,
+    });
+}
+
+GlobalState = struct
+{
+    arena: &Arena,
+}
+
+global_state: GlobalState = undefined;
+
+global_state_initialize = fn () void
+{
+    global_state = {
+        .arena = arena_initialize_default(2 * 1024 * 1024),
+    };
+}
+
 [export] main = fn [cc(c)] () s32
 {
+    global_state_initialize();
     return 0;
 }
