@@ -38,6 +38,8 @@ OS_Linux_MAP = bits u32
     _: u5,
 }
 
+[extern] mmap = fn [cc(c)] (address: u64, size: u64, protection: OS_Linux_PROT, map: OS_Linux_MAP, file_descriptor: s32, offset: s64) &u8;
+
 OS_ProtectionFlags = bits
 {
     read: u1,
@@ -74,8 +76,18 @@ os_linux_map_flags = fn(map_flags: OS_MapFlags) OS_Linux_MAP
     };
 }
 
-os_reserve = fn (base: u64, protection: OS_ProtectionFlags, map: OS_MapFlags) &u8
+os_reserve = fn (base: u64, size: u64, protection: OS_ProtectionFlags, map: OS_MapFlags) &u8
 {
+    >protection_flags = os_linux_protection_flags(protection);
+    >map_flags = os_linux_map_flags(map);
+    >address = mmap(base, size, protection_flags, map_flags, -1, 0);
+    //if (address == #integer_max(u64))
+    //{
+    //    unreachable;
+    //}
+    //else
+    //{
+    //}
 }
 
 Arena = struct

@@ -1802,7 +1802,7 @@ const Converter = struct {
                             };
                             _ = &v;
 
-                            if (coerce_to_type != v.type) {
+                            if (!coerce_to_type.is_abi_equal(v.type)) {
                                 switch (v.type) {
                                     else => @trap(),
                                 }
@@ -2637,6 +2637,7 @@ const Converter = struct {
         cast,
         cast_to,
         extend,
+        integer_max,
         int_from_enum,
         select,
         trap,
@@ -2729,6 +2730,36 @@ const Converter = struct {
                     .llvm = extension_instruction,
                     .type = destination_type,
                     .bb = .instruction,
+                    .lvalue = false,
+                    .dereference_to_assign = false,
+                };
+
+                return value;
+            },
+            .integer_max => {
+                converter.skip_space();
+                const ty = converter.parse_type(module);
+                converter.expect_character(right_parenthesis);
+                if (ty.bb != .integer) {
+                    converter.report_error();
+                }
+                const bit_count = ty.bb.integer.bit_count;
+                const max_value = if (bit_count == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(bit_count - @intFromBool(ty.bb.integer.signed))) - 1;
+                const expected_ty = expected_type orelse ty;
+                if (ty.get_bit_size() > expected_ty.get_bit_size()) {
+                    converter.report_error();
+                }
+                const constant_integer = expected_ty.llvm.handle.to_integer().get_constant(max_value, @intFromBool(false));
+                const value = module.values.add();
+                value.* = .{
+                    .llvm = constant_integer.to_value(),
+                    .type = expected_ty,
+                    .bb = .{
+                        .constant_integer = .{
+                            .value = max_value,
+                            .signed = false,
+                        },
+                    },
                     .lvalue = false,
                     .dereference_to_assign = false,
                 };

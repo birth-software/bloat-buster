@@ -400,3 +400,7 @@ test "select" {
 test "bits_return_u1" {
     try invsrc(@src());
 }
+
+test "integer_max" {
+    try invsrc(@src());
+}
