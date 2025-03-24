@@ -408,3 +408,7 @@ test "integer_max" {
 test "unreachable" {
     try invsrc(@src());
 }
+
+test "pointer_cast" {
+    try invsrc(@src());
+}

@@ -1114,6 +1114,7 @@ pub const Value = struct {
         return switch (value.bb) {
             .constant_integer, .constant_array => true,
             .struct_initialization => |si| si.is_constant,
+            .instruction => false,
             else => @trap(),
         };
     }
@@ -2203,8 +2204,6 @@ const Converter = struct {
                         .@"return" => {
                             converter.skip_space();
 
-                            const abi_return_type = current_function_type.abi_return_type;
-                            _ = abi_return_type;
                             const return_type_abi = &current_function_type.return_type_abi;
                             const returns_nothing = converter.consume_character_if_match(';');
                             if (returns_nothing) {
@@ -2225,12 +2224,13 @@ const Converter = struct {
                                                 @trap();
                                             },
                                             else => {
+                                                assert(return_value.type.is_abi_equal(return_type_abi.semantic_type));
                                                 const return_alloca = current_function.return_alloca;
                                                 _ = module.create_store(.{
                                                     .source_value = return_value.llvm,
                                                     .destination_value = return_alloca,
                                                     .source_type = return_type_abi.semantic_type,
-                                                    .destination_type = current_function_type.abi_return_type,
+                                                    .destination_type = return_type_abi.semantic_type,
                                                 });
                                             },
                                         }
@@ -2647,6 +2647,7 @@ const Converter = struct {
         integer_max,
         int_from_enum,
         int_from_pointer,
+        pointer_cast,
         select,
         trap,
         truncate,
@@ -2822,6 +2823,30 @@ const Converter = struct {
                     .lvalue = false,
                     .dereference_to_assign = false,
                     .bb = .instruction,
+                };
+                return value;
+            },
+            .pointer_cast => {
+                const ty = expected_type orelse converter.report_error();
+                if (ty.bb != .pointer) {
+                    converter.report_error();
+                }
+                const source_value = converter.parse_value(module, null, .value);
+                converter.skip_space();
+                converter.expect_character(right_parenthesis);
+                if (source_value.type.bb != .pointer) {
+                    converter.report_error();
+                }
+                if (ty == source_value.type) {
+                    converter.report_error();
+                }
+                const value = module.values.add();
+                value.* = .{
+                    .llvm = module.llvm.builder.create_pointer_cast(source_value.llvm, ty.llvm.handle),
+                    .type = ty,
+                    .bb = .instruction,
+                    .lvalue = true,
+                    .dereference_to_assign = false,
                 };
                 return value;
             },
@@ -3237,6 +3262,7 @@ const Converter = struct {
                             if (field_count == struct_type.fields.len) {
                                 converter.report_error();
                             }
+
                             if (is_ordered and is_constant) {
                                 const zero_fields = struct_type.fields[field_count..];
                                 const zero_field_values = field_value_buffer[field_count..][0..zero_fields.len];
@@ -3567,9 +3593,6 @@ const Converter = struct {
                         const appointee_type = variable.value.type.bb.pointer.type;
 
                         if (converter.consume_character_if_match(left_parenthesis)) {
-                            if (value_kind == .pointer) {
-                                converter.report_error();
-                            }
                             const call = converter.parse_call(module, variable.value);
                             break :b call;
                         } else if (converter.consume_character_if_match('.')) {
@@ -3642,15 +3665,47 @@ const Converter = struct {
                                 .pointer => |pointer_type| {
                                     const element_type = pointer_type.type;
                                     if (converter.consume_character_if_match('&')) {
-                                        const load = module.values.add();
-                                        load.* = .{
+                                        const pointer_load = module.values.add();
+                                        pointer_load.* = .{
                                             .llvm = module.create_load(.{ .type = appointee_type, .value = variable.value.llvm }),
                                             .type = appointee_type,
                                             .bb = .instruction,
                                             .lvalue = false,
                                             .dereference_to_assign = false,
                                         };
-                                        break :b load;
+                                        switch (value_kind) {
+                                            .value => {
+                                                if (expected_type) |expected_ty| {
+                                                    if (expected_ty == appointee_type) {
+                                                        @trap();
+                                                    } else {
+                                                        if (appointee_type.bb == .pointer and appointee_type.bb.pointer.type == expected_ty) {
+                                                            const load = module.values.add();
+                                                            load.* = .{
+                                                                .llvm = module.create_load(.{ .type = expected_ty, .value = pointer_load.llvm }),
+                                                                .type = expected_ty,
+                                                                .bb = .instruction,
+                                                                .lvalue = false,
+                                                                .dereference_to_assign = false,
+                                                            };
+                                                            break :b load;
+                                                        } else {
+                                                            converter.report_error();
+                                                        }
+                                                    }
+                                                } else {
+                                                    @trap();
+                                                }
+                                            },
+                                            .maybe_pointer, .pointer => {
+                                                if (expected_type) |expected_ty| {
+                                                    _ = expected_ty;
+                                                    @trap();
+                                                } else {
+                                                    break :b pointer_load;
+                                                }
+                                            },
+                                        }
                                     } else {
                                         switch (element_type.bb) {
                                             .structure => |*struct_type| {

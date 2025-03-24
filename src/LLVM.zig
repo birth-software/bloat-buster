@@ -944,6 +944,10 @@ pub const Builder = opaque {
         return api.LLVMBuildPtrToInt(builder, value, destination_type, "");
     }
 
+    pub fn create_pointer_cast(builder: *Builder, value: *Value, destination_type: *Type) *Value {
+        return api.LLVMBuildPointerCast(builder, value, destination_type, "");
+    }
+
     pub fn create_truncate(builder: *Builder, value: *Value, destination_type: *Type) *Value {
         return api.LLVMBuildTrunc(builder, value, destination_type, "");
     }

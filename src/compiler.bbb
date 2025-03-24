@@ -39,6 +39,7 @@ OS_Linux_MAP = bits u32
 }
 
 [extern] mmap = fn [cc(c)] (address: u64, size: u64, protection: OS_Linux_PROT, map: OS_Linux_MAP, file_descriptor: s32, offset: s64) &u8;
+[extern] mprotect = fn [cc(c)] (address: u64, size: u64, protection: OS_Linux_PROT) s32;
 
 OS_ProtectionFlags = bits
 {
@@ -89,6 +90,16 @@ os_reserve = fn (base: u64, size: u64, protection: OS_ProtectionFlags, map: OS_M
     return address;
 }
 
+os_commit = fn (address: u64, size: u64, protection: OS_ProtectionFlags) void
+{
+    >protection_flags = os_linux_protection_flags(protection);
+    >result = mprotect(address, size, protection_flags);
+    if (result != 0)
+    {
+        unreachable;
+    }
+}
+
 Arena = struct
 {
     reserved_size: u64,
@@ -109,6 +120,35 @@ ArenaInitialization = struct
 
 arena_initialize = fn (initialization: ArenaInitialization) &Arena
 {
+    >protection_flags: OS_ProtectionFlags = {
+        .read = 1,
+        .write = 1,
+        zero,
+    };
+
+    >map_flags: OS_MapFlags = {
+        .private = 1,
+        .anonymous = 1,
+        .no_reserve = 1,
+        .populate = 0,
+    };
+
+    >arena: &Arena = #pointer_cast(os_reserve(0, initialization.reserved_size, protection_flags, map_flags));
+    os_commit(#int_from_pointer(arena), initialization.initial_size, {
+        .read = 1,
+        .write = 1,
+        zero,
+    });
+
+    //arena.& = {
+    //    .reserved_size = initialization.reserved_size,
+    //    .os_position = initialization.initial_size,
+    //    .position = minimum_position,
+    //    .granularity = initialization.granularity,
+    //    zero,
+    //};
+
+    return arena;
 }
 
 [export] main = fn [cc(c)] () s32
