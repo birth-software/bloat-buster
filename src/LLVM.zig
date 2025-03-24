@@ -627,6 +627,7 @@ pub const OptimizationPipelineOptions = packed struct(u64) {
         optimization_level: OptimizationLevel,
         debug_info: bool,
     };
+
     pub fn default(create: Create) OptimizationPipelineOptions {
         const pref_speed = create.optimization_level.prefers_speed();
         return .{

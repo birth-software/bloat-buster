@@ -5771,7 +5771,14 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
 
     var error_message: llvm.String = undefined;
     const target_machine = llvm.Target.Machine.create(.{
-        .target_options = llvm.Target.Options.default(),
+        .target_options = blk: {
+            var target_options = llvm.Target.Options.default();
+            target_options.flags0.trap_unreachable = switch (options.build_mode) {
+                .debug_none, .debug_fast, .debug_size => true,
+                else => false,
+            };
+            break :blk target_options;
+        },
         .cpu_triple = llvm.String.from_slice(llvm.global.host_triple),
         .cpu_model = llvm.String.from_slice(llvm.global.host_cpu_model),
         .cpu_features = llvm.String.from_slice(llvm.global.host_cpu_features),

@@ -85,9 +85,8 @@ os_reserve = fn (base: u64, size: u64, protection: OS_ProtectionFlags, map: OS_M
     {
         unreachable;
     }
-    else
-    {
-    }
+
+    return address;
 }
 
 Arena = struct
