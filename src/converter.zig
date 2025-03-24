@@ -114,6 +114,7 @@ const Module = struct {
     noreturn_type: *Type = undefined,
     va_list_type: ?*Type = null,
     void_value: *Value = undefined,
+    unreachable_value: *Value = undefined,
     anonymous_pair_type_buffer: [64]u32 = undefined,
     pointer_type_buffer: [128]u32 = undefined,
     pointer_type_count: u32 = 0,
@@ -778,10 +779,6 @@ const Module = struct {
         }
     }
 
-    pub fn get_infer_or_ignore_value(module: *Module) *Value {
-        return &module.values.buffer[0];
-    }
-
     pub fn get_type(module: *Module, index: usize) *Type {
         assert(index < module.types.count);
         const result = &module.types.buffer[index];
@@ -965,6 +962,15 @@ const Module = struct {
             .dereference_to_assign = false,
         };
 
+        module.unreachable_value = module.values.add();
+        module.unreachable_value.* = .{
+            .llvm = undefined,
+            .bb = .@"unreachable",
+            .type = module.noreturn_type,
+            .lvalue = false,
+            .dereference_to_assign = false,
+        };
+
         return module;
     }
 
@@ -1086,6 +1092,7 @@ pub const Value = struct {
         constant_integer: ConstantInteger,
         constant_array,
         external_function,
+        @"unreachable",
     },
     type: *Type,
     llvm: *llvm.Value,
@@ -2639,6 +2646,7 @@ const Converter = struct {
         extend,
         integer_max,
         int_from_enum,
+        int_from_pointer,
         select,
         trap,
         truncate,
@@ -2787,6 +2795,34 @@ const Converter = struct {
                 const value = module.values.add();
                 value.* = source_value.*;
                 value.type = target_type;
+                return value;
+            },
+            .int_from_pointer => {
+                const source_value = converter.parse_value(module, null, .value);
+                converter.skip_space();
+                converter.expect_character(right_parenthesis);
+                if (source_value.type.bb != .pointer) {
+                    converter.report_error();
+                }
+                const original_target_type = module.integer_type(64, false);
+                const target_type = expected_type orelse original_target_type;
+
+                if (target_type.bb != .integer) {
+                    converter.report_error();
+                }
+
+                if (target_type.get_bit_size() < original_target_type.get_bit_size()) {
+                    converter.report_error();
+                }
+
+                const value = module.values.add();
+                value.* = .{
+                    .llvm = module.llvm.builder.create_ptr_to_int(source_value.llvm, target_type.llvm.handle),
+                    .type = target_type,
+                    .lvalue = false,
+                    .dereference_to_assign = false,
+                    .bb = .instruction,
+                };
                 return value;
             },
             .select => {
@@ -3087,6 +3123,7 @@ const Converter = struct {
     const ValueKeyword = enum {
         @"_",
         undefined,
+        @"unreachable",
         zero,
     };
 
@@ -3176,6 +3213,7 @@ const Converter = struct {
                                 if (string_to_enum(ValueKeyword, identifier)) |value_keyword| switch (value_keyword) {
                                     ._ => converter.report_error(),
                                     .undefined => @trap(),
+                                    .@"unreachable" => @trap(),
                                     .zero => {
                                         zero = true;
                                         converter.skip_space();
@@ -3345,6 +3383,7 @@ const Converter = struct {
                                         // We need to break here otherwise `field_count` would be incremented
                                         break;
                                     },
+                                    .@"unreachable" => @trap(),
                                 } else {
                                     converter.report_error();
                                 }
@@ -3495,7 +3534,7 @@ const Converter = struct {
                     const identifier = converter.parse_identifier();
 
                     if (string_to_enum(ValueKeyword, identifier)) |value_keyword| switch (value_keyword) {
-                        ._ => return module.get_infer_or_ignore_value(),
+                        ._ => return module.void_value,
                         .undefined => {
                             const expected_ty = expected_type orelse converter.report_error();
                             // TODO: cache poison
@@ -3513,6 +3552,11 @@ const Converter = struct {
                             const ty = expected_type orelse converter.report_error();
 
                             return module.get_zero_value(ty);
+                        },
+                        .@"unreachable" => {
+                            _ = module.llvm.builder.create_unreachable();
+                            module.llvm.builder.clear_insertion_position();
+                            return module.unreachable_value;
                         },
                     } else {
                         const variable = if (current_function.value.bb.function.locals.find(identifier)) |local| local else if (current_function.value.bb.function.arguments.find(identifier)) |argument| argument else if (module.globals.find(identifier)) |global| global else converter.report_error();

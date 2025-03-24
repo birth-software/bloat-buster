@@ -81,13 +81,13 @@ os_reserve = fn (base: u64, size: u64, protection: OS_ProtectionFlags, map: OS_M
     >protection_flags = os_linux_protection_flags(protection);
     >map_flags = os_linux_map_flags(map);
     >address = mmap(base, size, protection_flags, map_flags, -1, 0);
-    //if (address == #integer_max(u64))
-    //{
-    //    unreachable;
-    //}
-    //else
-    //{
-    //}
+    if (#int_from_pointer(address) == #integer_max(u64))
+    {
+        unreachable;
+    }
+    else
+    {
+    }
 }
 
 Arena = struct

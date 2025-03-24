@@ -404,3 +404,7 @@ test "bits_return_u1" {
 test "integer_max" {
     try invsrc(@src());
 }
+
+test "unreachable" {
+    try invsrc(@src());
+}
