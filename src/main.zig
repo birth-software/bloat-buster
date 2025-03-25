@@ -45,7 +45,7 @@ pub fn main(argc: c_int, argv: [*:null]const ?[*:0]const u8) callconv(.C) c_int 
         .build_mode = .debug_none,
         .content = file_content,
         .path = file_path,
-        .has_debug_info = true,
+        .has_debug_info = false,
         .target = converter.Target.get_native(),
     });
     return 0;

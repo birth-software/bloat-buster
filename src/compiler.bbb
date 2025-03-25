@@ -174,7 +174,7 @@ global_state_initialize = fn () void
     };
 }
 
-[export] main = fn [cc(c)] () s32
+[export] main = fn [cc(c)] (argument_count: u32) s32
 {
     global_state_initialize();
     return 0;

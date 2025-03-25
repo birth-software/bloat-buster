@@ -13,6 +13,7 @@ pub extern fn llvm_instruction_is_call_base(instruction: *llvm.Instruction) bool
 
 // Module
 pub extern fn llvm_module_create_global_variable(module: *llvm.Module, global_type: *llvm.Type, is_constant: bool, linkage: llvm.LinkageType, initial_value: *llvm.Constant, name: llvm.String, before: ?*llvm.GlobalVariable, thread_local_mode: llvm.ThreadLocalMode, address_space: c_uint, externally_initialized: bool) *llvm.GlobalVariable;
+pub extern fn LLVMSetUnnamedAddress(global: *llvm.GlobalVariable, unnamed_address: llvm.GlobalVariable.UnnamedAddress) void;
 pub extern fn llvm_module_create_function(module: *llvm.Module, function_type: *llvm.Type.Function, linkage_type: llvm.LinkageType, address_space: c_uint, name: llvm.String) *llvm.Function;
 pub extern fn llvm_context_create_basic_block(context: *llvm.Context, name: llvm.String, parent: ?*llvm.Function) *llvm.BasicBlock;
 pub extern fn LLVMGetNextBasicBlock(basic_block: *llvm.BasicBlock) ?*llvm.BasicBlock;
@@ -193,6 +194,7 @@ pub extern fn LLVMConstIntGetSExtValue(constant: *llvm.Constant) i64;
 pub extern fn LLVMConstArray2(element_type: *llvm.Type, value_pointer: [*]const *llvm.Constant, value_length: u64) *llvm.Constant;
 pub extern fn LLVMConstStructInContext(context: *llvm.Context, constant_value_pointer: [*]const *llvm.Constant, constant_value_count: c_uint, is_packed: c_uint) *llvm.Constant;
 pub extern fn LLVMConstNamedStruct(struct_type: *llvm.Type.Struct, constant_value_pointer: [*]const *llvm.Constant, constant_value_count: c_uint) *llvm.Constant;
+pub extern fn LLVMConstStringInContext2(context: *llvm.Context, string_pointer: [*]const u8, string_length: usize, dont_null_terminate: Bool) *llvm.Constant;
 
 pub extern fn LLVMGetValueKind(value: *llvm.Value) llvm.Value.Kind;
 pub extern fn LLVMIsConstant(value: *llvm.Value) Bool;

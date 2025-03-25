@@ -118,6 +118,8 @@ const Module = struct {
     anonymous_pair_type_buffer: [64]u32 = undefined,
     pointer_type_buffer: [128]u32 = undefined,
     pointer_type_count: u32 = 0,
+    slice_type_buffer: [128]u32 = undefined,
+    slice_type_count: u32 = 0,
     anonymous_pair_type_count: u32 = 0,
     arena_restore_position: u64,
 
@@ -142,6 +144,7 @@ const Module = struct {
                             .initial_value = constant_struct,
                             .type = ty.llvm.handle,
                         });
+                        global_variable.set_unnamed_address(.global);
                         break :blk global_variable.to_value();
                     },
                 };
@@ -600,6 +603,7 @@ const Module = struct {
                         .byte_size = 24,
                         .bit_size = 24 * 8,
                         .fields = fields,
+                        .is_slice = false,
                     },
                 },
             });
@@ -720,6 +724,7 @@ const Module = struct {
         global_scope: *llvm.DI.Scope,
         file: *llvm.DI.File,
         pointer_type: *llvm.Type,
+        slice_type: *llvm.Type,
         intrinsic_table: IntrinsicTable,
 
         const IntrinsicTable = struct {
@@ -764,6 +769,7 @@ const Module = struct {
                         .byte_size = byte_size,
                         .bit_size = byte_size * 8,
                         .fields = fields,
+                        .is_slice = false,
                     },
                 },
                 .llvm = .{
@@ -858,8 +864,19 @@ const Module = struct {
             global_scope = compile_unit.to_scope();
         }
 
-        const module = arena.allocate_one(Module);
+        var llvm_integer_types: [64]*llvm.Type = undefined;
+
+        for (1..64 + 1) |bit_count| {
+            llvm_integer_types[bit_count - 1] = context.get_integer_type(@intCast(bit_count)).to_type();
+        }
+
+        const llvm_i128 = context.get_integer_type(128).to_type();
+
         const default_address_space = 0;
+        const pointer_type = context.get_pointer_type(default_address_space).to_type();
+        const slice_type = context.get_struct_type(&.{ pointer_type, llvm_integer_types[64 - 1] }).to_type();
+
+        const module = arena.allocate_one(Module);
         module.* = .{
             .arena = arena,
             .target = options.target,
@@ -870,7 +887,8 @@ const Module = struct {
                 .context = context,
                 .builder = context.create_builder(),
                 .di_builder = maybe_di_builder,
-                .pointer_type = context.get_pointer_type(default_address_space).to_type(),
+                .pointer_type = pointer_type,
+                .slice_type = slice_type,
                 .intrinsic_table = .{
                     .trap = llvm.lookup_intrinsic_id("llvm.trap"),
                     .va_start = llvm.lookup_intrinsic_id("llvm.va_start"),
@@ -880,14 +898,6 @@ const Module = struct {
             },
             .arena_restore_position = arena_restore_position,
         };
-
-        var llvm_integer_types: [64]*llvm.Type = undefined;
-
-        for (1..64 + 1) |bit_count| {
-            llvm_integer_types[bit_count - 1] = context.get_integer_type(@intCast(bit_count)).to_type();
-        }
-
-        const llvm_i128 = context.get_integer_type(128).to_type();
 
         module.void_type = module.types.add(.{
             .name = "void",
@@ -985,6 +995,11 @@ const Module = struct {
         alignment: ?u32 = null,
     };
 
+    const Slice = struct {
+        type: *Type,
+        alignment: ?u32 = null,
+    };
+
     pub fn get_pointer_type(module: *Module, pointer: Pointer) *Type {
         const p = PointerType{
             .type = pointer.type,
@@ -1017,6 +1032,76 @@ const Module = struct {
         };
 
         return pointer_type;
+    }
+
+    pub fn get_slice_type(module: *Module, slice: Slice) *Type {
+        const alignment = if (slice.alignment) |a| a else slice.type.get_byte_alignment();
+        const all_types = module.types.get();
+
+        for (module.slice_type_buffer[0..module.slice_type_count]) |slice_type_index| {
+            const ty = &all_types[slice_type_index];
+            const struct_type = &all_types[slice_type_index].bb.structure;
+            assert(struct_type.is_slice);
+            assert(struct_type.fields.len == 2);
+            const pointer_type = struct_type.fields[0].type;
+            if (pointer_type.bb.pointer.type == slice.type and pointer_type.bb.pointer.alignment == alignment) {
+                return ty;
+            }
+        } else {
+            const pointer_type = module.get_pointer_type(.{
+                .type = slice.type,
+                .alignment = slice.alignment,
+            });
+            const length_type = module.integer_type(64, false);
+
+            const llvm_type = module.llvm.context.get_struct_type(&.{ pointer_type.llvm.handle, length_type.llvm.handle }).to_type();
+
+            const name = module.arena.join_string(&.{ "[]", slice.type.name.? });
+            const debug_type = if (module.llvm.di_builder) |di_builder| blk: {
+                const bit_size = 64;
+                const bit_alignment = 64;
+                const llvm_member_types = [_]*llvm.DI.Type.Derived{
+                    di_builder.create_member_type(module.llvm.global_scope, "pointer", module.llvm.file, 0, bit_size, bit_alignment, 0, .{}, pointer_type.llvm.debug),
+                    di_builder.create_member_type(module.llvm.global_scope, "length", module.llvm.file, 0, bit_size, bit_alignment, bit_size, .{}, length_type.llvm.debug),
+                };
+                const flags = llvm.DI.Flags{};
+                const struct_type = di_builder.create_struct_type(module.llvm.global_scope, name, module.llvm.file, 0, bit_size, bit_alignment, flags, &llvm_member_types).to_type();
+                break :blk struct_type;
+            } else undefined;
+
+            const fields = module.arena.allocate(Field, 2);
+            fields[0] = .{
+                .bit_offset = 0,
+                .byte_offset = 0,
+                .type = pointer_type,
+                .name = "pointer",
+            };
+            fields[1] = .{
+                .bit_offset = 64,
+                .byte_offset = 8,
+                .type = length_type,
+                .name = "length",
+            };
+
+            const result = module.types.add(.{
+                .bb = .{
+                    .structure = .{
+                        .fields = fields,
+                        .byte_size = 16,
+                        .bit_size = 128,
+                        .byte_alignment = 8,
+                        .bit_alignment = 64,
+                        .is_slice = true,
+                    },
+                },
+                .llvm = .{
+                    .handle = llvm_type,
+                    .debug = debug_type,
+                },
+                .name = name,
+            });
+            return result;
+        }
     }
 };
 
@@ -1093,6 +1178,7 @@ pub const Value = struct {
         constant_array,
         external_function,
         @"unreachable",
+        string_literal_global,
     },
     type: *Type,
     llvm: *llvm.Value,
@@ -1143,6 +1229,7 @@ const FunctionType = struct {
 
 const StructType = struct {
     fields: []const Field,
+    is_slice: bool,
     bit_size: u64,
     byte_size: u64,
     bit_alignment: u32,
@@ -1192,6 +1279,11 @@ pub const PointerType = struct {
     alignment: u32,
 };
 
+pub const SliceType = struct {
+    pointer_type: *Type,
+    alignment: u32,
+};
+
 pub const Type = struct {
     bb: BB,
     llvm: LLVM,
@@ -1217,6 +1309,13 @@ pub const Type = struct {
         enumerator: Enumerator,
         vector,
     };
+
+    pub fn is_slice(ty: *const Type) bool {
+        return switch (ty.bb) {
+            .structure => |structure| structure.is_slice,
+            else => false,
+        };
+    }
 
     pub fn is_aggregate_type_for_abi(ty: *Type) bool {
         const ev_kind = ty.get_evaluation_kind();
@@ -1499,38 +1598,45 @@ const Converter = struct {
 
                 converter.skip_space();
 
-                const length_expression = converter.parse_value(module, module.integer_type(64, false), .value);
-                converter.skip_space();
-                converter.expect_character(right_bracket);
-
-                const element_type = converter.parse_type(module);
-
-                if (length_expression.bb == .infer_or_ignore) {
-                    const ty = module.types.add(.{
-                        .name = undefined,
-                        .llvm = undefined,
-                        .bb = .{
-                            .array = .{
-                                .element_count = null,
-                                .element_type = element_type,
-                            },
-                        },
-                    });
-                    return ty;
+                const is_slice = converter.consume_character_if_match(right_bracket);
+                if (is_slice) {
+                    const element_type = converter.parse_type(module);
+                    const slice_type = module.get_slice_type(.{ .type = element_type });
+                    return slice_type;
                 } else {
-                    const element_count = length_expression.bb.constant_integer.value;
-                    const array = ArrayType{
-                        .element_count = element_count,
-                        .element_type = element_type,
-                    };
-                    const ty = module.types.add(.{
-                        .name = array_type_name(module.arena, array),
-                        .llvm = array_type_llvm(module, array),
-                        .bb = .{
-                            .array = array,
-                        },
-                    });
-                    return ty;
+                    const length_expression = converter.parse_value(module, module.integer_type(64, false), .value);
+                    converter.skip_space();
+                    converter.expect_character(right_bracket);
+
+                    const element_type = converter.parse_type(module);
+
+                    if (length_expression.bb == .infer_or_ignore) {
+                        const array_type = module.types.add(.{
+                            .name = undefined,
+                            .llvm = undefined,
+                            .bb = .{
+                                .array = .{
+                                    .element_count = null,
+                                    .element_type = element_type,
+                                },
+                            },
+                        });
+                        return array_type;
+                    } else {
+                        const element_count = length_expression.bb.constant_integer.value;
+                        const array = ArrayType{
+                            .element_count = element_count,
+                            .element_type = element_type,
+                        };
+                        const array_type = module.types.add(.{
+                            .name = array_type_name(module.arena, array),
+                            .llvm = array_type_llvm(module, array),
+                            .bb = .{
+                                .array = array,
+                            },
+                        });
+                        return array_type;
+                    }
                 }
             },
             '&' => {
@@ -1864,16 +1970,27 @@ const Converter = struct {
                                     // TODO:
                                     assert(argument_abi.attributes.direct.offset == 0);
 
-                                    for (coerce_to_type.bb.structure.fields, 0..) |field, field_index| {
-                                        const gep = module.llvm.builder.create_struct_gep(coerce_to_type.llvm.handle.to_struct(), source, @intCast(field_index));
-                                        const maybe_undef = false;
-                                        if (maybe_undef) {
-                                            @trap();
-                                        }
-                                        const load = module.create_load(.{ .value = gep, .type = field.type, .alignment = alignment });
+                                    switch (semantic_argument_value.lvalue) {
+                                        true => {
+                                            for (coerce_to_type.bb.structure.fields, 0..) |field, field_index| {
+                                                const gep = module.llvm.builder.create_struct_gep(coerce_to_type.llvm.handle.to_struct(), source, @intCast(field_index));
+                                                const maybe_undef = false;
+                                                if (maybe_undef) {
+                                                    @trap();
+                                                }
+                                                const load = module.create_load(.{ .value = gep, .type = field.type, .alignment = alignment });
 
-                                        llvm_abi_argument_value_buffer[abi_argument_count] = load;
-                                        abi_argument_count += 1;
+                                                llvm_abi_argument_value_buffer[abi_argument_count] = load;
+                                                abi_argument_count += 1;
+                                            }
+                                        },
+                                        false => {
+                                            for (0..coerce_to_type.bb.structure.fields.len) |field_index| {
+                                                const extract_value = module.llvm.builder.create_extract_value(source, @intCast(field_index));
+                                                llvm_abi_argument_value_buffer[abi_argument_count] = extract_value;
+                                                abi_argument_count += 1;
+                                            }
+                                        },
                                     }
                                 }
                             } else {
@@ -2178,7 +2295,14 @@ const Converter = struct {
                 const source = value.llvm;
                 switch (local_type.get_evaluation_kind()) {
                     .aggregate => {
-                        _ = module.llvm.builder.create_memcpy(destination, alignment, source, alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(local_type.get_byte_size(), @intFromBool(false)).to_value());
+                        switch (value.lvalue) {
+                            true => {
+                                _ = module.llvm.builder.create_memcpy(destination, alignment, source, alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(local_type.get_byte_size(), @intFromBool(false)).to_value());
+                            },
+                            false => {
+                                _ = module.create_store(.{ .source_value = source, .destination_value = destination, .source_type = local_type, .destination_type = local_type });
+                            },
+                        }
                     },
                     else => {
                         _ = module.create_store(.{ .source_value = source, .destination_value = destination, .source_type = local_type, .destination_type = local_type });
@@ -3336,6 +3460,7 @@ const Converter = struct {
                                             .initial_value = constant_struct,
                                             .type = ty.llvm.handle,
                                         });
+                                        global_variable.set_unnamed_address(.global);
                                         break :b global_variable.to_value();
                                     },
                                 };
@@ -3524,6 +3649,7 @@ const Converter = struct {
                                         .initial_value = constant_array,
                                         .type = ty.llvm.handle,
                                     });
+                                    global_variable.set_unnamed_address(.global);
                                     break :b global_variable.to_value();
                                 },
                             };
@@ -3548,7 +3674,39 @@ const Converter = struct {
             '#' => return converter.parse_value_intrinsic(module, expected_type),
             '&' => {
                 converter.offset += 1;
-                return converter.parse_value(module, expected_type, .pointer);
+                const value = converter.parse_value(module, expected_type, .pointer);
+                if (expected_type) |expected_ty| {
+                    if (expected_ty.is_slice()) {
+                        switch (value.type.bb) {
+                            .pointer => |pointer| switch (pointer.type.bb) {
+                                .array => |array| {
+                                    switch (value_kind) {
+                                        .value => {
+                                            const slice_poison = expected_ty.llvm.handle.get_poison();
+                                            const pointer_insert = module.llvm.builder.create_insert_value(slice_poison, value.llvm, 0);
+                                            const length_value = module.integer_type(64, false).llvm.handle.to_integer().get_constant(array.element_count.?, @intFromBool(false));
+                                            const length_insert = module.llvm.builder.create_insert_value(pointer_insert, length_value.to_value(), 1);
+                                            const result = module.values.add();
+                                            result.* = .{
+                                                .llvm = length_insert,
+                                                .type = expected_ty,
+                                                .bb = .instruction,
+                                                .lvalue = false,
+                                                .dereference_to_assign = false,
+                                            };
+                                            return result;
+                                        },
+                                        else => |t| @panic(@tagName(t)),
+                                    }
+                                },
+                                else => @trap(),
+                            },
+                            else => @trap(),
+                        }
+                        @trap();
+                    }
+                }
+                return value;
             },
             '!' => blk: {
                 converter.offset += 1;
@@ -3583,6 +3741,78 @@ const Converter = struct {
                     },
                     .llvm = expected_ty.llvm.handle.to_integer().get_constant(field_value, @intFromBool(false)).to_value(),
                     .type = expected_ty,
+                    .lvalue = false,
+                    .dereference_to_assign = false,
+                };
+
+                return value;
+            },
+            '"' => {
+                converter.offset += 1;
+
+                const string_start = converter.offset;
+                // TODO: better string handling (escape characters and such)
+                while (!converter.consume_character_if_match('"')) {
+                    converter.offset += 1;
+                }
+                const string_end = converter.offset - 1;
+                const string_length = string_end - string_start;
+                const string = converter.content[string_start..][0..string_length];
+                const null_terminate = true;
+                const constant_string = module.llvm.context.get_constant_string(string, null_terminate);
+                switch (module.current_function == null) {
+                    true => @trap(),
+                    false => {
+                        const u8_type = module.integer_type(8, false);
+                        const global_variable = module.llvm.handle.create_global_variable(.{
+                            .linkage = .InternalLinkage,
+                            .name = module.arena.join_string(&.{ "__const.", module.current_function.?.name, ".string" }),
+                            .initial_value = constant_string,
+                            .type = u8_type.llvm.handle.get_array_type(string.len + @intFromBool(null_terminate)).to_type(),
+                        });
+                        global_variable.set_unnamed_address(.global);
+
+                        const slice_type = module.get_slice_type(.{
+                            .type = u8_type,
+                        });
+
+                        const slice_poison = slice_type.llvm.handle.get_poison();
+                        const slice_pointer = module.llvm.builder.create_insert_value(slice_poison, global_variable.to_value(), 0);
+                        const slice_length = module.llvm.builder.create_insert_value(slice_pointer, module.integer_type(64, false).llvm.handle.to_integer().get_constant(string.len, @intFromBool(false)).to_value(), 1);
+                        const slice = slice_length;
+
+                        const value = module.values.add();
+                        value.* = .{
+                            .type = slice_type,
+                            .bb = .instruction,
+                            .llvm = slice,
+                            .lvalue = false,
+                            .dereference_to_assign = false,
+                        };
+                        return value;
+                    },
+                }
+                @trap();
+            },
+            '\'' => {
+                converter.offset += 1;
+                // TODO: UTF-8
+                const ch = converter.content[converter.offset];
+                // TODO: escape character
+                assert(ch != '\\');
+                converter.offset += 1;
+                converter.expect_character('\'');
+                const value = module.values.add();
+                const u8_type = module.integer_type(8, false);
+                value.* = .{
+                    .llvm = u8_type.llvm.handle.to_integer().get_constant(ch, @intFromBool(false)).to_value(),
+                    .type = u8_type,
+                    .bb = .{
+                        .constant_integer = .{
+                            .value = ch,
+                            .signed = false,
+                        },
+                    },
                     .lvalue = false,
                     .dereference_to_assign = false,
                 };
@@ -3785,34 +4015,65 @@ const Converter = struct {
                         converter.skip_space();
 
                         const index_type = module.integer_type(64, false);
-                        const llvm_index_type = module.integer_type(64, false).llvm.handle.to_integer();
-                        const zero_index = llvm_index_type.get_constant(0, @intFromBool(false)).to_value();
                         const index = converter.parse_value(module, index_type, .value);
 
                         converter.skip_space();
                         converter.expect_character(right_bracket);
 
-                        const gep = module.llvm.builder.create_gep(.{
-                            .type = appointee_type.llvm.handle,
-                            .aggregate = variable.value.llvm,
-                            .indices = &.{ zero_index, index.llvm },
-                        });
+                        const llvm_index_type = module.integer_type(64, false).llvm.handle.to_integer();
+                        const zero_index = llvm_index_type.get_constant(0, @intFromBool(false)).to_value();
 
                         switch (value_kind) {
                             .pointer, .maybe_pointer => {
                                 @trap();
                             },
                             .value => {
-                                const load = module.values.add();
-                                const load_type = appointee_type.bb.array.element_type;
-                                load.* = .{
-                                    .llvm = module.create_load(.{ .type = load_type, .value = gep }),
-                                    .type = load_type,
-                                    .bb = .instruction,
-                                    .lvalue = false,
-                                    .dereference_to_assign = false,
-                                };
-                                break :b load;
+                                switch (appointee_type.bb) {
+                                    .array => |array| {
+                                        const gep = module.llvm.builder.create_gep(.{
+                                            .type = appointee_type.llvm.handle,
+                                            .aggregate = variable.value.llvm,
+                                            .indices = &.{ zero_index, index.llvm },
+                                        });
+
+                                        const load_type = array.element_type;
+                                        const load = module.values.add();
+                                        load.* = .{
+                                            .llvm = module.create_load(.{ .type = load_type, .value = gep }),
+                                            .type = load_type,
+                                            .bb = .instruction,
+                                            .lvalue = false,
+                                            .dereference_to_assign = false,
+                                        };
+                                        break :b load;
+                                    },
+                                    .structure => |structure| {
+                                        if (!structure.is_slice) {
+                                            converter.report_error();
+                                        }
+
+                                        const gep_to_pointer_field = module.llvm.builder.create_struct_gep(appointee_type.llvm.handle.to_struct(), variable.value.llvm, 0);
+                                        const pointer_type = structure.fields[0].type;
+                                        const element_type = pointer_type.bb.pointer.type;
+                                        const pointer_load = module.create_load(.{ .type = pointer_type, .value = gep_to_pointer_field });
+                                        const gep_to_element = module.llvm.builder.create_gep(.{
+                                            .type = element_type.llvm.handle,
+                                            .aggregate = pointer_load,
+                                            .indices = &.{index.llvm},
+                                        });
+                                        const element_load = module.create_load(.{ .type = element_type, .value = gep_to_element, .alignment = pointer_type.bb.pointer.alignment });
+                                        const load = module.values.add();
+                                        load.* = .{
+                                            .llvm = element_load,
+                                            .type = element_type,
+                                            .bb = .instruction,
+                                            .lvalue = false,
+                                            .dereference_to_assign = false,
+                                        };
+                                        break :b load;
+                                    },
+                                    else => converter.report_error(),
+                                }
                             },
                         }
                     } else {
@@ -5603,6 +5864,7 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                                 .bit_alignment = bit_alignment,
                                 .byte_alignment = byte_alignment,
                                 .fields = fields,
+                                .is_slice = false,
                             },
                         };
                     },

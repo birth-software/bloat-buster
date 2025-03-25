@@ -420,3 +420,11 @@ test "struct_assignment" {
 test "global_struct" {
     try invsrc(@src());
 }
+
+test "basic_slice" {
+    try invsrc(@src());
+}
+
+test "basic_string" {
+    try invsrc(@src());
+}

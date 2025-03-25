@@ -734,6 +734,10 @@ pub const Context = opaque {
         return api.LLVMConstStructInContext(context, constant_values.ptr, @intCast(constant_values.len), @intFromBool(is_packed));
     }
 
+    pub fn get_constant_string(context: *Context, string: []const u8, null_terminated: bool) *Constant {
+        return api.LLVMConstStringInContext2(context, string.ptr, string.len, @intFromBool(!null_terminated));
+    }
+
     // pub fn create_string_attribute(context: *Context, attribute_name: []const u8, attribute_value: []const u8) *Attribute {
     //     return api.LLVMCreateStringAttribute(context, attribute_name.ptr, @intCast(attribute_name.len), attribute_value.ptr, @intCast(attribute_value.len));
     // }
@@ -985,6 +989,14 @@ pub const GlobalVariable = opaque {
     pub fn to_value(global_variable: *GlobalVariable) *Value {
         return @ptrCast(global_variable);
     }
+
+    pub const UnnamedAddress = enum(c_uint) {
+        none,
+        local,
+        global,
+    };
+
+    pub const set_unnamed_address = api.LLVMSetUnnamedAddress;
 };
 
 pub const Function = opaque {
