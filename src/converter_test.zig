@@ -443,3 +443,7 @@ test "basic_string" {
 test "argv" {
     try invsrc(@src());
 }
+
+test "basic_while" {
+    try invsrc(@src());
+}

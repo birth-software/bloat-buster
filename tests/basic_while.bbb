@@ -1,0 +1,38 @@
+c_string_length = fn (c_string: &u8) u64
+{
+    >it = c_string;
+
+    while (it.&)
+    {
+        it = it + 1;
+    }
+
+    return #int_from_pointer(it) - #int_from_pointer(c_string);
+}
+
+[export] main = fn (argument_count: u32, argument_pointer: &&u8) s32
+{
+    if (argument_count == 0)
+    {
+        return 1;
+    }
+
+    >first_arg = argument_pointer[0];
+    if (!first_arg)
+    {
+        return 1;
+    }
+
+    >arg_length = c_string_length(first_arg);
+    if (arg_length == 0)
+    {
+        return 1;
+    }
+
+    if (first_arg[arg_length] != 0)
+    {
+        return 1;
+    }
+
+    return 0;
+}

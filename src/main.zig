@@ -7,6 +7,20 @@ const Arena = lib.Arena;
 
 pub const panic = lib.panic_struct;
 
+comptime {
+    if (!lib.is_test) {
+        @export(&main, .{
+            .name = "main",
+        });
+    }
+}
+
+test {
+    _ = lib;
+    _ = llvm;
+    _ = converter;
+}
+
 pub fn main(argc: c_int, argv: [*:null]const ?[*:0]const u8) callconv(.C) c_int {
     if (argc != 2) {
         lib.print_string("Failed to match argument count\n");
@@ -49,18 +63,4 @@ pub fn main(argc: c_int, argv: [*:null]const ?[*:0]const u8) callconv(.C) c_int 
         .target = converter.Target.get_native(),
     });
     return 0;
-}
-
-comptime {
-    if (!lib.is_test) {
-        @export(&main, .{
-            .name = "main",
-        });
-    }
-}
-
-test {
-    _ = lib;
-    _ = llvm;
-    _ = converter;
 }
