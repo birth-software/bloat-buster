@@ -19,6 +19,7 @@ fn invoke(name: []const u8) !void {
     defer arena.restore(arena_position);
 
     const c_abi_object_path = arena.duplicate_string(configuration.c_abi_object_path);
+    const file_path = arena.join_string(&.{ "tests/", name, ".bbb" });
 
     inline for (@typeInfo(BuildMode).@"enum".fields) |f| {
         const build_mode = @field(BuildMode, f.name);
@@ -34,12 +35,13 @@ fn invoke(name: []const u8) !void {
                 try unit_test(arena, allocator, .{
                     .object_paths = if (lib.string.equal(name, "c_abi")) &.{ object_path, c_abi_object_path } else &.{object_path},
                     .executable_path = executable_path,
-                    .file_path = arena.join_string(&.{ "tests/", name, ".bbb" }),
+                    .file_path = file_path,
                     .name = name,
                     .directory_path = directory_path,
                     .build_mode = build_mode,
                     .has_debug_info = has_debug_info,
                     .self_hosted_path = null,
+                    .run = true,
                 });
             }
 
@@ -54,12 +56,13 @@ fn invoke(name: []const u8) !void {
                 try unit_test(arena, allocator, .{
                     .object_paths = if (lib.string.equal(name, "c_abi")) &.{ object_path, c_abi_object_path } else &.{object_path},
                     .executable_path = executable_path,
-                    .file_path = arena.join_string(&.{ "tests/", name, ".bbb" }),
+                    .file_path = file_path,
                     .name = name,
                     .directory_path = directory_path,
                     .build_mode = build_mode,
                     .has_debug_info = has_debug_info,
                     .self_hosted_path = arena.join_string(&.{ "bb-cache/", compiler_basename(arena, build_mode, has_debug_info) }),
+                    .run = true,
                 });
             }
         }
@@ -94,6 +97,7 @@ fn compile_the_compiler() !void {
                 const executable_path = base_path;
                 const directory_path = "bb-cache";
                 const object_path = arena.join_string(&.{ base_path, ".o" });
+
                 try unit_test(arena, allocator, .{
                     .object_paths = &.{object_path},
                     .executable_path = executable_path,
@@ -103,6 +107,7 @@ fn compile_the_compiler() !void {
                     .build_mode = build_mode,
                     .has_debug_info = has_debug_info,
                     .self_hosted_path = null,
+                    .run = false,
                 });
             }
         }
@@ -118,6 +123,7 @@ const InvokeWrapper = struct {
     has_debug_info: bool,
     directory_path: [:0]const u8,
     self_hosted_path: ?[]const u8,
+    run: bool,
 };
 
 fn unit_test(arena: *Arena, allocator: std.mem.Allocator, options: InvokeWrapper) anyerror!void {
@@ -128,19 +134,20 @@ fn unit_test(arena: *Arena, allocator: std.mem.Allocator, options: InvokeWrapper
 
     if (options.self_hosted_path) |self_hosted_path| {
         try compile_the_compiler();
+        const argv = [_][]const u8{
+            self_hosted_path,
+            options.file_path,
+        };
         const run_result = try std.process.Child.run(.{
             .allocator = allocator,
-            .argv = &.{
-                self_hosted_path,
-                options.file_path,
-            },
+            .argv = &argv,
         });
         const success = switch (run_result.term) {
             .Exited => |exit_code| exit_code == 0,
             else => false,
         };
         if (!success) {
-            std.debug.print("{}\n{}\n", .{ run_result, options });
+            std.debug.print("{s}\n{}\n{}\n", .{ argv, run_result, options });
             return error.compiler_failed_to_run_successfully;
         }
     } else {
@@ -154,29 +161,33 @@ fn unit_test(arena: *Arena, allocator: std.mem.Allocator, options: InvokeWrapper
             .has_debug_info = options.has_debug_info,
             .target = converter.Target.get_native(),
         });
-        const run_result = std.process.Child.run(.{
-            .allocator = allocator,
-            .argv = &.{options.executable_path},
-        }) catch |err| {
-            std.debug.print("error: {}\n", .{err});
-            const r = try std.process.Child.run(.{
-                .allocator = allocator,
-                .argv = &.{ "/usr/bin/ls", "-lasR", options.directory_path },
-                .max_output_bytes = std.math.maxInt(usize),
-            });
-            defer allocator.free(r.stdout);
-            defer allocator.free(r.stderr);
-            std.debug.print("ls {s} {s}\n", .{ options.directory_path, r.stdout });
-            return err;
-        };
 
-        const success = switch (run_result.term) {
-            .Exited => |exit_code| exit_code == 0,
-            else => false,
-        };
-        if (!success) {
-            std.debug.print("{}\n{}\n", .{ run_result, options });
-            return error.executable_failed_to_run_successfully;
+        if (options.run) {
+            const argv = [_][]const u8{options.executable_path};
+            const run_result = std.process.Child.run(.{
+                .allocator = allocator,
+                .argv = &argv,
+            }) catch |err| {
+                std.debug.print("error: {}\n", .{err});
+                const r = try std.process.Child.run(.{
+                    .allocator = allocator,
+                    .argv = &.{ "/usr/bin/ls", "-lasR", options.directory_path },
+                    .max_output_bytes = std.math.maxInt(usize),
+                });
+                defer allocator.free(r.stdout);
+                defer allocator.free(r.stderr);
+                std.debug.print("ls {s} {s}\n", .{ options.directory_path, r.stdout });
+                return err;
+            };
+
+            const success = switch (run_result.term) {
+                .Exited => |exit_code| exit_code == 0,
+                else => false,
+            };
+            if (!success) {
+                std.debug.print("{s} {}\n{}\n", .{ argv, run_result, options });
+                return error.executable_failed_to_run_successfully;
+            }
         }
     }
 }
@@ -426,5 +437,9 @@ test "basic_slice" {
 }
 
 test "basic_string" {
+    try invsrc(@src());
+}
+
+test "argv" {
     try invsrc(@src());
 }

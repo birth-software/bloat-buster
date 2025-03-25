@@ -4047,6 +4047,26 @@ const Converter = struct {
                                         };
                                         break :b load;
                                     },
+                                    .pointer => |pointer| {
+                                        const pointer_load = module.create_load(.{ .type = appointee_type, .value = variable.value.llvm });
+                                        const gep = module.llvm.builder.create_gep(.{
+                                            .type = pointer.type.llvm.handle,
+                                            .aggregate = pointer_load,
+                                            .indices = &.{index.llvm},
+                                            .inbounds = false,
+                                        });
+
+                                        const load_type = pointer.type;
+                                        const load = module.values.add();
+                                        load.* = .{
+                                            .llvm = module.create_load(.{ .type = load_type, .value = gep }),
+                                            .type = load_type,
+                                            .bb = .instruction,
+                                            .lvalue = false,
+                                            .dereference_to_assign = false,
+                                        };
+                                        break :b load;
+                                    },
                                     .structure => |structure| {
                                         if (!structure.is_slice) {
                                             converter.report_error();
@@ -4060,6 +4080,7 @@ const Converter = struct {
                                             .type = element_type.llvm.handle,
                                             .aggregate = pointer_load,
                                             .indices = &.{index.llvm},
+                                            .inbounds = false,
                                         });
                                         const element_load = module.create_load(.{ .type = element_type, .value = gep_to_element, .alignment = pointer_type.bb.pointer.alignment });
                                         const load = module.values.add();
@@ -4118,7 +4139,11 @@ const Converter = struct {
             .negative, // Already done in 'parse_integer' // TODO:
             => {},
             .not_zero => {
-                const llvm_value = module.llvm.builder.create_compare(.eq, value.llvm, value.type.llvm.handle.to_integer().get_constant(0, 0).to_value());
+                const llvm_value = module.llvm.builder.create_compare(.eq, value.llvm, switch (value.type.bb) {
+                    .integer => value.type.llvm.handle.to_integer().get_constant(0, 0).to_value(),
+                    .pointer => value.type.llvm.handle.get_zero().to_value(),
+                    else => @trap(),
+                });
                 value.* = .{
                     .llvm = llvm_value,
                     .bb = .instruction,
