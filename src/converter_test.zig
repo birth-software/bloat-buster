@@ -451,3 +451,7 @@ test "basic_while" {
 test "c_string_to_slice" {
     try invsrc(@src());
 }
+
+test "assignment_operators" {
+    try invsrc(@src());
+}

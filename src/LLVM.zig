@@ -1054,6 +1054,7 @@ pub const Constant = opaque {
 
     pub const get_sign_extended_value = api.LLVMConstIntGetSExtValue;
     pub const get_zero_extended_value = api.LLVMConstIntGetZExtValue;
+    pub const negate = api.LLVMConstNeg;
 };
 
 pub const Argument = opaque {

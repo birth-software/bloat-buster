@@ -1,3 +1,7 @@
+[extern] memcmp = fn [cc(c)] (a: &u8, b: &u8, byte_count: u64) s32;
+
+string_no_match = #integer_max(u64);
+
 c_string_length = fn (c_string: &u8) u64
 {
     >it = c_string;
@@ -14,6 +18,35 @@ c_string_to_slice = fn (c_string: &u8) []u8
 {
     >length = c_string_length(c_string);
     return #slice(c_string, length);
+}
+
+string_equal = fn(a: []u8, b: []u8) u1
+{
+    >result: #ReturnType() = 0;
+
+    if (a.length == b.length)
+    {
+        result = memcmp(a.pointer, b.pointer, a.length) == 0;
+    }
+
+    return result;
+}
+
+string_last_character = fn(string: []u8, character: u8) u64
+{
+    >i = string.length;
+
+    while (i > 0)
+    {
+        i -= 1;
+
+        if (string[i] == character)
+        {
+            return i;
+        }
+    }
+
+    return string_no_match;
 }
 
 OS_Linux_PROT = bits u32
@@ -206,6 +239,17 @@ global_state_initialize = fn () void
     }
 
     >relative_file_path = c_string_to_slice(relative_file_path_pointer);
+
+    if (relative_file_path.length < 5)
+    {
+        return 1;
+    }
+
+    >extension_start = string_last_character(relative_file_path, '.');
+    if (extension_start == string_no_match)
+    {
+        return 1;
+    }
 
     global_state_initialize();
     return 0;
