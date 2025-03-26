@@ -1083,7 +1083,7 @@ const Module = struct {
                 .name = "length",
             };
 
-            const result = module.types.add(.{
+            const slice_type = module.types.add(.{
                 .bb = .{
                     .structure = .{
                         .fields = fields,
@@ -1100,9 +1100,13 @@ const Module = struct {
                 },
                 .name = name,
             });
-            return result;
+            const index = slice_type - module.types.get().ptr;
+            module.slice_type_buffer[module.slice_type_count] = @intCast(index);
+            module.slice_type_count += 1;
+            return slice_type;
         }
     }
+
     fn negate_value_llvm(noalias module: *Module, value: *Value) *llvm.Value {
         _ = module;
         return switch (value.is_constant()) {
@@ -3419,30 +3423,62 @@ const Converter = struct {
                     if (!expected_ty.is_slice()) {
                         converter.report_error();
                     }
+
                     const slice_type = expected_ty;
                     const slice_pointer_type = slice_type.bb.structure.fields[0].type;
                     const slice_element_type = slice_pointer_type.bb.pointer.type;
 
+                    assert(slice_type != value.type);
+
                     switch (value.type.bb) {
                         .pointer => |pointer| {
                             const pointer_element_type = pointer.type;
-                            if (pointer_element_type == slice_element_type) {
-                                switch (element_count) {
-                                    1 => @trap(),
-                                    2 => {
-                                        // If a pointer is found and its element type matches the slice element type, then the second argument is the length of the slice
-                                        const length = second_argument orelse unreachable;
-                                        if (length.type.bb != .integer) {
-                                            converter.report_error();
-                                        }
+                            if (slice_type == pointer_element_type) switch (element_count) {
+                                1 => @trap(),
+                                2 => {
+                                    // If a slice is found and two arguments are given, the second argument is a start
+                                    @trap();
+                                },
+                                3 => @trap(),
+                                else => unreachable,
+                            } else if (pointer_element_type == slice_element_type) switch (element_count) {
+                                1 => @trap(),
+                                2 => {
+                                    // If a pointer is found and its element type matches the slice element type, then the second argument is the length of the slice
+                                    const length = second_argument orelse unreachable;
+                                    if (length.type.bb != .integer) {
+                                        converter.report_error();
+                                    }
 
-                                        if (length.type != u64_type) {
-                                            @trap();
-                                        }
+                                    if (length.type != u64_type) {
+                                        @trap();
+                                    }
 
+                                    const slice_poison = slice_type.llvm.handle.get_poison();
+                                    const pointer_insert = module.llvm.builder.create_insert_value(slice_poison, value.llvm, 0);
+                                    const length_insert = module.llvm.builder.create_insert_value(pointer_insert, length.llvm, 1);
+                                    const slice_value = length_insert;
+                                    const result = module.values.add();
+                                    result.* = .{
+                                        .llvm = slice_value,
+                                        .type = slice_type,
+                                        .bb = .instruction,
+                                        .lvalue = false,
+                                        .dereference_to_assign = false,
+                                    };
+                                    return result;
+                                },
+                                3 => @trap(),
+                                else => unreachable,
+                            } else switch (pointer_element_type.bb) {
+                                .array => |array| {
+                                    const array_element_type = array.element_type;
+                                    if (array_element_type == slice_element_type) {
+                                        assert(element_count == 1);
                                         const slice_poison = slice_type.llvm.handle.get_poison();
                                         const pointer_insert = module.llvm.builder.create_insert_value(slice_poison, value.llvm, 0);
-                                        const length_insert = module.llvm.builder.create_insert_value(pointer_insert, length.llvm, 1);
+                                        const length_value = u64_type.llvm.handle.to_integer().get_constant(array.element_count.?, @intFromBool(false));
+                                        const length_insert = module.llvm.builder.create_insert_value(pointer_insert, length_value.to_value(), 1);
                                         const slice_value = length_insert;
                                         const result = module.values.add();
                                         result.* = .{
@@ -3453,36 +3489,11 @@ const Converter = struct {
                                             .dereference_to_assign = false,
                                         };
                                         return result;
-                                    },
-                                    3 => @trap(),
-                                    else => unreachable,
-                                }
-                            } else {
-                                switch (pointer_element_type.bb) {
-                                    .array => |array| {
-                                        const array_element_type = array.element_type;
-                                        if (array_element_type == slice_element_type) {
-                                            assert(element_count == 1);
-                                            const slice_poison = slice_type.llvm.handle.get_poison();
-                                            const pointer_insert = module.llvm.builder.create_insert_value(slice_poison, value.llvm, 0);
-                                            const length_value = u64_type.llvm.handle.to_integer().get_constant(array.element_count.?, @intFromBool(false));
-                                            const length_insert = module.llvm.builder.create_insert_value(pointer_insert, length_value.to_value(), 1);
-                                            const slice_value = length_insert;
-                                            const result = module.values.add();
-                                            result.* = .{
-                                                .llvm = slice_value,
-                                                .type = slice_type,
-                                                .bb = .instruction,
-                                                .lvalue = false,
-                                                .dereference_to_assign = false,
-                                            };
-                                            return result;
-                                        } else {
-                                            converter.report_error();
-                                        }
-                                    },
-                                    else => @trap(),
-                                }
+                                    } else {
+                                        converter.report_error();
+                                    }
+                                },
+                                else => @trap(),
                             }
                         },
                         else => @trap(),

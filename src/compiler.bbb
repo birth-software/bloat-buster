@@ -251,6 +251,11 @@ global_state_initialize = fn () void
         return 1;
     }
 
+    //if (!string_equal(#slice(relative_file_path, extension_start), ".bbb"))
+    //{
+    //    return 1;
+    //}
+
     global_state_initialize();
     return 0;
 }
