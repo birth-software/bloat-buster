@@ -2378,6 +2378,7 @@ const Converter = struct {
                                 }
 
                                 // Clang equivalent: CodeGenFunction::EmitReturnStmt
+                                const return_alloca = current_function.return_alloca;
                                 switch (return_type_abi.semantic_type.get_evaluation_kind()) {
                                     .scalar => {
                                         switch (return_type_abi.flags.kind) {
@@ -2385,8 +2386,8 @@ const Converter = struct {
                                                 @trap();
                                             },
                                             else => {
+                                                assert(!return_value.lvalue);
                                                 assert(return_value.type.is_abi_equal(return_type_abi.semantic_type));
-                                                const return_alloca = current_function.return_alloca;
                                                 _ = module.create_store(.{
                                                     .source_value = return_value.llvm,
                                                     .destination_value = return_alloca,
@@ -2398,36 +2399,50 @@ const Converter = struct {
                                     },
                                     .aggregate => {
                                         // TODO: handcoded code, might be wrong
-                                        const return_alloca = current_function.return_alloca;
-                                        const abi_alignment = current_function_type.return_type_abi.semantic_type.get_byte_alignment();
-                                        const abi_size = current_function_type.return_type_abi.semantic_type.get_byte_size();
-                                        switch (return_type_abi.flags.kind) {
-                                            .indirect => {
-                                                _ = module.llvm.builder.create_memcpy(return_alloca, abi_alignment, return_value.llvm, abi_alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(abi_size, @intFromBool(false)).to_value());
-                                            },
-                                            else => {
-                                                switch (current_function_type.abi_return_type.get_evaluation_kind()) {
-                                                    .aggregate => {
-                                                        assert(abi_alignment == return_type_abi.semantic_type.get_byte_alignment());
-                                                        assert(abi_size == return_type_abi.semantic_type.get_byte_size());
+                                        switch (return_value.lvalue) {
+                                            true => {
+                                                const abi_alignment = current_function_type.return_type_abi.semantic_type.get_byte_alignment();
+                                                const abi_size = current_function_type.return_type_abi.semantic_type.get_byte_size();
+                                                switch (return_type_abi.flags.kind) {
+                                                    .indirect => {
                                                         _ = module.llvm.builder.create_memcpy(return_alloca, abi_alignment, return_value.llvm, abi_alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(abi_size, @intFromBool(false)).to_value());
                                                     },
-                                                    .scalar => {
-                                                        const destination_type = current_function_type.return_type_abi.semantic_type;
-                                                        const source_type = current_function_type.return_type_abi.semantic_type;
-                                                        assert(return_value.type == source_type);
-                                                        const rv = switch (return_value.type.bb) {
-                                                            .pointer => return_value.llvm,
-                                                            // TODO: this feels hacky
-                                                            else => switch (return_value.lvalue) {
-                                                                true => module.create_load(.{ .type = return_value.type, .value = return_value.llvm }),
-                                                                false => return_value.llvm,
+                                                    else => {
+                                                        switch (return_type_abi.semantic_type.get_evaluation_kind()) {
+                                                            .aggregate => {
+                                                                // TODO: this is 100% wrong, fix
+                                                                assert(abi_alignment == return_type_abi.semantic_type.get_byte_alignment());
+                                                                assert(abi_size == return_type_abi.semantic_type.get_byte_size());
+                                                                _ = module.llvm.builder.create_memcpy(return_alloca, abi_alignment, return_value.llvm, abi_alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(abi_size, @intFromBool(false)).to_value());
                                                             },
-                                                        };
-                                                        _ = module.create_store(.{ .source_value = rv, .source_type = source_type, .destination_value = return_alloca, .destination_type = destination_type });
+                                                            .scalar => {
+                                                                const destination_type = current_function_type.return_type_abi.semantic_type;
+                                                                const source_type = current_function_type.return_type_abi.semantic_type;
+                                                                assert(return_value.type == source_type);
+                                                                const rv = switch (return_value.type.bb) {
+                                                                    .pointer => return_value.llvm,
+                                                                    // TODO: this feels hacky
+                                                                    else => switch (return_value.lvalue) {
+                                                                        true => module.create_load(.{ .type = return_value.type, .value = return_value.llvm }),
+                                                                        false => return_value.llvm,
+                                                                    },
+                                                                };
+                                                                _ = module.create_store(.{ .source_value = rv, .source_type = source_type, .destination_value = return_alloca, .destination_type = destination_type });
+                                                            },
+                                                            .complex => @trap(),
+                                                        }
                                                     },
-                                                    .complex => @trap(),
                                                 }
+                                            },
+                                            false => {
+                                                assert(!return_value.lvalue);
+                                                assert(return_value.type.is_abi_equal(return_type_abi.semantic_type));
+                                                _ = module.create_store(.{
+                                                    .source_value = return_value.llvm,
+                                                    .destination_value = return_alloca,
+                                                    .source_type = return_type_abi.semantic_type,
+                                                    .destination_type = return_type_abi.semantic_type,
+                                                });
                                             },
                                         }
                                     },
@@ -3097,10 +3112,38 @@ const Converter = struct {
                 return value;
             },
             .slice => {
-                const value = converter.parse_value(module, null, .pointer);
+                const value = converter.parse_value(module, null, .value);
+                const u64_type = module.integer_type(64, false);
 
                 converter.skip_space();
-                converter.expect_character(right_parenthesis);
+
+                var found_right_parenthesis = false;
+                const second_argument: ?*Value = if (converter.consume_character_if_match(',')) b: {
+                    converter.skip_space();
+                    if (!converter.consume_character_if_match(right_parenthesis)) {
+                        break :b converter.parse_value(module, null, .value);
+                    } else {
+                        found_right_parenthesis = true;
+                        break :b null;
+                    }
+                } else null;
+
+                const parse_third_argument = if (!found_right_parenthesis) b: {
+                    converter.skip_space();
+                    const second_comma = converter.consume_character_if_match(',');
+                    converter.skip_space();
+                    found_right_parenthesis = converter.consume_character_if_match(right_parenthesis);
+                    if (second_comma and !found_right_parenthesis) {
+                        @trap();
+                    }
+
+                    if (!found_right_parenthesis) {
+                        converter.report_error();
+                    }
+                    break :b false;
+                } else false;
+                const third_argument: ?*Value = if (parse_third_argument) converter.parse_value(module, null, .value) else null;
+                const element_count = @as(u32, 1) + @intFromBool(second_argument != null) + @intFromBool(third_argument != null);
 
                 if (expected_type) |expected_ty| {
                     if (!expected_ty.is_slice()) {
@@ -3109,19 +3152,50 @@ const Converter = struct {
                     const slice_type = expected_ty;
                     const slice_pointer_type = slice_type.bb.structure.fields[0].type;
                     const slice_element_type = slice_pointer_type.bb.pointer.type;
+
                     switch (value.type.bb) {
                         .pointer => |pointer| {
                             const pointer_element_type = pointer.type;
                             if (pointer_element_type == slice_element_type) {
-                                @trap();
+                                switch (element_count) {
+                                    1 => @trap(),
+                                    2 => {
+                                        // If a pointer is found and its element type matches the slice element type, then the second argument is the length of the slice
+                                        const length = second_argument orelse unreachable;
+                                        if (length.type.bb != .integer) {
+                                            converter.report_error();
+                                        }
+
+                                        if (length.type != u64_type) {
+                                            @trap();
+                                        }
+
+                                        const slice_poison = slice_type.llvm.handle.get_poison();
+                                        const pointer_insert = module.llvm.builder.create_insert_value(slice_poison, value.llvm, 0);
+                                        const length_insert = module.llvm.builder.create_insert_value(pointer_insert, length.llvm, 1);
+                                        const slice_value = length_insert;
+                                        const result = module.values.add();
+                                        result.* = .{
+                                            .llvm = slice_value,
+                                            .type = slice_type,
+                                            .bb = .instruction,
+                                            .lvalue = false,
+                                            .dereference_to_assign = false,
+                                        };
+                                        return result;
+                                    },
+                                    3 => @trap(),
+                                    else => unreachable,
+                                }
                             } else {
                                 switch (pointer_element_type.bb) {
                                     .array => |array| {
                                         const array_element_type = array.element_type;
                                         if (array_element_type == slice_element_type) {
+                                            assert(element_count == 1);
                                             const slice_poison = slice_type.llvm.handle.get_poison();
                                             const pointer_insert = module.llvm.builder.create_insert_value(slice_poison, value.llvm, 0);
-                                            const length_value = module.integer_type(64, false).llvm.handle.to_integer().get_constant(array.element_count.?, @intFromBool(false));
+                                            const length_value = u64_type.llvm.handle.to_integer().get_constant(array.element_count.?, @intFromBool(false));
                                             const length_insert = module.llvm.builder.create_insert_value(pointer_insert, length_value.to_value(), 1);
                                             const slice_value = length_insert;
                                             const result = module.values.add();

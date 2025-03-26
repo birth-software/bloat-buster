@@ -10,6 +10,12 @@ c_string_length = fn (c_string: &u8) u64
     return #int_from_pointer(it) - #int_from_pointer(c_string);
 }
 
+c_string_to_slice = fn (c_string: &u8) []u8
+{
+    >length = c_string_length(c_string);
+    return #slice(c_string, length);
+}
+
 OS_Linux_PROT = bits u32
 {
     read: u1,
@@ -198,6 +204,8 @@ global_state_initialize = fn () void
     {
         return 1;
     }
+
+    >relative_file_path = c_string_to_slice(relative_file_path_pointer);
 
     global_state_initialize();
     return 0;

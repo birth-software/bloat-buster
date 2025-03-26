@@ -447,3 +447,7 @@ test "argv" {
 test "basic_while" {
     try invsrc(@src());
 }
+
+test "c_string_to_slice" {
+    try invsrc(@src());
+}
