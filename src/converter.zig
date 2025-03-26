@@ -2856,6 +2856,7 @@ const Converter = struct {
         int_from_pointer,
         pointer_cast,
         select,
+        slice,
         trap,
         truncate,
         va_start,
@@ -3094,6 +3095,57 @@ const Converter = struct {
                     .dereference_to_assign = false,
                 };
                 return value;
+            },
+            .slice => {
+                const value = converter.parse_value(module, null, .pointer);
+
+                converter.skip_space();
+                converter.expect_character(right_parenthesis);
+
+                if (expected_type) |expected_ty| {
+                    if (!expected_ty.is_slice()) {
+                        converter.report_error();
+                    }
+                    const slice_type = expected_ty;
+                    const slice_pointer_type = slice_type.bb.structure.fields[0].type;
+                    const slice_element_type = slice_pointer_type.bb.pointer.type;
+                    switch (value.type.bb) {
+                        .pointer => |pointer| {
+                            const pointer_element_type = pointer.type;
+                            if (pointer_element_type == slice_element_type) {
+                                @trap();
+                            } else {
+                                switch (pointer_element_type.bb) {
+                                    .array => |array| {
+                                        const array_element_type = array.element_type;
+                                        if (array_element_type == slice_element_type) {
+                                            const slice_poison = slice_type.llvm.handle.get_poison();
+                                            const pointer_insert = module.llvm.builder.create_insert_value(slice_poison, value.llvm, 0);
+                                            const length_value = module.integer_type(64, false).llvm.handle.to_integer().get_constant(array.element_count.?, @intFromBool(false));
+                                            const length_insert = module.llvm.builder.create_insert_value(pointer_insert, length_value.to_value(), 1);
+                                            const slice_value = length_insert;
+                                            const result = module.values.add();
+                                            result.* = .{
+                                                .llvm = slice_value,
+                                                .type = slice_type,
+                                                .bb = .instruction,
+                                                .lvalue = false,
+                                                .dereference_to_assign = false,
+                                            };
+                                            return result;
+                                        } else {
+                                            converter.report_error();
+                                        }
+                                    },
+                                    else => @trap(),
+                                }
+                            }
+                        },
+                        else => @trap(),
+                    }
+                } else {
+                    @trap();
+                }
             },
             .trap => {
                 converter.expect_character(right_parenthesis);
@@ -3746,37 +3798,6 @@ const Converter = struct {
             '&' => {
                 converter.offset += 1;
                 const value = converter.parse_value(module, expected_type, .pointer);
-                if (expected_type) |expected_ty| {
-                    if (expected_ty.is_slice()) {
-                        switch (value.type.bb) {
-                            .pointer => |pointer| switch (pointer.type.bb) {
-                                .array => |array| {
-                                    switch (value_kind) {
-                                        .value => {
-                                            const slice_poison = expected_ty.llvm.handle.get_poison();
-                                            const pointer_insert = module.llvm.builder.create_insert_value(slice_poison, value.llvm, 0);
-                                            const length_value = module.integer_type(64, false).llvm.handle.to_integer().get_constant(array.element_count.?, @intFromBool(false));
-                                            const length_insert = module.llvm.builder.create_insert_value(pointer_insert, length_value.to_value(), 1);
-                                            const result = module.values.add();
-                                            result.* = .{
-                                                .llvm = length_insert,
-                                                .type = expected_ty,
-                                                .bb = .instruction,
-                                                .lvalue = false,
-                                                .dereference_to_assign = false,
-                                            };
-                                            return result;
-                                        },
-                                        else => |t| @panic(@tagName(t)),
-                                    }
-                                },
-                                else => @trap(),
-                            },
-                            else => @trap(),
-                        }
-                        @trap();
-                    }
-                }
                 return value;
             },
             '!' => blk: {
