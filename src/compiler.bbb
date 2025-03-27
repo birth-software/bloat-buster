@@ -17,7 +17,7 @@ c_string_length = fn (c_string: &u8) u64
 c_string_to_slice = fn (c_string: &u8) []u8
 {
     >length = c_string_length(c_string);
-    return #slice(c_string, length);
+    return c_string[0..length];
 }
 
 string_equal = fn(a: []u8, b: []u8) u1
@@ -251,10 +251,10 @@ global_state_initialize = fn () void
         return 1;
     }
 
-    //if (!string_equal(#slice(relative_file_path, extension_start), ".bbb"))
-    //{
-    //    return 1;
-    //}
+    if (!string_equal(relative_file_path[extension_start..], ".bbb"))
+    {
+        return 1;
+    }
 
     global_state_initialize();
     return 0;

@@ -2,18 +2,13 @@ const lib = @import("lib.zig");
 const configuration = @import("configuration");
 const os = lib.os;
 const llvm = @import("LLVM.zig");
-const converter = @import("converter.zig");
 const Arena = lib.Arena;
 
-pub const panic = lib.panic_struct;
+const converter = @import("converter.zig");
+const BuildMode = converter.BuildMode;
 
-comptime {
-    if (!lib.is_test) {
-        @export(&main, .{
-            .name = "main",
-        });
-    }
-}
+pub const panic = lib.panic_struct;
+pub const std_options = lib.std_options;
 
 test {
     _ = lib;
@@ -21,46 +16,134 @@ test {
     _ = converter;
 }
 
-pub fn main(argc: c_int, argv: [*:null]const ?[*:0]const u8) callconv(.C) c_int {
-    if (argc != 2) {
-        lib.print_string("Failed to match argument count\n");
-        return 1;
-    }
-    const relative_file_path_pointer = argv[1] orelse return 1;
-    const relative_file_path = lib.cstring.to_slice(relative_file_path_pointer);
+fn fail() noreturn {
+    lib.libc.exit(1);
+}
+
+pub const main = lib.main;
+
+const Command = enum {
+    @"test",
+    compile,
+};
+
+const Compile = struct {
+    relative_file_path: [:0]const u8,
+    build_mode: BuildMode,
+    has_debug_info: bool,
+    silent: bool,
+};
+
+fn compile_file(arena: *Arena, compile: Compile) converter.Options {
+    const checkpoint = arena.position;
+    defer arena.restore(checkpoint);
+
+    const relative_file_path = compile.relative_file_path;
     if (relative_file_path.len < 5) {
-        return 1;
+        fail();
     }
 
-    const extension_start = lib.string.last_character(relative_file_path, '.') orelse return 1;
+    const extension_start = lib.string.last_character(relative_file_path, '.') orelse fail();
     if (!lib.string.equal(relative_file_path[extension_start..], ".bbb")) {
-        return 1;
+        fail();
     }
+
     const separator_index = lib.string.last_character(relative_file_path, '/') orelse 0;
     const base_start = separator_index + @intFromBool(separator_index != 0 or relative_file_path[separator_index] == '/');
     const base_name = relative_file_path[base_start..extension_start];
 
-    lib.GlobalState.initialize();
+    const is_compiler = lib.string.equal(relative_file_path, "src/compiler.bbb");
+    const output_path_dir = arena.join_string(&.{
+        base_cache_dir,
+        if (is_compiler) "/compiler/" else "/",
+        @tagName(compile.build_mode),
+        "_",
+        if (compile.has_debug_info) "di" else "nodi",
+    });
 
-    const arena = lib.global.arena;
+    os.make_directory(base_cache_dir);
+    if (is_compiler) {
+        os.make_directory(base_cache_dir ++ "/compiler");
+    }
 
-    const build_dir = "bb-cache";
-    const output_path_base = arena.join_string(&.{ build_dir, "/", base_name });
+    os.make_directory(output_path_dir);
+
+    const output_path_base = arena.join_string(&.{
+        output_path_dir,
+        "/",
+        base_name,
+    });
+
     const output_object_path = arena.join_string(&.{ output_path_base, ".o" });
     const output_executable_path = output_path_base;
 
-    const c_abi_object_path = arena.duplicate_string(configuration.c_abi_object_path);
     const file_content = lib.file.read(arena, relative_file_path);
     const file_path = os.absolute_path(arena, relative_file_path);
-    converter.convert(arena, .{
+    const c_abi_object_path = arena.duplicate_string(configuration.c_abi_object_path);
+
+    const convert_options = converter.Options{
         .executable = output_executable_path,
         .objects = if (lib.string.equal(base_name, "c_abi")) &.{ output_object_path, c_abi_object_path } else &.{output_object_path},
         .name = base_name,
-        .build_mode = .debug_none,
+        .build_mode = compile.build_mode,
         .content = file_content,
         .path = file_path,
-        .has_debug_info = true,
+        .has_debug_info = compile.has_debug_info,
         .target = converter.Target.get_native(),
-    });
-    return 0;
+        .silent = compile.silent,
+    };
+
+    converter.convert(arena, convert_options);
+
+    return convert_options;
+}
+
+const base_cache_dir = "bb-cache";
+
+pub fn entry_point(arguments: []const [*:0]const u8) void {
+    lib.GlobalState.initialize();
+    const arena = lib.global.arena;
+
+    if (arguments.len < 2) {
+        lib.print_string("error: Not enough arguments\n");
+        fail();
+    }
+
+    const command = lib.string.to_enum(Command, lib.cstring.to_slice(arguments[1])) orelse fail();
+
+    switch (command) {
+        .compile => {
+            const relative_file_path = lib.cstring.to_slice(arguments[2]);
+            _ = compile_file(arena, .{
+                .relative_file_path = relative_file_path,
+                .build_mode = .debug_none,
+                .has_debug_info = true,
+                .silent = false,
+            });
+        },
+        .@"test" => {
+            if (arguments.len != 2) {
+                fail();
+            }
+
+            inline for (@typeInfo(converter.BuildMode).@"enum".fields) |f| {
+                const build_mode = @field(converter.BuildMode, f.name);
+                inline for ([2]bool{ true, false }) |has_debug_info| {
+                    const names = [_][]const u8{ "minimal", "constant_add", "minimal_stack" };
+                    for (names) |name| {
+                        const position = arena.position;
+                        defer arena.restore(position);
+
+                        const relative_file_path = arena.join_string(&.{ "tests/", name, ".bbb" });
+                        _ = compile_file(arena, .{
+                            .relative_file_path = relative_file_path,
+                            .build_mode = build_mode,
+                            .has_debug_info = has_debug_info,
+                            .silent = true,
+                        });
+                    }
+                }
+            }
+        },
+    }
 }

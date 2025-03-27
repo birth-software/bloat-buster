@@ -19,7 +19,7 @@ const max_argument_count = 64;
 
 fn array_type_name(arena: *Arena, array_type: ArrayType) [:0]const u8 {
     var buffer: [256]u8 = undefined;
-    var i: usize = 0;
+    var i: u64 = 0;
     buffer[i] = left_bracket;
     i += 1;
     i += lib.string_format.integer_decimal(buffer[i..], array_type.element_count.?);
@@ -49,14 +49,6 @@ fn is_decimal_ch(ch: u8) bool {
 
 fn is_identifier_ch(ch: u8) bool {
     return is_identifier_start_ch(ch) or is_decimal_ch(ch);
-}
-
-fn string_to_enum(comptime E: type, string: []const u8) ?E {
-    inline for (@typeInfo(E).@"enum".fields) |e| {
-        if (lib.string.equal(e.name, string)) {
-            return @field(E, e.name);
-        }
-    } else return null;
 }
 
 const GlobalKeyword = enum {
@@ -122,6 +114,7 @@ const Module = struct {
     slice_type_count: u32 = 0,
     anonymous_pair_type_count: u32 = 0,
     arena_restore_position: u64,
+    silent: bool,
 
     fn get_zero_value(module: *Module, ty: *Type) *Value {
         const value = module.values.add();
@@ -785,7 +778,7 @@ const Module = struct {
         }
     }
 
-    pub fn get_type(module: *Module, index: usize) *Type {
+    pub fn get_type(module: *Module, index: u64) *Type {
         assert(index < module.types.count);
         const result = &module.types.buffer[index];
         return result;
@@ -794,7 +787,7 @@ const Module = struct {
     pub fn integer_type(module: *Module, bit_count: u32, sign: bool) *Type {
         switch (bit_count) {
             1...64 => {
-                const index = @as(usize, @intFromBool(sign)) * 64 + bit_count;
+                const index = @as(u64, @intFromBool(sign)) * 64 + bit_count;
                 const result = module.get_type(index);
                 assert(result.bb == .integer);
                 assert(result.bb.integer.bit_count == bit_count);
@@ -839,7 +832,7 @@ const Module = struct {
         @trap();
     }
 
-    pub fn initialize(arena: *Arena, options: ConvertOptions) *Module {
+    pub fn initialize(arena: *Arena, options: Options) *Module {
         const arena_restore_position = arena.position;
         const context = llvm.Context.create();
         const handle = context.create_module(options.name);
@@ -897,6 +890,7 @@ const Module = struct {
                 },
             },
             .arena_restore_position = arena_restore_position,
+            .silent = options.silent,
         };
 
         module.void_type = module.types.add(.{
@@ -911,7 +905,7 @@ const Module = struct {
         for ([2]bool{ false, true }) |sign| {
             for (1..64 + 1) |bit_count| {
                 const name_buffer = [3]u8{ if (sign) 's' else 'u', @intCast(if (bit_count < 10) bit_count % 10 + '0' else bit_count / 10 + '0'), if (bit_count > 9) @intCast(bit_count % 10 + '0') else 0 };
-                const name_length = @as(usize, 2) + @intFromBool(bit_count > 9);
+                const name_length = @as(u64, 2) + @intFromBool(bit_count > 9);
 
                 const name = arena.duplicate_string(name_buffer[0..name_length]);
 
@@ -995,11 +989,6 @@ const Module = struct {
         alignment: ?u32 = null,
     };
 
-    const Slice = struct {
-        type: *Type,
-        alignment: ?u32 = null,
-    };
-
     pub fn get_pointer_type(module: *Module, pointer: Pointer) *Type {
         const p = PointerType{
             .type = pointer.type,
@@ -1033,6 +1022,11 @@ const Module = struct {
 
         return pointer_type;
     }
+
+    const Slice = struct {
+        type: *Type,
+        alignment: ?u32 = null,
+    };
 
     pub fn get_slice_type(module: *Module, slice: Slice) *Type {
         const alignment = if (slice.alignment) |a| a else slice.type.get_byte_alignment();
@@ -1198,7 +1192,7 @@ pub const Value = struct {
 
     const Array = struct {
         buffer: [1024]Value = undefined,
-        count: usize = 0,
+        count: u64 = 0,
 
         pub fn add(values: *Array) *Value {
             const result = &values.buffer[values.count];
@@ -1220,8 +1214,8 @@ pub const Value = struct {
 const Field = struct {
     name: []const u8,
     type: *Type,
-    bit_offset: usize,
-    byte_offset: usize,
+    bit_offset: u64,
+    byte_offset: u64,
 };
 
 const FunctionType = struct {
@@ -1254,7 +1248,7 @@ const Bits = struct {
 };
 
 pub const ArrayType = struct {
-    element_count: ?usize,
+    element_count: ?u64,
     element_type: *Type,
 };
 
@@ -1456,7 +1450,7 @@ pub const Type = struct {
 
     const Array = struct {
         buffer: [1024]Type = undefined,
-        count: usize = 0,
+        count: u64 = 0,
 
         const buffer_size = 1024;
 
@@ -1528,9 +1522,9 @@ pub const Variable = struct {
 
 const Converter = struct {
     content: []const u8,
-    offset: usize,
-    line_offset: usize,
-    line_character_offset: usize,
+    offset: u64,
+    line_offset: u64,
+    line_character_offset: u64,
 
     fn get_line(converter: *const Converter) u32 {
         return @intCast(converter.line_offset + 1);
@@ -1592,7 +1586,7 @@ const Converter = struct {
     }
 
     pub fn parse_condition_raw(noalias converter: *Converter, noalias module: *Module) *Value {
-        const condition = converter.parse_value(module, null, .value);
+        const condition = converter.parse_value(module, .{});
         const boolean_type = module.integer_type(1, false);
         if (condition.type != boolean_type) {
             const llvm_value = switch (condition.type.bb) {
@@ -1652,7 +1646,10 @@ const Converter = struct {
                     const slice_type = module.get_slice_type(.{ .type = element_type });
                     return slice_type;
                 } else {
-                    const length_expression = converter.parse_value(module, module.integer_type(64, false), .value);
+                    const length_expression = converter.parse_value(module, ValueBuilder{
+                        .type = module.integer_type(64, false),
+                        .kind = .value,
+                    });
                     converter.skip_space();
                     converter.expect_character(right_bracket);
 
@@ -2296,7 +2293,10 @@ const Converter = struct {
 
                 converter.expect_character('=');
 
-                const value = converter.parse_value(module, local_type_stated, .value);
+                const value = converter.parse_value(module, .{
+                    .type = local_type_stated,
+                    .kind = .value,
+                });
                 const local_storage = module.values.add();
                 const is_inferred = local_type_stated == null;
                 const is_inferred_pointer = is_inferred and value.dereference_to_assign;
@@ -2375,8 +2375,16 @@ const Converter = struct {
             } else if (is_identifier_start_ch(statement_start_ch)) {
                 const statement_start_identifier = converter.parse_identifier();
 
-                if (string_to_enum(StatementStartKeyword, statement_start_identifier)) |statement_start_keyword| {
+                if (lib.string.to_enum(StatementStartKeyword, statement_start_identifier)) |statement_start_keyword| {
                     switch (statement_start_keyword) {
+                        ._ => {
+                            converter.skip_space();
+                            converter.expect_character('=');
+                            converter.skip_space();
+                            _ = converter.parse_value(module, .{
+                                .kind = .value,
+                            });
+                        },
                         .@"return" => {
                             converter.skip_space();
 
@@ -2386,7 +2394,10 @@ const Converter = struct {
                                 @trap();
                             } else {
                                 // TODO: take ABI into account
-                                const return_value = converter.parse_value(module, return_type_abi.semantic_type, .value);
+                                const return_value = converter.parse_value(module, .{
+                                    .kind = .value,
+                                    .type = return_type_abi.semantic_type,
+                                });
 
                                 if (module.llvm.di_builder) |_| {
                                     module.llvm.builder.set_current_debug_location(statement_debug_location);
@@ -2574,7 +2585,9 @@ const Converter = struct {
                 } else {
                     converter.offset -= statement_start_identifier.len;
 
-                    const v = converter.parse_value(module, null, .maybe_pointer);
+                    const v = converter.parse_value(module, .{
+                        .kind = .maybe_pointer,
+                    });
 
                     converter.skip_space();
 
@@ -2731,7 +2744,10 @@ const Converter = struct {
                             => 3,
                         };
 
-                        const right_side = converter.parse_value(module, store_type, .value);
+                        const right_side = converter.parse_value(module, .{
+                            .type = store_type,
+                            .kind = .value,
+                        });
                         const right_llvm = right_side.llvm;
 
                         converter.skip_space();
@@ -2862,12 +2878,865 @@ const Converter = struct {
         maybe_pointer,
     };
 
-    fn parse_value(noalias converter: *Converter, noalias module: *Module, maybe_expected_type: ?*Type, value_kind: ValueKind) *Value {
+    const Precedence = enum {
+        none,
+        assignment,
+        @"or",
+        @"and",
+        comparison,
+        bitwise,
+        shifting,
+        add_like,
+        div_like,
+        prefix,
+        aggregate_initialization,
+        postfix,
+
+        pub fn increment(precedence: Precedence) Precedence {
+            return @enumFromInt(@intFromEnum(precedence) + 1);
+        }
+    };
+
+    const ExpressionOperator = enum {};
+
+    const Operator = enum {
+        none,
+    };
+
+    const ComparisonOperator = enum {
+        compare_equal,
+        compare_not_equal,
+        compare_less_than,
+        compare_less_equal,
+        compare_greater_than,
+        compare_greater_equal,
+    };
+
+    const AssignmentOp = enum(u8) {
+        @"=" = '=',
+        @"+=" = '+',
+        @"-=" = '-',
+        @"*=" = '*',
+        @"/=" = '/',
+        @"%=" = '%',
+        @"&=" = '&',
+        @"|=" = '|',
+        @"^=" = '^',
+        @"<<=" = '<',
+        @">>=" = '>',
+    };
+
+    const ArithmeticBinaryOperator = enum(u8) {
+        @"+" = '+',
+        @"-" = '-',
+        @"*" = '*',
+        @"/" = '/',
+        @"%" = '%',
+        @"&" = '&',
+        @"|" = '|',
+        @"^" = '^',
+        @"<<" = '<',
+        @">>" = '>',
+    };
+
+    const Rule = struct {
+        before: ?*const Rule.Function,
+        after: ?*const Rule.Function,
+        precedence: Precedence,
+
+        const Function = fn (noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value;
+    };
+
+    fn rule_before_identifier(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
+        const identifier = value_builder.token.identifier;
+        const current_function = module.current_function orelse converter.report_error();
+        const variable = if (current_function.value.bb.function.locals.find(identifier)) |local| local else if (current_function.value.bb.function.arguments.find(identifier)) |argument| argument else if (module.globals.find(identifier)) |global| global else converter.report_error();
+        assert(variable.value.type.bb == .pointer);
+        return variable.value;
+    }
+
+    fn rule_before_value_keyword(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
+        _ = value_builder;
+        _ = module;
+        _ = converter;
+        @trap();
+    }
+
+    fn rule_before_value_intrinsic(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
+        const expected_type = value_builder.type;
+        const value_intrinsic = value_builder.token.value_intrinsic;
+        const has_parenthesis = switch (value_intrinsic) {
+            .byte_size,
+            .cast,
+            .cast_to,
+            .extend,
+            .integer_max,
+            .int_from_enum,
+            .int_from_pointer,
+            .pointer_cast,
+            .select,
+            .trap,
+            .truncate,
+            .va_start,
+            .va_end,
+            .va_copy,
+            .va_arg,
+            => true,
+        };
+
+        if (has_parenthesis) {
+            converter.expect_character(left_parenthesis);
+        }
+
+        const value = switch (value_intrinsic) {
+            .integer_max => blk: {
+                const ty = converter.parse_type(module);
+                if (ty.bb != .integer) {
+                    converter.report_error();
+                }
+                const bit_count = ty.bb.integer.bit_count;
+                const max_value = if (bit_count == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(bit_count - @intFromBool(ty.bb.integer.signed))) - 1;
+                const expected_ty = expected_type orelse ty;
+                if (ty.get_bit_size() > expected_ty.get_bit_size()) {
+                    converter.report_error();
+                }
+                const constant_integer = expected_ty.llvm.handle.to_integer().get_constant(max_value, @intFromBool(false));
+                const value = module.values.add();
+                value.* = .{
+                    .llvm = constant_integer.to_value(),
+                    .type = expected_ty,
+                    .bb = .{
+                        .constant_integer = .{
+                            .value = max_value,
+                            .signed = false,
+                        },
+                    },
+                    .lvalue = false,
+                    .dereference_to_assign = false,
+                };
+                break :blk value;
+            },
+            else => @trap(),
+        };
+
+        if (has_parenthesis) {
+            converter.skip_space();
+            converter.expect_character(right_parenthesis);
+        }
+
+        return value;
+    }
+
+    const Unary = enum {
+        @"-",
+        @"+",
+    };
+
+    fn rule_before_unary(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
+        assert(value_builder.left == null);
+        const unary_token = value_builder.token;
+        const unary_expression: Unary = switch (unary_token) {
+            .none => unreachable,
+            .@"-" => .@"-",
+            else => |t| @panic(@tagName(t)),
+        };
+        const right = converter.parse_precedence(module, value_builder.with_precedence(.prefix).with_token(.none));
+        return switch (unary_expression) {
+            .@"+" => @trap(),
+            .@"-" => b: {
+                const value = module.values.add();
+                value.* = .{
+                    .llvm = module.negate_value_llvm(right),
+                    .bb = .instruction,
+                    .type = right.type,
+                    .lvalue = false,
+                    .dereference_to_assign = false,
+                };
+                break :b value;
+            },
+        };
+    }
+
+    const BinaryOperationKind = enum {
+        integer_add,
+        integer_sub,
+        integer_mul,
+        integer_udiv,
+        integer_sdiv,
+        integer_urem,
+        integer_srem,
+        integer_and,
+        integer_or,
+        integer_xor,
+        integer_shl,
+        integer_ashr,
+        integer_lshr,
+    };
+
+    fn rule_after_binary(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
+        const binary_operator_token = value_builder.token;
+        const binary_operator_token_precedence = rules[@intFromEnum(binary_operator_token)].precedence;
+        const left = value_builder.left orelse converter.report_error();
+        assert(binary_operator_token_precedence != .assignment); // TODO: this may be wrong. Assignment operator is not allowed in expressions
+        const right_precedence = if (binary_operator_token_precedence == .assignment) .assignment else binary_operator_token_precedence.increment();
+        const right = converter.parse_precedence(module, value_builder.with_precedence(right_precedence).with_token(.none).with_left(null));
+
+        const binary_operation_type = value_builder.type orelse converter.report_error();
+
+        const binary_operation_kind: BinaryOperationKind = switch (binary_operator_token) {
+            .none => unreachable,
+            .@"+" => switch (binary_operation_type.bb) {
+                .integer => .integer_add,
+                else => @trap(),
+            },
+            .@"-" => switch (binary_operation_type.bb) {
+                .integer => .integer_sub,
+                else => @trap(),
+            },
+            .@"*" => switch (binary_operation_type.bb) {
+                .integer => .integer_mul,
+                else => @trap(),
+            },
+            .@"/" => switch (binary_operation_type.bb) {
+                .integer => |integer| switch (integer.signed) {
+                    true => .integer_sdiv,
+                    false => .integer_udiv,
+                },
+                else => @trap(),
+            },
+            .@"%" => switch (binary_operation_type.bb) {
+                .integer => |integer| switch (integer.signed) {
+                    true => .integer_srem,
+                    false => .integer_urem,
+                },
+                else => @trap(),
+            },
+            .@"&" => switch (binary_operation_type.bb) {
+                .integer => .integer_and,
+                else => @trap(),
+            },
+            .@"|" => switch (binary_operation_type.bb) {
+                .integer => .integer_or,
+                else => @trap(),
+            },
+            .@"^" => switch (binary_operation_type.bb) {
+                .integer => .integer_xor,
+                else => @trap(),
+            },
+            .@"<<" => switch (binary_operation_type.bb) {
+                .integer => .integer_shl,
+                else => @trap(),
+            },
+            .@">>" => switch (binary_operation_type.bb) {
+                .integer => |integer| switch (integer.signed) {
+                    true => .integer_ashr,
+                    false => .integer_lshr,
+                },
+                else => @trap(),
+            },
+            else => @trap(),
+        };
+
+        const result = module.values.add();
+
+        const llvm_value = switch (binary_operation_kind) {
+            .integer_add => module.llvm.builder.create_add(left.llvm, right.llvm),
+            .integer_sub => module.llvm.builder.create_sub(left.llvm, right.llvm),
+            .integer_mul => module.llvm.builder.create_mul(left.llvm, right.llvm),
+            .integer_udiv => module.llvm.builder.create_udiv(left.llvm, right.llvm),
+            .integer_sdiv => module.llvm.builder.create_sdiv(left.llvm, right.llvm),
+            .integer_urem => module.llvm.builder.create_urem(left.llvm, right.llvm),
+            .integer_srem => module.llvm.builder.create_srem(left.llvm, right.llvm),
+            .integer_and => module.llvm.builder.create_and(left.llvm, right.llvm),
+            .integer_or => module.llvm.builder.create_or(left.llvm, right.llvm),
+            .integer_xor => module.llvm.builder.create_xor(left.llvm, right.llvm),
+            .integer_shl => module.llvm.builder.create_shl(left.llvm, right.llvm),
+            .integer_ashr => module.llvm.builder.create_ashr(left.llvm, right.llvm),
+            .integer_lshr => module.llvm.builder.create_lshr(left.llvm, right.llvm),
+        };
+
+        result.* = .{
+            .llvm = llvm_value,
+            .type = binary_operation_type,
+            .dereference_to_assign = false,
+            .lvalue = false,
+            .bb = .instruction,
+        };
+
+        return result;
+    }
+
+    fn rule_before_integer(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
+        const v = value_builder.token.integer.value;
+        const value = module.values.add();
+        const expected_ty = value_builder.type orelse converter.report_error();
+        if (expected_ty.bb != .integer) {
+            converter.report_error();
+        }
+        value.* = .{
+            .llvm = expected_ty.llvm.handle.to_integer().get_constant(v, @intFromBool(false)).to_value(),
+            .type = expected_ty,
+            .bb = .{
+                .constant_integer = .{
+                    .value = v,
+                    .signed = false,
+                },
+            },
+            .dereference_to_assign = false,
+            .lvalue = false,
+        };
+        return value;
+    }
+
+    const Token = union(Id) {
+        none,
+        end_of_statement,
+        integer: Integer,
+        identifier: []const u8,
+        value_keyword: ValueKeyword,
+        value_intrinsic: ValueIntrinsic,
+        // Assignment operators
+        @"=",
+        @"+=",
+        @"-=",
+        @"*=",
+        @"/=",
+        @"%=",
+        @"&=",
+        @"|=",
+        @"^=",
+        @"<<=",
+        @">>=",
+        // Comparison operators
+        @"==",
+        @"!=",
+        @"<",
+        @">",
+        @"<=",
+        @">=",
+        // Logical AND
+        @"and",
+        @"and?",
+        // Logical OR
+        @"or",
+        @"or?",
+        // Add-like operators
+        @"+",
+        @"-",
+        // Div-like operators
+        @"*",
+        @"/",
+        @"%",
+        // Bitwise operators
+        @"&",
+        @"|",
+        @"^",
+        // Shifting operators
+        @"<<",
+        @">>",
+
+        const Id = enum {
+            none,
+            end_of_statement,
+            integer,
+            identifier,
+            value_keyword,
+            value_intrinsic,
+            // Assignment operators
+            @"=",
+            @"+=",
+            @"-=",
+            @"*=",
+            @"/=",
+            @"%=",
+            @"&=",
+            @"|=",
+            @"^=",
+            @"<<=",
+            @">>=",
+            // Comparison operators
+            @"==",
+            @"!=",
+            @"<",
+            @">",
+            @"<=",
+            @">=",
+            // Logical AND
+            @"and",
+            @"and?",
+            // Logical OR
+            @"or",
+            @"or?",
+            // Add-like operators
+            @"+",
+            @"-",
+            // Div-like operators
+            @"*",
+            @"/",
+            @"%",
+            // Bitwise operators
+            @"&",
+            @"|",
+            @"^",
+            // Shifting operators
+            @"<<",
+            @">>",
+        };
+
+        const Integer = struct {
+            value: u64,
+            kind: Kind,
+
+            const Kind = enum {
+                hexadecimal,
+                decimal,
+                octal,
+                binary,
+            };
+        };
+    };
+
+    const rules = blk: {
+        var r: [@typeInfo(Token.Id).@"enum".fields.len]Rule = undefined;
+        var count: u32 = 0;
+        r[@intFromEnum(Token.Id.none)] = .{
+            .before = null,
+            .after = null,
+            .precedence = .none,
+        };
+        count += 1;
+        r[@intFromEnum(Token.Id.end_of_statement)] = .{
+            .before = null,
+            .after = null,
+            .precedence = .none,
+        };
+        count += 1;
+        r[@intFromEnum(Token.Id.identifier)] = .{
+            .before = &rule_before_identifier,
+            .after = null,
+            .precedence = .none,
+        };
+        count += 1;
+        r[@intFromEnum(Token.Id.value_keyword)] = .{
+            .before = &rule_before_value_keyword,
+            .after = null,
+            .precedence = .none,
+        };
+        count += 1;
+        r[@intFromEnum(Token.Id.value_intrinsic)] = .{
+            .before = &rule_before_value_intrinsic,
+            .after = null,
+            .precedence = .none,
+        };
+        count += 1;
+        r[@intFromEnum(Token.Id.integer)] = .{
+            .before = &rule_before_integer,
+            .after = null,
+            .precedence = .none,
+        };
+        count += 1;
+
+        const assignment_operators = [_]Token.Id{
+            .@"=",
+            .@"+=",
+            .@"-=",
+            .@"*=",
+            .@"/=",
+            .@"%=",
+            .@"&=",
+            .@"|=",
+            .@"^=",
+            .@"<<=",
+            .@">>=",
+        };
+
+        for (assignment_operators) |assignment_operator| {
+            r[@intFromEnum(assignment_operator)] = .{
+                .before = null,
+                .after = rule_after_binary,
+                .precedence = .assignment,
+            };
+            count += 1;
+        }
+
+        const comparison_operators = [_]Token.Id{
+            .@"==",
+            .@"!=",
+            .@"<",
+            .@">",
+            .@"<=",
+            .@">=",
+        };
+
+        for (comparison_operators) |comparison_operator| {
+            r[@intFromEnum(comparison_operator)] = .{
+                .before = null,
+                .after = rule_after_binary,
+                .precedence = .comparison,
+            };
+            count += 1;
+        }
+
+        const and_operators = [_]Token.Id{
+            .@"and",
+            .@"and?",
+        };
+
+        for (and_operators) |and_operator| {
+            r[@intFromEnum(and_operator)] = .{
+                .before = null,
+                .after = rule_after_binary,
+                .precedence = .@"or",
+            };
+            count += 1;
+        }
+
+        const or_operators = [_]Token.Id{
+            .@"or",
+            .@"or?",
+        };
+
+        for (or_operators) |or_operator| {
+            r[@intFromEnum(or_operator)] = .{
+                .before = null,
+                .after = rule_after_binary,
+                .precedence = .@"or",
+            };
+            count += 1;
+        }
+
+        const add_like_operators = [_]Token.Id{
+            .@"+",
+            .@"-",
+        };
+
+        for (add_like_operators) |add_like_operator| {
+            r[@intFromEnum(add_like_operator)] = .{
+                .before = rule_before_unary,
+                .after = rule_after_binary,
+                .precedence = .add_like,
+            };
+            count += 1;
+        }
+
+        const div_like_operators = [_]Token.Id{
+            .@"*",
+            .@"/",
+            .@"%",
+        };
+
+        for (div_like_operators) |div_like_operator| {
+            r[@intFromEnum(div_like_operator)] = .{
+                .before = null,
+                .after = rule_after_binary,
+                .precedence = .div_like,
+            };
+            count += 1;
+        }
+
+        const bitwise_operators = [_]Token.Id{
+            .@"&",
+            .@"|",
+            .@"^",
+        };
+
+        for (bitwise_operators) |bitwise_operator| {
+            r[@intFromEnum(bitwise_operator)] = .{
+                .before = null,
+                .after = rule_after_binary,
+                .precedence = .bitwise,
+            };
+            count += 1;
+        }
+
+        const shifting_operators = [_]Token.Id{
+            .@"<<",
+            .@">>",
+        };
+        for (shifting_operators) |shifting_operator| {
+            r[@intFromEnum(shifting_operator)] = .{
+                .before = null,
+                .after = rule_after_binary,
+                .precedence = .shifting,
+            };
+            count += 1;
+        }
+
+        assert(count == r.len);
+        break :blk r;
+    };
+
+    fn tokenize(converter: *Converter) Token {
+        converter.skip_space();
+
+        const start_index = converter.offset;
+        if (start_index == converter.content.len) {
+            converter.report_error();
+        }
+
+        const start_character = converter.content[start_index];
+        const result: Token = switch (start_character) {
+            ';' => blk: {
+                converter.offset += 1;
+                break :blk .end_of_statement;
+            },
+            'a'...'z', 'A'...'Z', '_' => blk: {
+                assert(is_identifier_start_ch(start_character));
+                const identifier = converter.parse_identifier();
+                const token: Token = if (lib.string.to_enum(ValueKeyword, identifier)) |value_keyword| .{ .value_keyword = value_keyword } else .{ .identifier = identifier };
+                break :blk token;
+            },
+            '#' => if (is_identifier_start_ch(converter.content[converter.offset + 1])) blk: {
+                converter.offset += 1;
+                const value_intrinsic_identifier = converter.parse_identifier();
+                const value_intrinsic = lib.string.to_enum(ValueIntrinsic, value_intrinsic_identifier) orelse converter.report_error();
+                break :blk .{
+                    .value_intrinsic = value_intrinsic,
+                };
+            } else {
+                @trap();
+            },
+            '0' => blk: {
+                const next_ch = converter.content[start_index + 1];
+                const token_integer_kind: Token.Integer.Kind = switch (next_ch) {
+                    'x' => .hexadecimal,
+                    'o' => .octal,
+                    'b' => .binary,
+                    else => .decimal,
+                };
+                const value: u64 = switch (token_integer_kind) {
+                    .decimal => switch (next_ch) {
+                        0...9 => converter.report_error(),
+                        else => b: {
+                            converter.offset += 1;
+                            break :b 0;
+                        },
+                    },
+                    else => @trap(),
+                };
+
+                if (converter.content[converter.offset] == '.') {
+                    @trap();
+                } else {
+                    break :blk .{ .integer = .{ .value = value, .kind = token_integer_kind } };
+                }
+            },
+            '1'...'9' => blk: {
+                const decimal = converter.parse_decimal();
+                if (converter.content[converter.offset] == '.') {
+                    @trap();
+                } else {
+                    break :blk .{ .integer = .{ .value = decimal, .kind = .decimal } };
+                }
+            },
+            '+', '-', '*', '/', '%', '&', '|', '^' => |c| blk: {
+                const next_ch = converter.content[start_index + 1];
+                const token_id: Token.Id = switch (next_ch) {
+                    '=' => @trap(),
+                    else => switch (c) {
+                        '+' => .@"+",
+                        '-' => .@"-",
+                        '*' => .@"*",
+                        '/' => .@"/",
+                        '%' => .@"%",
+                        '&' => .@"&",
+                        '|' => .@"|",
+                        '^' => .@"^",
+                        else => unreachable,
+                    },
+                };
+
+                const token = switch (token_id) {
+                    else => unreachable,
+                    inline .@"+",
+                    .@"-",
+                    .@"*",
+                    .@"/",
+                    .@"%",
+                    .@"&",
+                    .@"|",
+                    .@"^",
+                    => |tid| @unionInit(Token, @tagName(tid), {}),
+                };
+
+                converter.offset += @as(u32, 1) + @intFromBool(next_ch == '=');
+
+                break :blk token;
+            },
+            '<' => blk: {
+                const next_ch = converter.content[start_index + 1];
+                const token_id: Token.Id = switch (next_ch) {
+                    '<' => switch (converter.content[start_index + 2]) {
+                        '=' => .@"<<=",
+                        else => .@"<<",
+                    },
+                    '=' => .@"<=",
+                    else => .@"<",
+                };
+
+                converter.offset += switch (token_id) {
+                    .@"<<=" => 3,
+                    .@"<<", .@"<=" => 2,
+                    .@"<" => 1,
+                    else => unreachable,
+                };
+
+                const token = switch (token_id) {
+                    else => unreachable,
+                    inline .@"<<=",
+                    .@"<<",
+                    .@"<=",
+                    .@"<",
+                    => |tid| @unionInit(Token, @tagName(tid), {}),
+                };
+                break :blk token;
+            },
+            '>' => blk: {
+                const next_ch = converter.content[start_index + 1];
+                const token_id: Token.Id = switch (next_ch) {
+                    '<' => switch (converter.content[start_index + 2]) {
+                        '=' => .@">>=",
+                        else => .@">>",
+                    },
+                    '=' => .@">=",
+                    else => .@">",
+                };
+
+                converter.offset += switch (token_id) {
+                    .@">>=" => 3,
+                    .@">>", .@">=" => 2,
+                    .@">" => 1,
+                    else => unreachable,
+                };
+
+                const token = switch (token_id) {
+                    else => unreachable,
+                    inline .@">>=",
+                    .@">>",
+                    .@">=",
+                    .@">",
+                    => |tid| @unionInit(Token, @tagName(tid), {}),
+                };
+                break :blk token;
+            },
+            else => @trap(),
+        };
+
+        assert(start_index != converter.offset);
+
+        return result;
+    }
+
+    fn parse_precedence(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
+        assert(value_builder.token == .none);
+        const token = converter.tokenize();
+        const rule = &rules[@intFromEnum(token)];
+        if (rule.before) |before| {
+            const left = before(converter, module, value_builder.with_precedence(.none).with_token(token));
+
+            const result = converter.parse_precedence_left(module, value_builder.with_left(left));
+            return result;
+        } else {
+            converter.report_error();
+        }
+    }
+
+    fn parse_precedence_left(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
+        var result = value_builder.left;
+        const precedence = value_builder.precedence;
+
+        while (true) {
+            const checkpoint = converter.offset;
+            const token = converter.tokenize();
+            const token_rule = &rules[@intFromEnum(token)];
+            if (@intFromEnum(precedence) > @intFromEnum(token_rule.precedence)) {
+                converter.offset = checkpoint;
+                break;
+            }
+
+            const after_rule = token_rule.after orelse converter.report_error();
+            const old = result;
+            const new = after_rule(converter, module, value_builder.with_token(token).with_precedence(.none).with_left(old));
+            result = new;
+        }
+
+        return result.?;
+    }
+
+    const parse_value = parse_value2;
+    fn parse_value2(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
+        assert(value_builder.precedence == .none);
+        assert(value_builder.left == null);
+        const value = converter.parse_precedence(module, value_builder.with_precedence(.assignment));
+
+        const result = if (value_builder.type) |expected_type| blk: {
+            if (expected_type != value.type) {
+                const evaluation_kind = expected_type.get_evaluation_kind();
+                if (value.lvalue and value.type.bb.pointer.type == expected_type) {
+                    switch (evaluation_kind) {
+                        .scalar => {
+                            const load = module.create_load(.{
+                                .type = expected_type,
+                                .value = value.llvm,
+                                .alignment = value.type.bb.pointer.alignment,
+                            });
+                            const result = module.values.add();
+                            result.* = .{
+                                .llvm = load,
+                                .type = expected_type,
+                                .bb = .instruction,
+                                .lvalue = false,
+                                .dereference_to_assign = false,
+                            };
+                            break :blk result;
+                        },
+                        else => @trap(),
+                    }
+                } else {
+                    @trap();
+                }
+            } else {
+                break :blk value;
+            }
+        } else {
+            @trap();
+        };
+
+        return result;
+    }
+
+    const ValueBuilder = struct {
+        kind: ValueKind = .value,
+        type: ?*Type = null,
+        precedence: Precedence = .none,
+        left: ?*Value = null,
+        token: Token = .none,
+
+        fn with_token(vb: ValueBuilder, token: Token) ValueBuilder {
+            var v = vb;
+            v.token = token;
+            return v;
+        }
+
+        fn with_precedence(vb: ValueBuilder, precedence: Precedence) ValueBuilder {
+            var v = vb;
+            v.precedence = precedence;
+            return v;
+        }
+
+        fn with_left(vb: ValueBuilder, left: ?*Value) ValueBuilder {
+            var v = vb;
+            v.left = left;
+            return v;
+        }
+    };
+
+    fn parse_value1(noalias converter: *Converter, noalias module: *Module, maybe_expected_type: ?*Type, value_kind: ValueKind) *Value {
         converter.skip_space();
 
         var value_state = ExpressionState.none;
         var previous_value: ?*Value = null;
-        var iterations: usize = 0;
+        var iterations: u64 = 0;
         var iterative_expected_type = maybe_expected_type;
 
         const value: *Value = while (true) : (iterations += 1) {
@@ -3090,6 +3959,10 @@ const Converter = struct {
                     },
                     else => converter.report_error(),
                 },
+                '.' => switch (converter.content[converter.offset + 1]) {
+                    '.' => .none,
+                    else => @trap(),
+                },
                 else => converter.report_error(),
             };
 
@@ -3145,7 +4018,6 @@ const Converter = struct {
         int_from_pointer,
         pointer_cast,
         select,
-        slice,
         trap,
         truncate,
         va_start,
@@ -3158,7 +4030,7 @@ const Converter = struct {
         converter.expect_character('#');
         converter.skip_space();
         const intrinsic_name = converter.parse_identifier();
-        const intrinsic_keyword = string_to_enum(ValueIntrinsic, intrinsic_name) orelse converter.report_error();
+        const intrinsic_keyword = lib.string.to_enum(ValueIntrinsic, intrinsic_name) orelse converter.report_error();
         converter.skip_space();
 
         converter.expect_character(left_parenthesis);
@@ -3197,7 +4069,7 @@ const Converter = struct {
                 const destination_type = converter.parse_type(module);
                 converter.skip_space();
                 converter.expect_character(',');
-                const source_value = converter.parse_value(module, null, .value);
+                const source_value = converter.parse_value(module, .{});
                 converter.skip_space();
                 converter.expect_character(')');
 
@@ -3216,7 +4088,7 @@ const Converter = struct {
                 }
             },
             .extend => {
-                const source_value = converter.parse_value(module, null, .value);
+                const source_value = converter.parse_value(module, .{});
                 converter.skip_space();
                 converter.expect_character(right_parenthesis);
                 const source_type = source_value.type;
@@ -3273,7 +4145,7 @@ const Converter = struct {
                 return value;
             },
             .int_from_enum => {
-                const source_value = converter.parse_value(module, null, .value);
+                const source_value = converter.parse_value(module, .{});
                 converter.skip_space();
                 converter.expect_character(right_parenthesis);
                 if (source_value.type.bb != .enumerator) {
@@ -3296,7 +4168,7 @@ const Converter = struct {
                 return value;
             },
             .int_from_pointer => {
-                const source_value = converter.parse_value(module, null, .value);
+                const source_value = converter.parse_value(module, .{});
                 converter.skip_space();
                 converter.expect_character(right_parenthesis);
                 if (source_value.type.bb != .pointer) {
@@ -3328,7 +4200,7 @@ const Converter = struct {
                 if (ty.bb != .pointer) {
                     converter.report_error();
                 }
-                const source_value = converter.parse_value(module, null, .value);
+                const source_value = converter.parse_value(module, .{});
                 converter.skip_space();
                 converter.expect_character(right_parenthesis);
                 if (source_value.type.bb != .pointer) {
@@ -3354,7 +4226,9 @@ const Converter = struct {
                 converter.expect_character(',');
                 converter.skip_space();
 
-                const true_value = converter.parse_value(module, expected_type, .value);
+                const true_value = converter.parse_value(module, .{
+                    .type = expected_type,
+                });
 
                 converter.skip_space();
                 converter.expect_character(',');
@@ -3362,7 +4236,9 @@ const Converter = struct {
 
                 const expected_ty = expected_type orelse true_value.type;
 
-                const false_value = converter.parse_value(module, expected_ty, .value);
+                const false_value = converter.parse_value(module, .{
+                    .type = expected_ty,
+                });
 
                 converter.skip_space();
                 converter.expect_character(right_parenthesis);
@@ -3385,123 +4261,123 @@ const Converter = struct {
                 };
                 return value;
             },
-            .slice => {
-                const value = converter.parse_value(module, null, .value);
-                const u64_type = module.integer_type(64, false);
-
-                converter.skip_space();
-
-                var found_right_parenthesis = false;
-                const second_argument: ?*Value = if (converter.consume_character_if_match(',')) b: {
-                    converter.skip_space();
-                    if (!converter.consume_character_if_match(right_parenthesis)) {
-                        break :b converter.parse_value(module, null, .value);
-                    } else {
-                        found_right_parenthesis = true;
-                        break :b null;
-                    }
-                } else null;
-
-                const parse_third_argument = if (!found_right_parenthesis) b: {
-                    converter.skip_space();
-                    const second_comma = converter.consume_character_if_match(',');
-                    converter.skip_space();
-                    found_right_parenthesis = converter.consume_character_if_match(right_parenthesis);
-                    if (second_comma and !found_right_parenthesis) {
-                        @trap();
-                    }
-
-                    if (!found_right_parenthesis) {
-                        converter.report_error();
-                    }
-                    break :b false;
-                } else false;
-                const third_argument: ?*Value = if (parse_third_argument) converter.parse_value(module, null, .value) else null;
-                const element_count = @as(u32, 1) + @intFromBool(second_argument != null) + @intFromBool(third_argument != null);
-
-                if (expected_type) |expected_ty| {
-                    if (!expected_ty.is_slice()) {
-                        converter.report_error();
-                    }
-
-                    const slice_type = expected_ty;
-                    const slice_pointer_type = slice_type.bb.structure.fields[0].type;
-                    const slice_element_type = slice_pointer_type.bb.pointer.type;
-
-                    assert(slice_type != value.type);
-
-                    switch (value.type.bb) {
-                        .pointer => |pointer| {
-                            const pointer_element_type = pointer.type;
-                            if (slice_type == pointer_element_type) switch (element_count) {
-                                1 => @trap(),
-                                2 => {
-                                    // If a slice is found and two arguments are given, the second argument is a start
-                                    @trap();
-                                },
-                                3 => @trap(),
-                                else => unreachable,
-                            } else if (pointer_element_type == slice_element_type) switch (element_count) {
-                                1 => @trap(),
-                                2 => {
-                                    // If a pointer is found and its element type matches the slice element type, then the second argument is the length of the slice
-                                    const length = second_argument orelse unreachable;
-                                    if (length.type.bb != .integer) {
-                                        converter.report_error();
-                                    }
-
-                                    if (length.type != u64_type) {
-                                        @trap();
-                                    }
-
-                                    const slice_poison = slice_type.llvm.handle.get_poison();
-                                    const pointer_insert = module.llvm.builder.create_insert_value(slice_poison, value.llvm, 0);
-                                    const length_insert = module.llvm.builder.create_insert_value(pointer_insert, length.llvm, 1);
-                                    const slice_value = length_insert;
-                                    const result = module.values.add();
-                                    result.* = .{
-                                        .llvm = slice_value,
-                                        .type = slice_type,
-                                        .bb = .instruction,
-                                        .lvalue = false,
-                                        .dereference_to_assign = false,
-                                    };
-                                    return result;
-                                },
-                                3 => @trap(),
-                                else => unreachable,
-                            } else switch (pointer_element_type.bb) {
-                                .array => |array| {
-                                    const array_element_type = array.element_type;
-                                    if (array_element_type == slice_element_type) {
-                                        assert(element_count == 1);
-                                        const slice_poison = slice_type.llvm.handle.get_poison();
-                                        const pointer_insert = module.llvm.builder.create_insert_value(slice_poison, value.llvm, 0);
-                                        const length_value = u64_type.llvm.handle.to_integer().get_constant(array.element_count.?, @intFromBool(false));
-                                        const length_insert = module.llvm.builder.create_insert_value(pointer_insert, length_value.to_value(), 1);
-                                        const slice_value = length_insert;
-                                        const result = module.values.add();
-                                        result.* = .{
-                                            .llvm = slice_value,
-                                            .type = slice_type,
-                                            .bb = .instruction,
-                                            .lvalue = false,
-                                            .dereference_to_assign = false,
-                                        };
-                                        return result;
-                                    } else {
-                                        converter.report_error();
-                                    }
-                                },
-                                else => @trap(),
-                            }
-                        },
-                        else => @trap(),
-                    }
-                } else {
-                    @trap();
-                }
-            },
+            // .slice => {
+            //     const value = converter.parse_value(module, null, .value);
+            //     const u64_type = module.integer_type(64, false);
+            //
+            //     converter.skip_space();
+            //
+            //     var found_right_parenthesis = false;
+            //     const second_argument: ?*Value = if (converter.consume_character_if_match(',')) b: {
+            //         converter.skip_space();
+            //         if (!converter.consume_character_if_match(right_parenthesis)) {
+            //             break :b converter.parse_value(module, null, .value);
+            //         } else {
+            //             found_right_parenthesis = true;
+            //             break :b null;
+            //         }
+            //     } else null;
+            //
+            //     const parse_third_argument = if (!found_right_parenthesis) b: {
+            //         converter.skip_space();
+            //         const second_comma = converter.consume_character_if_match(',');
+            //         converter.skip_space();
+            //         found_right_parenthesis = converter.consume_character_if_match(right_parenthesis);
+            //         if (second_comma and !found_right_parenthesis) {
+            //             @trap();
+            //         }
+            //
+            //         if (!found_right_parenthesis) {
+            //             converter.report_error();
+            //         }
+            //         break :b false;
+            //     } else false;
+            //     const third_argument: ?*Value = if (parse_third_argument) converter.parse_value(module, null, .value) else null;
+            //     const element_count = @as(u32, 1) + @intFromBool(second_argument != null) + @intFromBool(third_argument != null);
+            //
+            //     if (expected_type) |expected_ty| {
+            //         if (!expected_ty.is_slice()) {
+            //             converter.report_error();
+            //         }
+            //
+            //         const slice_type = expected_ty;
+            //         const slice_pointer_type = slice_type.bb.structure.fields[0].type;
+            //         const slice_element_type = slice_pointer_type.bb.pointer.type;
+            //
+            //         assert(slice_type != value.type);
+            //
+            //         switch (value.type.bb) {
+            //             .pointer => |pointer| {
+            //                 const pointer_element_type = pointer.type;
+            //                 if (slice_type == pointer_element_type) switch (element_count) {
+            //                     1 => @trap(),
+            //                     2 => {
+            //                         // If a slice is found and two arguments are given, the second argument is a start
+            //                         @trap();
+            //                     },
+            //                     3 => @trap(),
+            //                     else => unreachable,
+            //                 } else if (pointer_element_type == slice_element_type) switch (element_count) {
+            //                     1 => @trap(),
+            //                     2 => {
+            //                         // If a pointer is found and its element type matches the slice element type, then the second argument is the length of the slice
+            //                         const length = second_argument orelse unreachable;
+            //                         if (length.type.bb != .integer) {
+            //                             converter.report_error();
+            //                         }
+            //
+            //                         if (length.type != u64_type) {
+            //                             @trap();
+            //                         }
+            //
+            //                         const slice_poison = slice_type.llvm.handle.get_poison();
+            //                         const pointer_insert = module.llvm.builder.create_insert_value(slice_poison, value.llvm, 0);
+            //                         const length_insert = module.llvm.builder.create_insert_value(pointer_insert, length.llvm, 1);
+            //                         const slice_value = length_insert;
+            //                         const result = module.values.add();
+            //                         result.* = .{
+            //                             .llvm = slice_value,
+            //                             .type = slice_type,
+            //                             .bb = .instruction,
+            //                             .lvalue = false,
+            //                             .dereference_to_assign = false,
+            //                         };
+            //                         return result;
+            //                     },
+            //                     3 => @trap(),
+            //                     else => unreachable,
+            //                 } else switch (pointer_element_type.bb) {
+            //                     .array => |array| {
+            //                         const array_element_type = array.element_type;
+            //                         if (array_element_type == slice_element_type) {
+            //                             assert(element_count == 1);
+            //                             const slice_poison = slice_type.llvm.handle.get_poison();
+            //                             const pointer_insert = module.llvm.builder.create_insert_value(slice_poison, value.llvm, 0);
+            //                             const length_value = u64_type.llvm.handle.to_integer().get_constant(array.element_count.?, @intFromBool(false));
+            //                             const length_insert = module.llvm.builder.create_insert_value(pointer_insert, length_value.to_value(), 1);
+            //                             const slice_value = length_insert;
+            //                             const result = module.values.add();
+            //                             result.* = .{
+            //                                 .llvm = slice_value,
+            //                                 .type = slice_type,
+            //                                 .bb = .instruction,
+            //                                 .lvalue = false,
+            //                                 .dereference_to_assign = false,
+            //                             };
+            //                             return result;
+            //                         } else {
+            //                             converter.report_error();
+            //                         }
+            //                     },
+            //                     else => @trap(),
+            //                 }
+            //             },
+            //             else => @trap(),
+            //         }
+            //     } else {
+            //         @trap();
+            //     }
+            // },
             .trap => {
                 converter.expect_character(right_parenthesis);
 
@@ -3527,7 +4403,7 @@ const Converter = struct {
                 return value;
             },
             .truncate => {
-                const source_value = converter.parse_value(module, null, .value);
+                const source_value = converter.parse_value(module, .{});
                 converter.skip_space();
                 converter.expect_character(right_parenthesis);
                 const destination_type = expected_type orelse converter.report_error();
@@ -3568,7 +4444,10 @@ const Converter = struct {
                 return value;
             },
             .va_end => {
-                const va_list = converter.parse_value(module, module.get_pointer_type(.{ .type = module.get_va_list_type() }), .pointer);
+                const va_list = converter.parse_value(module, .{
+                    .type = module.get_pointer_type(.{ .type = module.get_va_list_type() }),
+                    .kind = .pointer,
+                });
                 converter.skip_space();
                 converter.expect_character(right_parenthesis);
                 const intrinsic_id = module.llvm.intrinsic_table.va_end;
@@ -3591,7 +4470,10 @@ const Converter = struct {
             .va_copy => @trap(),
             .va_arg => {
                 const va_list_type = module.get_va_list_type();
-                const raw_va_list = converter.parse_value(module, module.get_pointer_type(.{ .type = va_list_type }), .pointer);
+                const raw_va_list = converter.parse_value(module, .{
+                    .type = module.get_pointer_type(.{ .type = va_list_type }),
+                    .kind = .pointer,
+                });
                 const va_list = module.llvm.builder.create_gep(.{
                     .type = va_list_type.llvm.handle,
                     .aggregate = raw_va_list.llvm,
@@ -3731,7 +4613,7 @@ const Converter = struct {
         converter.expect_character('#');
         converter.skip_space();
         const intrinsic_name = converter.parse_identifier();
-        const intrinsic_keyword = string_to_enum(TypeIntrinsic, intrinsic_name) orelse converter.report_error();
+        const intrinsic_keyword = lib.string.to_enum(TypeIntrinsic, intrinsic_name) orelse converter.report_error();
         converter.skip_space();
 
         converter.expect_character(left_parenthesis);
@@ -3752,7 +4634,6 @@ const Converter = struct {
     }
 
     const ValueKeyword = enum {
-        @"_",
         undefined,
         @"unreachable",
         zero,
@@ -3841,7 +4722,7 @@ const Converter = struct {
                                 converter.skip_space();
                             } else {
                                 const identifier = converter.parse_identifier();
-                                if (string_to_enum(ValueKeyword, identifier)) |value_keyword| switch (value_keyword) {
+                                if (lib.string.to_enum(ValueKeyword, identifier)) |value_keyword| switch (value_keyword) {
                                     ._ => converter.report_error(),
                                     .undefined => @trap(),
                                     .@"unreachable" => @trap(),
@@ -4000,7 +4881,7 @@ const Converter = struct {
                         return value;
                     },
                     .bits => |bits| {
-                        var field_count: usize = 0;
+                        var field_count: u64 = 0;
 
                         var llvm_value = bits.backing_type.llvm.handle.to_integer().get_constant(0, @intFromBool(false)).to_value();
 
@@ -4040,7 +4921,7 @@ const Converter = struct {
                                 converter.skip_space();
                             } else {
                                 const identifier = converter.parse_identifier();
-                                if (string_to_enum(ValueKeyword, identifier)) |value_keyword| switch (value_keyword) {
+                                if (lib.string.to_enum(ValueKeyword, identifier)) |value_keyword| switch (value_keyword) {
                                     ._ => converter.report_error(),
                                     .undefined => @trap(),
                                     .zero => {
@@ -4088,7 +4969,7 @@ const Converter = struct {
                 const ty = expected_type orelse converter.report_error();
                 switch (ty.bb) {
                     .array => |*array| {
-                        var element_count: usize = 0;
+                        var element_count: u64 = 0;
                         var element_buffer: [64]*llvm.Value = undefined;
 
                         var elements_are_constant = true;
@@ -4153,6 +5034,39 @@ const Converter = struct {
             '&' => {
                 converter.offset += 1;
                 const value = converter.parse_value(module, expected_type, .pointer);
+
+                if (expected_type) |expected_ty| {
+                    if (expected_ty.is_slice()) {
+                        switch (value.type.bb) {
+                            .pointer => |pointer| switch (pointer.type.bb) {
+                                .array => |array| {
+                                    switch (value_kind) {
+                                        .value => {
+                                            const slice_poison = expected_ty.llvm.handle.get_poison();
+                                            const pointer_insert = module.llvm.builder.create_insert_value(slice_poison, value.llvm, 0);
+                                            const length_value = module.integer_type(64, false).llvm.handle.to_integer().get_constant(array.element_count.?, @intFromBool(false));
+                                            const length_insert = module.llvm.builder.create_insert_value(pointer_insert, length_value.to_value(), 1);
+                                            const result = module.values.add();
+                                            result.* = .{
+                                                .llvm = length_insert,
+                                                .type = expected_ty,
+                                                .bb = .instruction,
+                                                .lvalue = false,
+                                                .dereference_to_assign = false,
+                                            };
+                                            return result;
+                                        },
+                                        else => |t| @panic(@tagName(t)),
+                                    }
+                                },
+                                else => @trap(),
+                            },
+                            else => @trap(),
+                        }
+                        @trap();
+                    }
+                }
+
                 return value;
             },
             '!' => blk: {
@@ -4275,7 +5189,7 @@ const Converter = struct {
             'a'...'z', 'A'...'Z', '_' => b: {
                 const identifier = converter.parse_identifier();
 
-                if (string_to_enum(ValueKeyword, identifier)) |value_keyword| switch (value_keyword) {
+                if (lib.string.to_enum(ValueKeyword, identifier)) |value_keyword| switch (value_keyword) {
                     ._ => return module.void_value,
                     .undefined => {
                         const expected_ty = expected_type orelse converter.report_error();
@@ -4473,83 +5387,171 @@ const Converter = struct {
                         const index_type = module.integer_type(64, false);
                         const index = converter.parse_value(module, index_type, .value);
 
-                        converter.skip_space();
-                        converter.expect_character(right_bracket);
+                        const ArrayExpressionKind = enum {
+                            array,
+                            slice,
+                        };
+                        const array_expression_kind: ArrayExpressionKind = if (converter.consume_character_if_match(right_bracket)) .array else .slice;
+                        switch (array_expression_kind) {
+                            .array => {
+                                const llvm_index_type = module.integer_type(64, false).llvm.handle.to_integer();
+                                const zero_index = llvm_index_type.get_constant(0, @intFromBool(false)).to_value();
 
-                        const llvm_index_type = module.integer_type(64, false).llvm.handle.to_integer();
-                        const zero_index = llvm_index_type.get_constant(0, @intFromBool(false)).to_value();
-
-                        switch (value_kind) {
-                            .pointer, .maybe_pointer => {
-                                @trap();
-                            },
-                            .value => {
-                                switch (appointee_type.bb) {
-                                    .array => |array| {
-                                        const gep = module.llvm.builder.create_gep(.{
-                                            .type = appointee_type.llvm.handle,
-                                            .aggregate = variable.value.llvm,
-                                            .indices = &.{ zero_index, index.llvm },
-                                        });
-
-                                        const load_type = array.element_type;
-                                        const load = module.values.add();
-                                        load.* = .{
-                                            .llvm = module.create_load(.{ .type = load_type, .value = gep }),
-                                            .type = load_type,
-                                            .bb = .instruction,
-                                            .lvalue = false,
-                                            .dereference_to_assign = false,
-                                        };
-                                        break :b load;
+                                switch (value_kind) {
+                                    .pointer, .maybe_pointer => {
+                                        @trap();
                                     },
-                                    .pointer => |pointer| {
-                                        const pointer_load = module.create_load(.{ .type = appointee_type, .value = variable.value.llvm });
-                                        const gep = module.llvm.builder.create_gep(.{
-                                            .type = pointer.type.llvm.handle,
-                                            .aggregate = pointer_load,
-                                            .indices = &.{index.llvm},
-                                            .inbounds = false,
-                                        });
+                                    .value => {
+                                        switch (appointee_type.bb) {
+                                            .array => |array| {
+                                                const gep = module.llvm.builder.create_gep(.{
+                                                    .type = appointee_type.llvm.handle,
+                                                    .aggregate = variable.value.llvm,
+                                                    .indices = &.{ zero_index, index.llvm },
+                                                });
 
-                                        const load_type = pointer.type;
-                                        const load = module.values.add();
-                                        load.* = .{
-                                            .llvm = module.create_load(.{ .type = load_type, .value = gep }),
-                                            .type = load_type,
-                                            .bb = .instruction,
-                                            .lvalue = false,
-                                            .dereference_to_assign = false,
-                                        };
-                                        break :b load;
-                                    },
-                                    .structure => |structure| {
-                                        if (!structure.is_slice) {
-                                            converter.report_error();
+                                                const load_type = array.element_type;
+                                                const load = module.values.add();
+                                                load.* = .{
+                                                    .llvm = module.create_load(.{ .type = load_type, .value = gep }),
+                                                    .type = load_type,
+                                                    .bb = .instruction,
+                                                    .lvalue = false,
+                                                    .dereference_to_assign = false,
+                                                };
+                                                break :b load;
+                                            },
+                                            .pointer => |pointer| {
+                                                const pointer_load = module.create_load(.{ .type = appointee_type, .value = variable.value.llvm });
+                                                const gep = module.llvm.builder.create_gep(.{
+                                                    .type = pointer.type.llvm.handle,
+                                                    .aggregate = pointer_load,
+                                                    .indices = &.{index.llvm},
+                                                    .inbounds = false,
+                                                });
+
+                                                const load_type = pointer.type;
+                                                const load = module.values.add();
+                                                load.* = .{
+                                                    .llvm = module.create_load(.{ .type = load_type, .value = gep }),
+                                                    .type = load_type,
+                                                    .bb = .instruction,
+                                                    .lvalue = false,
+                                                    .dereference_to_assign = false,
+                                                };
+                                                break :b load;
+                                            },
+                                            .structure => |structure| {
+                                                if (!structure.is_slice) {
+                                                    converter.report_error();
+                                                }
+
+                                                const gep_to_pointer_field = module.llvm.builder.create_struct_gep(appointee_type.llvm.handle.to_struct(), variable.value.llvm, 0);
+                                                const pointer_type = structure.fields[0].type;
+                                                const element_type = pointer_type.bb.pointer.type;
+                                                const pointer_load = module.create_load(.{ .type = pointer_type, .value = gep_to_pointer_field });
+                                                const gep_to_element = module.llvm.builder.create_gep(.{
+                                                    .type = element_type.llvm.handle,
+                                                    .aggregate = pointer_load,
+                                                    .indices = &.{index.llvm},
+                                                    .inbounds = false,
+                                                });
+                                                const element_load = module.create_load(.{ .type = element_type, .value = gep_to_element, .alignment = pointer_type.bb.pointer.alignment });
+                                                const load = module.values.add();
+                                                load.* = .{
+                                                    .llvm = element_load,
+                                                    .type = element_type,
+                                                    .bb = .instruction,
+                                                    .lvalue = false,
+                                                    .dereference_to_assign = false,
+                                                };
+                                                break :b load;
+                                            },
+                                            else => converter.report_error(),
                                         }
-
-                                        const gep_to_pointer_field = module.llvm.builder.create_struct_gep(appointee_type.llvm.handle.to_struct(), variable.value.llvm, 0);
-                                        const pointer_type = structure.fields[0].type;
-                                        const element_type = pointer_type.bb.pointer.type;
-                                        const pointer_load = module.create_load(.{ .type = pointer_type, .value = gep_to_pointer_field });
-                                        const gep_to_element = module.llvm.builder.create_gep(.{
-                                            .type = element_type.llvm.handle,
-                                            .aggregate = pointer_load,
-                                            .indices = &.{index.llvm},
-                                            .inbounds = false,
-                                        });
-                                        const element_load = module.create_load(.{ .type = element_type, .value = gep_to_element, .alignment = pointer_type.bb.pointer.alignment });
-                                        const load = module.values.add();
-                                        load.* = .{
-                                            .llvm = element_load,
-                                            .type = element_type,
-                                            .bb = .instruction,
-                                            .lvalue = false,
-                                            .dereference_to_assign = false,
-                                        };
-                                        break :b load;
                                     },
-                                    else => converter.report_error(),
+                                }
+                            },
+                            .slice => {
+                                const start_index = index;
+                                converter.expect_character('.');
+                                converter.expect_character('.');
+                                converter.skip_space();
+
+                                if (converter.consume_character_if_match(right_bracket)) {
+                                    switch (appointee_type.bb) {
+                                        .structure => |structure| {
+                                            if (!structure.is_slice) {
+                                                converter.report_error();
+                                            }
+
+                                            const slice_type = appointee_type;
+                                            const slice_pointer_type = structure.fields[0].type;
+                                            const slice_element_type = slice_pointer_type.bb.pointer.type;
+                                            const slice_load = module.create_load(.{ .type = slice_type, .value = variable.value.llvm });
+                                            const original_pointer_field = module.llvm.builder.create_extract_value(slice_load, 0);
+                                            const original_length_field = module.llvm.builder.create_extract_value(slice_load, 1);
+                                            const pointer_field = module.llvm.builder.create_gep(.{ .type = slice_element_type.llvm.handle, .aggregate = original_pointer_field, .indices = &.{start_index.llvm} });
+                                            const length_field = module.llvm.builder.create_sub(original_length_field, start_index.llvm);
+
+                                            const slice_poison = slice_type.llvm.handle.get_poison();
+                                            const slice_pointer = module.llvm.builder.create_insert_value(slice_poison, pointer_field, 0);
+                                            const slice_length = module.llvm.builder.create_insert_value(slice_pointer, length_field, 1);
+                                            const slice_value = slice_length;
+
+                                            const result = module.values.add();
+                                            result.* = .{
+                                                .llvm = slice_value,
+                                                .type = slice_type,
+                                                .bb = .instruction,
+                                                .lvalue = false,
+                                                .dereference_to_assign = false,
+                                            };
+                                            return result;
+                                        },
+                                        else => @trap(),
+                                    }
+                                } else {
+                                    const end_index = converter.parse_value(module, index_type, .value);
+                                    converter.skip_space();
+                                    converter.expect_character(right_bracket);
+
+                                    if (start_index.bb == .constant_integer and end_index.bb == .constant_integer) {
+                                        @trap();
+                                    } else if (start_index.bb == .constant_integer) {
+                                        switch (appointee_type.bb) {
+                                            .pointer => {
+                                                const slice_type = module.get_slice_type(.{ .type = appointee_type });
+                                                const pointer_load = module.create_load(.{ .type = appointee_type, .value = variable.value.llvm });
+                                                const resulting_pointer = if (start_index.bb.constant_integer.value == 0) pointer_load else module.llvm.builder.create_gep(.{
+                                                    .type = variable.value.type.llvm.handle,
+                                                    .aggregate = pointer_load,
+                                                    .indices = &.{start_index.llvm},
+                                                });
+                                                const resulting_length = if (start_index.bb.constant_integer.value == 0) end_index.llvm else @trap();
+                                                const slice_poison = slice_type.llvm.handle.get_poison();
+                                                const pointer_insert = module.llvm.builder.create_insert_value(slice_poison, resulting_pointer, 0);
+                                                const length_insert = module.llvm.builder.create_insert_value(pointer_insert, resulting_length, 1);
+                                                const slice_value = length_insert;
+
+                                                const result = module.values.add();
+                                                result.* = .{
+                                                    .llvm = slice_value,
+                                                    .type = slice_type,
+                                                    .bb = .instruction,
+                                                    .lvalue = false,
+                                                    .dereference_to_assign = false,
+                                                };
+                                                return result;
+                                            },
+                                            else => @trap(),
+                                        }
+                                        @trap();
+                                    } else if (end_index.bb == .constant_integer) {
+                                        @trap();
+                                    } else {
+                                        @trap();
+                                    }
                                 }
                             },
                         }
@@ -4619,6 +5621,7 @@ fn is_space(ch: u8) bool {
 }
 
 const StatementStartKeyword = enum {
+    @"_",
     @"return",
     @"if",
     // TODO: make `unreachable` a statement start keyword?
@@ -5567,21 +6570,19 @@ pub const Abi = struct {
     };
 };
 
-const ConvertOptions = struct {
+pub const Options = struct {
     content: []const u8,
     path: [:0]const u8,
     executable: [:0]const u8,
-    build_mode: BuildMode,
     name: []const u8,
-    has_debug_info: bool,
     objects: []const [:0]const u8,
     target: Target,
+    build_mode: BuildMode,
+    has_debug_info: bool,
+    silent: bool,
 };
 
-pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
-    const build_dir = "bb-cache";
-    os.make_directory(build_dir);
-
+pub noinline fn convert(arena: *Arena, options: Options) void {
     var converter = Converter{
         .content = options.content,
         .offset = 0,
@@ -5614,7 +6615,7 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
             while (converter.offset < converter.content.len) {
                 const global_keyword_string = converter.parse_identifier();
 
-                const global_keyword = string_to_enum(GlobalKeyword, global_keyword_string) orelse converter.report_error();
+                const global_keyword = lib.string.to_enum(GlobalKeyword, global_keyword_string) orelse converter.report_error();
                 switch (global_keyword) {
                     .@"export" => is_export = true,
                     .@"extern" => is_extern = true,
@@ -5656,7 +6657,7 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
             const global_string = converter.parse_identifier();
             converter.skip_space();
 
-            if (string_to_enum(GlobalKind, global_string)) |global_kind| {
+            if (lib.string.to_enum(GlobalKind, global_string)) |global_kind| {
                 global_keyword = true;
                 switch (global_kind) {
                     .@"fn" => {
@@ -5668,7 +6669,7 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                             while (converter.offset < converter.content.len) {
                                 const function_identifier = converter.parse_identifier();
 
-                                const function_keyword = string_to_enum(FunctionKeyword, function_identifier) orelse converter.report_error();
+                                const function_keyword = lib.string.to_enum(FunctionKeyword, function_identifier) orelse converter.report_error();
 
                                 converter.skip_space();
 
@@ -5680,7 +6681,7 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
 
                                         const calling_convention_string = converter.parse_identifier();
 
-                                        calling_convention = string_to_enum(CallingConvention, calling_convention_string) orelse converter.report_error();
+                                        calling_convention = lib.string.to_enum(CallingConvention, calling_convention_string) orelse converter.report_error();
 
                                         converter.skip_space();
 
@@ -6258,7 +7259,7 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
                         var field_buffer: [256]Field = undefined;
                         var llvm_field_type_buffer: [field_buffer.len]*llvm.Type = undefined;
                         var llvm_debug_member_type_buffer: [field_buffer.len]*llvm.DI.Type.Derived = undefined;
-                        var field_count: usize = 0;
+                        var field_count: u64 = 0;
                         var byte_offset: u64 = 0;
                         var byte_alignment: u32 = 1;
                         var bit_alignment: u32 = 1;
@@ -6362,7 +7363,7 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
 
                         var field_buffer: [128]Field = undefined;
                         var field_line_buffer: [128]u32 = undefined;
-                        var field_count: usize = 0;
+                        var field_count: u64 = 0;
 
                         var field_bit_offset: u64 = 0;
 
@@ -6550,7 +7551,9 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
         }
 
         if (!global_keyword) {
-            const value = converter.parse_value(module, global_type, .value);
+            const value = converter.parse_value(module, .{
+                .type = global_type,
+            });
             const expected_type = global_type orelse value.type;
             converter.skip_space();
 
@@ -6604,7 +7607,7 @@ pub noinline fn convert(arena: *Arena, options: ConvertOptions) void {
         os.abort();
     }
 
-    if (!lib.is_test) {
+    if (!module.silent) {
         const module_string = module.llvm.handle.to_string();
         lib.print_string_stderr(module_string);
     }

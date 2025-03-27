@@ -1,7 +1,12 @@
 const builtin = @import("builtin");
 pub const is_test = builtin.is_test;
 pub const optimization_mode = builtin.mode;
-const VariableArguments = @import("std").builtin.VaList;
+pub const VariableArguments = extern struct {
+    gp_offset: c_uint,
+    fp_offset: c_uint,
+    overflow_arg_area: *anyopaque,
+    reg_save_area: *anyopaque,
+};
 extern "c" fn IsDebuggerPresent() bool;
 extern "c" fn __errno_location() *c_int;
 
@@ -13,6 +18,9 @@ const CSlice = extern struct {
     pointer: ?*anyopaque,
     length: usize,
 };
+
+extern fn dump_stack_trace(return_address: usize) void;
+extern fn enable_signal_handlers() void;
 
 pub const KB = 1024;
 pub const MB = 1024 * 1024;
@@ -515,9 +523,7 @@ pub const os = struct {
         if (os.is_being_debugged()) {
             @trap();
         } else {
-            if (is_test) {
-                @import("std").debug.dumpCurrentStackTrace(@returnAddress());
-            }
+            dump_stack_trace(@returnAddress());
 
             libc.exit(1);
         }
@@ -566,6 +572,14 @@ pub const libc = struct {
 };
 
 pub const string = struct {
+    pub fn to_enum(comptime E: type, str: []const u8) ?E {
+        inline for (@typeInfo(E).@"enum".fields) |e| {
+            if (equal(e.name, str)) {
+                return @field(E, e.name);
+            }
+        } else return null;
+    }
+
     pub fn equal(a: []const u8, b: []const u8) bool {
         var result = a.len == b.len;
         if (result) {
@@ -2684,143 +2698,147 @@ pub fn print_string_stderr(str: []const u8) void {
     os.get_stderr().write(str);
 }
 
-pub const panic_struct = switch (is_test) {
-    true => @import("std").debug.FullPanic(@import("std").debug.defaultPanic),
-    false => struct {
-        const abort = os.abort;
-        pub fn call(_: []const u8, _: ?usize) noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+pub const panic_struct = struct {
+    const abort = os.abort;
+    pub fn call(_: []const u8, _: ?usize) noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn sentinelMismatch(_: anytype, _: anytype) noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn sentinelMismatch(_: anytype, _: anytype) noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn unwrapError(_: anyerror) noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn unwrapError(_: anyerror) noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn outOfBounds(_: usize, _: usize) noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn outOfBounds(_: usize, _: usize) noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn startGreaterThanEnd(_: usize, _: usize) noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn startGreaterThanEnd(_: usize, _: usize) noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn inactiveUnionField(_: anytype, _: anytype) noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn inactiveUnionField(_: anytype, _: anytype) noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn reachedUnreachable() noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn reachedUnreachable() noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn unwrapNull() noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn unwrapNull() noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn castToNull() noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn castToNull() noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn incorrectAlignment() noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn incorrectAlignment() noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn invalidErrorCode() noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn invalidErrorCode() noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn castTruncatedData() noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn castTruncatedData() noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn negativeToUnsigned() noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn negativeToUnsigned() noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn integerOverflow() noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn integerOverflow() noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn shlOverflow() noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn shlOverflow() noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn shrOverflow() noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn shrOverflow() noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn divideByZero() noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn divideByZero() noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn exactDivisionRemainder() noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn exactDivisionRemainder() noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn integerPartOutOfBounds() noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn integerPartOutOfBounds() noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn corruptSwitch() noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn corruptSwitch() noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn shiftRhsTooBig() noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn shiftRhsTooBig() noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn invalidEnumValue() noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn invalidEnumValue() noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn forLenMismatch() noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn forLenMismatch() noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn memcpyLenMismatch() noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn memcpyLenMismatch() noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn memcpyAlias() noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn memcpyAlias() noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn noreturnReturned() noreturn {
-            @branchHint(.cold);
-            abort();
-        }
+    pub fn noreturnReturned() noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 
-        pub fn sliceCastLenRemainder(_: usize) noreturn {
-            @branchHint(.cold);
-            abort();
-        }
-    },
+    pub fn sliceCastLenRemainder(_: usize) noreturn {
+        @branchHint(.cold);
+        abort();
+    }
 };
+
+pub export fn main(argc: c_int, argv: [*:null]const ?[*:0]const u8) callconv(.C) c_int {
+    enable_signal_handlers();
+    const arguments: []const [*:0]const u8 = @ptrCast(argv[0..@intCast(argc)]);
+    @import("root").entry_point(arguments);
+    return 0;
+}

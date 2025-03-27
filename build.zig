@@ -61,233 +61,6 @@ const CmakeBuildType = enum {
     }
 };
 
-const LLVM = struct {
-    module: *std.Build.Module,
-
-    fn setup(b: *std.Build, path: []const u8) !LLVM {
-        var llvm_libs = std.ArrayList([]const u8).init(b.allocator);
-        var flags = std.ArrayList([]const u8).init(b.allocator);
-        const llvm_config_path = if (b.option([]const u8, "llvm_prefix", "LLVM prefix")) |llvm_prefix| blk: {
-            const full_path = try std.mem.concat(b.allocator, u8, &.{ llvm_prefix, "/bin/llvm-config" });
-            const f = std.fs.cwd().openFile(full_path, .{}) catch return error.llvm_not_found;
-            f.close();
-            break :blk full_path;
-        } else if (system_llvm) executable_find_in_path(b.allocator, "llvm-config", path) orelse return error.llvm_not_found else blk: {
-            const home_env = switch (@import("builtin").os.tag) {
-                .windows => "USERPROFILE",
-                else => "HOME",
-            };
-            const home_path = env.get(home_env) orelse unreachable;
-            const is_ci = std.mem.eql(u8, (env.get("BB_CI") orelse "0"), "1");
-            const download_dir = try std.mem.concat(b.allocator, u8, &.{ home_path, "/Downloads" });
-            std.fs.makeDirAbsolute(download_dir) catch {};
-            const cmake_build_type = if (is_ci) CmakeBuildType.from_zig_build_type(optimize) else CmakeBuildType.Release;
-            const llvm_base = try std.mem.concat(b.allocator, u8, &.{ "llvm-", @tagName(target.result.cpu.arch), "-", @tagName(target.result.os.tag), "-", @tagName(cmake_build_type) });
-            const base = try std.mem.concat(b.allocator, u8, &.{ download_dir, "/", llvm_base });
-            const full_path = try std.mem.concat(b.allocator, u8, &.{ base, "/bin/llvm-config" });
-
-            const f = std.fs.cwd().openFile(full_path, .{}) catch {
-                const url = try std.mem.concat(b.allocator, u8, &.{ "https://github.com/birth-software/llvm/releases/download/v19.1.7/", llvm_base, ".7z" });
-                var result = try std.process.Child.run(.{
-                    .allocator = b.allocator,
-                    .argv = &.{ "wget", "-P", download_dir, url },
-                    .max_output_bytes = std.math.maxInt(usize),
-                });
-                var success = false;
-                switch (result.term) {
-                    .Exited => |exit_code| {
-                        success = exit_code == 0;
-                    },
-                    else => {},
-                }
-
-                if (!success) {
-                    std.debug.print("{s}\n{s}\n", .{ result.stdout, result.stderr });
-                }
-
-                if (success) {
-                    const file_7z = try std.mem.concat(b.allocator, u8, &.{ base, ".7z" });
-                    result = try std.process.Child.run(.{
-                        .allocator = b.allocator,
-                        .argv = &.{ "7z", "x", try std.mem.concat(b.allocator, u8, &.{ "-o", download_dir }), file_7z },
-                        .max_output_bytes = std.math.maxInt(usize),
-                    });
-                    success = false;
-                    switch (result.term) {
-                        .Exited => |exit_code| {
-                            success = exit_code == 0;
-                        },
-                        else => {},
-                    }
-
-                    if (!success) {
-                        std.debug.print("{s}\n{s}\n", .{ result.stdout, result.stderr });
-                    }
-
-                    break :blk full_path;
-                }
-
-                return error.llvm_not_found;
-            };
-
-            f.close();
-            break :blk full_path;
-        };
-        const llvm_components_result = try run_process_and_capture_stdout(b, &.{ llvm_config_path, "--components" });
-        var it = std.mem.splitScalar(u8, llvm_components_result, ' ');
-        var args = std.ArrayList([]const u8).init(b.allocator);
-        try args.append(llvm_config_path);
-        try args.append("--libs");
-        while (it.next()) |component| {
-            try args.append(std.mem.trimRight(u8, component, "\n"));
-        }
-        const llvm_libs_result = try run_process_and_capture_stdout(b, args.items);
-        it = std.mem.splitScalar(u8, llvm_libs_result, ' ');
-
-        while (it.next()) |lib| {
-            const llvm_lib = std.mem.trimLeft(u8, std.mem.trimRight(u8, lib, "\n"), "-l");
-            try llvm_libs.append(llvm_lib);
-        }
-
-        const llvm_cxx_flags_result = try run_process_and_capture_stdout(b, &.{ llvm_config_path, "--cxxflags" });
-        it = std.mem.splitScalar(u8, llvm_cxx_flags_result, ' ');
-        while (it.next()) |flag| {
-            const llvm_cxx_flag = std.mem.trimRight(u8, flag, "\n");
-            try flags.append(llvm_cxx_flag);
-        }
-
-        const llvm_lib_dir = std.mem.trimRight(u8, try run_process_and_capture_stdout(b, &.{ llvm_config_path, "--libdir" }), "\n");
-
-        if (optimize != .ReleaseSmall) {
-            try flags.append("-g");
-        }
-
-        try flags.append("-fno-rtti");
-
-        const llvm = b.createModule(.{
-            .target = target,
-            .optimize = optimize,
-            .sanitize_c = false,
-        });
-
-        llvm.addLibraryPath(.{ .cwd_relative = llvm_lib_dir });
-
-        const a = std.fs.cwd().openDir("/usr/lib/x86_64-linux-gnu/", .{});
-        if (a) |_| {
-            var dir = a catch unreachable;
-            dir.close();
-            llvm.addLibraryPath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu/" });
-        } else |err| {
-            err catch {};
-        }
-
-        llvm.addCSourceFiles(.{
-            .files = &.{"src/llvm.cpp"},
-            .flags = flags.items,
-        });
-
-        var dir = try std.fs.cwd().openDir("/usr/include/c++", .{
-            .iterate = true,
-        });
-        var iterator = dir.iterate();
-        const gcc_version = while (try iterator.next()) |entry| {
-            if (entry.kind == .directory) {
-                break entry.name;
-            }
-        } else return error.include_cpp_dir_not_found;
-        dir.close();
-        const general_cpp_include_dir = try std.mem.concat(b.allocator, u8, &.{ "/usr/include/c++/", gcc_version });
-        llvm.addIncludePath(.{ .cwd_relative = general_cpp_include_dir });
-
-        {
-            const arch_cpp_include_dir = try std.mem.concat(b.allocator, u8, &.{ general_cpp_include_dir, "/x86_64-pc-linux-gnu" });
-            const d2 = std.fs.cwd().openDir(arch_cpp_include_dir, .{});
-            if (d2) |_| {
-                var d = d2 catch unreachable;
-                d.close();
-                llvm.addIncludePath(.{ .cwd_relative = arch_cpp_include_dir });
-            } else |err| err catch {};
-        }
-
-        {
-            const arch_cpp_include_dir = try std.mem.concat(b.allocator, u8, &.{ "/usr/include/x86_64-linux-gnu/c++/", gcc_version });
-            const d2 = std.fs.cwd().openDir(arch_cpp_include_dir, .{});
-            if (d2) |_| {
-                var d = d2 catch unreachable;
-                d.close();
-                llvm.addIncludePath(.{ .cwd_relative = arch_cpp_include_dir });
-            } else |err| err catch {};
-        }
-
-        var found_libcpp = false;
-
-        if (std.fs.cwd().openFile("/usr/lib/libstdc++.so.6", .{})) |file| {
-            file.close();
-            found_libcpp = true;
-            llvm.addObjectFile(.{ .cwd_relative = "/usr/lib/libstdc++.so.6" });
-        } else |err| {
-            err catch {};
-        }
-
-        if (std.fs.cwd().openFile("/usr/lib/x86_64-linux-gnu/libstdc++.so.6", .{})) |file| {
-            file.close();
-            found_libcpp = true;
-            llvm.addObjectFile(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu/libstdc++.so.6" });
-        } else |err| {
-            err catch {};
-        }
-
-        if (!found_libcpp) {
-            return error.libcpp_not_found;
-        }
-
-        const needed_libraries: []const []const u8 = &.{ "unwind", "z", "zstd" };
-
-        const lld_libs: []const []const u8 = &.{ "lldCommon", "lldCOFF", "lldELF", "lldMachO", "lldMinGW", "lldWasm" };
-
-        for (needed_libraries) |lib| {
-            llvm.linkSystemLibrary(lib, .{});
-        }
-
-        for (llvm_libs.items) |lib| {
-            llvm.linkSystemLibrary(lib, .{});
-        }
-
-        for (lld_libs) |lib| {
-            llvm.linkSystemLibrary(lib, .{});
-        }
-
-        return LLVM{
-            .module = llvm,
-        };
-    }
-
-    fn link(llvm: LLVM, compile: *std.Build.Step.Compile) void {
-        if (compile.root_module != llvm.module) {
-            compile.root_module.addImport("llvm", llvm.module);
-        } else {
-            // TODO: should we allow this case?
-            unreachable;
-        }
-    }
-};
-
-fn debug_binary(b: *std.Build, exe: *std.Build.Step.Compile) *std.Build.Step.Run {
-    const run_step = std.Build.Step.Run.create(b, b.fmt("debug {s}", .{exe.name}));
-    run_step.addArg("gdb");
-    run_step.addArg("-ex");
-    run_step.addArg("r");
-    if (b.args) |args| {
-        run_step.addArg("--args");
-        run_step.addArtifactArg(exe);
-        run_step.addArgs(args);
-    } else {
-        run_step.addArtifactArg(exe);
-    }
-
-    return run_step;
-}
-
 var system_llvm: bool = undefined;
 var target: std.Build.ResolvedTarget = undefined;
 var optimize: std.builtin.OptimizeMode = undefined;
@@ -309,23 +82,33 @@ pub fn build(b: *std.Build) !void {
     target = b.standardTargetOptions(.{});
     optimize = b.standardOptimizeOption(.{});
     system_llvm = b.option(bool, "system_llvm", "Link against system LLVM libraries") orelse false;
-    const path = env.get("PATH") orelse unreachable;
 
-    const c_abi_module = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .sanitize_c = false,
-    });
     const c_abi = b.addObject(.{
         .name = "c_abi",
         .link_libc = true,
-        .root_module = c_abi_module,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .sanitize_c = false,
+        }),
         .optimize = optimize,
     });
     c_abi.addCSourceFiles(.{
         .files = &.{"tests/c_abi.c"},
         .flags = &.{"-g"},
+    });
+
+    const path = env.get("PATH") orelse unreachable;
+
+    const stack_trace_library = b.addObject(.{
+        .name = "stack_trace",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = .ReleaseFast,
+            .root_source_file = b.path("src/stack_trace.zig"),
+            .link_libc = true,
+        }),
     });
 
     const exe_mod = b.createModule(.{
@@ -339,43 +122,241 @@ pub fn build(b: *std.Build) !void {
     configuration.addOptionPath("c_abi_object_path", c_abi.getEmittedBin());
     exe_mod.addOptions("configuration", configuration);
 
-    const llvm = try LLVM.setup(b, path);
-
     const exe = b.addExecutable(.{
         .name = "bloat-buster",
         .root_module = exe_mod,
         .link_libc = true,
     });
+    exe.addObject(stack_trace_library);
+    var llvm_libs = std.ArrayList([]const u8).init(b.allocator);
+    var flags = std.ArrayList([]const u8).init(b.allocator);
+    const llvm_config_path = if (b.option([]const u8, "llvm_prefix", "LLVM prefix")) |llvm_prefix| blk: {
+        const full_path = try std.mem.concat(b.allocator, u8, &.{ llvm_prefix, "/bin/llvm-config" });
+        const f = std.fs.cwd().openFile(full_path, .{}) catch return error.llvm_not_found;
+        f.close();
+        break :blk full_path;
+    } else if (system_llvm) executable_find_in_path(b.allocator, "llvm-config", path) orelse return error.llvm_not_found else blk: {
+        const home_env = switch (@import("builtin").os.tag) {
+            .windows => "USERPROFILE",
+            else => "HOME",
+        };
+        const home_path = env.get(home_env) orelse unreachable;
+        const is_ci = std.mem.eql(u8, (env.get("BB_CI") orelse "0"), "1");
+        const download_dir = try std.mem.concat(b.allocator, u8, &.{ home_path, "/Downloads" });
+        std.fs.makeDirAbsolute(download_dir) catch {};
+        const cmake_build_type = if (is_ci) CmakeBuildType.from_zig_build_type(optimize) else CmakeBuildType.Release;
+        const llvm_base = try std.mem.concat(b.allocator, u8, &.{ "llvm-", @tagName(target.result.cpu.arch), "-", @tagName(target.result.os.tag), "-", @tagName(cmake_build_type) });
+        const base = try std.mem.concat(b.allocator, u8, &.{ download_dir, "/", llvm_base });
+        const full_path = try std.mem.concat(b.allocator, u8, &.{ base, "/bin/llvm-config" });
 
-    llvm.link(exe);
+        const f = std.fs.cwd().openFile(full_path, .{}) catch {
+            const url = try std.mem.concat(b.allocator, u8, &.{ "https://github.com/birth-software/llvm/releases/download/v19.1.7/", llvm_base, ".7z" });
+            var result = try std.process.Child.run(.{
+                .allocator = b.allocator,
+                .argv = &.{ "wget", "-P", download_dir, url },
+                .max_output_bytes = std.math.maxInt(usize),
+            });
+            var success = false;
+            switch (result.term) {
+                .Exited => |exit_code| {
+                    success = exit_code == 0;
+                },
+                else => {},
+            }
+
+            if (!success) {
+                std.debug.print("{s}\n{s}\n", .{ result.stdout, result.stderr });
+            }
+
+            if (success) {
+                const file_7z = try std.mem.concat(b.allocator, u8, &.{ base, ".7z" });
+                result = try std.process.Child.run(.{
+                    .allocator = b.allocator,
+                    .argv = &.{ "7z", "x", try std.mem.concat(b.allocator, u8, &.{ "-o", download_dir }), file_7z },
+                    .max_output_bytes = std.math.maxInt(usize),
+                });
+                success = false;
+                switch (result.term) {
+                    .Exited => |exit_code| {
+                        success = exit_code == 0;
+                    },
+                    else => {},
+                }
+
+                if (!success) {
+                    std.debug.print("{s}\n{s}\n", .{ result.stdout, result.stderr });
+                }
+
+                break :blk full_path;
+            }
+
+            return error.llvm_not_found;
+        };
+
+        f.close();
+        break :blk full_path;
+    };
+    const llvm_components_result = try run_process_and_capture_stdout(b, &.{ llvm_config_path, "--components" });
+    var it = std.mem.splitScalar(u8, llvm_components_result, ' ');
+    {
+        var args = std.ArrayList([]const u8).init(b.allocator);
+        try args.append(llvm_config_path);
+        try args.append("--libs");
+        while (it.next()) |component| {
+            try args.append(std.mem.trimRight(u8, component, "\n"));
+        }
+        const llvm_libs_result = try run_process_and_capture_stdout(b, args.items);
+        it = std.mem.splitScalar(u8, llvm_libs_result, ' ');
+    }
+
+    while (it.next()) |lib| {
+        const llvm_lib = std.mem.trimLeft(u8, std.mem.trimRight(u8, lib, "\n"), "-l");
+        try llvm_libs.append(llvm_lib);
+    }
+
+    const llvm_cxx_flags_result = try run_process_and_capture_stdout(b, &.{ llvm_config_path, "--cxxflags" });
+    it = std.mem.splitScalar(u8, llvm_cxx_flags_result, ' ');
+    while (it.next()) |flag| {
+        const llvm_cxx_flag = std.mem.trimRight(u8, flag, "\n");
+        try flags.append(llvm_cxx_flag);
+    }
+
+    const llvm_lib_dir = std.mem.trimRight(u8, try run_process_and_capture_stdout(b, &.{ llvm_config_path, "--libdir" }), "\n");
+
+    if (optimize != .ReleaseSmall) {
+        try flags.append("-g");
+    }
+
+    try flags.append("-fno-rtti");
+
+    exe.addLibraryPath(.{ .cwd_relative = llvm_lib_dir });
+
+    const a = std.fs.cwd().openDir("/usr/lib/x86_64-linux-gnu/", .{});
+    if (a) |_| {
+        var dir = a catch unreachable;
+        dir.close();
+        exe.addLibraryPath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu/" });
+    } else |err| {
+        err catch {};
+    }
+
+    exe.addCSourceFiles(.{
+        .files = &.{"src/llvm.cpp"},
+        .flags = flags.items,
+    });
+
+    var dir = try std.fs.cwd().openDir("/usr/include/c++", .{
+        .iterate = true,
+    });
+    var iterator = dir.iterate();
+    const gcc_version = while (try iterator.next()) |entry| {
+        if (entry.kind == .directory) {
+            break entry.name;
+        }
+    } else return error.include_cpp_dir_not_found;
+    dir.close();
+    const general_cpp_include_dir = try std.mem.concat(b.allocator, u8, &.{ "/usr/include/c++/", gcc_version });
+    exe.addIncludePath(.{ .cwd_relative = general_cpp_include_dir });
+
+    {
+        const arch_cpp_include_dir = try std.mem.concat(b.allocator, u8, &.{ general_cpp_include_dir, "/x86_64-pc-linux-gnu" });
+        const d2 = std.fs.cwd().openDir(arch_cpp_include_dir, .{});
+        if (d2) |_| {
+            var d = d2 catch unreachable;
+            d.close();
+            exe.addIncludePath(.{ .cwd_relative = arch_cpp_include_dir });
+        } else |err| err catch {};
+    }
+
+    {
+        const arch_cpp_include_dir = try std.mem.concat(b.allocator, u8, &.{ "/usr/include/x86_64-linux-gnu/c++/", gcc_version });
+        const d2 = std.fs.cwd().openDir(arch_cpp_include_dir, .{});
+        if (d2) |_| {
+            var d = d2 catch unreachable;
+            d.close();
+            exe.addIncludePath(.{ .cwd_relative = arch_cpp_include_dir });
+        } else |err| err catch {};
+    }
+
+    var found_libcpp = false;
+
+    if (std.fs.cwd().openFile("/usr/lib/libstdc++.so.6", .{})) |file| {
+        file.close();
+        found_libcpp = true;
+        exe.addObjectFile(.{ .cwd_relative = "/usr/lib/libstdc++.so.6" });
+    } else |err| {
+        err catch {};
+    }
+
+    if (std.fs.cwd().openFile("/usr/lib/x86_64-linux-gnu/libstdc++.so.6", .{})) |file| {
+        file.close();
+        found_libcpp = true;
+        exe.addObjectFile(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu/libstdc++.so.6" });
+    } else |err| {
+        err catch {};
+    }
+
+    if (!found_libcpp) {
+        return error.libcpp_not_found;
+    }
+
+    const needed_libraries: []const []const u8 = &.{ "unwind", "z", "zstd" };
+    for (needed_libraries) |lib| {
+        exe.linkSystemLibrary(lib);
+    }
+
+    for (llvm_libs.items) |lib| {
+        exe.linkSystemLibrary(lib);
+    }
+
+    const lld_libs: []const []const u8 = &.{ "lldCommon", "lldCOFF", "lldELF", "lldMachO", "lldMinGW", "lldWasm" };
+    for (lld_libs) |lib| {
+        exe.linkSystemLibrary(lib);
+    }
 
     b.installArtifact(exe);
 
-    const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
+    for ([_]bool{ false, true }) |is_test| {
+        const run_step_name = switch (is_test) {
+            true => "test",
+            false => "run",
+        };
+
+        const debug_step_name = switch (is_test) {
+            true => "debug_test",
+            false => "debug",
+        };
+
+        const command = b.addRunArtifact(exe);
+        command.step.dependOn(b.getInstallStep());
+
+        if (is_test) {
+            command.addArg("test");
+        }
+
+        if (b.args) |args| {
+            command.addArgs(args);
+        }
+
+        const run_step = b.step(run_step_name, "");
+        run_step.dependOn(&command.step);
+
+        const debug_command = std.Build.Step.Run.create(b, b.fmt("{s} {s}", .{ debug_step_name, exe.name }));
+        debug_command.addArg("gdb");
+        debug_command.addArg("-ex");
+        debug_command.addArg("r");
+        debug_command.addArg("--args");
+        debug_command.addArtifactArg(exe);
+
+        if (is_test) {
+            debug_command.addArg("test");
+        }
+
+        if (b.args) |args| {
+            debug_command.addArgs(args);
+        }
+
+        const debug_step = b.step(debug_step_name, "");
+        debug_step.dependOn(&debug_command.step);
     }
-    const run_step = b.step("run", "Run the app");
-    run_step.dependOn(&run_cmd.step);
-
-    const debug_cmd = debug_binary(b, exe);
-    const debug_step = b.step("debug", "Debug the app");
-    debug_step.dependOn(&debug_cmd.step);
-
-    const exe_unit_tests = b.addTest(.{
-        .root_module = exe_mod,
-        .link_libc = true,
-    });
-
-    llvm.link(exe);
-
-    const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
-
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_exe_unit_tests.step);
-
-    const debug_test_cmd = debug_binary(b, exe_unit_tests);
-    const debug_test_step = b.step("debug_test", "Debug the tests");
-    debug_test_step.dependOn(&debug_test_cmd.step);
 }

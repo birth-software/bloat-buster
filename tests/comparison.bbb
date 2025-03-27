@@ -1,0 +1,14 @@
+trivial_comparison = fn (a: u32, b: u32) u1
+{
+    return a + 1 == b + 1;
+}
+
+[export] main = fn [cc(c)] (argument_count: u32) s32
+{
+    >result = trivial_comparison(argument_count, argument_count);
+    if (!result)
+    {
+        #trap();
+    }
+    return 0;
+}

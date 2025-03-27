@@ -20,7 +20,7 @@ c_string_length = fn (c_string: &u8) u64
 
 c_string_slice_build = fn (c_string: &u8, length: u64) []u8
 {
-    return #slice(c_string, length);
+    return c_string[0..length];
 }
 
 [export] main = fn [cc(c)] (argument_count: u32, argument_pointer: &&u8) s32
