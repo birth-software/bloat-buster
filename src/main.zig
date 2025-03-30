@@ -100,7 +100,7 @@ fn compile_file(arena: *Arena, compile: Compile) converter.Options {
 
 const base_cache_dir = "bb-cache";
 
-pub fn entry_point(arguments: []const [*:0]const u8) void {
+pub fn entry_point(arguments: []const [*:0]const u8, environment: [*:null]const ?[*:0]const u8) void {
     lib.GlobalState.initialize();
     const arena = lib.global.arena;
 
@@ -135,12 +135,22 @@ pub fn entry_point(arguments: []const [*:0]const u8) void {
                         defer arena.restore(position);
 
                         const relative_file_path = arena.join_string(&.{ "tests/", name, ".bbb" });
-                        _ = compile_file(arena, .{
+                        const compile_result = compile_file(arena, .{
                             .relative_file_path = relative_file_path,
                             .build_mode = build_mode,
                             .has_debug_info = has_debug_info,
                             .silent = true,
                         });
+
+                        const result = lib.os.run_child_process(arena, &.{compile_result.executable}, environment, .{
+                            .stdout = .pipe,
+                            .stderr = .pipe,
+                            .null_file_descriptor = null,
+                        });
+
+                        if (!result.is_successful()) {
+                            @trap();
+                        }
                     }
                 }
             }

@@ -320,6 +320,9 @@ pub const os = struct {
     }
 
     const linux = struct {
+        pub const stdin = 0;
+        pub const stdout = 1;
+        pub const stderr = 2;
         pub const CPU_SETSIZE = 128;
         pub const cpu_set_t = [CPU_SETSIZE / @sizeOf(usize)]usize;
         pub const cpu_count_t = @Type(.{
@@ -450,6 +453,11 @@ pub const os = struct {
         extern "c" fn write(fd: system.FileDescriptor, pointer: [*]const u8, byte_count: usize) isize;
         extern "c" fn sched_getaffinity(pid: c_int, size: usize, set: *cpu_set_t) c_int;
         extern "c" fn mkdir(path: [*:0]const u8, mode: mode_t) c_int;
+        extern "c" fn pipe(pipe: *[2]i32) File.Descriptor;
+        extern "c" fn fork() Process.Descriptor;
+        extern "c" fn dup2(old: File.Descriptor, new: File.Descriptor) c_int;
+        extern "c" fn execve(path_name: [*:0]const u8, arguments: [*:null]const ?[*:0]const u8, environment: [*:null]const ?[*:0]const u8) c_int;
+        extern "c" fn waitpid(pid: Process.Descriptor, status: ?*u32, options: u32) Process.Descriptor;
 
         const mode_t = usize;
 
@@ -472,6 +480,34 @@ pub const os = struct {
 
             return result;
         }
+
+        pub const W = struct {
+            pub const NOHANG = 1;
+            pub const UNTRACED = 2;
+            pub const STOPPED = 2;
+            pub const EXITED = 4;
+            pub const CONTINUED = 8;
+            pub const NOWAIT = 0x1000000;
+
+            pub fn EXITSTATUS(s: u32) u8 {
+                return @as(u8, @intCast((s & 0xff00) >> 8));
+            }
+            pub fn TERMSIG(s: u32) u32 {
+                return s & 0x7f;
+            }
+            pub fn STOPSIG(s: u32) u32 {
+                return EXITSTATUS(s);
+            }
+            pub fn IFEXITED(s: u32) bool {
+                return TERMSIG(s) == 0;
+            }
+            pub fn IFSTOPPED(s: u32) bool {
+                return @as(u16, @truncate(((s & 0xffff) *% 0x10001) >> 8)) > 0x7f00;
+            }
+            pub fn IFSIGNALED(s: u32) bool {
+                return (s & 0xffff) -% 1 < 0xff;
+            }
+        };
     };
 
     const windows = struct {
@@ -534,7 +570,7 @@ pub const os = struct {
             .windows => @compileError("TODO"),
             else => {
                 return File{
-                    .fd = 1,
+                    .fd = posix.stdout,
                 };
             },
         };
@@ -545,7 +581,7 @@ pub const os = struct {
             .windows => @compileError("TODO"),
             else => {
                 return File{
-                    .fd = 2,
+                    .fd = posix.stderr,
                 };
             },
         };
@@ -563,6 +599,185 @@ pub const os = struct {
         var buffer: [4096]u8 = undefined;
         return arena.duplicate_string(absolute_path_stack(&buffer, relative_path));
     }
+
+    const ChildProcessStream = struct {
+        const Policy = enum {
+            inherit,
+            pipe,
+            ignore,
+        };
+    };
+
+    pub const RunChildProcessOptions = struct {
+        stdout: ChildProcessStream.Policy,
+        stderr: ChildProcessStream.Policy,
+        null_file_descriptor: ?File.Descriptor,
+    };
+
+    pub const RunChildProcessResult = struct {
+        stdout: []const u8,
+        stderr: []const u8,
+        kind: Kind,
+        code: u32,
+
+        pub fn is_successful(result: RunChildProcessResult) bool {
+            return result.kind == .exit and result.code == 0;
+        }
+
+        pub const Kind = enum {
+            exit,
+            signal,
+            stop,
+            unknown,
+        };
+    };
+
+    pub fn run_child_process(arena: *Arena, arguments: [*:null]const ?[*:0]const u8, environment_variables: [*:null]const ?[*:0]const u8, options: RunChildProcessOptions) RunChildProcessResult {
+        const null_fd: File.Descriptor = if (options.null_file_descriptor) |nullfd| nullfd else if (options.stdout == .ignore or options.stderr == .ignore) posix.open("/dev/null", .{ .ACCMODE = .WRONLY }) else undefined;
+
+        var stdout_pipe: [2]i32 = undefined;
+        var stderr_pipe: [2]i32 = undefined;
+
+        if (options.stdout == .pipe) {
+            if (posix.pipe(&stdout_pipe) == -1) {
+                @trap();
+            }
+        }
+
+        if (options.stderr == .pipe) {
+            if (posix.pipe(&stderr_pipe) == -1) {
+                @trap();
+            }
+        }
+
+        const pid = posix.fork();
+
+        switch (pid) {
+            -1 => @trap(),
+            // Child process
+            0 => {
+                switch (options.stdout) {
+                    .pipe => {
+                        _ = posix.close(stdout_pipe[0]);
+                        _ = posix.dup2(stdout_pipe[1], posix.stdout);
+                        _ = posix.close(stdout_pipe[1]);
+                    },
+                    .ignore => {
+                        _ = posix.dup2(null_fd, posix.stdout);
+                        _ = posix.close(null_fd);
+                    },
+                    .inherit => {},
+                }
+
+                switch (options.stderr) {
+                    .pipe => {
+                        _ = posix.close(stderr_pipe[0]);
+                        _ = posix.dup2(stderr_pipe[1], posix.stderr);
+                        _ = posix.close(stderr_pipe[1]);
+                    },
+                    .ignore => {
+                        _ = posix.dup2(null_fd, posix.stderr);
+                        _ = posix.close(null_fd);
+                    },
+                    .inherit => {},
+                }
+
+                const result = posix.execve(arguments[0].?, arguments, environment_variables);
+                if (result != 1) {
+                    unreachable;
+                }
+
+                @trap();
+            },
+            // Parent (~current) process
+            else => {
+                if (options.stdout == .pipe) {
+                    _ = posix.close(stdout_pipe[1]);
+                }
+
+                if (options.stderr == .pipe) {
+                    _ = posix.close(stderr_pipe[1]);
+                }
+
+                var stdout_buffer_slice: []u8 = &.{};
+                var stderr_buffer_slice: []u8 = &.{};
+                if (options.stdout == .pipe or options.stderr == .pipe) {
+                    const allocation_size = 1024 * 1024;
+                    const allocation = arena.allocate_bytes(2 * allocation_size, 1);
+
+                    var offset: u64 = 0;
+                    if (options.stdout == .pipe) {
+                        const stdout_buffer_offset = offset;
+                        offset += allocation_size;
+                        stdout_buffer_slice = allocation[stdout_buffer_offset..][0..allocation_size];
+                    }
+
+                    if (options.stderr == .pipe) {
+                        const stderr_buffer_offset = offset;
+                        offset += allocation_size;
+                        stderr_buffer_slice = allocation[stderr_buffer_offset..][0..allocation_size];
+                    }
+                }
+
+                if (options.stdout == .pipe) {
+                    const byte_count = posix.read(stdout_pipe[0], stdout_buffer_slice.ptr, stdout_buffer_slice.len);
+                    assert(byte_count >= 0);
+                    stdout_buffer_slice = stdout_buffer_slice[0..@intCast(byte_count)];
+                    _ = posix.close(stdout_pipe[0]);
+                }
+
+                if (options.stderr == .pipe) {
+                    const byte_count = posix.read(stderr_pipe[0], stderr_buffer_slice.ptr, stderr_buffer_slice.len);
+                    assert(byte_count >= 0);
+                    stderr_buffer_slice = stderr_buffer_slice[0..@intCast(byte_count)];
+                    _ = posix.close(stderr_pipe[0]);
+                }
+
+                var status: u32 = 0;
+                const waitpid_result = posix.waitpid(pid, &status, 0);
+
+                if (waitpid_result == pid) {
+                    const termination: struct {
+                        code: u32,
+                        kind: RunChildProcessResult.Kind,
+                    } = if (linux.W.IFEXITED(status)) .{
+                        .code = linux.W.EXITSTATUS(status),
+                        .kind = .exit,
+                    } else if (linux.W.IFSIGNALED(status)) .{
+                        .code = linux.W.TERMSIG(status),
+                        .kind = .signal,
+                    } else if (linux.W.IFSTOPPED(status)) .{
+                        .code = linux.W.STOPSIG(status),
+                        .kind = .stop,
+                    } else .{
+                        .code = 0,
+                        .kind = .unknown,
+                    };
+
+                    if (options.null_file_descriptor == null and system.fd_is_valid(null_fd)) {
+                        _ = posix.close(null_fd);
+                    }
+
+                    return .{
+                        .stdout = stdout_buffer_slice,
+                        .stderr = stderr_buffer_slice,
+                        .kind = termination.kind,
+                        .code = termination.code,
+                    };
+                } else if (waitpid_result == -1) {
+                    @trap();
+                } else {
+                    @trap();
+                }
+            },
+        }
+    }
+
+    const Process = struct {
+        descriptor: Descriptor,
+
+        const Descriptor = system.FileDescriptor;
+    };
 };
 
 pub const libc = struct {
@@ -2836,9 +3051,9 @@ pub const panic_struct = struct {
     }
 };
 
-pub export fn main(argc: c_int, argv: [*:null]const ?[*:0]const u8) callconv(.C) c_int {
+pub export fn main(argc: c_int, argv: [*:null]const ?[*:0]const u8, environment: [*:null]const ?[*:0]const u8) callconv(.C) c_int {
     enable_signal_handlers();
     const arguments: []const [*:0]const u8 = @ptrCast(argv[0..@intCast(argc)]);
-    @import("root").entry_point(arguments);
+    @import("root").entry_point(arguments, environment);
     return 0;
 }
