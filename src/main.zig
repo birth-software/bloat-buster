@@ -184,6 +184,7 @@ pub fn entry_point(arguments: []const [*:0]const u8, environment: [*:null]const 
                 "constant_shift_left",
                 "constant_shift_right",
                 "minimal_stack",
+                "minimal_stack_arithmetic",
                 "pointer",
             };
 
