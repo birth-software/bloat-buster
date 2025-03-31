@@ -3453,6 +3453,7 @@ const Converter = struct {
             .@"<<",
             .@">>",
         };
+
         for (shifting_operators) |shifting_operator| {
             r[@intFromEnum(shifting_operator)] = .{
                 .before = null,
@@ -3594,7 +3595,7 @@ const Converter = struct {
             '>' => blk: {
                 const next_ch = converter.content[start_index + 1];
                 const token_id: Token.Id = switch (next_ch) {
-                    '<' => switch (converter.content[start_index + 2]) {
+                    '>' => switch (converter.content[start_index + 2]) {
                         '=' => .@">>=",
                         else => .@">>",
                     },

@@ -182,7 +182,7 @@ pub fn entry_point(arguments: []const [*:0]const u8, environment: [*:null]const 
                 "constant_sub",
                 "constant_xor",
                 "constant_shift_left",
-                //"constant_shift_right",
+                "constant_shift_right",
                 "minimal_stack",
             };
 
