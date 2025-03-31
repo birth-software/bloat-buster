@@ -100,6 +100,48 @@ fn compile_file(arena: *Arena, compile: Compile) converter.Options {
 
 const base_cache_dir = "bb-cache";
 
+const TestRun = struct {
+    build_mode: BuildMode,
+    has_debug_info: bool,
+    stop_at_failure: bool,
+};
+
+// This function is abstracted out so that dumb inline for loops don't inline the code 10x
+fn run_tests(arena: *Arena, environment: [*:null]const ?[*:0]const u8, names: []const []const u8, test_run: TestRun) void {
+    for (names) |name| {
+        const build_mode = test_run.build_mode;
+        const has_debug_info = test_run.has_debug_info;
+        const stop_at_failure = test_run.has_debug_info;
+
+        const position = arena.position;
+        defer arena.restore(position);
+
+        const relative_file_path = arena.join_string(&.{ "tests/", name, ".bbb" });
+        const compile_result = compile_file(arena, .{
+            .relative_file_path = relative_file_path,
+            .build_mode = build_mode,
+            .has_debug_info = has_debug_info,
+            .silent = true,
+        });
+
+        const result = lib.os.run_child_process(arena, &.{compile_result.executable}, environment, .{
+            .stdout = .pipe,
+            .stderr = .pipe,
+            .null_file_descriptor = null,
+        });
+
+        if (!result.is_successful()) {
+            lib.print_string("Failed to run test ");
+            lib.print_string(name);
+            lib.print_string(" with build mode ");
+            lib.print_string(@tagName(build_mode));
+            if (stop_at_failure) {
+                lib.libc.exit(1);
+            }
+        }
+    }
+}
+
 pub fn entry_point(arguments: []const [*:0]const u8, environment: [*:null]const ?[*:0]const u8) void {
     lib.GlobalState.initialize();
     const arena = lib.global.arena;
@@ -126,32 +168,32 @@ pub fn entry_point(arguments: []const [*:0]const u8, environment: [*:null]const 
                 fail();
             }
 
+            const stop_at_failure = true;
+
+            const names = &[_][]const u8{
+                "minimal",
+                "comments",
+                "constant_add",
+                "constant_and",
+                "constant_div",
+                "constant_mul",
+                "constant_rem",
+                "constant_or",
+                "constant_sub",
+                "constant_xor",
+                "constant_shift_left",
+                //"constant_shift_right",
+                "minimal_stack",
+            };
+
             inline for (@typeInfo(converter.BuildMode).@"enum".fields) |f| {
                 const build_mode = @field(converter.BuildMode, f.name);
-                inline for ([2]bool{ true, false }) |has_debug_info| {
-                    const names = [_][]const u8{ "minimal", "constant_add", "minimal_stack" };
-                    for (names) |name| {
-                        const position = arena.position;
-                        defer arena.restore(position);
-
-                        const relative_file_path = arena.join_string(&.{ "tests/", name, ".bbb" });
-                        const compile_result = compile_file(arena, .{
-                            .relative_file_path = relative_file_path,
-                            .build_mode = build_mode,
-                            .has_debug_info = has_debug_info,
-                            .silent = true,
-                        });
-
-                        const result = lib.os.run_child_process(arena, &.{compile_result.executable}, environment, .{
-                            .stdout = .pipe,
-                            .stderr = .pipe,
-                            .null_file_descriptor = null,
-                        });
-
-                        if (!result.is_successful()) {
-                            @trap();
-                        }
-                    }
+                for ([2]bool{ true, false }) |has_debug_info| {
+                    run_tests(arena, environment, names, .{
+                        .build_mode = build_mode,
+                        .has_debug_info = has_debug_info,
+                        .stop_at_failure = stop_at_failure,
+                    });
                 }
             }
         },
