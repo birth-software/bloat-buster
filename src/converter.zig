@@ -93,8 +93,423 @@ pub const ResolvedCallingConvention = enum {
     win64,
 };
 
+
+const AttributeContainerType = enum {
+    call,
+    function,
+};
+
+fn llvm_add_function_attribute(value: *llvm.Value, attribute: *llvm.Attribute, container_type: AttributeContainerType) void {
+    switch (container_type) {
+        .call => {
+            const call = value.is_call_instruction() orelse unreachable;
+            call.add_attribute(.function, attribute);
+        },
+        .function => {
+            const function = value.to_function();
+            function.add_attribute(.function, attribute);
+        },
+    }
+}
+
+fn llvm_add_argument_attribute(value: *llvm.Value, attribute: *llvm.Attribute, index: c_uint, container_type: AttributeContainerType) void {
+    switch (container_type) {
+        .call => {
+            const call = value.is_call_instruction() orelse unreachable;
+            call.add_attribute(@enumFromInt(index), attribute);
+        },
+        .function => {
+            const function = value.to_function();
+            function.add_attribute(@enumFromInt(index), attribute);
+        },
+    }
+}
+
+pub const Function = struct {
+    return_alloca: *llvm.Value,
+    exit_block: ?*llvm.BasicBlock,
+    return_block: *llvm.BasicBlock,
+    current_scope: *llvm.DI.Scope,
+    return_pointer: *Value,
+    attributes: Attributes,
+    locals: Variable.Array = .{},
+    arguments: Variable.Array = .{},
+
+    const Attributes = struct {
+        inline_behavior: enum {
+            default,
+            always_inline,
+            no_inline,
+            inline_hint,
+        } = .default,
+        naked: bool = false,
+    };
+};
+
+pub const ConstantInteger = struct {
+    value: u64,
+    signed: bool,
+};
+
+pub const Value = struct {
+    bb: union(enum) {
+        function: Function,
+        local,
+        global,
+        argument,
+        instruction,
+        struct_initialization: struct {
+            is_constant: bool,
+        },
+        bits_initialization,
+        infer_or_ignore,
+        constant_integer: ConstantInteger,
+        constant_array,
+        external_function,
+        @"unreachable",
+        string_literal_global,
+    },
+    type: *Type,
+    llvm: *llvm.Value,
+    lvalue: bool,
+    dereference_to_assign: bool,
+
+    const Array = struct {
+        buffer: [1024]Value = undefined,
+        count: u64 = 0,
+
+        pub fn add(values: *Array) *Value {
+            const result = &values.buffer[values.count];
+            values.count += 1;
+            return result;
+        }
+    };
+
+    pub fn is_constant(value: *Value) bool {
+        return switch (value.bb) {
+            .constant_integer, .constant_array => true,
+            .struct_initialization => |si| si.is_constant,
+            .instruction => false,
+            else => @trap(),
+        };
+    }
+};
+
+const Field = struct {
+    name: []const u8,
+    type: *Type,
+    bit_offset: u64,
+    byte_offset: u64,
+};
+
+const FunctionType = struct {
+    return_type_abi: Abi.Information,
+    argument_type_abis: []const Abi.Information,
+    abi_return_type: *Type,
+    abi_argument_types: []const *Type,
+    calling_convention: CallingConvention,
+    available_registers: Abi.RegisterCount,
+    is_var_args: bool,
+
+    fn get_abi_argument_types(function_type: *const FunctionType) []const *Type {
+        return function_type.abi_argument_types[0..function_type.abi_argument_count];
+    }
+};
+
+const StructType = struct {
+    fields: []const Field,
+    is_slice: bool,
+    bit_size: u64,
+    byte_size: u64,
+    bit_alignment: u32,
+    byte_alignment: u32,
+};
+
+const Bits = struct {
+    fields: []const Field,
+    backing_type: *Type,
+    implicit_backing_type: bool,
+};
+
+pub const ArrayType = struct {
+    element_count: ?u64,
+    element_type: *Type,
+};
+
+pub const IntegerType = struct {
+    bit_count: u32,
+    signed: bool,
+};
+
+pub const FloatType = struct {
+    const Kind = enum {
+        half,
+        bfloat,
+        float,
+        double,
+        fp128,
+    };
+    kind: Kind,
+};
+
+pub const Enumerator = struct {
+    fields: []const Enumerator.Field,
+    backing_type: *Type,
+    implicit_backing_type: bool,
+
+    pub const Field = struct {
+        name: []const u8,
+        value: u64,
+    };
+};
+
+pub const PointerType = struct {
+    type: *Type,
+    alignment: u32,
+};
+
+pub const SliceType = struct {
+    pointer_type: *Type,
+    alignment: u32,
+};
+
+pub const Type = struct {
+    bb: BB,
+    llvm: LLVM,
+    name: ?[]const u8,
+
+    pub const EvaluationKind = enum {
+        scalar,
+        complex,
+        aggregate,
+    };
+
+    pub const BB = union(enum) {
+        void,
+        noreturn,
+        forward_declaration,
+        integer: IntegerType,
+        float: FloatType,
+        structure: StructType,
+        bits: Bits,
+        function: FunctionType,
+        array: ArrayType,
+        pointer: PointerType,
+        enumerator: Enumerator,
+        vector,
+    };
+
+    pub fn is_slice(ty: *const Type) bool {
+        return switch (ty.bb) {
+            .structure => |structure| structure.is_slice,
+            else => false,
+        };
+    }
+
+    pub fn is_aggregate_type_for_abi(ty: *Type) bool {
+        const ev_kind = ty.get_evaluation_kind();
+        const is_member_function_pointer_type = false; // TODO
+        return ev_kind != .scalar or is_member_function_pointer_type;
+    }
+
+    pub fn is_integer_backing(ty: *Type) bool {
+        return switch (ty.bb) {
+            .enumerator, .integer, .bits, .pointer => true,
+            else => false,
+        };
+    }
+
+    pub fn is_abi_equal(ty: *const Type, other: *const Type) bool {
+        return ty == other or ty.llvm.handle == other.llvm.handle;
+    }
+
+    pub fn is_signed(ty: *const Type) bool {
+        return switch (ty.bb) {
+            .integer => |integer| integer.signed,
+            .bits => |bits| bits.backing_type.is_signed(),
+            else => @trap(),
+        };
+    }
+
+    pub fn is_integral_or_enumeration_type(ty: *Type) bool {
+        return switch (ty.bb) {
+            .integer => true,
+            .bits => true,
+            .structure => false,
+            // .integer => |integer| switch (integer.bit_count) {
+            //     1, 8, 16, 32, 64, 128 => true,
+            //     else => false,
+            // },
+            else => @trap(),
+        };
+    }
+
+    pub fn is_arbitrary_bit_integer(ty: *Type) bool {
+        return switch (ty.bb) {
+            .integer => |integer| switch (integer.bit_count) {
+                8, 16, 32, 64, 128 => false,
+                else => true,
+            },
+            .bits => |bits| bits.backing_type.is_arbitrary_bit_integer(),
+            else => false,
+        };
+    }
+
+    pub fn is_promotable_integer_type_for_abi(ty: *Type) bool {
+        return switch (ty.bb) {
+            .integer => |integer| integer.bit_count < 32,
+            .bits => |bits| bits.backing_type.is_promotable_integer_type_for_abi(),
+            else => @trap(),
+        };
+    }
+
+    pub fn get_evaluation_kind(ty: *const Type) EvaluationKind {
+        return switch (ty.bb) {
+            .structure, .array => .aggregate,
+            .integer, .bits, .pointer, .enumerator => .scalar,
+            else => @trap(),
+        };
+    }
+
+    pub fn get_byte_allocation_size(ty: *const Type) u64 {
+        return lib.align_forward_u64(ty.get_byte_size(), ty.get_byte_alignment());
+    }
+
+    pub fn get_bit_size(ty: *const Type) u64 {
+        return switch (ty.bb) {
+            .integer => |integer| integer.bit_count,
+            .structure => |struct_type| struct_type.bit_size,
+            .bits => |bits| bits.backing_type.get_bit_size(),
+            .void, .forward_declaration, .function, .noreturn => unreachable,
+            .array => |*array| array.element_type.get_bit_size() * array.element_count.?,
+            .pointer => 64,
+            .enumerator => |enumerator| enumerator.backing_type.get_bit_size(),
+            .float => @trap(),
+            .vector => @trap(),
+        };
+    }
+
+    pub fn get_byte_size(ty: *const Type) u64 {
+        return switch (ty.bb) {
+            .integer => |integer| @divExact(@max(8, lib.next_power_of_two(integer.bit_count)), 8),
+            .structure => |struct_type| struct_type.byte_size,
+            .bits => |bits| bits.backing_type.get_byte_size(),
+            .void, .forward_declaration, .function, .noreturn => unreachable,
+            .array => |*array| array.element_type.get_byte_size() * array.element_count.?,
+            .pointer => 8,
+            .enumerator => @trap(),
+            .float => @trap(),
+            .vector => @trap(),
+        };
+    }
+
+    pub fn get_bit_alignment(ty: *const Type) u32 {
+        return switch (ty.bb) {
+            .integer => |integer| integer.bit_count,
+            .structure => |struct_type| struct_type.bit_alignment,
+            .bits => |bits| bits.backing_type.get_bit_alignment(),
+            .void, .forward_declaration, .function, .noreturn => unreachable,
+            .array => |*array| array.element_type.get_bit_alignment(),
+            .pointer => 64,
+            .enumerator => @trap(),
+            .float => @trap(),
+            .vector => @trap(),
+        };
+    }
+
+    pub fn get_byte_alignment(ty: *const Type) u32 {
+        return switch (ty.bb) {
+            .integer => |integer| @as(u32, @intCast(@divExact(@max(8, lib.next_power_of_two(integer.bit_count)), 8))),
+            .structure => |struct_type| struct_type.byte_alignment,
+            .bits => |bits| bits.backing_type.get_byte_alignment(),
+            .function => 1,
+            .void, .forward_declaration, .noreturn => unreachable,
+            .array => |array| array.element_type.get_byte_alignment(),
+            .pointer => 8,
+            .enumerator => |enumerator| enumerator.backing_type.get_byte_alignment(),
+            .float => @trap(),
+            .vector => @trap(),
+        };
+    }
+
+    const Array = struct {
+        buffer: [1024]Type = undefined,
+        count: u64 = 0,
+
+        const buffer_size = 1024;
+
+        pub fn get(types: *Array) []Type {
+            return types.buffer[0..types.count];
+        }
+
+        pub fn find(types: *Array, name: []const u8) ?*Type {
+            for (types.get()) |*ty| {
+                if (ty.name) |type_name| {
+                    if (lib.string.equal(type_name, name)) {
+                        return ty;
+                    }
+                }
+            } else {
+                return null;
+            }
+        }
+
+        fn add(types: *Array, ty: Type) *Type {
+            const result = &types.buffer[types.count];
+            types.count += 1;
+            result.* = ty;
+            return result;
+        }
+    };
+
+    pub const LLVM = struct {
+        handle: *llvm.Type,
+        debug: *llvm.DI.Type,
+    };
+};
+
+pub const Variable = struct {
+    value: *Value,
+    name: []const u8,
+
+    const Array = struct {
+        buffer: [1024]Variable = undefined,
+        count: u32 = 0,
+
+        pub fn get(variables: *Array) []Variable {
+            return variables.buffer[0..variables.count];
+        }
+
+        pub fn add(variables: *Array) *Variable {
+            const result = &variables.buffer[variables.count];
+            variables.count += 1;
+            return result;
+        }
+
+        pub fn add_many(variables: *Array, count: u32) []Variable {
+            const result = variables.buffer[variables.count .. variables.count + count];
+            variables.count += count;
+            return result;
+        }
+
+        pub fn find(variables: *Array, name: []const u8) ?*Variable {
+            for (variables.get()) |*variable| {
+                if (lib.string.equal(variable.name, name)) {
+                    return variable;
+                }
+            } else {
+                return null;
+            }
+        }
+    };
+};
+
 const Module = struct {
     arena: *Arena,
+    content: []const u8,
+    offset: u64,
+    line_offset: u64,
+    line_character_offset: u64,
     llvm: LLVM,
     target: Target,
     globals: Variable.Array = .{},
@@ -871,6 +1286,10 @@ const Module = struct {
 
         const module = arena.allocate_one(Module);
         module.* = .{
+            .content = options.content,
+            .offset = 0,
+            .line_offset = 0,
+            .line_character_offset = 0,
             .arena = arena,
             .target = options.target,
             .llvm = .{
@@ -1108,485 +1527,68 @@ const Module = struct {
             false => @trap(),
         };
     }
-};
 
-const AttributeContainerType = enum {
-    call,
-    function,
-};
-
-fn llvm_add_function_attribute(value: *llvm.Value, attribute: *llvm.Attribute, container_type: AttributeContainerType) void {
-    switch (container_type) {
-        .call => {
-            const call = value.is_call_instruction() orelse unreachable;
-            call.add_attribute(.function, attribute);
-        },
-        .function => {
-            const function = value.to_function();
-            function.add_attribute(.function, attribute);
-        },
-    }
-}
-
-fn llvm_add_argument_attribute(value: *llvm.Value, attribute: *llvm.Attribute, index: c_uint, container_type: AttributeContainerType) void {
-    switch (container_type) {
-        .call => {
-            const call = value.is_call_instruction() orelse unreachable;
-            call.add_attribute(@enumFromInt(index), attribute);
-        },
-        .function => {
-            const function = value.to_function();
-            function.add_attribute(@enumFromInt(index), attribute);
-        },
-    }
-}
-
-pub const Function = struct {
-    return_alloca: *llvm.Value,
-    exit_block: ?*llvm.BasicBlock,
-    return_block: *llvm.BasicBlock,
-    current_scope: *llvm.DI.Scope,
-    return_pointer: *Value,
-    attributes: Attributes,
-    locals: Variable.Array = .{},
-    arguments: Variable.Array = .{},
-
-    const Attributes = struct {
-        inline_behavior: enum {
-            default,
-            always_inline,
-            no_inline,
-            inline_hint,
-        } = .default,
-        naked: bool = false,
-    };
-};
-
-pub const ConstantInteger = struct {
-    value: u64,
-    signed: bool,
-};
-
-pub const Value = struct {
-    bb: union(enum) {
-        function: Function,
-        local,
-        global,
-        argument,
-        instruction,
-        struct_initialization: struct {
-            is_constant: bool,
-        },
-        bits_initialization,
-        infer_or_ignore,
-        constant_integer: ConstantInteger,
-        constant_array,
-        external_function,
-        @"unreachable",
-        string_literal_global,
-    },
-    type: *Type,
-    llvm: *llvm.Value,
-    lvalue: bool,
-    dereference_to_assign: bool,
-
-    const Array = struct {
-        buffer: [1024]Value = undefined,
-        count: u64 = 0,
-
-        pub fn add(values: *Array) *Value {
-            const result = &values.buffer[values.count];
-            values.count += 1;
-            return result;
-        }
-    };
-
-    pub fn is_constant(value: *Value) bool {
-        return switch (value.bb) {
-            .constant_integer, .constant_array => true,
-            .struct_initialization => |si| si.is_constant,
-            .instruction => false,
-            else => @trap(),
-        };
-    }
-};
-
-const Field = struct {
-    name: []const u8,
-    type: *Type,
-    bit_offset: u64,
-    byte_offset: u64,
-};
-
-const FunctionType = struct {
-    return_type_abi: Abi.Information,
-    argument_type_abis: []const Abi.Information,
-    abi_return_type: *Type,
-    abi_argument_types: []const *Type,
-    calling_convention: CallingConvention,
-    available_registers: Abi.RegisterCount,
-    is_var_args: bool,
-
-    fn get_abi_argument_types(function_type: *const FunctionType) []const *Type {
-        return function_type.abi_argument_types[0..function_type.abi_argument_count];
-    }
-};
-
-const StructType = struct {
-    fields: []const Field,
-    is_slice: bool,
-    bit_size: u64,
-    byte_size: u64,
-    bit_alignment: u32,
-    byte_alignment: u32,
-};
-
-const Bits = struct {
-    fields: []const Field,
-    backing_type: *Type,
-    implicit_backing_type: bool,
-};
-
-pub const ArrayType = struct {
-    element_count: ?u64,
-    element_type: *Type,
-};
-
-pub const IntegerType = struct {
-    bit_count: u32,
-    signed: bool,
-};
-
-pub const FloatType = struct {
-    const Kind = enum {
-        half,
-        bfloat,
-        float,
-        double,
-        fp128,
-    };
-    kind: Kind,
-};
-
-pub const Enumerator = struct {
-    fields: []const Enumerator.Field,
-    backing_type: *Type,
-    implicit_backing_type: bool,
-
-    pub const Field = struct {
-        name: []const u8,
-        value: u64,
-    };
-};
-
-pub const PointerType = struct {
-    type: *Type,
-    alignment: u32,
-};
-
-pub const SliceType = struct {
-    pointer_type: *Type,
-    alignment: u32,
-};
-
-pub const Type = struct {
-    bb: BB,
-    llvm: LLVM,
-    name: ?[]const u8,
-
-    pub const EvaluationKind = enum {
-        scalar,
-        complex,
-        aggregate,
-    };
-
-    pub const BB = union(enum) {
-        void,
-        noreturn,
-        forward_declaration,
-        integer: IntegerType,
-        float: FloatType,
-        structure: StructType,
-        bits: Bits,
-        function: FunctionType,
-        array: ArrayType,
-        pointer: PointerType,
-        enumerator: Enumerator,
-        vector,
-    };
-
-    pub fn is_slice(ty: *const Type) bool {
-        return switch (ty.bb) {
-            .structure => |structure| structure.is_slice,
-            else => false,
-        };
+    fn get_line(module: *const Module) u32 {
+        return @intCast(module.line_offset + 1);
     }
 
-    pub fn is_aggregate_type_for_abi(ty: *Type) bool {
-        const ev_kind = ty.get_evaluation_kind();
-        const is_member_function_pointer_type = false; // TODO
-        return ev_kind != .scalar or is_member_function_pointer_type;
+    fn get_column(module: *const Module) u32 {
+        return @intCast(module.offset - module.line_character_offset + 1);
     }
 
-    pub fn is_integer_backing(ty: *Type) bool {
-        return switch (ty.bb) {
-            .enumerator, .integer, .bits, .pointer => true,
-            else => false,
-        };
-    }
-
-    pub fn is_abi_equal(ty: *const Type, other: *const Type) bool {
-        return ty == other or ty.llvm.handle == other.llvm.handle;
-    }
-
-    pub fn is_signed(ty: *const Type) bool {
-        return switch (ty.bb) {
-            .integer => |integer| integer.signed,
-            .bits => |bits| bits.backing_type.is_signed(),
-            else => @trap(),
-        };
-    }
-
-    pub fn is_integral_or_enumeration_type(ty: *Type) bool {
-        return switch (ty.bb) {
-            .integer => true,
-            .bits => true,
-            .structure => false,
-            // .integer => |integer| switch (integer.bit_count) {
-            //     1, 8, 16, 32, 64, 128 => true,
-            //     else => false,
-            // },
-            else => @trap(),
-        };
-    }
-
-    pub fn is_arbitrary_bit_integer(ty: *Type) bool {
-        return switch (ty.bb) {
-            .integer => |integer| switch (integer.bit_count) {
-                8, 16, 32, 64, 128 => false,
-                else => true,
-            },
-            .bits => |bits| bits.backing_type.is_arbitrary_bit_integer(),
-            else => false,
-        };
-    }
-
-    pub fn is_promotable_integer_type_for_abi(ty: *Type) bool {
-        return switch (ty.bb) {
-            .integer => |integer| integer.bit_count < 32,
-            .bits => |bits| bits.backing_type.is_promotable_integer_type_for_abi(),
-            else => @trap(),
-        };
-    }
-
-    pub fn get_evaluation_kind(ty: *const Type) EvaluationKind {
-        return switch (ty.bb) {
-            .structure, .array => .aggregate,
-            .integer, .bits, .pointer, .enumerator => .scalar,
-            else => @trap(),
-        };
-    }
-
-    pub fn get_byte_allocation_size(ty: *const Type) u64 {
-        return lib.align_forward_u64(ty.get_byte_size(), ty.get_byte_alignment());
-    }
-
-    pub fn get_bit_size(ty: *const Type) u64 {
-        return switch (ty.bb) {
-            .integer => |integer| integer.bit_count,
-            .structure => |struct_type| struct_type.bit_size,
-            .bits => |bits| bits.backing_type.get_bit_size(),
-            .void, .forward_declaration, .function, .noreturn => unreachable,
-            .array => |*array| array.element_type.get_bit_size() * array.element_count.?,
-            .pointer => 64,
-            .enumerator => |enumerator| enumerator.backing_type.get_bit_size(),
-            .float => @trap(),
-            .vector => @trap(),
-        };
-    }
-
-    pub fn get_byte_size(ty: *const Type) u64 {
-        return switch (ty.bb) {
-            .integer => |integer| @divExact(@max(8, lib.next_power_of_two(integer.bit_count)), 8),
-            .structure => |struct_type| struct_type.byte_size,
-            .bits => |bits| bits.backing_type.get_byte_size(),
-            .void, .forward_declaration, .function, .noreturn => unreachable,
-            .array => |*array| array.element_type.get_byte_size() * array.element_count.?,
-            .pointer => 8,
-            .enumerator => @trap(),
-            .float => @trap(),
-            .vector => @trap(),
-        };
-    }
-
-    pub fn get_bit_alignment(ty: *const Type) u32 {
-        return switch (ty.bb) {
-            .integer => |integer| integer.bit_count,
-            .structure => |struct_type| struct_type.bit_alignment,
-            .bits => |bits| bits.backing_type.get_bit_alignment(),
-            .void, .forward_declaration, .function, .noreturn => unreachable,
-            .array => |*array| array.element_type.get_bit_alignment(),
-            .pointer => 64,
-            .enumerator => @trap(),
-            .float => @trap(),
-            .vector => @trap(),
-        };
-    }
-
-    pub fn get_byte_alignment(ty: *const Type) u32 {
-        return switch (ty.bb) {
-            .integer => |integer| @as(u32, @intCast(@divExact(@max(8, lib.next_power_of_two(integer.bit_count)), 8))),
-            .structure => |struct_type| struct_type.byte_alignment,
-            .bits => |bits| bits.backing_type.get_byte_alignment(),
-            .function => 1,
-            .void, .forward_declaration, .noreturn => unreachable,
-            .array => |array| array.element_type.get_byte_alignment(),
-            .pointer => 8,
-            .enumerator => |enumerator| enumerator.backing_type.get_byte_alignment(),
-            .float => @trap(),
-            .vector => @trap(),
-        };
-    }
-
-    const Array = struct {
-        buffer: [1024]Type = undefined,
-        count: u64 = 0,
-
-        const buffer_size = 1024;
-
-        pub fn get(types: *Array) []Type {
-            return types.buffer[0..types.count];
-        }
-
-        pub fn find(types: *Array, name: []const u8) ?*Type {
-            for (types.get()) |*ty| {
-                if (ty.name) |type_name| {
-                    if (lib.string.equal(type_name, name)) {
-                        return ty;
-                    }
-                }
-            } else {
-                return null;
-            }
-        }
-
-        fn add(types: *Array, ty: Type) *Type {
-            const result = &types.buffer[types.count];
-            types.count += 1;
-            result.* = ty;
-            return result;
-        }
-    };
-
-    pub const LLVM = struct {
-        handle: *llvm.Type,
-        debug: *llvm.DI.Type,
-    };
-};
-
-pub const Variable = struct {
-    value: *Value,
-    name: []const u8,
-
-    const Array = struct {
-        buffer: [1024]Variable = undefined,
-        count: u32 = 0,
-
-        pub fn get(variables: *Array) []Variable {
-            return variables.buffer[0..variables.count];
-        }
-
-        pub fn add(variables: *Array) *Variable {
-            const result = &variables.buffer[variables.count];
-            variables.count += 1;
-            return result;
-        }
-
-        pub fn add_many(variables: *Array, count: u32) []Variable {
-            const result = variables.buffer[variables.count .. variables.count + count];
-            variables.count += count;
-            return result;
-        }
-
-        pub fn find(variables: *Array, name: []const u8) ?*Variable {
-            for (variables.get()) |*variable| {
-                if (lib.string.equal(variable.name, name)) {
-                    return variable;
-                }
-            } else {
-                return null;
-            }
-        }
-    };
-};
-
-const Converter = struct {
-    content: []const u8,
-    offset: u64,
-    line_offset: u64,
-    line_character_offset: u64,
-
-    fn get_line(converter: *const Converter) u32 {
-        return @intCast(converter.line_offset + 1);
-    }
-
-    fn get_column(converter: *const Converter) u32 {
-        return @intCast(converter.offset - converter.line_character_offset + 1);
-    }
-
-    fn report_error(noalias converter: *Converter) noreturn {
+    fn report_error(noalias module: *Module) noreturn {
         @branchHint(.cold);
-        _ = converter;
+        _ = module;
         lib.os.abort();
     }
 
-    fn skip_space(noalias converter: *Converter) void {
+    fn skip_space(noalias module: *Module) void {
         while (true) {
-            const offset = converter.offset;
-            while (converter.offset < converter.content.len and is_space(converter.content[converter.offset])) {
-                converter.line_offset += @intFromBool(converter.content[converter.offset] == '\n');
-                converter.line_character_offset = if (converter.content[converter.offset] == '\n') converter.offset else converter.line_character_offset;
-                converter.offset += 1;
+            const offset = module.offset;
+            while (module.offset < module.content.len and is_space(module.content[module.offset])) {
+                module.line_offset += @intFromBool(module.content[module.offset] == '\n');
+                module.line_character_offset = if (module.content[module.offset] == '\n') module.offset else module.line_character_offset;
+                module.offset += 1;
             }
 
-            if (converter.offset + 1 < converter.content.len) {
-                const i = converter.offset;
-                const is_comment = converter.content[i] == '/' and converter.content[i + 1] == '/';
+            if (module.offset + 1 < module.content.len) {
+                const i = module.offset;
+                const is_comment = module.content[i] == '/' and module.content[i + 1] == '/';
                 if (is_comment) {
-                    while (converter.offset < converter.content.len and converter.content[converter.offset] != '\n') {
-                        converter.offset += 1;
+                    while (module.offset < module.content.len and module.content[module.offset] != '\n') {
+                        module.offset += 1;
                     }
 
-                    if (converter.offset < converter.content.len) {
-                        converter.line_offset += 1;
-                        converter.line_character_offset = converter.offset;
-                        converter.offset += 1;
+                    if (module.offset < module.content.len) {
+                        module.line_offset += 1;
+                        module.line_character_offset = module.offset;
+                        module.offset += 1;
                     }
                 }
             }
 
-            if (converter.offset - offset == 0) {
+            if (module.offset - offset == 0) {
                 break;
             }
         }
     }
 
-    pub fn parse_condition_parenthesis(noalias converter: *Converter, noalias module: *Module) *Value {
-        converter.skip_space();
+    pub fn parse_condition_parenthesis(noalias module: *Module) *Value {
+        module.skip_space();
 
-        converter.expect_character(left_parenthesis);
-        converter.skip_space();
+        module.expect_character(left_parenthesis);
+        module.skip_space();
 
-        const condition = converter.parse_condition_raw(module);
+        const condition = module.parse_condition_raw();
 
-        converter.skip_space();
-        converter.expect_character(right_parenthesis);
+        module.skip_space();
+        module.expect_character(right_parenthesis);
 
         return condition;
     }
 
-    pub fn parse_condition_raw(noalias converter: *Converter, noalias module: *Module) *Value {
-        const condition = converter.parse_value(module, .{});
+    pub fn parse_condition_raw(noalias module: *Module) *Value {
+        const condition = module.parse_value(.{});
         const boolean_type = module.integer_type(1, false);
         if (condition.type != boolean_type) {
             const llvm_value = switch (condition.type.bb) {
@@ -1608,18 +1610,18 @@ const Converter = struct {
         }
     }
 
-    pub fn parse_type(noalias converter: *Converter, noalias module: *Module) *Type {
-        switch (converter.content[converter.offset]) {
+    pub fn parse_type(noalias module: *Module) *Type {
+        switch (module.content[module.offset]) {
             'a'...'z', 'A'...'Z', '_' => {
-                const identifier = converter.parse_identifier();
-                var integer_type = identifier.len > 1 and identifier[0] == 's' or identifier[0] == 'u';
-                if (integer_type) {
+                const identifier = module.parse_identifier();
+                var int_type = identifier.len > 1 and identifier[0] == 's' or identifier[0] == 'u';
+                if (int_type) {
                     for (identifier[1..]) |ch| {
-                        integer_type = integer_type and is_decimal_ch(ch);
+                        int_type = int_type and is_decimal_ch(ch);
                     }
                 }
 
-                if (integer_type) {
+                if (int_type) {
                     const signedness = switch (identifier[0]) {
                         's' => true,
                         'u' => false,
@@ -1636,24 +1638,24 @@ const Converter = struct {
                 }
             },
             left_bracket => {
-                converter.offset += 1;
+                module.offset += 1;
 
-                converter.skip_space();
+                module.skip_space();
 
-                const is_slice = converter.consume_character_if_match(right_bracket);
+                const is_slice = module.consume_character_if_match(right_bracket);
                 if (is_slice) {
-                    const element_type = converter.parse_type(module);
+                    const element_type = module.parse_type();
                     const slice_type = module.get_slice_type(.{ .type = element_type });
                     return slice_type;
                 } else {
-                    const length_expression = converter.parse_value(module, ValueBuilder{
+                    const length_expression = module.parse_value(ValueBuilder{
                         .type = module.integer_type(64, false),
                         .kind = .value,
                     });
-                    converter.skip_space();
-                    converter.expect_character(right_bracket);
+                    module.skip_space();
+                    module.expect_character(right_bracket);
 
-                    const element_type = converter.parse_type(module);
+                    const element_type = module.parse_type();
 
                     if (length_expression.bb == .infer_or_ignore) {
                         const array_type = module.types.add(.{
@@ -1685,156 +1687,156 @@ const Converter = struct {
                 }
             },
             '&' => {
-                converter.offset += 1;
+                module.offset += 1;
 
-                converter.skip_space();
+                module.skip_space();
 
-                const element_type = converter.parse_type(module);
+                const element_type = module.parse_type();
 
                 return module.get_pointer_type(.{
                     .type = element_type,
                 });
             },
-            '#' => return converter.parse_type_intrinsic(module),
+            '#' => return module.parse_type_intrinsic(),
             else => @trap(),
         }
     }
 
-    pub fn parse_identifier(noalias converter: *Converter) []const u8 {
-        const start = converter.offset;
+    pub fn parse_identifier(noalias module: *Module) []const u8 {
+        const start = module.offset;
 
-        if (is_identifier_start_ch(converter.content[start])) {
-            converter.offset += 1;
+        if (is_identifier_start_ch(module.content[start])) {
+            module.offset += 1;
 
-            while (converter.offset < converter.content.len) {
-                if (is_identifier_ch(converter.content[converter.offset])) {
-                    converter.offset += 1;
+            while (module.offset < module.content.len) {
+                if (is_identifier_ch(module.content[module.offset])) {
+                    module.offset += 1;
                 } else {
                     break;
                 }
             }
         }
 
-        if (converter.offset - start == 0) {
-            converter.report_error();
+        if (module.offset - start == 0) {
+            module.report_error();
         }
 
-        return converter.content[start..converter.offset];
+        return module.content[start..module.offset];
     }
 
-    fn consume_character_if_match(noalias converter: *Converter, expected_ch: u8) bool {
+    fn consume_character_if_match(noalias module: *Module, expected_ch: u8) bool {
         var is_ch = false;
-        if (converter.offset < converter.content.len) {
-            const ch = converter.content[converter.offset];
+        if (module.offset < module.content.len) {
+            const ch = module.content[module.offset];
             is_ch = expected_ch == ch;
-            converter.offset += @intFromBool(is_ch);
+            module.offset += @intFromBool(is_ch);
         }
 
         return is_ch;
     }
 
-    fn expect_or_consume(noalias converter: *Converter, expected_ch: u8, is_required: bool) bool {
+    fn expect_or_consume(noalias module: *Module, expected_ch: u8, is_required: bool) bool {
         if (is_required) {
-            converter.expect_character(expected_ch);
+            module.expect_character(expected_ch);
             return true;
         } else {
-            return converter.consume_character_if_match(expected_ch);
+            return module.consume_character_if_match(expected_ch);
         }
     }
 
-    fn parse_decimal(noalias converter: *Converter) u64 {
+    fn parse_decimal(noalias module: *Module) u64 {
         var value: u64 = 0;
         while (true) {
-            const ch = converter.content[converter.offset];
+            const ch = module.content[module.offset];
             if (!is_decimal_ch(ch)) {
                 break;
             }
 
-            converter.offset += 1;
+            module.offset += 1;
             value = lib.parse.accumulate_decimal(value, ch);
         }
 
         return value;
     }
 
-    fn parse_hexadecimal(noalias converter: *Converter) u64 {
+    fn parse_hexadecimal(noalias module: *Module) u64 {
         var value: u64 = 0;
         while (true) {
-            const ch = converter.content[converter.offset];
+            const ch = module.content[module.offset];
             if (!lib.is_hex_digit(ch)) {
                 break;
             }
 
-            converter.offset += 1;
+            module.offset += 1;
             value = lib.parse.accumulate_hexadecimal(value, ch);
         }
 
         return value;
     }
 
-    fn parse_integer_value(converter: *Converter, sign: bool) u64 {
-        const start = converter.offset;
-        const integer_start_ch = converter.content[start];
+    fn parse_integer_value(module: *Module, sign: bool) u64 {
+        const start = module.offset;
+        const integer_start_ch = module.content[start];
         assert(!is_space(integer_start_ch));
         assert(is_decimal_ch(integer_start_ch));
 
         const absolute_value: u64 = switch (integer_start_ch) {
             '0' => blk: {
-                converter.offset += 1;
+                module.offset += 1;
 
-                const next_ch = converter.content[converter.offset];
+                const next_ch = module.content[module.offset];
                 break :blk switch (sign) {
                     false => switch (next_ch) {
                         'x' => b: {
-                            converter.offset += 1;
-                            break :b converter.parse_hexadecimal();
+                            module.offset += 1;
+                            break :b module.parse_hexadecimal();
                         },
                         'o' => {
                             // TODO: parse octal
-                            converter.report_error();
+                            module.report_error();
                         },
                         'b' => {
                             // TODO: parse binary
-                            converter.report_error();
+                            module.report_error();
                         },
                         '0'...'9' => {
-                            converter.report_error();
+                            module.report_error();
                         },
                         // Zero literal
                         else => 0,
                     },
                     true => switch (next_ch) {
-                        'x', 'o', 'b', '0' => converter.report_error(),
-                        '1'...'9' => converter.parse_decimal(),
+                        'x', 'o', 'b', '0' => module.report_error(),
+                        '1'...'9' => module.parse_decimal(),
                         else => unreachable,
                     },
                 };
             },
-            '1'...'9' => converter.parse_decimal(),
+            '1'...'9' => module.parse_decimal(),
             else => unreachable,
         };
 
         return absolute_value;
     }
 
-    fn parse_integer(noalias converter: *Converter, noalias module: *Module, expected_type: *Type, sign: bool) *Value {
-        const absolute_value = converter.parse_integer_value(sign);
+    fn parse_integer(noalias module: *Module, expected_type: *Type, sign: bool) *Value {
+        const absolute_value = module.parse_integer_value(sign);
 
         const value: u64 = switch (sign) {
             true => @bitCast(-@as(i64, @intCast(absolute_value))),
             false => absolute_value,
         };
 
-        const integer_type = switch (expected_type.bb) {
+        const int_type = switch (expected_type.bb) {
             .integer => expected_type,
             .pointer => module.integer_type(64, false),
             else => @trap(),
         };
-        const llvm_integer_value = integer_type.llvm.handle.to_integer().get_constant(value, @intFromBool(integer_type.bb.integer.signed));
+        const llvm_integer_value = int_type.llvm.handle.to_integer().get_constant(value, @intFromBool(int_type.bb.integer.signed));
         const integer_value = module.values.add();
         integer_value.* = .{
             .llvm = llvm_integer_value.to_value(),
-            .type = integer_type,
+            .type = int_type,
             .bb = .{
                 .constant_integer = .{
                     .value = absolute_value,
@@ -1847,13 +1849,13 @@ const Converter = struct {
         return integer_value;
     }
 
-    fn expect_character(noalias converter: *Converter, expected_ch: u8) void {
-        if (!converter.consume_character_if_match(expected_ch)) {
-            converter.report_error();
+    fn expect_character(noalias module: *Module, expected_ch: u8) void {
+        if (!module.consume_character_if_match(expected_ch)) {
+            module.report_error();
         }
     }
 
-    fn parse_call(noalias converter: *Converter, noalias module: *Module, may_be_callable: *Value) *Value {
+    fn parse_call(noalias module: *Module, may_be_callable: *Value) *Value {
         const child_type = may_be_callable.type.bb.pointer.type;
         const pointer_type = switch (child_type.bb) {
             .function => may_be_callable.type,
@@ -1913,9 +1915,9 @@ const Converter = struct {
         var available_registers = function_type.available_registers;
 
         while (true) : (semantic_argument_count += 1) {
-            converter.skip_space();
+            module.skip_space();
 
-            if (converter.consume_character_if_match(right_parenthesis)) {
+            if (module.consume_character_if_match(right_parenthesis)) {
                 break;
             }
 
@@ -1923,9 +1925,9 @@ const Converter = struct {
             const is_named_argument = semantic_argument_index < function_semantic_argument_count;
             if (is_named_argument or function_type.is_var_args) {
                 const expected_semantic_argument_type: ?*Type = if (is_named_argument) function_type.argument_type_abis[semantic_argument_index].semantic_type else null;
-                const semantic_argument_value = converter.parse_value(module, expected_semantic_argument_type, .value);
+                const semantic_argument_value = module.parse_value(module, expected_semantic_argument_type, .value);
 
-                _ = converter.consume_character_if_match(',');
+                _ = module.consume_character_if_match(',');
 
                 const semantic_argument_type = switch (is_named_argument) {
                     true => function_type.argument_type_abis[semantic_argument_index].semantic_type,
@@ -2111,7 +2113,7 @@ const Converter = struct {
 
                 assert(abi_argument_count == argument_abi.abi_start + argument_abi.abi_count);
             } else {
-                converter.report_error();
+                module.report_error();
             }
         }
 
@@ -2225,14 +2227,14 @@ const Converter = struct {
         }
     }
 
-    fn parse_block(noalias converter: *Converter, noalias module: *Module) void {
-        converter.skip_space();
+    fn parse_block(noalias module: *Module) void {
+        module.skip_space();
 
         const current_function_global = module.current_function orelse unreachable;
         const current_function = &current_function_global.value.bb.function;
         const current_function_type = &current_function_global.value.type.bb.pointer.type.bb.function;
-        const block_line = converter.get_line();
-        const block_column = converter.get_column();
+        const block_line = module.get_line();
+        const block_column = module.get_column();
 
         const current_scope = current_function.current_scope;
         defer current_function.current_scope = current_scope;
@@ -2242,26 +2244,26 @@ const Converter = struct {
             current_function.current_scope = lexical_block.to_scope();
         }
 
-        converter.expect_character(left_brace);
+        module.expect_character(left_brace);
 
         const local_offset = current_function.locals.count;
         defer current_function.locals.count = local_offset;
 
         while (true) {
-            converter.skip_space();
+            module.skip_space();
 
-            if (converter.offset == converter.content.len) {
+            if (module.offset == module.content.len) {
                 break;
             }
 
-            if (converter.content[converter.offset] == right_brace) {
+            if (module.content[module.offset] == right_brace) {
                 break;
             }
 
             var require_semicolon = true;
 
-            const line = converter.get_line();
-            const column = converter.get_column();
+            const line = module.get_line();
+            const column = module.get_column();
 
             var statement_debug_location: *llvm.DI.Location = undefined;
             if (module.llvm.di_builder) |_| {
@@ -2270,30 +2272,30 @@ const Converter = struct {
                 module.llvm.builder.set_current_debug_location(statement_debug_location);
             }
 
-            const statement_start_ch = converter.content[converter.offset];
+            const statement_start_ch = module.content[module.offset];
             if (statement_start_ch == '>') {
-                converter.offset += 1;
+                module.offset += 1;
 
-                converter.skip_space();
+                module.skip_space();
 
-                const local_name = converter.parse_identifier();
+                const local_name = module.parse_identifier();
 
-                converter.skip_space();
+                module.skip_space();
 
-                const has_type = converter.consume_character_if_match(':');
+                const has_type = module.consume_character_if_match(':');
 
-                converter.skip_space();
+                module.skip_space();
 
                 const local_type_stated: ?*Type = switch (has_type) {
-                    true => converter.parse_type(module),
+                    true => module.parse_type(),
                     false => null,
                 };
 
-                converter.skip_space();
+                module.skip_space();
 
-                converter.expect_character('=');
+                module.expect_character('=');
 
-                const value = converter.parse_value(module, .{
+                const value = module.parse_value(.{
                     .type = local_type_stated,
                     .kind = .value,
                 });
@@ -2367,34 +2369,34 @@ const Converter = struct {
                     .value = local_storage,
                 };
             } else if (statement_start_ch == '#') {
-                const intrinsic = converter.parse_value_intrinsic(module, null);
+                const intrinsic = module.parse_value_intrinsic(null);
                 switch (intrinsic.type.bb) {
                     .void, .noreturn => {},
                     else => @trap(),
                 }
             } else if (is_identifier_start_ch(statement_start_ch)) {
-                const statement_start_identifier = converter.parse_identifier();
+                const statement_start_identifier = module.parse_identifier();
 
                 if (lib.string.to_enum(StatementStartKeyword, statement_start_identifier)) |statement_start_keyword| {
                     switch (statement_start_keyword) {
                         ._ => {
-                            converter.skip_space();
-                            converter.expect_character('=');
-                            converter.skip_space();
-                            _ = converter.parse_value(module, .{
+                            module.skip_space();
+                            module.expect_character('=');
+                            module.skip_space();
+                            _ = module.parse_value(.{
                                 .kind = .value,
                             });
                         },
                         .@"return" => {
-                            converter.skip_space();
+                            module.skip_space();
 
                             const return_type_abi = &current_function_type.return_type_abi;
-                            const returns_nothing = converter.consume_character_if_match(';');
+                            const returns_nothing = module.consume_character_if_match(';');
                             if (returns_nothing) {
                                 @trap();
                             } else {
                                 // TODO: take ABI into account
-                                const return_value = converter.parse_value(module, .{
+                                const return_value = module.parse_value(.{
                                     .kind = .value,
                                     .type = return_type_abi.semantic_type,
                                 });
@@ -2484,7 +2486,7 @@ const Converter = struct {
                             const not_taken_block = module.llvm.context.create_basic_block("if.false", current_function_global.value.llvm.to_function());
                             const exit_block = module.llvm.context.create_basic_block("if.end", null);
 
-                            const condition = converter.parse_condition_parenthesis(module);
+                            const condition = module.parse_condition_parenthesis();
 
                             _ = module.llvm.builder.create_conditional_branch(condition.llvm, taken_block, not_taken_block);
                             module.llvm.builder.position_at_end(taken_block);
@@ -2494,18 +2496,18 @@ const Converter = struct {
 
                             current_function.exit_block = exit_block;
 
-                            converter.parse_block(module);
+                            module.parse_block();
 
                             const if_final_block = module.llvm.builder.get_insert_block();
 
-                            converter.skip_space();
+                            module.skip_space();
 
                             var is_else = false;
-                            if (is_identifier_start_ch(converter.content[converter.offset])) {
-                                const identifier = converter.parse_identifier();
+                            if (is_identifier_start_ch(module.content[module.offset])) {
+                                const identifier = module.parse_identifier();
                                 is_else = lib.string.equal(identifier, "else");
                                 if (!is_else) {
-                                    converter.offset -= identifier.len;
+                                    module.offset -= identifier.len;
                                 }
                             }
 
@@ -2513,7 +2515,7 @@ const Converter = struct {
                             module.llvm.builder.position_at_end(not_taken_block);
                             if (is_else) {
                                 current_function.exit_block = exit_block;
-                                converter.parse_block(module);
+                                module.parse_block();
                                 is_second_block_terminated = module.llvm.builder.get_insert_block() == null;
                             } else {
                                 if (if_final_block) |final_block| {
@@ -2556,14 +2558,14 @@ const Converter = struct {
                             _ = module.llvm.builder.create_branch(loop_entry_block);
                             module.llvm.builder.position_at_end(loop_entry_block);
 
-                            const condition = converter.parse_condition_parenthesis(module);
+                            const condition = module.parse_condition_parenthesis();
 
                             const loop_body_block = module.llvm.context.create_basic_block("while.body", current_function_global.value.llvm.to_function());
                             const loop_end_block = module.llvm.context.create_basic_block("while.end", current_function_global.value.llvm.to_function());
                             _ = module.llvm.builder.create_conditional_branch(condition.llvm, loop_body_block, loop_end_block);
                             module.llvm.builder.position_at_end(loop_body_block);
-                            converter.skip_space();
-                            converter.parse_block(module);
+                            module.skip_space();
+                            module.parse_block();
 
                             if (module.llvm.builder.get_insert_block() != null) {
                                 _ = module.llvm.builder.create_branch(loop_entry_block);
@@ -2583,19 +2585,19 @@ const Converter = struct {
                         },
                     }
                 } else {
-                    converter.offset -= statement_start_identifier.len;
+                    module.offset -= statement_start_identifier.len;
 
-                    const v = converter.parse_value(module, .{
+                    const v = module.parse_value(.{
                         .kind = .maybe_pointer,
                     });
 
-                    converter.skip_space();
+                    module.skip_space();
 
-                    if (converter.consume_character_if_match(';')) {
+                    if (module.consume_character_if_match(';')) {
                         const is_noreturn = v.type.bb == .noreturn;
                         const is_valid = v.type.bb == .void or is_noreturn;
                         if (!is_valid) {
-                            converter.report_error();
+                            module.report_error();
                         }
 
                         if (is_noreturn) {
@@ -2606,7 +2608,7 @@ const Converter = struct {
                     } else {
                         const left = v;
                         if (left.type.bb != .pointer) {
-                            converter.report_error();
+                            module.report_error();
                         }
                         const store_alignment = left.type.bb.pointer.alignment;
                         const store_type = left.type.bb.pointer.type;
@@ -2630,9 +2632,9 @@ const Converter = struct {
                             xor,
                         };
 
-                        const assignment_operator: AssignmentOperator = switch (converter.content[converter.offset]) {
+                        const assignment_operator: AssignmentOperator = switch (module.content[module.offset]) {
                             '=' => .plain,
-                            '+' => switch (converter.content[converter.offset + 1]) {
+                            '+' => switch (module.content[module.offset + 1]) {
                                 '=' => switch (store_type.bb) {
                                     .integer => .integer_add,
                                     .pointer => .pointer_add,
@@ -2640,7 +2642,7 @@ const Converter = struct {
                                 },
                                 else => @trap(),
                             },
-                            '-' => switch (converter.content[converter.offset + 1]) {
+                            '-' => switch (module.content[module.offset + 1]) {
                                 '=' => switch (store_type.bb) {
                                     .integer => .integer_sub,
                                     .pointer => .pointer_sub,
@@ -2648,14 +2650,14 @@ const Converter = struct {
                                 },
                                 else => @trap(),
                             },
-                            '*' => switch (converter.content[converter.offset + 1]) {
+                            '*' => switch (module.content[module.offset + 1]) {
                                 '=' => switch (store_type.bb) {
                                     .integer => .integer_mul,
                                     else => @trap(),
                                 },
                                 else => @trap(),
                             },
-                            '/' => switch (converter.content[converter.offset + 1]) {
+                            '/' => switch (module.content[module.offset + 1]) {
                                 '=' => switch (store_type.bb) {
                                     .integer => |integer| switch (integer.signed) {
                                         true => .integer_sdiv,
@@ -2665,7 +2667,7 @@ const Converter = struct {
                                 },
                                 else => @trap(),
                             },
-                            '%' => switch (converter.content[converter.offset + 1]) {
+                            '%' => switch (module.content[module.offset + 1]) {
                                 '=' => switch (store_type.bb) {
                                     .integer => |integer| switch (integer.signed) {
                                         true => .integer_srem,
@@ -2675,29 +2677,29 @@ const Converter = struct {
                                 },
                                 else => @trap(),
                             },
-                            '&' => switch (converter.content[converter.offset + 1]) {
+                            '&' => switch (module.content[module.offset + 1]) {
                                 '=' => switch (store_type.bb) {
                                     .integer => .@"and",
                                     else => @trap(),
                                 },
                                 else => @trap(),
                             },
-                            '|' => switch (converter.content[converter.offset + 1]) {
+                            '|' => switch (module.content[module.offset + 1]) {
                                 '=' => switch (store_type.bb) {
                                     .integer => .@"or",
                                     else => @trap(),
                                 },
                                 else => @trap(),
                             },
-                            '^' => switch (converter.content[converter.offset + 1]) {
+                            '^' => switch (module.content[module.offset + 1]) {
                                 '=' => switch (store_type.bb) {
                                     .integer => .xor,
                                     else => @trap(),
                                 },
                                 else => @trap(),
                             },
-                            '<' => switch (converter.content[converter.offset + 1]) {
-                                '<' => switch (converter.content[converter.offset + 2]) {
+                            '<' => switch (module.content[module.offset + 1]) {
+                                '<' => switch (module.content[module.offset + 2]) {
                                     '=' => switch (store_type.bb) {
                                         .integer => .shl,
                                         else => @trap(),
@@ -2706,8 +2708,8 @@ const Converter = struct {
                                 },
                                 else => @trap(),
                             },
-                            '>' => switch (converter.content[converter.offset + 1]) {
-                                '>' => switch (converter.content[converter.offset + 2]) {
+                            '>' => switch (module.content[module.offset + 1]) {
+                                '>' => switch (module.content[module.offset + 2]) {
                                     '=' => switch (store_type.bb) {
                                         .integer => |integer| switch (integer.signed) {
                                             true => .ashr,
@@ -2722,7 +2724,7 @@ const Converter = struct {
                             else => @trap(),
                         };
 
-                        converter.offset += switch (assignment_operator) {
+                        module.offset += switch (assignment_operator) {
                             .plain,
                             => 1,
                             .pointer_sub,
@@ -2744,13 +2746,13 @@ const Converter = struct {
                             => 3,
                         };
 
-                        const right_side = converter.parse_value(module, .{
+                        const right_side = module.parse_value(.{
                             .type = store_type,
                             .kind = .value,
                         });
                         const right_llvm = right_side.llvm;
 
-                        converter.skip_space();
+                        module.skip_space();
 
                         const right = switch (assignment_operator) {
                             .plain => right_side,
@@ -2803,7 +2805,7 @@ const Converter = struct {
                         switch (store_type.get_evaluation_kind()) {
                             .aggregate => {
                                 if (store_type != right.type) {
-                                    converter.report_error();
+                                    module.report_error();
                                 }
                                 assert(right.lvalue);
                                 _ = module.llvm.builder.create_memcpy(left.llvm, store_alignment, right.llvm, right.type.get_byte_alignment(), module.integer_type(64, false).llvm.handle.to_integer().get_constant(right.type.get_byte_size(), @intFromBool(false)).to_value());
@@ -2813,17 +2815,17 @@ const Converter = struct {
                     }
                 }
             } else {
-                converter.report_error();
+                module.report_error();
             }
 
-            converter.skip_space();
+            module.skip_space();
 
             if (require_semicolon) {
-                converter.expect_character(';');
+                module.expect_character(';');
             }
         }
 
-        converter.expect_character(right_brace);
+        module.expect_character(right_brace);
     }
 
     const ExpressionState = enum {
@@ -2944,13 +2946,13 @@ const Converter = struct {
         after: ?*const Rule.Function,
         precedence: Precedence,
 
-        const Function = fn (noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value;
+        const Function = fn (noalias module: *Module, value_builder: ValueBuilder) *Value;
     };
 
-    fn rule_before_identifier(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
+    fn rule_before_identifier(noalias module: *Module, value_builder: ValueBuilder) *Value {
         const identifier = value_builder.token.identifier;
-        const current_function = module.current_function orelse converter.report_error();
-        const variable = if (current_function.value.bb.function.locals.find(identifier)) |local| local else if (current_function.value.bb.function.arguments.find(identifier)) |argument| argument else if (module.globals.find(identifier)) |global| global else converter.report_error();
+        const current_function = module.current_function orelse module.report_error();
+        const variable = if (current_function.value.bb.function.locals.find(identifier)) |local| local else if (current_function.value.bb.function.arguments.find(identifier)) |argument| argument else if (module.globals.find(identifier)) |global| global else module.report_error();
         const value = variable.value;
         assert(value.type.bb == .pointer);
 
@@ -3022,14 +3024,13 @@ const Converter = struct {
         };
     }
 
-    fn rule_before_value_keyword(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
+    fn rule_before_value_keyword(noalias module: *Module, value_builder: ValueBuilder) *Value {
         _ = value_builder;
         _ = module;
-        _ = converter;
         @trap();
     }
 
-    fn rule_before_value_intrinsic(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
+    fn rule_before_value_intrinsic(noalias module: *Module, value_builder: ValueBuilder) *Value {
         const expected_type = value_builder.type;
         const value_intrinsic = value_builder.token.value_intrinsic;
         const has_parenthesis = switch (value_intrinsic) {
@@ -3052,18 +3053,18 @@ const Converter = struct {
         };
 
         if (has_parenthesis) {
-            converter.expect_character(left_parenthesis);
+            module.expect_character(left_parenthesis);
         }
 
         const value = switch (value_intrinsic) {
             .extend => blk: {
-                const source_value = converter.parse_value(module, .{});
+                const source_value = module.parse_value(.{});
                 const source_type = source_value.type;
-                const destination_type = expected_type orelse converter.report_error();
+                const destination_type = expected_type orelse module.report_error();
                 if (source_type.get_bit_size() > destination_type.get_bit_size()) {
-                    converter.report_error();
+                    module.report_error();
                 } else if (source_type.get_bit_size() == destination_type.get_bit_size() and source_type.is_signed() == destination_type.is_signed()) {
-                    converter.report_error();
+                    module.report_error();
                 }
 
                 const extension_instruction = switch (source_type.bb.integer.signed) {
@@ -3081,15 +3082,15 @@ const Converter = struct {
                 break :blk value;
             },
             .integer_max => blk: {
-                const ty = converter.parse_type(module);
+                const ty = module.parse_type();
                 if (ty.bb != .integer) {
-                    converter.report_error();
+                    module.report_error();
                 }
                 const bit_count = ty.bb.integer.bit_count;
                 const max_value = if (bit_count == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(bit_count - @intFromBool(ty.bb.integer.signed))) - 1;
                 const expected_ty = expected_type orelse ty;
                 if (ty.get_bit_size() > expected_ty.get_bit_size()) {
-                    converter.report_error();
+                    module.report_error();
                 }
                 const constant_integer = expected_ty.llvm.handle.to_integer().get_constant(max_value, @intFromBool(false));
                 const value = module.values.add();
@@ -3111,8 +3112,8 @@ const Converter = struct {
         };
 
         if (has_parenthesis) {
-            converter.skip_space();
-            converter.expect_character(right_parenthesis);
+            module.skip_space();
+            module.expect_character(right_parenthesis);
         }
 
         return value;
@@ -3124,7 +3125,7 @@ const Converter = struct {
         @"&",
     };
 
-    fn rule_before_unary(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
+    fn rule_before_unary(noalias module: *Module, value_builder: ValueBuilder) *Value {
         assert(value_builder.left == null);
         const unary_token = value_builder.token;
         const unary_expression: Unary = switch (unary_token) {
@@ -3133,7 +3134,7 @@ const Converter = struct {
             .@"&" => .@"&",
             else => |t| @panic(@tagName(t)),
         };
-        const right = converter.parse_precedence(module, value_builder.with_precedence(.prefix).with_token(.none).with_kind(if (unary_expression == .@"&") .pointer else value_builder.kind));
+        const right = module.parse_precedence(value_builder.with_precedence(.prefix).with_token(.none).with_kind(if (unary_expression == .@"&") .pointer else value_builder.kind));
         return switch (unary_expression) {
             .@"+" => @trap(),
             .@"-" => b: {
@@ -3177,15 +3178,14 @@ const Converter = struct {
         integer_compare_signed_greater_equal,
     };
 
-    fn rule_before_parenthesis(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
-        _ = converter;
+    fn rule_before_parenthesis(noalias module: *Module, value_builder: ValueBuilder) *Value {
         _ = module;
         _ = value_builder;
         @trap();
     }
 
-    fn rule_after_call(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
-        const may_be_callable = value_builder.left orelse converter.report_error();
+    fn rule_after_call(noalias module: *Module, value_builder: ValueBuilder) *Value {
+        const may_be_callable = value_builder.left orelse module.report_error();
         const child_type = may_be_callable.type.bb.pointer.type;
         const pointer_type = switch (child_type.bb) {
             .function => may_be_callable.type,
@@ -3245,9 +3245,9 @@ const Converter = struct {
         var available_registers = function_type.available_registers;
 
         while (true) : (semantic_argument_count += 1) {
-            converter.skip_space();
+            module.skip_space();
 
-            if (converter.consume_character_if_match(right_parenthesis)) {
+            if (module.consume_character_if_match(right_parenthesis)) {
                 break;
             }
 
@@ -3255,11 +3255,11 @@ const Converter = struct {
             const is_named_argument = semantic_argument_index < function_semantic_argument_count;
             if (is_named_argument or function_type.is_var_args) {
                 const expected_semantic_argument_type: ?*Type = if (is_named_argument) function_type.argument_type_abis[semantic_argument_index].semantic_type else null;
-                const semantic_argument_value = converter.parse_value(module, .{
+                const semantic_argument_value = module.parse_value(.{
                     .type = expected_semantic_argument_type,
                 });
 
-                _ = converter.consume_character_if_match(',');
+                _ = module.consume_character_if_match(',');
 
                 const semantic_argument_type = switch (is_named_argument) {
                     true => function_type.argument_type_abis[semantic_argument_index].semantic_type,
@@ -3445,7 +3445,7 @@ const Converter = struct {
 
                 assert(abi_argument_count == argument_abi.abi_start + argument_abi.abi_count);
             } else {
-                converter.report_error();
+                module.report_error();
             }
         }
 
@@ -3561,7 +3561,7 @@ const Converter = struct {
         //return value;
     }
 
-    fn rule_after_dereference(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
+    fn rule_after_dereference(noalias module: *Module, value_builder: ValueBuilder) *Value {
         const left = value_builder.left orelse unreachable;
         switch (left.type.bb) {
             .pointer => |pointer| {
@@ -3581,17 +3581,17 @@ const Converter = struct {
                 };
                 return value;
             },
-            else => converter.report_error(),
+            else => module.report_error(),
         }
     }
 
-    fn rule_after_binary(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
+    fn rule_after_binary(noalias module: *Module, value_builder: ValueBuilder) *Value {
         const binary_operator_token = value_builder.token;
         const binary_operator_token_precedence = rules[@intFromEnum(binary_operator_token)].precedence;
-        const left = value_builder.left orelse converter.report_error();
+        const left = value_builder.left orelse module.report_error();
         assert(binary_operator_token_precedence != .assignment); // TODO: this may be wrong. Assignment operator is not allowed in expressions
         const right_precedence = if (binary_operator_token_precedence == .assignment) .assignment else binary_operator_token_precedence.increment();
-        const right = converter.parse_precedence(module, value_builder.with_precedence(right_precedence).with_token(.none).with_left(null).with_type(left.type));
+        const right = module.parse_precedence(value_builder.with_precedence(right_precedence).with_token(.none).with_left(null).with_type(left.type));
 
         const binary_operation_type = value_builder.type orelse left.type;
 
@@ -3705,12 +3705,12 @@ const Converter = struct {
         return result;
     }
 
-    fn rule_before_integer(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
+    fn rule_before_integer(noalias module: *Module, value_builder: ValueBuilder) *Value {
         const v = value_builder.token.integer.value;
         const value = module.values.add();
-        const expected_ty = value_builder.type orelse converter.report_error();
+        const expected_ty = value_builder.type orelse module.report_error();
         if (expected_ty.bb != .integer) {
-            converter.report_error();
+            module.report_error();
         }
         value.* = .{
             .llvm = expected_ty.llvm.handle.to_integer().get_constant(v, @intFromBool(false)).to_value(),
@@ -4042,30 +4042,30 @@ const Converter = struct {
         break :blk r;
     };
 
-    fn tokenize(converter: *Converter) Token {
-        converter.skip_space();
+    fn tokenize(module: *Module) Token {
+        module.skip_space();
 
-        const start_index = converter.offset;
-        if (start_index == converter.content.len) {
-            converter.report_error();
+        const start_index = module.offset;
+        if (start_index == module.content.len) {
+            module.report_error();
         }
 
-        const start_character = converter.content[start_index];
+        const start_character = module.content[start_index];
         const result: Token = switch (start_character) {
             ';' => blk: {
-                converter.offset += 1;
+                module.offset += 1;
                 break :blk .end_of_statement;
             },
             'a'...'z', 'A'...'Z', '_' => blk: {
                 assert(is_identifier_start_ch(start_character));
-                const identifier = converter.parse_identifier();
+                const identifier = module.parse_identifier();
                 const token: Token = if (lib.string.to_enum(ValueKeyword, identifier)) |value_keyword| .{ .value_keyword = value_keyword } else .{ .identifier = identifier };
                 break :blk token;
             },
-            '#' => if (is_identifier_start_ch(converter.content[converter.offset + 1])) blk: {
-                converter.offset += 1;
-                const value_intrinsic_identifier = converter.parse_identifier();
-                const value_intrinsic = lib.string.to_enum(ValueIntrinsic, value_intrinsic_identifier) orelse converter.report_error();
+            '#' => if (is_identifier_start_ch(module.content[module.offset + 1])) blk: {
+                module.offset += 1;
+                const value_intrinsic_identifier = module.parse_identifier();
+                const value_intrinsic = lib.string.to_enum(ValueIntrinsic, value_intrinsic_identifier) orelse module.report_error();
                 break :blk .{
                     .value_intrinsic = value_intrinsic,
                 };
@@ -4073,7 +4073,7 @@ const Converter = struct {
                 @trap();
             },
             '0' => blk: {
-                const next_ch = converter.content[start_index + 1];
+                const next_ch = module.content[start_index + 1];
                 const token_integer_kind: Token.Integer.Kind = switch (next_ch) {
                     'x' => .hexadecimal,
                     'o' => .octal,
@@ -4082,31 +4082,31 @@ const Converter = struct {
                 };
                 const value: u64 = switch (token_integer_kind) {
                     .decimal => switch (next_ch) {
-                        0...9 => converter.report_error(),
+                        0...9 => module.report_error(),
                         else => b: {
-                            converter.offset += 1;
+                            module.offset += 1;
                             break :b 0;
                         },
                     },
                     else => @trap(),
                 };
 
-                if (converter.content[converter.offset] == '.') {
+                if (module.content[module.offset] == '.') {
                     @trap();
                 } else {
                     break :blk .{ .integer = .{ .value = value, .kind = token_integer_kind } };
                 }
             },
             '1'...'9' => blk: {
-                const decimal = converter.parse_decimal();
-                if (converter.content[converter.offset] == '.') {
+                const decimal = module.parse_decimal();
+                if (module.content[module.offset] == '.') {
                     @trap();
                 } else {
                     break :blk .{ .integer = .{ .value = decimal, .kind = .decimal } };
                 }
             },
             '+', '-', '*', '/', '%', '&', '|', '^' => |c| blk: {
-                const next_ch = converter.content[start_index + 1];
+                const next_ch = module.content[start_index + 1];
                 const token_id: Token.Id = switch (next_ch) {
                     '=' => @trap(),
                     else => switch (c) {
@@ -4135,14 +4135,14 @@ const Converter = struct {
                     => |tid| @unionInit(Token, @tagName(tid), {}),
                 };
 
-                converter.offset += @as(u32, 1) + @intFromBool(next_ch == '=');
+                module.offset += @as(u32, 1) + @intFromBool(next_ch == '=');
 
                 break :blk token;
             },
             '<' => blk: {
-                const next_ch = converter.content[start_index + 1];
+                const next_ch = module.content[start_index + 1];
                 const token_id: Token.Id = switch (next_ch) {
-                    '<' => switch (converter.content[start_index + 2]) {
+                    '<' => switch (module.content[start_index + 2]) {
                         '=' => .@"<<=",
                         else => .@"<<",
                     },
@@ -4150,7 +4150,7 @@ const Converter = struct {
                     else => .@"<",
                 };
 
-                converter.offset += switch (token_id) {
+                module.offset += switch (token_id) {
                     .@"<<=" => 3,
                     .@"<<", .@"<=" => 2,
                     .@"<" => 1,
@@ -4168,9 +4168,9 @@ const Converter = struct {
                 break :blk token;
             },
             '>' => blk: {
-                const next_ch = converter.content[start_index + 1];
+                const next_ch = module.content[start_index + 1];
                 const token_id: Token.Id = switch (next_ch) {
-                    '>' => switch (converter.content[start_index + 2]) {
+                    '>' => switch (module.content[start_index + 2]) {
                         '=' => .@">>=",
                         else => .@">>",
                     },
@@ -4178,7 +4178,7 @@ const Converter = struct {
                     else => .@">",
                 };
 
-                converter.offset += switch (token_id) {
+                module.offset += switch (token_id) {
                     .@">>=" => 3,
                     .@">>", .@">=" => 2,
                     .@">" => 1,
@@ -4196,13 +4196,13 @@ const Converter = struct {
                 break :blk token;
             },
             '.' => blk: {
-                const next_ch = converter.content[start_index + 1];
+                const next_ch = module.content[start_index + 1];
                 const token_id: Token.Id = switch (next_ch) {
                     '&' => .@".&",
                     else => @trap(),
                 };
 
-                converter.offset += switch (token_id) {
+                module.offset += switch (token_id) {
                     .@".&" => 2,
                     else => @trap(),
                 };
@@ -4214,12 +4214,12 @@ const Converter = struct {
                 break :blk token;
             },
             '=' => blk: {
-                const next_ch = converter.content[start_index + 1];
+                const next_ch = module.content[start_index + 1];
                 const token_id: Token.Id = switch (next_ch) {
                     '=' => .@"==",
                     else => .@"=",
                 };
-                converter.offset += switch (token_id) {
+                module.offset += switch (token_id) {
                     .@"==" => 2,
                     .@"=" => 1,
                     else => @trap(),
@@ -4231,42 +4231,42 @@ const Converter = struct {
                 break :blk token;
             },
             '(' => blk: {
-                converter.offset += 1;
+                module.offset += 1;
                 break :blk .@"(";
             },
             ')' => blk: {
-                converter.offset += 1;
+                module.offset += 1;
                 break :blk .@")";
             },
             else => @trap(),
         };
 
-        assert(start_index != converter.offset);
+        assert(start_index != module.offset);
 
         return result;
     }
 
-    fn parse_precedence(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
+    fn parse_precedence(noalias module: *Module, value_builder: ValueBuilder) *Value {
         assert(value_builder.token == .none);
-        const token = converter.tokenize();
+        const token = module.tokenize();
         const rule = &rules[@intFromEnum(token)];
         if (rule.before) |before| {
-            const left = before(converter, module, value_builder.with_precedence(.none).with_token(token));
+            const left = before(module, value_builder.with_precedence(.none).with_token(token));
 
-            const result = converter.parse_precedence_left(module, value_builder.with_left(left));
+            const result = module.parse_precedence_left(value_builder.with_left(left));
             return result;
         } else {
-            converter.report_error();
+            module.report_error();
         }
     }
 
-    fn parse_precedence_left(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
+    fn parse_precedence_left(noalias module: *Module, value_builder: ValueBuilder) *Value {
         var result = value_builder.left;
         const precedence = value_builder.precedence;
 
         while (true) {
-            const checkpoint = converter.offset;
-            const token = converter.tokenize();
+            const checkpoint = module.offset;
+            const token = module.tokenize();
             const token_rule = &rules[@intFromEnum(token)];
             const token_precedence: Precedence = switch (token_rule.precedence) {
                 .assignment => switch (value_builder.allow_assignment_operators) {
@@ -4276,13 +4276,13 @@ const Converter = struct {
                 else => |p| p,
             };
             if (@intFromEnum(precedence) > @intFromEnum(token_precedence)) {
-                converter.offset = checkpoint;
+                module.offset = checkpoint;
                 break;
             }
 
-            const after_rule = token_rule.after orelse converter.report_error();
+            const after_rule = token_rule.after orelse module.report_error();
             const old = result;
-            const new = after_rule(converter, module, value_builder.with_token(token).with_precedence(.none).with_left(old));
+            const new = after_rule(module, value_builder.with_token(token).with_precedence(.none).with_left(old));
             result = new;
         }
 
@@ -4290,14 +4290,14 @@ const Converter = struct {
     }
 
     const parse_value = parse_value2;
-    fn parse_value2(noalias converter: *Converter, noalias module: *Module, value_builder: ValueBuilder) *Value {
+    fn parse_value2(noalias module: *Module, value_builder: ValueBuilder) *Value {
         assert(value_builder.precedence == .none);
         assert(value_builder.left == null);
-        const value = converter.parse_precedence(module, value_builder.with_precedence(.assignment));
+        const value = module.parse_precedence(value_builder.with_precedence(.assignment));
 
         if (value_builder.type) |expected_type| {
             if (expected_type != value.type) {
-                converter.report_error();
+                module.report_error();
             }
         }
 
@@ -4343,8 +4343,8 @@ const Converter = struct {
         }
     };
 
-    fn parse_value1(noalias converter: *Converter, noalias module: *Module, maybe_expected_type: ?*Type, value_kind: ValueKind) *Value {
-        converter.skip_space();
+    fn parse_value1(noalias module: *Module, maybe_expected_type: ?*Type, value_kind: ValueKind) *Value {
+        module.skip_space();
 
         var value_state = ExpressionState.none;
         var previous_value: ?*Value = null;
@@ -4362,19 +4362,19 @@ const Converter = struct {
                 else => iterative_expected_type,
             };
 
-            const current_value = switch (converter.consume_character_if_match(left_parenthesis)) {
+            const current_value = switch (module.consume_character_if_match(left_parenthesis)) {
                 true => blk: {
-                    const r = converter.parse_value(module, iterative_expected_type, value_kind);
-                    converter.skip_space();
-                    converter.expect_character(right_parenthesis);
+                    const r = module.parse_value(module, iterative_expected_type, value_kind);
+                    module.skip_space();
+                    module.expect_character(right_parenthesis);
                     break :blk r;
                 },
-                false => converter.parse_single_value(module, iterative_expected_type, value_kind),
+                false => module.parse_single_value(module, iterative_expected_type, value_kind),
             };
 
             iterative_expected_type = old_iterative_expected_type;
 
-            converter.skip_space();
+            module.skip_space();
 
             const left = switch (value_state) {
                 .none => undefined,
@@ -4459,19 +4459,19 @@ const Converter = struct {
                 },
             }
 
-            const ch = converter.content[converter.offset];
+            const ch = module.content[module.offset];
             // If an assignment operator (it being simple or compound, like +=, -=, &=, etc.) is found, then we break
             const new_value_state: ExpressionState = switch (ch) {
                 ',', ';', right_parenthesis, right_bracket, right_brace => .none,
-                '=' => switch (converter.content[converter.offset + 1]) {
+                '=' => switch (module.content[module.offset + 1]) {
                     '=' => .integer_compare_equal,
                     else => .none,
                 },
-                '-' => switch (converter.content[converter.offset + 1]) {
+                '-' => switch (module.content[module.offset + 1]) {
                     '=' => .none,
                     else => .integer_sub,
                 },
-                '+' => switch (converter.content[converter.offset + 1]) {
+                '+' => switch (module.content[module.offset + 1]) {
                     '=' => .none,
                     else => switch (next_ty.bb) {
                         .integer => .integer_add,
@@ -4479,14 +4479,14 @@ const Converter = struct {
                         else => @trap(),
                     },
                 },
-                '*' => switch (converter.content[converter.offset + 1]) {
+                '*' => switch (module.content[module.offset + 1]) {
                     '=' => .none,
                     else => switch (next_ty.bb) {
                         .integer => .integer_mul,
                         else => @trap(),
                     },
                 },
-                '/' => switch (converter.content[converter.offset + 1]) {
+                '/' => switch (module.content[module.offset + 1]) {
                     '=' => .none,
                     else => switch (next_ty.bb) {
                         .integer => |int| switch (int.signed) {
@@ -4496,7 +4496,7 @@ const Converter = struct {
                         else => @trap(),
                     },
                 },
-                '%' => switch (converter.content[converter.offset + 1]) {
+                '%' => switch (module.content[module.offset + 1]) {
                     '=' => .none,
                     else => switch (next_ty.bb) {
                         .integer => |int| switch (int.signed) {
@@ -4506,8 +4506,8 @@ const Converter = struct {
                         else => @trap(),
                     },
                 },
-                '<' => switch (converter.content[converter.offset + 1]) {
-                    '<' => switch (converter.content[converter.offset + 2]) {
+                '<' => switch (module.content[module.offset + 1]) {
+                    '<' => switch (module.content[module.offset + 2]) {
                         '=' => .none,
                         else => .shl,
                     },
@@ -4526,8 +4526,8 @@ const Converter = struct {
                         else => @trap(),
                     },
                 },
-                '>' => switch (converter.content[converter.offset + 1]) {
-                    '>' => switch (converter.content[converter.offset + 2]) {
+                '>' => switch (module.content[module.offset + 1]) {
+                    '>' => switch (module.content[module.offset + 2]) {
                         '=' => .none,
                         else => switch (next_ty.bb) {
                             .integer => |integer| switch (integer.signed) {
@@ -4552,33 +4552,33 @@ const Converter = struct {
                         else => @trap(),
                     },
                 },
-                '&' => switch (converter.content[converter.offset + 1]) {
+                '&' => switch (module.content[module.offset + 1]) {
                     '=' => .none,
                     else => .@"and",
                 },
-                '|' => switch (converter.content[converter.offset + 1]) {
+                '|' => switch (module.content[module.offset + 1]) {
                     '=' => .none,
                     else => .@"or",
                 },
-                '^' => switch (converter.content[converter.offset + 1]) {
+                '^' => switch (module.content[module.offset + 1]) {
                     '=' => .none,
                     else => .xor,
                 },
-                '!' => switch (converter.content[converter.offset + 1]) {
+                '!' => switch (module.content[module.offset + 1]) {
                     '=' => switch (next_ty.bb) {
                         .integer, .pointer => .integer_compare_not_equal,
                         else => @trap(),
                     },
-                    else => converter.report_error(),
+                    else => module.report_error(),
                 },
-                '.' => switch (converter.content[converter.offset + 1]) {
+                '.' => switch (module.content[module.offset + 1]) {
                     '.' => .none,
                     else => @trap(),
                 },
-                else => converter.report_error(),
+                else => module.report_error(),
             };
 
-            converter.offset += switch (new_value_state) {
+            module.offset += switch (new_value_state) {
                 .none => break previous_value.?,
                 .pointer_add,
                 .integer_sub,
@@ -4608,7 +4608,7 @@ const Converter = struct {
                 => 2,
             };
             value_state = new_value_state;
-            converter.skip_space();
+            module.skip_space();
         };
 
         return value;
@@ -4638,26 +4638,26 @@ const Converter = struct {
         va_arg,
     };
 
-    fn parse_value_intrinsic(noalias converter: *Converter, noalias module: *Module, expected_type: ?*Type) *Value {
-        converter.expect_character('#');
-        converter.skip_space();
-        const intrinsic_name = converter.parse_identifier();
-        const intrinsic_keyword = lib.string.to_enum(ValueIntrinsic, intrinsic_name) orelse converter.report_error();
-        converter.skip_space();
+    fn parse_value_intrinsic(noalias module: *Module, expected_type: ?*Type) *Value {
+        module.expect_character('#');
+        module.skip_space();
+        const intrinsic_name = module.parse_identifier();
+        const intrinsic_keyword = lib.string.to_enum(ValueIntrinsic, intrinsic_name) orelse module.report_error();
+        module.skip_space();
 
-        converter.expect_character(left_parenthesis);
+        module.expect_character(left_parenthesis);
 
-        converter.skip_space();
+        module.skip_space();
 
         switch (intrinsic_keyword) {
             .byte_size => {
-                const ty = converter.parse_type(module);
-                converter.skip_space();
-                converter.expect_character(')');
+                const ty = module.parse_type();
+                module.skip_space();
+                module.expect_character(')');
                 const byte_size = ty.get_byte_size();
-                const destination_type = expected_type orelse converter.report_error();
+                const destination_type = expected_type orelse module.report_error();
                 if (destination_type.bb != .integer) {
-                    converter.report_error();
+                    module.report_error();
                 }
                 const value = module.values.add();
                 value.* = .{
@@ -4678,12 +4678,12 @@ const Converter = struct {
                 @trap();
             },
             .cast_to => {
-                const destination_type = converter.parse_type(module);
-                converter.skip_space();
-                converter.expect_character(',');
-                const source_value = converter.parse_value(module, .{});
-                converter.skip_space();
-                converter.expect_character(')');
+                const destination_type = module.parse_type();
+                module.skip_space();
+                module.expect_character(',');
+                const source_value = module.parse_value(.{});
+                module.skip_space();
+                module.expect_character(')');
 
                 if (source_value.type.bb == .pointer and destination_type.bb == .integer) {
                     const value = module.values.add();
@@ -4700,15 +4700,15 @@ const Converter = struct {
                 }
             },
             .extend => {
-                const source_value = converter.parse_value(module, .{});
-                converter.skip_space();
-                converter.expect_character(right_parenthesis);
+                const source_value = module.parse_value(.{});
+                module.skip_space();
+                module.expect_character(right_parenthesis);
                 const source_type = source_value.type;
-                const destination_type = expected_type orelse converter.report_error();
+                const destination_type = expected_type orelse module.report_error();
                 if (source_type.get_bit_size() > destination_type.get_bit_size()) {
-                    converter.report_error();
+                    module.report_error();
                 } else if (source_type.get_bit_size() == destination_type.get_bit_size() and source_type.is_signed() == destination_type.is_signed()) {
-                    converter.report_error();
+                    module.report_error();
                 }
 
                 const extension_instruction = switch (source_type.bb.integer.signed) {
@@ -4727,17 +4727,17 @@ const Converter = struct {
                 return value;
             },
             .integer_max => {
-                converter.skip_space();
-                const ty = converter.parse_type(module);
-                converter.expect_character(right_parenthesis);
+                module.skip_space();
+                const ty = module.parse_type();
+                module.expect_character(right_parenthesis);
                 if (ty.bb != .integer) {
-                    converter.report_error();
+                    module.report_error();
                 }
                 const bit_count = ty.bb.integer.bit_count;
                 const max_value = if (bit_count == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(bit_count - @intFromBool(ty.bb.integer.signed))) - 1;
                 const expected_ty = expected_type orelse ty;
                 if (ty.get_bit_size() > expected_ty.get_bit_size()) {
-                    converter.report_error();
+                    module.report_error();
                 }
                 const constant_integer = expected_ty.llvm.handle.to_integer().get_constant(max_value, @intFromBool(false));
                 const value = module.values.add();
@@ -4757,21 +4757,21 @@ const Converter = struct {
                 return value;
             },
             .int_from_enum => {
-                const source_value = converter.parse_value(module, .{});
-                converter.skip_space();
-                converter.expect_character(right_parenthesis);
+                const source_value = module.parse_value(.{});
+                module.skip_space();
+                module.expect_character(right_parenthesis);
                 if (source_value.type.bb != .enumerator) {
-                    converter.report_error();
+                    module.report_error();
                 }
                 const original_target_type = source_value.type.bb.enumerator.backing_type;
                 const target_type = expected_type orelse original_target_type;
 
                 if (target_type.bb != .integer) {
-                    converter.report_error();
+                    module.report_error();
                 }
 
                 if (target_type.get_bit_size() < original_target_type.get_bit_size()) {
-                    converter.report_error();
+                    module.report_error();
                 }
 
                 const value = module.values.add();
@@ -4780,21 +4780,21 @@ const Converter = struct {
                 return value;
             },
             .int_from_pointer => {
-                const source_value = converter.parse_value(module, .{});
-                converter.skip_space();
-                converter.expect_character(right_parenthesis);
+                const source_value = module.parse_value(.{});
+                module.skip_space();
+                module.expect_character(right_parenthesis);
                 if (source_value.type.bb != .pointer) {
-                    converter.report_error();
+                    module.report_error();
                 }
                 const original_target_type = module.integer_type(64, false);
                 const target_type = expected_type orelse original_target_type;
 
                 if (target_type.bb != .integer) {
-                    converter.report_error();
+                    module.report_error();
                 }
 
                 if (target_type.get_bit_size() < original_target_type.get_bit_size()) {
-                    converter.report_error();
+                    module.report_error();
                 }
 
                 const value = module.values.add();
@@ -4808,18 +4808,18 @@ const Converter = struct {
                 return value;
             },
             .pointer_cast => {
-                const ty = expected_type orelse converter.report_error();
+                const ty = expected_type orelse module.report_error();
                 if (ty.bb != .pointer) {
-                    converter.report_error();
+                    module.report_error();
                 }
-                const source_value = converter.parse_value(module, .{});
-                converter.skip_space();
-                converter.expect_character(right_parenthesis);
+                const source_value = module.parse_value(.{});
+                module.skip_space();
+                module.expect_character(right_parenthesis);
                 if (source_value.type.bb != .pointer) {
-                    converter.report_error();
+                    module.report_error();
                 }
                 if (ty == source_value.type) {
-                    converter.report_error();
+                    module.report_error();
                 }
                 const value = module.values.add();
                 value.* = .{
@@ -4832,35 +4832,35 @@ const Converter = struct {
                 return value;
             },
             .select => {
-                const condition_value = converter.parse_condition_raw(module);
+                const condition_value = module.parse_condition_raw();
 
-                converter.skip_space();
-                converter.expect_character(',');
-                converter.skip_space();
+                module.skip_space();
+                module.expect_character(',');
+                module.skip_space();
 
-                const true_value = converter.parse_value(module, .{
+                const true_value = module.parse_value(.{
                     .type = expected_type,
                 });
 
-                converter.skip_space();
-                converter.expect_character(',');
-                converter.skip_space();
+                module.skip_space();
+                module.expect_character(',');
+                module.skip_space();
 
                 const expected_ty = expected_type orelse true_value.type;
 
-                const false_value = converter.parse_value(module, .{
+                const false_value = module.parse_value(.{
                     .type = expected_ty,
                 });
 
-                converter.skip_space();
-                converter.expect_character(right_parenthesis);
+                module.skip_space();
+                module.expect_character(right_parenthesis);
 
                 if (true_value.type != expected_ty) {
-                    converter.report_error();
+                    module.report_error();
                 }
 
                 if (false_value.type != expected_ty) {
-                    converter.report_error();
+                    module.report_error();
                 }
 
                 const value = module.values.add();
@@ -4874,16 +4874,16 @@ const Converter = struct {
                 return value;
             },
             // .slice => {
-            //     const value = converter.parse_value(module, null, .value);
+            //     const value = module.parse_value(module, null, .value);
             //     const u64_type = module.integer_type(64, false);
             //
-            //     converter.skip_space();
+            //     module.skip_space();
             //
             //     var found_right_parenthesis = false;
-            //     const second_argument: ?*Value = if (converter.consume_character_if_match(',')) b: {
-            //         converter.skip_space();
-            //         if (!converter.consume_character_if_match(right_parenthesis)) {
-            //             break :b converter.parse_value(module, null, .value);
+            //     const second_argument: ?*Value = if (module.consume_character_if_match(',')) b: {
+            //         module.skip_space();
+            //         if (!module.consume_character_if_match(right_parenthesis)) {
+            //             break :b module.parse_value(module, null, .value);
             //         } else {
             //             found_right_parenthesis = true;
             //             break :b null;
@@ -4891,25 +4891,25 @@ const Converter = struct {
             //     } else null;
             //
             //     const parse_third_argument = if (!found_right_parenthesis) b: {
-            //         converter.skip_space();
-            //         const second_comma = converter.consume_character_if_match(',');
-            //         converter.skip_space();
-            //         found_right_parenthesis = converter.consume_character_if_match(right_parenthesis);
+            //         module.skip_space();
+            //         const second_comma = module.consume_character_if_match(',');
+            //         module.skip_space();
+            //         found_right_parenthesis = module.consume_character_if_match(right_parenthesis);
             //         if (second_comma and !found_right_parenthesis) {
             //             @trap();
             //         }
             //
             //         if (!found_right_parenthesis) {
-            //             converter.report_error();
+            //             module.report_error();
             //         }
             //         break :b false;
             //     } else false;
-            //     const third_argument: ?*Value = if (parse_third_argument) converter.parse_value(module, null, .value) else null;
+            //     const third_argument: ?*Value = if (parse_third_argument) module.parse_value(module, null, .value) else null;
             //     const element_count = @as(u32, 1) + @intFromBool(second_argument != null) + @intFromBool(third_argument != null);
             //
             //     if (expected_type) |expected_ty| {
             //         if (!expected_ty.is_slice()) {
-            //             converter.report_error();
+            //             module.report_error();
             //         }
             //
             //         const slice_type = expected_ty;
@@ -4935,7 +4935,7 @@ const Converter = struct {
             //                         // If a pointer is found and its element type matches the slice element type, then the second argument is the length of the slice
             //                         const length = second_argument orelse unreachable;
             //                         if (length.type.bb != .integer) {
-            //                             converter.report_error();
+            //                             module.report_error();
             //                         }
             //
             //                         if (length.type != u64_type) {
@@ -4978,7 +4978,7 @@ const Converter = struct {
             //                             };
             //                             return result;
             //                         } else {
-            //                             converter.report_error();
+            //                             module.report_error();
             //                         }
             //                     },
             //                     else => @trap(),
@@ -4991,7 +4991,7 @@ const Converter = struct {
             //     }
             // },
             .trap => {
-                converter.expect_character(right_parenthesis);
+                module.expect_character(right_parenthesis);
 
                 // TODO: lookup in advance
                 const intrinsic_id = module.llvm.intrinsic_table.trap;
@@ -5015,10 +5015,10 @@ const Converter = struct {
                 return value;
             },
             .truncate => {
-                const source_value = converter.parse_value(module, .{});
-                converter.skip_space();
-                converter.expect_character(right_parenthesis);
-                const destination_type = expected_type orelse converter.report_error();
+                const source_value = module.parse_value(.{});
+                module.skip_space();
+                module.expect_character(right_parenthesis);
+                const destination_type = expected_type orelse module.report_error();
                 const truncate = module.llvm.builder.create_truncate(source_value.llvm, destination_type.llvm.handle);
 
                 const value = module.values.add();
@@ -5033,7 +5033,7 @@ const Converter = struct {
                 return value;
             },
             .va_start => {
-                converter.expect_character(right_parenthesis);
+                module.expect_character(right_parenthesis);
 
                 const va_list_type = module.get_va_list_type();
                 const alloca = module.create_alloca(.{ .type = va_list_type });
@@ -5056,12 +5056,12 @@ const Converter = struct {
                 return value;
             },
             .va_end => {
-                const va_list = converter.parse_value(module, .{
+                const va_list = module.parse_value(.{
                     .type = module.get_pointer_type(.{ .type = module.get_va_list_type() }),
                     .kind = .pointer,
                 });
-                converter.skip_space();
-                converter.expect_character(right_parenthesis);
+                module.skip_space();
+                module.expect_character(right_parenthesis);
                 const intrinsic_id = module.llvm.intrinsic_table.va_end;
                 const argument_types: []const *llvm.Type = &.{module.llvm.pointer_type};
                 const intrinsic_function = module.llvm.handle.get_intrinsic_declaration(intrinsic_id, argument_types);
@@ -5082,7 +5082,7 @@ const Converter = struct {
             .va_copy => @trap(),
             .va_arg => {
                 const va_list_type = module.get_va_list_type();
-                const raw_va_list = converter.parse_value(module, .{
+                const raw_va_list = module.parse_value(.{
                     .type = module.get_pointer_type(.{ .type = va_list_type }),
                     .kind = .pointer,
                 });
@@ -5092,16 +5092,16 @@ const Converter = struct {
                     .indices = &([1]*llvm.Value{module.integer_type(64, false).llvm.handle.to_integer().get_constant(0, @intFromBool(false)).to_value()} ** 2),
                 });
 
-                converter.skip_space();
+                module.skip_space();
 
-                converter.expect_character(',');
+                module.expect_character(',');
 
-                converter.skip_space();
+                module.skip_space();
 
-                const arg_type = converter.parse_type(module);
-                converter.skip_space();
+                const arg_type = module.parse_type();
+                module.skip_space();
 
-                converter.expect_character(right_parenthesis);
+                module.expect_character(right_parenthesis);
                 const r = Abi.SystemV.classify_argument_type(module, arg_type, .{
                     .available_gpr = 0,
                     .is_named_argument = false,
@@ -5221,22 +5221,22 @@ const Converter = struct {
         ReturnType,
     };
 
-    fn parse_type_intrinsic(noalias converter: *Converter, noalias module: *Module) *Type {
-        converter.expect_character('#');
-        converter.skip_space();
-        const intrinsic_name = converter.parse_identifier();
-        const intrinsic_keyword = lib.string.to_enum(TypeIntrinsic, intrinsic_name) orelse converter.report_error();
-        converter.skip_space();
+    fn parse_type_intrinsic(noalias module: *Module) *Type {
+        module.expect_character('#');
+        module.skip_space();
+        const intrinsic_name = module.parse_identifier();
+        const intrinsic_keyword = lib.string.to_enum(TypeIntrinsic, intrinsic_name) orelse module.report_error();
+        module.skip_space();
 
-        converter.expect_character(left_parenthesis);
+        module.expect_character(left_parenthesis);
 
-        converter.skip_space();
+        module.skip_space();
 
         switch (intrinsic_keyword) {
             .ReturnType => {
-                converter.skip_space();
-                converter.expect_character(right_parenthesis);
-                const current_function_variable = module.current_function orelse converter.report_error();
+                module.skip_space();
+                module.expect_character(right_parenthesis);
+                const current_function_variable = module.current_function orelse module.report_error();
                 const return_type = current_function_variable.value.type.bb.pointer.type.bb.function.return_type_abi.semantic_type;
                 return return_type;
             },
@@ -5251,37 +5251,37 @@ const Converter = struct {
         zero,
     };
 
-    fn parse_single_value(noalias converter: *Converter, noalias module: *Module, expected_type: ?*Type, value_kind: ValueKind) *Value {
-        converter.skip_space();
+    fn parse_single_value(noalias module: *Module, expected_type: ?*Type, value_kind: ValueKind) *Value {
+        module.skip_space();
 
         if (module.current_function) |function| {
             if (module.llvm.di_builder) |_| {
-                const line = converter.get_line();
-                const column = converter.get_column();
+                const line = module.get_line();
+                const column = module.get_column();
                 const inlined_at: ?*llvm.DI.Metadata = null; // TODO
                 const debug_location = llvm.DI.create_debug_location(module.llvm.context, line, column, function.value.bb.function.current_scope, inlined_at);
                 module.llvm.builder.set_current_debug_location(debug_location);
             }
         }
 
-        const prefix_offset = converter.offset;
-        const prefix_ch = converter.content[prefix_offset];
+        const prefix_offset = module.offset;
+        const prefix_ch = module.content[prefix_offset];
         const must_be_constant = module.current_function == null;
         const prefix: Prefix = switch (prefix_ch) {
             'a'...'z', 'A'...'Z', '_', '0'...'9' => .none,
             '-' => blk: {
-                converter.offset += 1;
+                module.offset += 1;
 
                 // TODO: should we skip space here?
-                converter.skip_space();
+                module.skip_space();
                 break :blk .negative;
             },
             left_brace => {
-                converter.offset += 1;
+                module.offset += 1;
 
-                converter.skip_space();
+                module.skip_space();
 
-                const ty = expected_type orelse converter.report_error();
+                const ty = expected_type orelse module.report_error();
 
                 switch (ty.bb) {
                     .structure => |*struct_type| {
@@ -5295,28 +5295,28 @@ const Converter = struct {
                         var zero = false;
 
                         while (true) : (field_count += 1) {
-                            converter.skip_space();
+                            module.skip_space();
 
-                            if (converter.consume_character_if_match(right_brace)) {
+                            if (module.consume_character_if_match(right_brace)) {
                                 break;
-                            } else if (converter.consume_character_if_match('.')) {
-                                const field_name = converter.parse_identifier();
+                            } else if (module.consume_character_if_match('.')) {
+                                const field_name = module.parse_identifier();
                                 const field_index: u32 = for (struct_type.fields, 0..) |*field, field_index| {
                                     if (lib.string.equal(field.name, field_name)) {
                                         break @intCast(field_index);
                                     }
-                                } else converter.report_error();
+                                } else module.report_error();
 
                                 is_ordered = is_ordered and field_index == field_count;
                                 const field = struct_type.fields[field_index];
 
-                                converter.skip_space();
+                                module.skip_space();
 
-                                converter.expect_character('=');
+                                module.expect_character('=');
 
-                                converter.skip_space();
+                                module.skip_space();
 
-                                const field_value = converter.parse_value(module, field.type, .value);
+                                const field_value = module.parse_value(module, field.type, .value);
                                 if (field.type != field_value.type) {
                                     @trap();
                                 }
@@ -5327,28 +5327,28 @@ const Converter = struct {
                                 field_value_buffer[field_count] = field_value;
                                 field_index_buffer[field_count] = field_index;
 
-                                converter.skip_space();
+                                module.skip_space();
 
-                                _ = converter.consume_character_if_match(',');
+                                _ = module.consume_character_if_match(',');
 
-                                converter.skip_space();
+                                module.skip_space();
                             } else {
-                                const identifier = converter.parse_identifier();
+                                const identifier = module.parse_identifier();
                                 if (lib.string.to_enum(ValueKeyword, identifier)) |value_keyword| switch (value_keyword) {
-                                    ._ => converter.report_error(),
+                                    ._ => module.report_error(),
                                     .undefined => @trap(),
                                     .@"unreachable" => @trap(),
                                     .zero => {
                                         zero = true;
-                                        converter.skip_space();
-                                        _ = converter.consume_character_if_match(',');
-                                        converter.skip_space();
-                                        converter.expect_character(right_brace);
+                                        module.skip_space();
+                                        _ = module.consume_character_if_match(',');
+                                        module.skip_space();
+                                        module.expect_character(right_brace);
                                         // We need to break here otherwise `field_count` would be incremented
                                         break;
                                     },
                                 } else {
-                                    converter.report_error();
+                                    module.report_error();
                                 }
                             }
                         }
@@ -5360,7 +5360,7 @@ const Converter = struct {
                         var zero_until_end = false;
                         if (zero) {
                             if (field_count == struct_type.fields.len) {
-                                converter.report_error();
+                                module.report_error();
                             }
 
                             if (is_ordered and is_constant) {
@@ -5499,55 +5499,55 @@ const Converter = struct {
 
                         var zero = false;
                         while (true) : (field_count += 1) {
-                            converter.skip_space();
+                            module.skip_space();
 
-                            if (converter.consume_character_if_match(right_brace)) {
+                            if (module.consume_character_if_match(right_brace)) {
                                 break;
-                            } else if (converter.consume_character_if_match('.')) {
-                                const field_name = converter.parse_identifier();
+                            } else if (module.consume_character_if_match('.')) {
+                                const field_name = module.parse_identifier();
                                 const field_index: u32 = for (bits.fields, 0..) |*field, field_index| {
                                     if (lib.string.equal(field.name, field_name)) {
                                         break @intCast(field_index);
                                     }
-                                } else converter.report_error();
+                                } else module.report_error();
 
                                 const field = bits.fields[field_index];
 
-                                converter.skip_space();
+                                module.skip_space();
 
-                                converter.expect_character('=');
+                                module.expect_character('=');
 
-                                converter.skip_space();
+                                module.skip_space();
 
-                                const field_value = converter.parse_value(module, field.type, .value);
+                                const field_value = module.parse_value(module, field.type, .value);
 
                                 const extended_field_value = module.llvm.builder.create_zero_extend(field_value.llvm, bits.backing_type.llvm.handle);
                                 const shifted_value = module.llvm.builder.create_shl(extended_field_value, bits.backing_type.llvm.handle.to_integer().get_constant(field.bit_offset, @intFromBool(false)).to_value());
                                 const or_value = module.llvm.builder.create_or(llvm_value, shifted_value);
                                 llvm_value = or_value;
 
-                                converter.skip_space();
+                                module.skip_space();
 
-                                _ = converter.consume_character_if_match(',');
+                                _ = module.consume_character_if_match(',');
 
-                                converter.skip_space();
+                                module.skip_space();
                             } else {
-                                const identifier = converter.parse_identifier();
+                                const identifier = module.parse_identifier();
                                 if (lib.string.to_enum(ValueKeyword, identifier)) |value_keyword| switch (value_keyword) {
-                                    ._ => converter.report_error(),
+                                    ._ => module.report_error(),
                                     .undefined => @trap(),
                                     .zero => {
                                         zero = true;
-                                        converter.skip_space();
-                                        _ = converter.consume_character_if_match(',');
-                                        converter.skip_space();
-                                        converter.expect_character(right_brace);
+                                        module.skip_space();
+                                        _ = module.consume_character_if_match(',');
+                                        module.skip_space();
+                                        module.expect_character(right_brace);
                                         // We need to break here otherwise `field_count` would be incremented
                                         break;
                                     },
                                     .@"unreachable" => @trap(),
                                 } else {
-                                    converter.report_error();
+                                    module.report_error();
                                 }
                             }
                         }
@@ -5572,13 +5572,13 @@ const Converter = struct {
 
                         return value;
                     },
-                    else => converter.report_error(),
+                    else => module.report_error(),
                 }
             },
             left_bracket => {
-                converter.offset += 1;
+                module.offset += 1;
 
-                const ty = expected_type orelse converter.report_error();
+                const ty = expected_type orelse module.report_error();
                 switch (ty.bb) {
                     .array => |*array| {
                         var element_count: u64 = 0;
@@ -5587,19 +5587,19 @@ const Converter = struct {
                         var elements_are_constant = true;
 
                         while (true) : (element_count += 1) {
-                            converter.skip_space();
+                            module.skip_space();
 
-                            if (converter.consume_character_if_match(right_bracket)) {
+                            if (module.consume_character_if_match(right_bracket)) {
                                 break;
                             }
 
-                            const element_value = converter.parse_value(module, array.element_type, .value);
+                            const element_value = module.parse_value(module, array.element_type, .value);
                             elements_are_constant = elements_are_constant and element_value.is_constant();
                             element_buffer[element_count] = element_value.llvm;
 
-                            converter.skip_space();
+                            module.skip_space();
 
-                            _ = converter.consume_character_if_match(',');
+                            _ = module.consume_character_if_match(',');
                         }
 
                         if (array.element_count == null) {
@@ -5642,10 +5642,10 @@ const Converter = struct {
                     else => @trap(),
                 }
             },
-            '#' => return converter.parse_value_intrinsic(module, expected_type),
+            '#' => return module.parse_value_intrinsic(module, expected_type),
             '&' => {
-                converter.offset += 1;
-                const value = converter.parse_value(module, expected_type, .pointer);
+                module.offset += 1;
+                const value = module.parse_value(module, expected_type, .pointer);
 
                 if (expected_type) |expected_ty| {
                     if (expected_ty.is_slice()) {
@@ -5682,27 +5682,27 @@ const Converter = struct {
                 return value;
             },
             '!' => blk: {
-                converter.offset += 1;
+                module.offset += 1;
 
                 // TODO: should we skip space here?
-                converter.skip_space();
+                module.skip_space();
                 break :blk .not_zero;
             },
             '.' => {
-                const expected_ty = expected_type orelse converter.report_error();
+                const expected_ty = expected_type orelse module.report_error();
                 if (expected_ty.bb != .enumerator) {
-                    converter.report_error();
+                    module.report_error();
                 }
-                converter.offset += 1;
+                module.offset += 1;
 
-                converter.skip_space();
-                const field_name = converter.parse_identifier();
+                module.skip_space();
+                const field_name = module.parse_identifier();
                 const field_value = for (expected_ty.bb.enumerator.fields) |*field| {
                     if (lib.string.equal(field.name, field_name)) {
                         break field.value;
                     }
                 } else {
-                    converter.report_error();
+                    module.report_error();
                 };
                 const value = module.values.add();
                 value.* = .{
@@ -5721,16 +5721,16 @@ const Converter = struct {
                 return value;
             },
             '"' => {
-                converter.offset += 1;
+                module.offset += 1;
 
-                const string_start = converter.offset;
+                const string_start = module.offset;
                 // TODO: better string handling (escape characters and such)
-                while (!converter.consume_character_if_match('"')) {
-                    converter.offset += 1;
+                while (!module.consume_character_if_match('"')) {
+                    module.offset += 1;
                 }
-                const string_end = converter.offset - 1;
+                const string_end = module.offset - 1;
                 const string_length = string_end - string_start;
-                const string = converter.content[string_start..][0..string_length];
+                const string = module.content[string_start..][0..string_length];
                 const null_terminate = true;
                 const constant_string = module.llvm.context.get_constant_string(string, null_terminate);
                 switch (module.current_function == null) {
@@ -5768,13 +5768,13 @@ const Converter = struct {
                 @trap();
             },
             '\'' => {
-                converter.offset += 1;
+                module.offset += 1;
                 // TODO: UTF-8
-                const ch = converter.content[converter.offset];
+                const ch = module.content[module.offset];
                 // TODO: escape character
                 assert(ch != '\\');
-                converter.offset += 1;
-                converter.expect_character('\'');
+                module.offset += 1;
+                module.expect_character('\'');
                 const value = module.values.add();
                 const u8_type = module.integer_type(8, false);
                 value.* = .{
@@ -5795,16 +5795,16 @@ const Converter = struct {
             else => os.abort(),
         };
 
-        const value_offset = converter.offset;
-        const value_start_ch = converter.content[value_offset];
+        const value_offset = module.offset;
+        const value_start_ch = module.content[value_offset];
         var value = switch (value_start_ch) {
             'a'...'z', 'A'...'Z', '_' => b: {
-                const identifier = converter.parse_identifier();
+                const identifier = module.parse_identifier();
 
                 if (lib.string.to_enum(ValueKeyword, identifier)) |value_keyword| switch (value_keyword) {
                     ._ => return module.void_value,
                     .undefined => {
-                        const expected_ty = expected_type orelse converter.report_error();
+                        const expected_ty = expected_type orelse module.report_error();
                         // TODO: cache poison
                         const value = module.values.add();
                         value.* = .{
@@ -5817,7 +5817,7 @@ const Converter = struct {
                         return value;
                     },
                     .zero => {
-                        const ty = expected_type orelse converter.report_error();
+                        const ty = expected_type orelse module.report_error();
 
                         return module.get_zero_value(ty);
                     },
@@ -5829,27 +5829,27 @@ const Converter = struct {
                 };
 
                 if (module.current_function) |current_function| {
-                    const variable = if (current_function.value.bb.function.locals.find(identifier)) |local| local else if (current_function.value.bb.function.arguments.find(identifier)) |argument| argument else if (module.globals.find(identifier)) |global| global else converter.report_error();
+                    const variable = if (current_function.value.bb.function.locals.find(identifier)) |local| local else if (current_function.value.bb.function.arguments.find(identifier)) |argument| argument else if (module.globals.find(identifier)) |global| global else module.report_error();
 
-                    converter.skip_space();
+                    module.skip_space();
 
                     assert(variable.value.type.bb == .pointer);
                     const appointee_type = variable.value.type.bb.pointer.type;
 
-                    if (converter.consume_character_if_match(left_parenthesis)) {
-                        const call = converter.parse_call(module, variable.value);
+                    if (module.consume_character_if_match(left_parenthesis)) {
+                        const call = module.parse_call(module, variable.value);
                         break :b call;
-                    } else if (converter.consume_character_if_match('.')) {
-                        converter.skip_space();
+                    } else if (module.consume_character_if_match('.')) {
+                        module.skip_space();
 
                         switch (appointee_type.bb) {
                             .structure => |*struct_type| {
-                                const field_name = converter.parse_identifier();
+                                const field_name = module.parse_identifier();
                                 const field_index: u32 = for (struct_type.fields, 0..) |field, field_index| {
                                     if (lib.string.equal(field.name, field_name)) {
                                         break @intCast(field_index);
                                     }
-                                } else converter.report_error();
+                                } else module.report_error();
                                 const field = struct_type.fields[field_index];
                                 const gep = module.llvm.builder.create_struct_gep(appointee_type.llvm.handle.to_struct(), variable.value.llvm, field_index);
 
@@ -5871,12 +5871,12 @@ const Converter = struct {
                                 }
                             },
                             .bits => |*bits| {
-                                const field_name = converter.parse_identifier();
+                                const field_name = module.parse_identifier();
                                 const field_index: u32 = for (bits.fields, 0..) |field, field_index| {
                                     if (lib.string.equal(field.name, field_name)) {
                                         break @intCast(field_index);
                                     }
-                                } else converter.report_error();
+                                } else module.report_error();
                                 const field = bits.fields[field_index];
 
                                 const bitfield_load = module.create_load(.{ .type = bits.backing_type, .value = variable.value.llvm });
@@ -5884,7 +5884,7 @@ const Converter = struct {
                                 const bitfield_masked = module.llvm.builder.create_and(bitfield_shifted, bits.backing_type.llvm.handle.to_integer().get_constant((@as(u64, 1) << @intCast(field.type.get_bit_size())) - 1, @intFromBool(false)).to_value());
 
                                 if (value_kind == .pointer) {
-                                    converter.report_error();
+                                    module.report_error();
                                 }
 
                                 const value = module.values.add();
@@ -5908,7 +5908,7 @@ const Converter = struct {
                             },
                             .pointer => |pointer_type| {
                                 const element_type = pointer_type.type;
-                                if (converter.consume_character_if_match('&')) {
+                                if (module.consume_character_if_match('&')) {
                                     const pointer_load = module.values.add();
                                     pointer_load.* = .{
                                         .llvm = module.create_load(.{ .type = appointee_type, .value = variable.value.llvm }),
@@ -5935,7 +5935,7 @@ const Converter = struct {
                                                         };
                                                         break :b load;
                                                     } else {
-                                                        converter.report_error();
+                                                        module.report_error();
                                                     }
                                                 }
                                             } else {
@@ -5962,12 +5962,12 @@ const Converter = struct {
                                 } else {
                                     switch (element_type.bb) {
                                         .structure => |*struct_type| {
-                                            const field_name = converter.parse_identifier();
+                                            const field_name = module.parse_identifier();
                                             const field_index: u32 = for (struct_type.fields, 0..) |field, field_index| {
                                                 if (lib.string.equal(field.name, field_name)) {
                                                     break @intCast(field_index);
                                                 }
-                                            } else converter.report_error();
+                                            } else module.report_error();
                                             const field = struct_type.fields[field_index];
                                             const gep = module.llvm.builder.create_struct_gep(element_type.llvm.handle.to_struct(), variable.value.llvm, field_index);
                                             switch (value_kind) {
@@ -5993,17 +5993,17 @@ const Converter = struct {
                             },
                             else => @trap(),
                         }
-                    } else if (converter.consume_character_if_match(left_bracket)) {
-                        converter.skip_space();
+                    } else if (module.consume_character_if_match(left_bracket)) {
+                        module.skip_space();
 
                         const index_type = module.integer_type(64, false);
-                        const index = converter.parse_value(module, index_type, .value);
+                        const index = module.parse_value(module, index_type, .value);
 
                         const ArrayExpressionKind = enum {
                             array,
                             slice,
                         };
-                        const array_expression_kind: ArrayExpressionKind = if (converter.consume_character_if_match(right_bracket)) .array else .slice;
+                        const array_expression_kind: ArrayExpressionKind = if (module.consume_character_if_match(right_bracket)) .array else .slice;
                         switch (array_expression_kind) {
                             .array => {
                                 const llvm_index_type = module.integer_type(64, false).llvm.handle.to_integer();
@@ -6055,7 +6055,7 @@ const Converter = struct {
                                             },
                                             .structure => |structure| {
                                                 if (!structure.is_slice) {
-                                                    converter.report_error();
+                                                    module.report_error();
                                                 }
 
                                                 const gep_to_pointer_field = module.llvm.builder.create_struct_gep(appointee_type.llvm.handle.to_struct(), variable.value.llvm, 0);
@@ -6079,22 +6079,22 @@ const Converter = struct {
                                                 };
                                                 break :b load;
                                             },
-                                            else => converter.report_error(),
+                                            else => module.report_error(),
                                         }
                                     },
                                 }
                             },
                             .slice => {
                                 const start_index = index;
-                                converter.expect_character('.');
-                                converter.expect_character('.');
-                                converter.skip_space();
+                                module.expect_character('.');
+                                module.expect_character('.');
+                                module.skip_space();
 
-                                if (converter.consume_character_if_match(right_bracket)) {
+                                if (module.consume_character_if_match(right_bracket)) {
                                     switch (appointee_type.bb) {
                                         .structure => |structure| {
                                             if (!structure.is_slice) {
-                                                converter.report_error();
+                                                module.report_error();
                                             }
 
                                             const slice_type = appointee_type;
@@ -6124,9 +6124,9 @@ const Converter = struct {
                                         else => @trap(),
                                     }
                                 } else {
-                                    const end_index = converter.parse_value(module, index_type, .value);
-                                    converter.skip_space();
-                                    converter.expect_character(right_bracket);
+                                    const end_index = module.parse_value(module, index_type, .value);
+                                    module.skip_space();
+                                    module.expect_character(right_bracket);
 
                                     if (start_index.bb == .constant_integer and end_index.bb == .constant_integer) {
                                         @trap();
@@ -6197,10 +6197,10 @@ const Converter = struct {
                         }
                     }
                 } else {
-                    converter.report_error();
+                    module.report_error();
                 }
             },
-            '0'...'9' => converter.parse_integer(module, expected_type.?, prefix == .negative),
+            '0'...'9' => module.parse_integer(module, expected_type.?, prefix == .negative),
             else => os.abort(),
         };
 
@@ -7194,80 +7194,75 @@ pub const Options = struct {
     silent: bool,
 };
 
-pub noinline fn convert(arena: *Arena, options: Options) void {
-    var converter = Converter{
-        .content = options.content,
-        .offset = 0,
-        .line_offset = 0,
-        .line_character_offset = 0,
-    };
+pub const convert = convert2;
 
+pub noinline fn convert2(arena: *Arena, options: Options) void {
     llvm.default_initialize();
 
     const module = Module.initialize(arena, options);
     defer module.deinitialize();
 
     while (true) {
-        converter.skip_space();
+        module.skip_space();
 
-        if (converter.offset == converter.content.len) {
+        if (module.offset == module.content.len) {
             break;
         }
 
         var is_export = false;
         var is_extern = false;
 
-        const global_line = converter.get_line();
-        const global_column = converter.get_column();
+        const global_line = module.get_line();
+        const global_column = module.get_column();
         _ = global_column;
 
-        if (converter.content[converter.offset] == left_bracket) {
-            converter.offset += 1;
+        if (module.content[module.offset] == left_bracket) {
+            module.offset += 1;
 
-            while (converter.offset < converter.content.len) {
-                const global_keyword_string = converter.parse_identifier();
+            while (module.offset < module.content.len) {
+                const global_keyword_string = module.parse_identifier();
 
-                const global_keyword = lib.string.to_enum(GlobalKeyword, global_keyword_string) orelse converter.report_error();
+                const global_keyword = lib.string.to_enum(GlobalKeyword, global_keyword_string) orelse module.report_error();
                 switch (global_keyword) {
                     .@"export" => is_export = true,
                     .@"extern" => is_extern = true,
                 }
 
-                switch (converter.content[converter.offset]) {
+                switch (module.content[module.offset]) {
                     right_bracket => break,
-                    else => converter.report_error(),
+                    else => module.report_error(),
                 }
             }
 
-            converter.expect_character(right_bracket);
+            module.expect_character(right_bracket);
 
-            converter.skip_space();
+            module.skip_space();
         }
 
-        const global_name = converter.parse_identifier();
+        const global_name = module.parse_identifier();
 
         if (module.types.find(global_name) != null) @trap();
         if (module.globals.find(global_name) != null) @trap();
 
-        converter.skip_space();
+        module.skip_space();
 
         var global_type: ?*Type = null;
-        if (converter.consume_character_if_match(':')) {
-            converter.skip_space();
+        if (module.consume_character_if_match(':')) {
+            module.skip_space();
 
-            global_type = converter.parse_type(module);
+            global_type = module.parse_type();
 
-            converter.skip_space();
+            module.skip_space();
         }
 
-        converter.expect_character('=');
+        module.expect_character('=');
 
-        converter.skip_space();
+        module.skip_space();
 
         var global_keyword = false;
-        if (is_identifier_start_ch(converter.content[converter.offset])) {
-            const global_string = converter.parse_identifier();
-            converter.skip_space();
+        if (is_identifier_start_ch(module.content[module.offset])) {
+            const global_string = module.parse_identifier();
+            module.skip_space();
 
             if (lib.string.to_enum(GlobalKind, global_string)) |global_kind| {
                 global_keyword = true;
@@ -7277,45 +7272,45 @@ pub noinline fn convert(arena: *Arena, options: Options) void {
                         const function_attributes = Function.Attributes{};
                         var is_var_args = false;
 
-                        if (converter.consume_character_if_match(left_bracket)) {
-                            while (converter.offset < converter.content.len) {
-                                const function_identifier = converter.parse_identifier();
+                        if (module.consume_character_if_match(left_bracket)) {
+                            while (module.offset < module.content.len) {
+                                const function_identifier = module.parse_identifier();
 
-                                const function_keyword = lib.string.to_enum(FunctionKeyword, function_identifier) orelse converter.report_error();
+                                const function_keyword = lib.string.to_enum(FunctionKeyword, function_identifier) orelse module.report_error();
 
-                                converter.skip_space();
+                                module.skip_space();
 
                                 switch (function_keyword) {
                                     .cc => {
-                                        converter.expect_character(left_parenthesis);
+                                        module.expect_character(left_parenthesis);
 
-                                        converter.skip_space();
+                                        module.skip_space();
 
-                                        const calling_convention_string = converter.parse_identifier();
+                                        const calling_convention_string = module.parse_identifier();
 
-                                        calling_convention = lib.string.to_enum(CallingConvention, calling_convention_string) orelse converter.report_error();
+                                        calling_convention = lib.string.to_enum(CallingConvention, calling_convention_string) orelse module.report_error();
 
-                                        converter.skip_space();
+                                        module.skip_space();
 
-                                        converter.expect_character(right_parenthesis);
+                                        module.expect_character(right_parenthesis);
                                     },
-                                    else => converter.report_error(),
+                                    else => module.report_error(),
                                 }
 
-                                converter.skip_space();
+                                module.skip_space();
 
-                                switch (converter.content[converter.offset]) {
+                                switch (module.content[module.offset]) {
                                     right_bracket => break,
-                                    else => converter.report_error(),
+                                    else => module.report_error(),
                                 }
                             }
 
-                            converter.expect_character(right_bracket);
+                            module.expect_character(right_bracket);
                         }
 
-                        converter.skip_space();
+                        module.skip_space();
 
-                        converter.expect_character(left_parenthesis);
+                        module.expect_character(left_parenthesis);
 
                         var argument_buffer: [max_argument_count]struct {
                             name: []const u8,
@@ -7325,20 +7320,20 @@ pub noinline fn convert(arena: *Arena, options: Options) void {
                         } = undefined;
                         var semantic_argument_count: u32 = 0;
 
-                        while (converter.offset < converter.content.len and converter.content[converter.offset] != right_parenthesis) : (semantic_argument_count += 1) {
-                            converter.skip_space();
+                        while (module.offset < module.content.len and module.content[module.offset] != right_parenthesis) : (semantic_argument_count += 1) {
+                            module.skip_space();
 
-                            const argument_line = converter.get_line();
-                            const argument_column = converter.get_column();
+                            const argument_line = module.get_line();
+                            const argument_column = module.get_column();
 
-                            if (converter.consume_character_if_match('.')) {
-                                if (converter.consume_character_if_match('.')) {
-                                    converter.expect_character('.');
-                                    converter.skip_space();
+                            if (module.consume_character_if_match('.')) {
+                                if (module.consume_character_if_match('.')) {
+                                    module.expect_character('.');
+                                    module.skip_space();
 
-                                    if (converter.content[converter.offset] == ')') {
+                                    if (module.content[module.offset] == ')') {
                                         if (calling_convention != .c) {
-                                            converter.report_error();
+                                            module.report_error();
                                         }
                                         is_var_args = true;
                                         break;
@@ -7350,18 +7345,18 @@ pub noinline fn convert(arena: *Arena, options: Options) void {
                                 }
                             }
 
-                            const argument_name = converter.parse_identifier();
+                            const argument_name = module.parse_identifier();
 
-                            converter.skip_space();
+                            module.skip_space();
 
-                            converter.expect_character(':');
+                            module.expect_character(':');
 
-                            converter.skip_space();
+                            module.skip_space();
 
-                            const argument_type = converter.parse_type(module);
+                            const argument_type = module.parse_type();
 
-                            converter.skip_space();
-                            _ = converter.consume_character_if_match(',');
+                            module.skip_space();
+                            _ = module.consume_character_if_match(',');
 
                             argument_buffer[semantic_argument_count] = .{
                                 .name = argument_name,
@@ -7371,11 +7366,11 @@ pub noinline fn convert(arena: *Arena, options: Options) void {
                             };
                         }
 
-                        converter.expect_character(right_parenthesis);
+                        module.expect_character(right_parenthesis);
 
-                        converter.skip_space();
+                        module.skip_space();
 
-                        const semantic_return_type = converter.parse_type(module);
+                        const semantic_return_type = module.parse_type();
                         const linkage_name = global_name;
 
                         const semantic_arguments = argument_buffer[0..semantic_argument_count];
@@ -7494,10 +7489,10 @@ pub noinline fn convert(arena: *Arena, options: Options) void {
                         });
 
                         llvm_handle.set_calling_convention(calling_convention.to_llvm());
-                        const has_semicolon = converter.consume_character_if_match(';');
+                        const has_semicolon = module.consume_character_if_match(';');
 
                         const function_scope: *llvm.DI.Scope = if (module.llvm.di_builder) |di_builder| blk: {
-                            const scope_line: u32 = @intCast(converter.line_offset + 1);
+                            const scope_line: u32 = @intCast(module.line_offset + 1);
                             const local_to_unit = !is_export and !is_extern;
                             const flags = llvm.DI.Flags{};
                             const is_definition = !is_extern;
@@ -7739,7 +7734,7 @@ pub noinline fn convert(arena: *Arena, options: Options) void {
                                 }
                             }
 
-                            converter.parse_block(module);
+                            module.parse_block();
 
                             // Handle jump to the return block
                             const return_block = value.bb.function.return_block;
@@ -7847,9 +7842,9 @@ pub noinline fn convert(arena: *Arena, options: Options) void {
                         }
                     },
                     .@"struct" => {
-                        converter.skip_space();
+                        module.skip_space();
 
-                        converter.expect_character(left_brace);
+                        module.expect_character(left_brace);
 
                         if (module.types.find(global_name) != null) {
                             @trap();
@@ -7877,22 +7872,22 @@ pub noinline fn convert(arena: *Arena, options: Options) void {
                         var bit_alignment: u32 = 1;
 
                         while (true) {
-                            converter.skip_space();
+                            module.skip_space();
 
-                            if (converter.consume_character_if_match(right_brace)) {
+                            if (module.consume_character_if_match(right_brace)) {
                                 break;
                             }
 
-                            const field_line = converter.get_line();
-                            const field_name = converter.parse_identifier();
+                            const field_line = module.get_line();
+                            const field_name = module.parse_identifier();
 
-                            converter.skip_space();
+                            module.skip_space();
 
-                            converter.expect_character(':');
+                            module.expect_character(':');
 
-                            converter.skip_space();
+                            module.skip_space();
 
-                            const field_type = converter.parse_type(module);
+                            const field_type = module.parse_type();
 
                             const field_byte_alignment = field_type.get_byte_alignment();
                             const field_bit_alignment = field_type.get_bit_alignment();
@@ -7922,17 +7917,17 @@ pub noinline fn convert(arena: *Arena, options: Options) void {
 
                             field_count += 1;
 
-                            converter.skip_space();
+                            module.skip_space();
 
-                            switch (converter.content[converter.offset]) {
-                                ',' => converter.offset += 1,
+                            switch (module.content[module.offset]) {
+                                ',' => module.offset += 1,
                                 else => {},
                             }
                         }
 
-                        converter.skip_space();
+                        module.skip_space();
 
-                        _ = converter.consume_character_if_match(';');
+                        _ = module.consume_character_if_match(';');
 
                         const byte_size = byte_offset;
                         const bit_size = byte_size * 8;
@@ -7963,15 +7958,15 @@ pub noinline fn convert(arena: *Arena, options: Options) void {
                         };
                     },
                     .bits => {
-                        const is_implicit_type = converter.content[converter.offset] == left_brace;
+                        const is_implicit_type = module.content[module.offset] == left_brace;
                         const maybe_backing_type: ?*Type = switch (is_implicit_type) {
                             true => null,
-                            false => converter.parse_type(module),
+                            false => module.parse_type(),
                         };
 
-                        converter.skip_space();
+                        module.skip_space();
 
-                        converter.expect_character(left_brace);
+                        module.expect_character(left_brace);
 
                         var field_buffer: [128]Field = undefined;
                         var field_line_buffer: [128]u32 = undefined;
@@ -7980,24 +7975,24 @@ pub noinline fn convert(arena: *Arena, options: Options) void {
                         var field_bit_offset: u64 = 0;
 
                         while (true) : (field_count += 1) {
-                            converter.skip_space();
+                            module.skip_space();
 
-                            if (converter.consume_character_if_match(right_brace)) {
+                            if (module.consume_character_if_match(right_brace)) {
                                 break;
                             }
 
-                            const field_line = converter.get_line();
+                            const field_line = module.get_line();
                             field_line_buffer[field_count] = field_line;
 
-                            const field_name = converter.parse_identifier();
+                            const field_name = module.parse_identifier();
 
-                            converter.skip_space();
+                            module.skip_space();
 
-                            converter.expect_character(':');
+                            module.expect_character(':');
 
-                            converter.skip_space();
+                            module.skip_space();
 
-                            const field_type = converter.parse_type(module);
+                            const field_type = module.parse_type();
 
                             field_buffer[field_count] = .{
                                 .name = field_name,
@@ -8014,12 +8009,12 @@ pub noinline fn convert(arena: *Arena, options: Options) void {
 
                             field_bit_offset += field_bit_size;
 
-                            converter.skip_space();
+                            module.skip_space();
 
-                            _ = converter.consume_character_if_match(',');
+                            _ = module.consume_character_if_match(',');
                         }
 
-                        _ = converter.consume_character_if_match(';');
+                        _ = module.consume_character_if_match(';');
 
                         const fields = module.arena.allocate(Field, field_count);
                         @memcpy(fields, field_buffer[0..field_count]);
@@ -8028,11 +8023,11 @@ pub noinline fn convert(arena: *Arena, options: Options) void {
 
                         const backing_type = if (maybe_backing_type) |bt| bt else module.integer_type(@intCast(@max(8, lib.next_power_of_two(field_bit_offset))), false);
                         if (backing_type.bb != .integer) {
-                            converter.report_error();
+                            module.report_error();
                         }
 
                         if (backing_type.get_bit_size() > 64) {
-                            converter.report_error();
+                            module.report_error();
                         }
 
                         const bit_size = backing_type.get_bit_size();
@@ -8063,15 +8058,15 @@ pub noinline fn convert(arena: *Arena, options: Options) void {
                         });
                     },
                     .@"enum" => {
-                        const is_implicit_type = converter.content[converter.offset] == left_brace;
+                        const is_implicit_type = module.content[module.offset] == left_brace;
                         const maybe_backing_type: ?*Type = switch (is_implicit_type) {
                             true => null,
-                            false => converter.parse_type(module),
+                            false => module.parse_type(),
                         };
 
-                        converter.skip_space();
+                        module.skip_space();
 
-                        converter.expect_character(left_brace);
+                        module.expect_character(left_brace);
 
                         var highest_value: u64 = 0;
                         var lowest_value = ~@as(u64, 0);
@@ -8080,19 +8075,19 @@ pub noinline fn convert(arena: *Arena, options: Options) void {
                         var field_count: u64 = 0;
 
                         while (true) : (field_count += 1) {
-                            converter.skip_space();
+                            module.skip_space();
 
-                            if (converter.consume_character_if_match(right_brace)) {
+                            if (module.consume_character_if_match(right_brace)) {
                                 break;
                             }
 
                             const field_index = field_count;
-                            const field_name = converter.parse_identifier();
-                            converter.skip_space();
+                            const field_name = module.parse_identifier();
+                            module.skip_space();
 
-                            const field_value = if (converter.consume_character_if_match('=')) blk: {
-                                converter.skip_space();
-                                const field_value = converter.parse_integer_value(false);
+                            const field_value = if (module.consume_character_if_match('=')) blk: {
+                                module.skip_space();
+                                const field_value = module.parse_integer_value(false);
                                 break :blk field_value;
                             } else {
                                 @trap();
@@ -8106,13 +8101,13 @@ pub noinline fn convert(arena: *Arena, options: Options) void {
                             highest_value = @max(highest_value, field_value);
                             lowest_value = @min(lowest_value, field_value);
 
-                            converter.skip_space();
-                            converter.expect_character(',');
+                            module.skip_space();
+                            module.expect_character(',');
                         }
 
-                        converter.skip_space();
+                        module.skip_space();
 
-                        _ = converter.consume_character_if_match(';');
+                        _ = module.consume_character_if_match(';');
 
                         const backing_type = maybe_backing_type orelse blk: {
                             const bits_needed = 64 - @clz(highest_value);
@@ -8123,7 +8118,7 @@ pub noinline fn convert(arena: *Arena, options: Options) void {
                         if (maybe_backing_type) |bt| {
                             const bits_needed = 64 - @clz(highest_value);
                             if (bits_needed > bt.get_bit_size()) {
-                                converter.report_error();
+                                module.report_error();
                             }
                         }
 
@@ -8158,18 +8153,18 @@ pub noinline fn convert(arena: *Arena, options: Options) void {
                     },
                 }
             } else {
-                converter.offset -= global_string.len;
+                module.offset -= global_string.len;
             }
         }
 
         if (!global_keyword) {
-            const value = converter.parse_value(module, .{
+            const value = module.parse_value(.{
                 .type = global_type,
             });
             const expected_type = global_type orelse value.type;
-            converter.skip_space();
+            module.skip_space();
 
-            converter.expect_character(';');
+            module.expect_character(';');
 
             const global_variable = module.llvm.handle.create_global_variable(.{
                 .linkage = switch (is_export) {
