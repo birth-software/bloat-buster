@@ -1,4 +1,4 @@
-const builtin = @import("builtin");
+pub const builtin = @import("builtin");
 pub const is_test = builtin.is_test;
 pub const optimization_mode = builtin.mode;
 pub const VariableArguments = extern struct {
@@ -519,6 +519,7 @@ pub const os = struct {
         write: u1,
         execute: u1,
     };
+
     const MapFlags = packed struct {
         private: u1,
         anonymous: u1,
@@ -2911,6 +2912,101 @@ pub fn print_string_stdout(str: []const u8) void {
 
 pub fn print_string_stderr(str: []const u8) void {
     os.get_stderr().write(str);
+}
+
+pub const RawVirtualBuffer = struct {
+    pointer: [*]align(4096) u8,
+    length: u32,
+    capacity: u32,
+
+    pub fn initialize() RawVirtualBuffer {
+        const pointer = os.reserve(0, 4 * 1024 * 1024, .{
+            .read = 1,
+            .write = 1,
+            .execute = 0,
+        }, .{
+            .private = 1,
+            .anonymous = 1,
+            .no_reserve = 1,
+            .populate = 0,
+        });
+        return .{
+            .pointer = @ptrCast(pointer),
+            .length = 0,
+            .capacity = 0,
+        };
+    }
+
+    pub fn ensure_capacity(vb: *RawVirtualBuffer, capacity: u64) void {
+        const commit_offset: u64 = vb.capacity;
+        const unaligned_existing_capacity = commit_offset - vb.length;
+        if (unaligned_existing_capacity < capacity) {
+            const aligned_wanted_capacity = align_forward_u64(commit_offset + capacity, 0x1000);
+            if (aligned_wanted_capacity > @as(u64, ~@as(u32, 0)) + 1) {
+                @trap();
+            }
+
+            const commit_size = aligned_wanted_capacity - commit_offset;
+            const commit_pointer = vb.pointer + commit_offset;
+            vb.capacity = @intCast(aligned_wanted_capacity);
+
+            os.commit(commit_pointer, commit_size, .{
+                .read = 1,
+                .write = 1,
+                .execute = 0,
+            });
+        }
+    }
+
+    pub fn add_bytes(vb: *RawVirtualBuffer, byte_count: u64) []u8 {
+        vb.ensure_capacity(byte_count);
+        const current_length = vb.length;
+        vb.length += @intCast(byte_count);
+        const slice = vb.pointer[current_length..][0..byte_count];
+        return slice;
+    }
+
+    pub fn append_bytes(vb: *RawVirtualBuffer, bytes: []const u8) []u8 {
+        const slice = vb.add_bytes(bytes.len);
+        @memcpy(slice, bytes);
+        return slice;
+    }
+};
+
+pub fn VirtualBuffer(comptime T: type) type {
+    return struct {
+        backing: RawVirtualBuffer,
+
+        const VB = @This();
+
+        pub fn initialize() VB {
+            return .{
+                .backing = .initialize(),
+            };
+        }
+
+        pub fn get_slice(vb: VB) []align(4096) T {
+            return @as([*]align(4096) T, @ptrCast(vb.backing.pointer))[0..@divExact(vb.backing.length, @sizeOf(T))];
+        }
+
+        fn byte_to_slice(v: *const T) []const u8 {
+            const byte_pointer: [*]const u8 = @ptrCast(v);
+            const byte_length = @sizeOf(T);
+            return byte_pointer[0..byte_length];
+        }
+
+        pub fn append(vb: *VB, v: T) *T {
+            const result = vb.backing.append_bytes(byte_to_slice(&v));
+            const pointer: *T = @alignCast(@ptrCast(&result[0]));
+            return pointer;
+        }
+
+        pub fn add(vb: *VB) *T {
+            const result = vb.backing.add_bytes(@sizeOf(T));
+            const pointer: *T = @alignCast(@ptrCast(&result[0]));
+            return pointer;
+        }
+    };
 }
 
 pub const panic_struct = struct {

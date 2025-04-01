@@ -1285,7 +1285,11 @@ pub const DI = struct {
             return @ptrCast(compile_unit);
         }
     };
-    pub const File = opaque {};
+    pub const File = opaque {
+        pub fn to_scope(file: *File) *Scope {
+            return @ptrCast(file);
+        }
+    };
     pub const Scope = opaque {};
     pub const Subprogram = opaque {};
     pub const Expression = opaque {};

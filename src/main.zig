@@ -4,23 +4,18 @@ const os = lib.os;
 const llvm = @import("LLVM.zig");
 const Arena = lib.Arena;
 
-const converter = @import("converter.zig");
-const BuildMode = converter.BuildMode;
-
-pub const panic = lib.panic_struct;
-pub const std_options = lib.std_options;
+const compiler = @import("bootstrap.zig");
+const BuildMode = compiler.BuildMode;
 
 test {
     _ = lib;
     _ = llvm;
-    _ = converter;
+    _ = compiler;
 }
 
 fn fail() noreturn {
     lib.libc.exit(1);
 }
-
-pub const main = lib.main;
 
 const Command = enum {
     @"test",
@@ -34,7 +29,7 @@ const Compile = struct {
     silent: bool,
 };
 
-fn compile_file(arena: *Arena, compile: Compile) converter.Options {
+fn compile_file(arena: *Arena, compile: Compile) compiler.Options {
     const checkpoint = arena.position;
     defer arena.restore(checkpoint);
 
@@ -81,7 +76,7 @@ fn compile_file(arena: *Arena, compile: Compile) converter.Options {
     const file_path = os.absolute_path(arena, relative_file_path);
     const c_abi_object_path = arena.duplicate_string(configuration.c_abi_object_path);
 
-    const convert_options = converter.Options{
+    const convert_options = compiler.Options{
         .executable = output_executable_path,
         .objects = if (lib.string.equal(base_name, "c_abi")) &.{ output_object_path, c_abi_object_path } else &.{output_object_path},
         .name = base_name,
@@ -89,16 +84,20 @@ fn compile_file(arena: *Arena, compile: Compile) converter.Options {
         .content = file_content,
         .path = file_path,
         .has_debug_info = compile.has_debug_info,
-        .target = converter.Target.get_native(),
+        .target = compiler.Target.get_native(),
         .silent = compile.silent,
     };
 
-    converter.convert(arena, convert_options);
+    compiler.compile(arena, convert_options);
 
     return convert_options;
 }
 
 const base_cache_dir = "bb-cache";
+
+pub const panic = lib.panic_struct;
+pub const std_options = lib.std_options;
+pub const main = lib.main;
 
 pub fn entry_point(arguments: []const [*:0]const u8, environment: [*:null]const ?[*:0]const u8) void {
     lib.GlobalState.initialize();
@@ -130,21 +129,21 @@ pub fn entry_point(arguments: []const [*:0]const u8, environment: [*:null]const 
 
             const names = &[_][]const u8{
                 "minimal",
-                "comments",
-                "constant_add",
-                "constant_and",
-                "constant_div",
-                "constant_mul",
-                "constant_rem",
-                "constant_or",
-                "constant_sub",
-                "constant_xor",
-                "constant_shift_left",
-                "constant_shift_right",
-                "minimal_stack",
-                "minimal_stack_arithmetic",
-                "pointer",
-                "extend",
+                // "comments",
+                // "constant_add",
+                // "constant_and",
+                // "constant_div",
+                // "constant_mul",
+                // "constant_rem",
+                // "constant_or",
+                // "constant_sub",
+                // "constant_xor",
+                // "constant_shift_left",
+                // "constant_shift_right",
+                // "minimal_stack",
+                // "minimal_stack_arithmetic",
+                // "pointer",
+                // "extend",
             };
 
             var build_modes: [@typeInfo(BuildMode).@"enum".fields.len]BuildMode = undefined;

@@ -145,12 +145,13 @@ pub fn build(b: *std.Build) !void {
         const download_dir = try std.mem.concat(b.allocator, u8, &.{ home_path, "/Downloads" });
         std.fs.makeDirAbsolute(download_dir) catch {};
         const cmake_build_type = if (is_ci) CmakeBuildType.from_zig_build_type(optimize) else CmakeBuildType.Release;
-        const llvm_base = try std.mem.concat(b.allocator, u8, &.{ "llvm-", @tagName(target.result.cpu.arch), "-", @tagName(target.result.os.tag), "-", @tagName(cmake_build_type) });
+        const version_string = "20.1.2";
+        const llvm_base = try std.mem.concat(b.allocator, u8, &.{ "llvm_", version_string, "_", @tagName(target.result.cpu.arch), "-", @tagName(target.result.os.tag), "-", @tagName(cmake_build_type) });
         const base = try std.mem.concat(b.allocator, u8, &.{ download_dir, "/", llvm_base });
         const full_path = try std.mem.concat(b.allocator, u8, &.{ base, "/bin/llvm-config" });
 
         const f = std.fs.cwd().openFile(full_path, .{}) catch {
-            const url = try std.mem.concat(b.allocator, u8, &.{ "https://github.com/birth-software/llvm/releases/download/v19.1.7/", llvm_base, ".7z" });
+            const url = try std.mem.concat(b.allocator, u8, &.{ "https://github.com/birth-software/llvm/releases/download/v", version_string, "/", llvm_base, ".7z" });
             var result = try std.process.Child.run(.{
                 .allocator = b.allocator,
                 .argv = &.{ "wget", "-P", download_dir, url },

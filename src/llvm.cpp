@@ -1148,9 +1148,8 @@ enum class BBLLVMBasicBlockSection : u8
 {
     all = 0,
     list = 1,
-    labels = 2,
-    preset = 3,
-    none = 4,
+    preset = 2,
+    none = 3,
 };
 
 enum class BBLLVMFloatAbi : u8
@@ -1396,7 +1395,6 @@ EXPORT TargetMachine* llvm_create_target_machine(const BBLLVMTargetMachineCreate
         {
             case BBLLVMBasicBlockSection::all: target_options.BBSections = BasicBlockSection::All; break;
             case BBLLVMBasicBlockSection::list: target_options.BBSections = BasicBlockSection::List; break;
-            case BBLLVMBasicBlockSection::labels: target_options.BBSections = BasicBlockSection::Labels; break;
             case BBLLVMBasicBlockSection::preset: target_options.BBSections = BasicBlockSection::Preset; break;
             case BBLLVMBasicBlockSection::none: target_options.BBSections = BasicBlockSection::None; break;
         }
@@ -1494,10 +1492,10 @@ EXPORT TargetMachine* llvm_create_target_machine(const BBLLVMTargetMachineCreate
             target_options.MCOptions.AsSecureLogFile = { create.target_options.mc.as_secure_log_file.pointer, create.target_options.mc.as_secure_log_file.length };
         }
 
-        target_options.MCOptions.Argv0 = create.target_options.mc.argv0;
-
         if (create.target_options.mc.argv_count)
         {
+            target_options.MCOptions.Argv0 = create.target_options.mc.argv0;
+
             // TODO:
             __builtin_trap();
         }
@@ -1683,7 +1681,7 @@ EXPORT void llvm_module_run_optimization_pipeline(Module& module, TargetMachine&
     } else if (lto) {
         __builtin_trap(); // TODO
     } else {
-         module_pass_manager.addPass(pass_builder.buildPerModuleDefaultPipeline(optimization_level, lto));
+         module_pass_manager.addPass(pass_builder.buildPerModuleDefaultPipeline(optimization_level));
     }
 
     // TODO: if emit bitcode/IR

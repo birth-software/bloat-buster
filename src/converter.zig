@@ -65,7 +65,6 @@ const GlobalKind = enum {
 
 const FunctionKeyword = enum {
     cc,
-    foo,
 };
 
 const CallingConvention = enum {
@@ -92,7 +91,6 @@ pub const ResolvedCallingConvention = enum {
     system_v,
     win64,
 };
-
 
 const AttributeContainerType = enum {
     call,
