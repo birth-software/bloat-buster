@@ -361,13 +361,65 @@ pub const Statement = struct {
     column: u32,
 };
 
+const Unary = struct {
+    value: *Value,
+    id: Id,
+
+    const Id = enum {
+        @"-",
+        @"+",
+        @"&",
+    };
+};
+
+const Binary = struct {
+    left: *Value,
+    right: *Value,
+    id: Id,
+
+    const Id = enum {
+        @"+",
+        @"-",
+        @"*",
+        @"/",
+        @"%",
+        @"&",
+        @"|",
+        @"^",
+        @"<<",
+        @">>",
+        @"==",
+        @"!=",
+        @">",
+        @"<",
+        @">=",
+        @"<=",
+    };
+};
+
 pub const Value = struct {
     bb: union(enum) {
         function: Function,
         constant_integer: ConstantInteger,
+        unary: Unary,
+        binary: Binary,
     },
     type: ?*Type = null,
     llvm: ?*llvm.Value = null,
+
+    fn is_constant(value: *Value) bool {
+        return switch (value.bb) {
+            .constant_integer => true,
+            else => @trap(),
+        };
+    }
+
+    fn negate_llvm(value: *Value) *llvm.Value {
+        return switch (value.is_constant()) {
+            true => value.llvm.?.to_constant().negate().to_value(),
+            false => @trap(),
+        };
+    }
 
     pub const Buffer = struct {
         buffer: lib.VirtualBuffer(Value),
@@ -439,12 +491,6 @@ pub const Value = struct {
         fn with_kind(vb: Builder, kind: Kind) Builder {
             var v = vb;
             v.kind = kind;
-            return v;
-        }
-
-        fn with_type(vb: Builder, ty: ?*Type) Builder {
-            var v = vb;
-            v.type = ty;
             return v;
         }
     };
@@ -1410,7 +1456,10 @@ pub const Module = struct {
                 break;
             }
 
-            @trap();
+            const after_rule = token_rule.after orelse module.report_error();
+            const old = result;
+            const new = after_rule(module, value_builder.with_token(token).with_precedence(.none).with_left(old));
+            result = new;
         }
 
         return result.?;
@@ -1526,15 +1575,73 @@ pub const Module = struct {
     }
 
     fn rule_after_binary(noalias module: *Module, value_builder: Value.Builder) *Value {
-        _ = module;
-        _ = value_builder;
-        @trap();
+        const binary_operator_token = value_builder.token;
+        const binary_operator_token_precedence = rules[@intFromEnum(binary_operator_token)].precedence;
+        const left = value_builder.left orelse module.report_error();
+        assert(binary_operator_token_precedence != .assignment); // TODO: this may be wrong. Assignment operator is not allowed in expressions
+        const right_precedence = if (binary_operator_token_precedence == .assignment) .assignment else binary_operator_token_precedence.increment();
+        const right = module.parse_precedence(value_builder.with_precedence(right_precedence).with_token(.none).with_left(null));
+
+        const binary_operation_kind: Binary.Id = switch (binary_operator_token) {
+            .none => unreachable,
+            .@"+" => .@"+",
+            .@"-" => .@"-",
+            .@"*" => .@"*",
+            .@"/" => .@"/",
+            .@"%" => .@"%",
+            .@"&" => .@"&",
+            .@"|" => .@"|",
+            .@"^" => .@"^",
+            .@"<<" => .@"<<",
+            .@">>" => .@">>",
+            .@"==" => .@"==",
+            .@"!=" => .@"!=",
+            else => @trap(),
+        };
+
+        const value = module.values.add();
+        value.* = .{
+            .bb = .{
+                .binary = .{
+                    .left = left,
+                    .right = right,
+                    .id = binary_operation_kind,
+                },
+            },
+        };
+
+        return value;
     }
 
     fn rule_before_unary(noalias module: *Module, value_builder: Value.Builder) *Value {
-        _ = module;
-        _ = value_builder;
-        @trap();
+        assert(value_builder.left == null);
+        const unary_token = value_builder.token;
+        const unary_id: Unary.Id = switch (unary_token) {
+            .none => unreachable,
+            .@"-" => .@"-",
+            .@"+" => .@"+",
+            else => @trap(),
+        };
+
+        const right = module.parse_precedence(value_builder.with_precedence(.prefix).with_token(.none).with_kind(if (unary_id == .@"&") .left else value_builder.kind));
+
+        const value = switch (unary_id) {
+            .@"+" => @trap(),
+            .@"-" => blk: {
+                const value = module.values.add();
+                value.* = .{
+                    .bb = .{
+                        .unary = .{
+                            .id = unary_id,
+                            .value = right,
+                        },
+                    },
+                };
+                break :blk value;
+            },
+            else => @trap(),
+        };
+        return value;
     }
 
     fn rule_after_dereference(noalias module: *Module, value_builder: Value.Builder) *Value {
@@ -2372,51 +2479,128 @@ pub const Module = struct {
     };
 
     pub fn analyze_value(module: *Module, function: *Global, value: *Value, analysis: ValueAnalysis) void {
-        _ = function;
-        if (analysis.type) |expected_type| {
-            if (value.type) |value_type| {
-                _ = value_type;
-                @trap();
-            } else switch (expected_type.bb) {
-                .integer => |integer| switch (value.bb) {
-                    .constant_integer => |constant_integer| switch (constant_integer.signed) {
-                        true => {
-                            if (!integer.signed) {
-                                module.report_error();
-                            }
-                            @trap();
-                        },
-                        false => {
-                            const type_max = (@as(u64, 1) << @intCast(integer.bit_count)) - 1;
-                            if (constant_integer.value > type_max) {
-                                module.report_error();
-                            }
-                            value.type = expected_type;
-                        },
-                    },
-                    else => @trap(),
-                },
-                else => @trap(),
-            }
-        } else {
-            @trap();
-        }
-
-        const value_type = value.type orelse module.report_error();
+        assert(value.type == null);
         assert(value.llvm == null);
 
-        switch (value.bb) {
-            .constant_integer => |constant_integer| {
-                const llvm_constant = value_type.llvm.handle.?.to_integer().get_constant(constant_integer.value, @intFromBool(constant_integer.signed));
-                value.llvm = llvm_constant.to_value();
+        if (analysis.type) |expected_type| switch (expected_type.bb) {
+            .integer => |integer| switch (value.bb) {
+                .constant_integer => |constant_integer| switch (constant_integer.signed) {
+                    true => {
+                        if (!integer.signed) {
+                            module.report_error();
+                        }
+
+                        @trap();
+                    },
+                    false => {
+                        const type_max = (@as(u64, 1) << @intCast(integer.bit_count)) - 1;
+                        if (constant_integer.value > type_max) {
+                            module.report_error();
+                        }
+                    },
+                },
+                .unary => |unary| {
+                    switch (unary.id) {
+                        .@"+" => @trap(),
+                        .@"-" => {
+                            module.analyze_value(function, unary.value, analysis);
+                            if (!unary.value.type.?.is_signed()) {
+                                module.report_error();
+                            }
+
+                            assert(expected_type == unary.value.type);
+                        },
+                        .@"&" => @trap(),
+                    }
+                },
+                .binary => |binary| {
+                    const is_boolean = switch (binary.id) {
+                        .@"==",
+                        .@"!=",
+                        .@">",
+                        .@"<",
+                        .@">=",
+                        .@"<=",
+                        => true,
+                        else => false,
+                    };
+
+                    const boolean_type = module.integer_type(1, false);
+
+                    if (is_boolean and expected_type != boolean_type) {
+                        module.report_error();
+                    }
+
+                    module.analyze_value(function, binary.left, .{
+                        .type = if (is_boolean) null else expected_type,
+                    });
+
+                    module.analyze_value(function, binary.right, .{
+                        .type = binary.left.type,
+                    });
+                },
+                else => @trap(),
             },
             else => @trap(),
-        }
+        };
 
-        _ = value.llvm orelse module.report_error();
-        if (value.llvm == null) {
-            @trap();
-        }
+        const value_type = if (analysis.type) |expected_type| expected_type else switch (value.bb) {
+            else => @trap(),
+        };
+
+        const llvm_value: *llvm.Value = switch (value.bb) {
+            .constant_integer => |constant_integer| value_type.llvm.handle.?.to_integer().get_constant(constant_integer.value, @intFromBool(constant_integer.signed)).to_value(),
+            .unary => |unary| switch (unary.id) {
+                .@"-" => unary.value.negate_llvm(),
+                else => @trap(),
+            },
+            .binary => |binary| switch (value_type.bb) {
+                .integer => |integer| switch (binary.id) {
+                    .@"+" => module.llvm.builder.create_add(binary.left.llvm.?, binary.right.llvm.?),
+                    .@"-" => module.llvm.builder.create_sub(binary.left.llvm.?, binary.right.llvm.?),
+                    .@"*" => module.llvm.builder.create_mul(binary.left.llvm.?, binary.right.llvm.?),
+                    .@"/" => switch (integer.signed) {
+                        true => module.llvm.builder.create_sdiv(binary.left.llvm.?, binary.right.llvm.?),
+                        false => module.llvm.builder.create_udiv(binary.left.llvm.?, binary.right.llvm.?),
+                    },
+                    .@"%" => switch (integer.signed) {
+                        true => module.llvm.builder.create_srem(binary.left.llvm.?, binary.right.llvm.?),
+                        false => module.llvm.builder.create_urem(binary.left.llvm.?, binary.right.llvm.?),
+                    },
+                    .@"&" => module.llvm.builder.create_and(binary.left.llvm.?, binary.right.llvm.?),
+                    .@"|" => module.llvm.builder.create_or(binary.left.llvm.?, binary.right.llvm.?),
+                    .@"^" => module.llvm.builder.create_xor(binary.left.llvm.?, binary.right.llvm.?),
+                    .@"<<" => module.llvm.builder.create_shl(binary.left.llvm.?, binary.right.llvm.?),
+                    .@">>" => switch (integer.signed) {
+                        true => module.llvm.builder.create_ashr(binary.left.llvm.?, binary.right.llvm.?),
+                        false => module.llvm.builder.create_lshr(binary.left.llvm.?, binary.right.llvm.?),
+                    },
+                    .@"==" => module.llvm.builder.create_integer_compare(.eq, binary.left.llvm.?, binary.right.llvm.?),
+                    .@"!=" => module.llvm.builder.create_integer_compare(.ne, binary.left.llvm.?, binary.right.llvm.?),
+                    .@">" => switch (integer.signed) {
+                        true => module.llvm.builder.create_integer_compare(.sgt, binary.left.llvm.?, binary.right.llvm.?),
+                        false => module.llvm.builder.create_integer_compare(.ugt, binary.left.llvm.?, binary.right.llvm.?),
+                    },
+                    .@"<" => switch (integer.signed) {
+                        true => module.llvm.builder.create_integer_compare(.slt, binary.left.llvm.?, binary.right.llvm.?),
+                        false => module.llvm.builder.create_integer_compare(.ult, binary.left.llvm.?, binary.right.llvm.?),
+                    },
+                    .@">=" => switch (integer.signed) {
+                        true => module.llvm.builder.create_integer_compare(.sge, binary.left.llvm.?, binary.right.llvm.?),
+                        false => module.llvm.builder.create_integer_compare(.uge, binary.left.llvm.?, binary.right.llvm.?),
+                    },
+                    .@"<=" => switch (integer.signed) {
+                        true => module.llvm.builder.create_integer_compare(.sle, binary.left.llvm.?, binary.right.llvm.?),
+                        false => module.llvm.builder.create_integer_compare(.ule, binary.left.llvm.?, binary.right.llvm.?),
+                    },
+                },
+                else => @trap(),
+            },
+            else => @trap(),
+        };
+
+        value.type = value_type;
+        value.llvm = llvm_value;
     }
 
     pub fn analyze_block(module: *Module, function: *Global, block: *LexicalBlock) void {

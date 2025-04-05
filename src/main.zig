@@ -127,25 +127,6 @@ pub fn entry_point(arguments: []const [*:0]const u8, environment: [*:null]const 
 
             const stop_at_failure = true;
 
-            const names = &[_][]const u8{
-                "minimal",
-                // "comments",
-                // "constant_add",
-                // "constant_and",
-                // "constant_div",
-                // "constant_mul",
-                // "constant_rem",
-                // "constant_or",
-                // "constant_sub",
-                // "constant_xor",
-                // "constant_shift_left",
-                // "constant_shift_right",
-                // "minimal_stack",
-                // "minimal_stack_arithmetic",
-                // "pointer",
-                // "extend",
-            };
-
             var build_modes: [@typeInfo(BuildMode).@"enum".fields.len]BuildMode = undefined;
             inline for (@typeInfo(BuildMode).@"enum".fields, 0..) |field, field_index| {
                 const build_mode = @field(BuildMode, field.name);
@@ -187,3 +168,22 @@ pub fn entry_point(arguments: []const [*:0]const u8, environment: [*:null]const 
         },
     }
 }
+
+const names = &[_][]const u8{
+    "minimal",
+    "comments",
+    "constant_add",
+    "constant_and",
+    "constant_div",
+    "constant_mul",
+    "constant_rem",
+    "constant_or",
+    "constant_sub",
+    "constant_xor",
+    "constant_shift_left",
+    "constant_shift_right",
+    // "minimal_stack",
+    // "minimal_stack_arithmetic",
+    // "pointer",
+    // "extend",
+};
