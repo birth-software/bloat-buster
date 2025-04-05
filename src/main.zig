@@ -182,7 +182,7 @@ const names = &[_][]const u8{
     "constant_xor",
     "constant_shift_left",
     "constant_shift_right",
-    // "minimal_stack",
+    "minimal_stack",
     // "minimal_stack_arithmetic",
     // "pointer",
     // "extend",
