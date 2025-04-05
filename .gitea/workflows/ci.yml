@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    tags:
+      - "**"
+    branches:
+      - main
+      - zig
+  schedule:
+    - cron: "0 0 * * *"
+
+env:
+  BB_CI: 1
+
+jobs:
+  ci:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest ]
+        BIRTH_ZIG_BUILD_TYPE: [ Debug, ReleaseSafe, ReleaseFast, ReleaseSmall ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test (Packaged LLVM)
+        run: |
+          ~/zig-linux-x86_64-0.14.0/zig build test -Doptimize=${{matrix.BIRTH_ZIG_BUILD_TYPE}} -Dsystem_llvm=false
+          ldd zig-out/bin/bloat-buster
