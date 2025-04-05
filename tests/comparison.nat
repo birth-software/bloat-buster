@@ -1,4 +1,0 @@
-fn main (argc: s32) s32
-{
-    return argc != 1;
-}

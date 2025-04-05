@@ -1,0 +1,13 @@
+A = bits {
+    a: u1,
+    b: u1,
+}
+
+[export] main = fn [cc(c)] () s32
+{
+    >a: A = {
+        .a = 1,
+        .b = 1,
+    };
+    return #extend(a.a - a.b);
+}

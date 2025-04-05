@@ -1,0 +1,7 @@
+[export] main = fn [cc(c)] () s32
+{
+    >result: u32 = 0;
+    >pointer = &result;
+    >signed_ptr: &s32 = #pointer_cast(pointer);
+    return signed_ptr.&;
+}

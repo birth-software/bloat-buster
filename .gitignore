@@ -12,3 +12,4 @@ imgui.ini
 /.gdb_history
 /.zig-cache/
 /zig-out/
+/bb-cache/

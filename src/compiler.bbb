@@ -1,0 +1,261 @@
+[extern] memcmp = fn [cc(c)] (a: &u8, b: &u8, byte_count: u64) s32;
+
+string_no_match = #integer_max(u64);
+
+c_string_length = fn (c_string: &u8) u64
+{
+    >it = c_string;
+
+    while (it.&)
+    {
+        it = it + 1;
+    }
+
+    return #int_from_pointer(it) - #int_from_pointer(c_string);
+}
+
+c_string_to_slice = fn (c_string: &u8) []u8
+{
+    >length = c_string_length(c_string);
+    return c_string[0..length];
+}
+
+string_equal = fn(a: []u8, b: []u8) u1
+{
+    >result: #ReturnType() = 0;
+
+    if (a.length == b.length)
+    {
+        result = memcmp(a.pointer, b.pointer, a.length) == 0;
+    }
+
+    return result;
+}
+
+string_last_character = fn(string: []u8, character: u8) u64
+{
+    >i = string.length;
+
+    while (i > 0)
+    {
+        i -= 1;
+
+        if (string[i] == character)
+        {
+            return i;
+        }
+    }
+
+    return string_no_match;
+}
+
+OS_Linux_PROT = bits u32
+{
+    read: u1,
+    write: u1,
+    execute: u1,
+    sem: u1,
+    _: u28,
+}
+
+OS_Linux_MAP_Type = enum u4
+{
+    shared = 0x1,
+    private = 0x2,
+    shared_validate = 0x3,
+}
+
+OS_Linux_MAP = bits u32
+{
+    type: OS_Linux_MAP_Type,
+    fixed: u1,
+    anonymous: u1,
+    bit_32: u1,
+    _: u1,
+    grows_down: u1,
+    _: u2,
+    deny_write: u1,
+    executable: u1,
+    locked: u1,
+    no_reserve: u1,
+    populate: u1,
+    non_block: u1,
+    stack: u1,
+    huge_tlb: u1,
+    sync: u1,
+    fixed_noreplace: u1,
+    _: u5,
+    uninitialized: u1,
+    _: u5,
+}
+
+[extern] mmap = fn [cc(c)] (address: u64, size: u64, protection: OS_Linux_PROT, map: OS_Linux_MAP, file_descriptor: s32, offset: s64) &u8;
+[extern] mprotect = fn [cc(c)] (address: u64, size: u64, protection: OS_Linux_PROT) s32;
+
+OS_ProtectionFlags = bits
+{
+    read: u1,
+    write: u1,
+    execute: u1,
+}
+
+OS_MapFlags = bits
+{
+    private: u1,
+    anonymous: u1,
+    no_reserve: u1,
+    populate: u1,
+}
+
+os_linux_protection_flags = fn(map_flags: OS_ProtectionFlags) OS_Linux_PROT
+{
+    return {
+        .read = map_flags.read,
+        .write = map_flags.write,
+        .execute = map_flags.execute,
+        zero,
+    };
+}
+
+os_linux_map_flags = fn(map_flags: OS_MapFlags) OS_Linux_MAP
+{
+    return {
+        .type = #select(map_flags.private, .private, .shared),
+        .anonymous = map_flags.anonymous,
+        .no_reserve = map_flags.no_reserve,
+        .populate = map_flags.populate,
+        zero,
+    };
+}
+
+os_reserve = fn (base: u64, size: u64, protection: OS_ProtectionFlags, map: OS_MapFlags) &u8
+{
+    >protection_flags = os_linux_protection_flags(protection);
+    >map_flags = os_linux_map_flags(map);
+    >address = mmap(base, size, protection_flags, map_flags, -1, 0);
+    if (#int_from_pointer(address) == #integer_max(u64))
+    {
+        unreachable;
+    }
+
+    return address;
+}
+
+os_commit = fn (address: u64, size: u64, protection: OS_ProtectionFlags) void
+{
+    >protection_flags = os_linux_protection_flags(protection);
+    >result = mprotect(address, size, protection_flags);
+    if (result != 0)
+    {
+        unreachable;
+    }
+}
+
+Arena = struct
+{
+    reserved_size: u64,
+    position: u64,
+    os_position: u64,
+    granularity: u64,
+    reserved: [32]u8,
+}
+
+minimum_position: u64 = #byte_size(Arena);
+
+ArenaInitialization = struct
+{
+    reserved_size: u64,
+    granularity: u64,
+    initial_size: u64,
+}
+
+arena_initialize = fn (initialization: ArenaInitialization) &Arena
+{
+    >protection_flags: OS_ProtectionFlags = {
+        .read = 1,
+        .write = 1,
+        zero,
+    };
+
+    >map_flags: OS_MapFlags = {
+        .private = 1,
+        .anonymous = 1,
+        .no_reserve = 1,
+        .populate = 0,
+    };
+
+    >arena: &Arena = #pointer_cast(os_reserve(0, initialization.reserved_size, protection_flags, map_flags));
+    os_commit(#int_from_pointer(arena), initialization.initial_size, {
+        .read = 1,
+        .write = 1,
+        zero,
+    });
+
+    arena.& = {
+        .reserved_size = initialization.reserved_size,
+        .position = minimum_position,
+        .os_position = initialization.initial_size,
+        .granularity = initialization.granularity,
+        zero,
+    };
+
+    return arena;
+}
+
+arena_initialize_default = fn (initial_size: u64) &Arena
+{
+    return arena_initialize({
+        .reserved_size = 4 * 1024 * 1024 * 1024,
+        .granularity = 4 * 1024,
+        .initial_size = initial_size,
+    });
+}
+
+GlobalState = struct
+{
+    arena: &Arena,
+}
+
+global_state: GlobalState = undefined;
+
+global_state_initialize = fn () void
+{
+    global_state = {
+        .arena = arena_initialize_default(2 * 1024 * 1024),
+    };
+}
+
+[export] main = fn [cc(c)] (argument_count: u32, argv: &&u8) s32
+{
+    if (argument_count != 2)
+    {
+        return 1;
+    }
+
+    >relative_file_path_pointer = argv[1];
+    if (!relative_file_path_pointer)
+    {
+        return 1;
+    }
+
+    >relative_file_path = c_string_to_slice(relative_file_path_pointer);
+
+    if (relative_file_path.length < 5)
+    {
+        return 1;
+    }
+
+    >extension_start = string_last_character(relative_file_path, '.');
+    if (extension_start == string_no_match)
+    {
+        return 1;
+    }
+
+    if (!string_equal(relative_file_path[extension_start..], ".bbb"))
+    {
+        return 1;
+    }
+
+    global_state_initialize();
+    return 0;
+}

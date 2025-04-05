@@ -1,0 +1,25 @@
+require = fn (ok: u1) void
+{
+    if (!ok)
+    {
+        #trap();
+    }
+}
+
+Struct_u64_u64 = struct
+{
+    a: u64,
+    b: u64,
+};
+
+bb_struct_u64_u64_0 = fn [cc(c)] (s: Struct_u64_u64) void
+{
+    require(s.a == 3);
+    require(s.b == 4);
+}
+
+[export] main = fn [cc(c)] () s32
+{
+    bb_struct_u64_u64_0({ .a = 3, .b = 4 });
+    return 0;
+}

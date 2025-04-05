@@ -1,0 +1,27 @@
+StructWithArray = struct
+{
+    a: u32,
+    padding: [4]u8,
+    c: u64,
+};
+
+c_ret_struct_with_array = fn [cc(c)] () StructWithArray
+{
+    return { .a = 4, .padding = [ 0, 0, 0, 0 ], .c = 155 };
+}
+
+require = fn(ok: u1) void
+{
+    if (!ok)
+    {
+        #trap();
+    }
+}
+
+[export] main = fn [cc(c)] () s32
+{
+    >s = c_ret_struct_with_array();
+    require(s.a == 4);
+    require(s.c == 155);
+    return 0;
+}

@@ -1,0 +1,5 @@
+[export] main = fn [cc(c)] () s32
+{
+    >a = #integer_max(u64);
+    return #truncate(a + 1);
+}

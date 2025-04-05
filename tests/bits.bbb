@@ -1,0 +1,18 @@
+BitField = bits u8
+{
+    a: u2,
+    b: u2,
+    c: u2,
+    d: u2,
+};
+
+[export] main = fn [cc(c)] () s32
+{
+    >b: BitField = {
+        .a = 3,
+        .b = 2,
+        .c = 2,
+        .d = 3,
+    };
+    return #extend((b.a - b.d) + (b.b - b.c));
+}

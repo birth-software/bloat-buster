@@ -1,0 +1,18 @@
+require = fn(ok: u1) void
+{
+    if (!ok)
+    {
+        #trap();
+    }
+}
+
+c_u16 = fn [cc(c)] (v: u16) void
+{
+    require(v == 0xfffe);
+}
+
+[export] main = fn [cc(c)] () s32
+{
+    c_u16(0xfffe);
+    return 0;
+}

@@ -1,5 +1,0 @@
-fn main() s32
-{
-    >a: u32 = 0;
-    return a;
-}

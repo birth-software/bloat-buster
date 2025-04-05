@@ -1,0 +1,17 @@
+S = bits u32
+{
+    a: u1,
+    b: u1,
+    c: u1,
+}
+
+foo = fn () u1
+{
+    >a: S = { .a = 1, .b = 1, .c = 0 };
+    return a.c;
+}
+
+[export] main = fn [cc(c)] () s32
+{
+    return #extend(foo() == 1);
+}

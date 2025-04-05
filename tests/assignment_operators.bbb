@@ -1,0 +1,35 @@
+unsigned = fn(n: s32) s32
+{
+    >result: u32 = #extend(n);
+    result >>= 1;
+    result <<= 1;
+    result ^= 1;
+    result |= 1;
+    result &= 1;
+    result += 1;
+    result -= 1;
+    result /= 1;
+    result %= 1;
+    result *= 0;
+
+    return #extend(result);
+}
+
+[export] main = fn [cc(c)] () s32
+{
+    >result: s32 = 0;
+    >pointer = &result;
+    pointer -= 1;
+    pointer += 1;
+    result >>= 1;
+    result <<= 1;
+    result ^= 1;
+    result |= 1;
+    result &= 1;
+    result += 1;
+    result -= 1;
+    result /= 1;
+    result %= 1;
+    result *= 0;
+    return unsigned(result);
+}

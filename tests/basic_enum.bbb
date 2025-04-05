@@ -1,0 +1,18 @@
+E = enum
+{
+    zero = 0,
+    one = 1,
+    two = 2,
+    three = 3,
+}
+
+[export] main = fn [cc(c)] () s32
+{
+    >a: E = .three;
+    >b: E = .two;
+    >c: E = .one;
+    >a_int: s32 = #extend(#int_from_enum(a));
+    >b_int: s32 = #extend(#int_from_enum(b));
+    >c_int: s32 = #extend(#int_from_enum(c));
+    return a_int - (b_int + c_int);
+}

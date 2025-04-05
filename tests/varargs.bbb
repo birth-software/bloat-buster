@@ -1,0 +1,66 @@
+S = struct
+{
+    a: u32,
+    b: u32,
+    c: u64,
+    d: u64,
+    e: u64
+}
+
+require = fn (ok: u1) void
+{
+    if (!ok)
+    {
+        #trap();
+    }
+}
+
+va_arg_function = fn [cc(c)] (first_arg: u32, ...) void
+{
+    >va = #va_start();
+
+    >a = #va_arg(&va, u32);
+    >b = #va_arg(&va, S);
+    >c = #va_arg(&va, s64); 
+    >d = #va_arg(&va, s32); 
+
+    require(first_arg == 123456789);
+    require(a == 123);
+    require(c == -1);
+    require(d == -2);
+    require(b.a == 1);
+    require(b.b == 2);
+    require(b.c == 3);
+    require(b.d == 4);
+    require(b.e == 5);
+
+    #va_end(&va);
+}
+
+S2 = struct
+{
+    a: u64,
+    b: u64,
+}
+
+va_arg_function2 = fn [cc(c)] (...) void
+{
+    >va = #va_start();
+    >s2 = #va_arg(&va, S2);
+    require(s2.a == 8);
+    require(s2.b == 9);
+    #va_end(&va);
+}
+
+[export] main = fn [cc(c)] () s32
+{
+    >first_arg: u32 = 123456789;
+    >a: u32 = 123;
+    >b: S = { .a = 1, .b = 2, .c = 3, .d = 4, .e = 5 };
+    >c: s64 = -1;
+    >d: s32 = -2;
+    va_arg_function(first_arg, a, b, c, d);
+    >s2: S2 = { .a = 8, .b = 9 };
+    va_arg_function2(s2);
+    return 0;
+}
