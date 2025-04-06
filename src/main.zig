@@ -186,6 +186,6 @@ const names = &[_][]const u8{
     "minimal_stack_arithmetic",
     "minimal_stack_arithmetic2",
     "minimal_stack_arithmetic3",
+    "extend",
     // "pointer",
-    // "extend",
 };

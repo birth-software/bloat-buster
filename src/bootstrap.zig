@@ -329,8 +329,11 @@ pub const Type = struct {
         return byte_size;
     }
     pub fn get_bit_size(ty: *const Type) u64 {
-        _ = ty;
-        @trap();
+        const bit_size: u64 = switch (ty.bb) {
+            .integer => |integer| integer.bit_count,
+            else => @trap(),
+        };
+        return bit_size;
     }
 
     pub fn get_byte_allocation_size(ty: *const Type) u64 {
@@ -440,9 +443,46 @@ pub const Value = struct {
         binary: Binary,
         variable_reference: *Variable,
         local,
+        intrinsic: Intrinsic,
     },
     type: ?*Type = null,
     llvm: ?*llvm.Value = null,
+
+    const Intrinsic = union(Id) {
+        byte_size,
+        cast,
+        cast_to,
+        extend: *Value,
+        integer_max,
+        int_from_enum,
+        int_from_pointer,
+        pointer_cast,
+        select,
+        trap,
+        truncate,
+        va_start,
+        va_end,
+        va_copy,
+        va_arg,
+
+        const Id = enum {
+            byte_size,
+            cast,
+            cast_to,
+            extend,
+            integer_max,
+            int_from_enum,
+            int_from_pointer,
+            pointer_cast,
+            select,
+            trap,
+            truncate,
+            va_start,
+            va_end,
+            va_copy,
+            va_arg,
+        };
+    };
 
     fn is_constant(value: *Value) bool {
         return switch (value.bb) {
@@ -473,24 +513,6 @@ pub const Value = struct {
         undefined,
         @"unreachable",
         zero,
-    };
-
-    const Intrinsic = enum {
-        byte_size,
-        cast,
-        cast_to,
-        extend,
-        integer_max,
-        int_from_enum,
-        int_from_pointer,
-        pointer_cast,
-        select,
-        trap,
-        truncate,
-        va_start,
-        va_end,
-        va_copy,
-        va_arg,
     };
 
     const Builder = struct {
@@ -1258,7 +1280,7 @@ pub const Module = struct {
             '#' => if (is_identifier_start_ch(module.content[module.offset + 1])) blk: {
                 module.offset += 1;
                 const value_intrinsic_identifier = module.parse_identifier();
-                const value_intrinsic = lib.string.to_enum(Value.Intrinsic, value_intrinsic_identifier) orelse module.report_error();
+                const value_intrinsic = lib.string.to_enum(Value.Intrinsic.Id, value_intrinsic_identifier) orelse module.report_error();
                 break :blk .{
                     .value_intrinsic = value_intrinsic,
                 };
@@ -1642,8 +1664,26 @@ pub const Module = struct {
     }
 
     fn rule_before_value_intrinsic(noalias module: *Module, value_builder: Value.Builder) *Value {
-        _ = module;
-        _ = value_builder;
+        const intrinsic = value_builder.token.value_intrinsic;
+        switch (intrinsic) {
+            .extend => {
+                module.skip_space();
+                module.expect_character(left_parenthesis);
+                module.skip_space();
+                const arg_value = module.parse_value(.{});
+                module.expect_character(right_parenthesis);
+                const value = module.values.add();
+                value.* = .{
+                    .bb = .{
+                        .intrinsic = .{
+                            .extend = arg_value,
+                        },
+                    },
+                };
+                return value;
+            },
+            else => @trap(),
+        }
         @trap();
     }
 
@@ -2631,7 +2671,7 @@ pub const Module = struct {
                             true => module.llvm.builder.create_integer_compare(.sle, left, right),
                             false => module.llvm.builder.create_integer_compare(.ule, left, right),
                         },
-                        },
+                    },
                     else => @trap(),
                 };
                 break :blk result;
@@ -2645,6 +2685,21 @@ pub const Module = struct {
                 .aggregate => @trap(),
                 .complex => @trap(),
             } else @trap(),
+            .intrinsic => |intrinsic| switch (intrinsic) {
+                .extend => |extended_value| blk: {
+                    if (extended_value.llvm == null) {
+                        module.emit_value(function, extended_value);
+                    }
+                    const llvm_value = extended_value.llvm orelse unreachable;
+                    const destination_type = value_type.llvm.handle.?;
+                    const extension_instruction = switch (extended_value.type.?.bb.integer.signed) {
+                        true => module.llvm.builder.create_sign_extend(llvm_value, destination_type),
+                        false => module.llvm.builder.create_zero_extend(llvm_value, destination_type),
+                    };
+                    break :blk extension_instruction;
+                },
+                else => @trap(),
+            },
             else => @trap(),
         };
 
@@ -2655,6 +2710,7 @@ pub const Module = struct {
         assert(value.type == null);
         assert(value.llvm == null);
 
+        // If a result type exists, then do the analysis against it
         if (analysis.type) |expected_type| switch (expected_type.bb) {
             .integer => |integer| switch (value.bb) {
                 .constant_integer => |constant_integer| switch (constant_integer.signed) {
@@ -2708,11 +2764,27 @@ pub const Module = struct {
                         module.report_error();
                     }
                 },
+                .intrinsic => |intrinsic| switch (intrinsic) {
+                    .extend => |extended_value| {
+                        module.analyze_value_type(function, extended_value, .{});
+                        assert(extended_value.type != null);
+                        const destination_type = expected_type;
+                        const source_type = extended_value.type.?;
+
+                        if (source_type.get_bit_size() > destination_type.get_bit_size()) {
+                            module.report_error();
+                        } else if (source_type.get_bit_size() == destination_type.get_bit_size() and source_type.is_signed() == destination_type.is_signed()) {
+                            module.report_error();
+                        }
+                    },
+                    else => @trap(),
+                },
                 else => @trap(),
             },
             else => @trap(),
         };
 
+        // Resolve the value type. If a result type does not exist, compute it
         const value_type = if (analysis.type) |expected_type| expected_type else switch (value.bb) {
             .binary => |binary| blk: {
                 if (binary.left.bb == .constant_integer and binary.right.bb == .constant_integer) {
@@ -3067,7 +3139,7 @@ const Token = union(Id) {
     integer: Integer,
     identifier: []const u8,
     value_keyword: Value.Keyword,
-    value_intrinsic: Value.Intrinsic,
+    value_intrinsic: Value.Intrinsic.Id,
     // Assignment operators
     @"=",
     @"+=",
