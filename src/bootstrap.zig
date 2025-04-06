@@ -409,8 +409,28 @@ const Binary = struct {
         @"<",
         @">=",
         @"<=",
+
+        fn is_boolean(id: Binary.Id) bool {
+            return switch (id) {
+                .@"==",
+                .@"!=",
+                .@">",
+                .@"<",
+                .@">=",
+                .@"<=",
+                => true,
+                else => false,
+            };
+        }
     };
 };
+
+fn negate_llvm_value(value: *llvm.Value, is_constant: bool) *llvm.Value {
+    return switch (is_constant) {
+        true => value.to_constant().negate().to_value(),
+        false => @trap(),
+    };
+}
 
 pub const Value = struct {
     bb: union(enum) {
@@ -428,13 +448,6 @@ pub const Value = struct {
         return switch (value.bb) {
             .constant_integer => true,
             else => @trap(),
-        };
-    }
-
-    fn negate_llvm(value: *Value) *llvm.Value {
-        return switch (value.is_constant()) {
-            true => value.llvm.?.to_constant().negate().to_value(),
-            false => @trap(),
         };
     }
 
@@ -2551,62 +2564,77 @@ pub const Module = struct {
 
     pub fn analyze(module: *Module, function: *Global, value: *Value, analysis: ValueAnalysis) void {
         module.analyze_value_type(function, value, analysis);
-        module.emit_value(function, value, analysis);
+        module.emit_value(function, value);
     }
 
-    pub fn emit_value(module: *Module, function: *Global, value: *Value, analysis: ValueAnalysis) void {
-        _ = function;
-        _ = analysis;
+    pub fn emit_value(module: *Module, function: *Global, value: *Value) void {
         const value_type = value.type orelse unreachable;
         assert(value.llvm == null);
 
         const llvm_value: *llvm.Value = switch (value.bb) {
             .constant_integer => |constant_integer| value_type.llvm.handle.?.to_integer().get_constant(constant_integer.value, @intFromBool(constant_integer.signed)).to_value(),
             .unary => |unary| switch (unary.id) {
-                .@"-" => unary.value.negate_llvm(),
-                else => @trap(),
-            },
-            .binary => |binary| switch (value_type.bb) {
-                .integer => |integer| switch (binary.id) {
-                    .@"+" => module.llvm.builder.create_add(binary.left.llvm.?, binary.right.llvm.?),
-                    .@"-" => module.llvm.builder.create_sub(binary.left.llvm.?, binary.right.llvm.?),
-                    .@"*" => module.llvm.builder.create_mul(binary.left.llvm.?, binary.right.llvm.?),
-                    .@"/" => switch (integer.signed) {
-                        true => module.llvm.builder.create_sdiv(binary.left.llvm.?, binary.right.llvm.?),
-                        false => module.llvm.builder.create_udiv(binary.left.llvm.?, binary.right.llvm.?),
-                    },
-                    .@"%" => switch (integer.signed) {
-                        true => module.llvm.builder.create_srem(binary.left.llvm.?, binary.right.llvm.?),
-                        false => module.llvm.builder.create_urem(binary.left.llvm.?, binary.right.llvm.?),
-                    },
-                    .@"&" => module.llvm.builder.create_and(binary.left.llvm.?, binary.right.llvm.?),
-                    .@"|" => module.llvm.builder.create_or(binary.left.llvm.?, binary.right.llvm.?),
-                    .@"^" => module.llvm.builder.create_xor(binary.left.llvm.?, binary.right.llvm.?),
-                    .@"<<" => module.llvm.builder.create_shl(binary.left.llvm.?, binary.right.llvm.?),
-                    .@">>" => switch (integer.signed) {
-                        true => module.llvm.builder.create_ashr(binary.left.llvm.?, binary.right.llvm.?),
-                        false => module.llvm.builder.create_lshr(binary.left.llvm.?, binary.right.llvm.?),
-                    },
-                    .@"==" => module.llvm.builder.create_integer_compare(.eq, binary.left.llvm.?, binary.right.llvm.?),
-                    .@"!=" => module.llvm.builder.create_integer_compare(.ne, binary.left.llvm.?, binary.right.llvm.?),
-                    .@">" => switch (integer.signed) {
-                        true => module.llvm.builder.create_integer_compare(.sgt, binary.left.llvm.?, binary.right.llvm.?),
-                        false => module.llvm.builder.create_integer_compare(.ugt, binary.left.llvm.?, binary.right.llvm.?),
-                    },
-                    .@"<" => switch (integer.signed) {
-                        true => module.llvm.builder.create_integer_compare(.slt, binary.left.llvm.?, binary.right.llvm.?),
-                        false => module.llvm.builder.create_integer_compare(.ult, binary.left.llvm.?, binary.right.llvm.?),
-                    },
-                    .@">=" => switch (integer.signed) {
-                        true => module.llvm.builder.create_integer_compare(.sge, binary.left.llvm.?, binary.right.llvm.?),
-                        false => module.llvm.builder.create_integer_compare(.uge, binary.left.llvm.?, binary.right.llvm.?),
-                    },
-                    .@"<=" => switch (integer.signed) {
-                        true => module.llvm.builder.create_integer_compare(.sle, binary.left.llvm.?, binary.right.llvm.?),
-                        false => module.llvm.builder.create_integer_compare(.ule, binary.left.llvm.?, binary.right.llvm.?),
-                    },
+                .@"-" => blk: {
+                    const unary_value = unary.value.llvm orelse b: {
+                        module.emit_value(function, unary.value);
+                        break :b unary.value.llvm orelse unreachable;
+                    };
+                    break :blk negate_llvm_value(unary_value, unary.value.is_constant());
                 },
                 else => @trap(),
+            },
+            .binary => |binary| blk: {
+                const left = if (binary.left.llvm) |left_llvm| left_llvm else b: {
+                    module.emit_value(function, binary.left);
+                    break :b binary.left.llvm orelse unreachable;
+                };
+                const right = if (binary.right.llvm) |right_llvm| right_llvm else b: {
+                    module.emit_value(function, binary.right);
+                    break :b binary.right.llvm orelse unreachable;
+                };
+                const result = switch (value_type.bb) {
+                    .integer => |integer| switch (binary.id) {
+                        .@"+" => module.llvm.builder.create_add(left, right),
+                        .@"-" => module.llvm.builder.create_sub(left, right),
+                        .@"*" => module.llvm.builder.create_mul(left, right),
+                        .@"/" => switch (integer.signed) {
+                            true => module.llvm.builder.create_sdiv(left, right),
+                            false => module.llvm.builder.create_udiv(left, right),
+                        },
+                        .@"%" => switch (integer.signed) {
+                            true => module.llvm.builder.create_srem(left, right),
+                            false => module.llvm.builder.create_urem(left, right),
+                        },
+                        .@"&" => module.llvm.builder.create_and(left, right),
+                        .@"|" => module.llvm.builder.create_or(left, right),
+                        .@"^" => module.llvm.builder.create_xor(left, right),
+                        .@"<<" => module.llvm.builder.create_shl(left, right),
+                        .@">>" => switch (integer.signed) {
+                            true => module.llvm.builder.create_ashr(left, right),
+                            false => module.llvm.builder.create_lshr(left, right),
+                        },
+                        .@"==" => module.llvm.builder.create_integer_compare(.eq, left, right),
+                        .@"!=" => module.llvm.builder.create_integer_compare(.ne, left, right),
+                        .@">" => switch (integer.signed) {
+                            true => module.llvm.builder.create_integer_compare(.sgt, left, right),
+                            false => module.llvm.builder.create_integer_compare(.ugt, left, right),
+                        },
+                        .@"<" => switch (integer.signed) {
+                            true => module.llvm.builder.create_integer_compare(.slt, left, right),
+                            false => module.llvm.builder.create_integer_compare(.ult, left, right),
+                        },
+                        .@">=" => switch (integer.signed) {
+                            true => module.llvm.builder.create_integer_compare(.sge, left, right),
+                            false => module.llvm.builder.create_integer_compare(.uge, left, right),
+                        },
+                        .@"<=" => switch (integer.signed) {
+                            true => module.llvm.builder.create_integer_compare(.sle, left, right),
+                            false => module.llvm.builder.create_integer_compare(.ule, left, right),
+                        },
+                        },
+                    else => @trap(),
+                };
+                break :blk result;
             },
             .variable_reference => |variable| if (variable.type == value_type) switch (value_type.get_evaluation_kind()) {
                 .scalar => module.create_load(.{
@@ -2648,7 +2676,7 @@ pub const Module = struct {
                     switch (unary.id) {
                         .@"+" => @trap(),
                         .@"-" => {
-                            module.analyze(function, unary.value, analysis);
+                            module.analyze_value_type(function, unary.value, analysis);
                             if (!unary.value.type.?.is_signed()) {
                                 module.report_error();
                             }
@@ -2659,16 +2687,7 @@ pub const Module = struct {
                     }
                 },
                 .binary => |binary| {
-                    const is_boolean = switch (binary.id) {
-                        .@"==",
-                        .@"!=",
-                        .@">",
-                        .@"<",
-                        .@">=",
-                        .@"<=",
-                        => true,
-                        else => false,
-                    };
+                    const is_boolean = binary.id.is_boolean();
 
                     const boolean_type = module.integer_type(1, false);
 
@@ -2676,11 +2695,11 @@ pub const Module = struct {
                         module.report_error();
                     }
 
-                    module.analyze(function, binary.left, .{
+                    module.analyze_value_type(function, binary.left, .{
                         .type = if (is_boolean) null else expected_type,
                     });
 
-                    module.analyze(function, binary.right, .{
+                    module.analyze_value_type(function, binary.right, .{
                         .type = binary.left.type,
                     });
                 },
@@ -2695,6 +2714,34 @@ pub const Module = struct {
         };
 
         const value_type = if (analysis.type) |expected_type| expected_type else switch (value.bb) {
+            .binary => |binary| blk: {
+                if (binary.left.bb == .constant_integer and binary.right.bb == .constant_integer) {
+                    module.report_error();
+                }
+
+                if (binary.left.bb == .constant_integer) {
+                    module.analyze_value_type(function, binary.right, .{});
+                    module.analyze_value_type(function, binary.left, .{
+                        .type = binary.right.type,
+                    });
+                } else if (binary.right.bb == .constant_integer) {
+                    module.analyze_value_type(function, binary.left, .{});
+                    module.analyze_value_type(function, binary.right, .{
+                        .type = binary.left.type,
+                    });
+                } else {
+                    module.analyze_value_type(function, binary.left, .{});
+                    module.analyze_value_type(function, binary.right, .{});
+                }
+
+                assert(binary.left.type != null);
+                assert(binary.right.type != null);
+                assert(binary.left.type == binary.right.type);
+                break :blk binary.left.type.?;
+            },
+            .variable_reference => |variable| blk: {
+                break :blk variable.type;
+            },
             else => @trap(),
         };
 
@@ -2832,18 +2879,14 @@ pub const Module = struct {
                     _ = module.llvm.builder.clear_insertion_position();
                 },
                 .local => |local| {
-                    if (local.variable.type) |expected_type| {
-                        assert(local.variable.storage == null);
-                        module.analyze_value_type(function, local.variable.initial_value, .{ .type = local.variable.type });
-                        local.variable.resolve_type(local.variable.initial_value.type.?);
-                        assert(expected_type == local.variable.type);
-                        module.emit_local_storage(local, last_statement_debug_location);
+                    const expected_type = local.variable.type;
+                    assert(local.variable.storage == null);
+                    module.analyze_value_type(function, local.variable.initial_value, .{ .type = local.variable.type });
+                    local.variable.resolve_type(local.variable.initial_value.type.?);
+                    if (expected_type) |lvt| assert(lvt == local.variable.type);
+                    module.emit_local_storage(local, last_statement_debug_location);
 
-
-                        module.emit_assignment(function, local.variable.storage.?, local.variable.initial_value);
-                    } else {
-                        @trap();
-                    }
+                    module.emit_assignment(function, local.variable.storage.?, local.variable.initial_value);
                 },
             }
         }
@@ -2859,7 +2902,7 @@ pub const Module = struct {
 
         switch (value_type.get_evaluation_kind()) {
             .scalar => {
-                module.emit_value(function, right, .{});
+                module.emit_value(function, right);
                 _ = module.create_store(.{
                     .source_value = right.llvm.?,
                     .destination_value = left.llvm.?,
