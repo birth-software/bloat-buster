@@ -189,5 +189,7 @@ const names = &[_][]const u8{
     "extend",
     "stack_negation",
     "basic_pointer",
+    "integer_max",
+    "integer_hex",
     // "pointer",
 };

@@ -505,13 +505,13 @@ pub const Value = struct {
         cast,
         cast_to,
         extend: *Value,
-        integer_max,
+        integer_max: *Type,
         int_from_enum,
         int_from_pointer,
         pointer_cast,
         select,
         trap,
-        truncate,
+        truncate: *Value,
         va_start,
         va_end,
         va_copy,
@@ -753,6 +753,21 @@ pub const Module = struct {
             128 => @trap(),
             else => @trap(),
         }
+    }
+
+    fn parse_hexadecimal(noalias module: *Module) u64 {
+        var value: u64 = 0;
+        while (true) {
+            const ch = module.content[module.offset];
+            if (!lib.is_hex_digit(ch)) {
+                break;
+            }
+
+            module.offset += 1;
+            value = lib.parse.accumulate_hexadecimal(value, ch);
+        }
+
+        return value;
     }
 
     fn parse_decimal(noalias module: *Module) u64 {
@@ -1351,6 +1366,8 @@ pub const Module = struct {
                     else => .decimal,
                 };
                 const value: u64 = switch (token_integer_kind) {
+                    .binary => @trap(),
+                    .octal => @trap(),
                     .decimal => switch (next_ch) {
                         0...9 => module.report_error(),
                         else => b: {
@@ -1358,7 +1375,11 @@ pub const Module = struct {
                             break :b 0;
                         },
                     },
-                    else => @trap(),
+                    .hexadecimal => b: {
+                        module.offset += 2;
+                        const v = module.parse_hexadecimal();
+                        break :b v;
+                    },
                 };
 
                 if (module.content[module.offset] == '.') {
@@ -1721,26 +1742,53 @@ pub const Module = struct {
 
     fn rule_before_value_intrinsic(noalias module: *Module, value_builder: Value.Builder) *Value {
         const intrinsic = value_builder.token.value_intrinsic;
-        switch (intrinsic) {
-            .extend => {
+        const value = module.values.add();
+        value.* = switch (intrinsic) {
+            .extend => blk: {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
                 const arg_value = module.parse_value(.{});
                 module.expect_character(right_parenthesis);
-                const value = module.values.add();
-                value.* = .{
+                break :blk .{
                     .bb = .{
                         .intrinsic = .{
                             .extend = arg_value,
                         },
                     },
                 };
-                return value;
+            },
+            .integer_max => blk: {
+                module.skip_space();
+                module.expect_character(left_parenthesis);
+                module.skip_space();
+                const ty = module.parse_type();
+                module.expect_character(right_parenthesis);
+                break :blk .{
+                    .bb = .{
+                        .intrinsic = .{
+                            .integer_max = ty,
+                        },
+                    },
+                };
+            },
+            .truncate => blk: {
+                module.skip_space();
+                module.expect_character(left_parenthesis);
+                module.skip_space();
+                const v = module.parse_value(.{});
+                module.expect_character(right_parenthesis);
+                break :blk .{
+                    .bb = .{
+                        .intrinsic = .{
+                            .truncate = v,
+                        },
+                    },
+                };
             },
             else => @trap(),
-        }
-        @trap();
+        };
+        return value;
     }
 
     fn rule_before_integer(noalias module: *Module, value_builder: Value.Builder) *Value {
@@ -2720,6 +2768,20 @@ pub const Module = struct {
                     };
                     break :blk extension_instruction;
                 },
+                .integer_max => |max_type| blk: {
+                    const bit_count = max_type.bb.integer.bit_count;
+                    const max_value = if (bit_count == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(bit_count - @intFromBool(max_type.bb.integer.signed))) - 1;
+                    const constant_integer = max_type.resolve(module).handle.to_integer().get_constant(max_value, @intFromBool(false));
+                    break :blk constant_integer.to_value();
+                },
+                .truncate => |value_to_truncate| blk: {
+                    if (value_to_truncate.llvm == null) {
+                        module.emit_value(function, value_to_truncate);
+                    }
+                    const llvm_value = value_to_truncate.llvm orelse unreachable;
+                    const truncate = module.llvm.builder.create_truncate(llvm_value, value_type.llvm.handle.?);
+                    break :blk truncate;
+                },
                 else => @trap(),
             },
             .dereference => |dereferenceable_value| blk: {
@@ -2756,8 +2818,10 @@ pub const Module = struct {
                         @trap();
                     },
                     false => {
-                        const type_max = (@as(u64, 1) << @intCast(integer.bit_count)) - 1;
-                        if (constant_integer.value > type_max) {
+                        const bit_count = integer.bit_count;
+                        const max_value = if (bit_count == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(bit_count - @intFromBool(integer.signed))) - 1;
+
+                        if (constant_integer.value > max_value) {
                             module.report_error();
                         }
                     },
@@ -2808,6 +2872,12 @@ pub const Module = struct {
                         if (source_type.get_bit_size() > destination_type.get_bit_size()) {
                             module.report_error();
                         } else if (source_type.get_bit_size() == destination_type.get_bit_size() and source_type.is_signed() == destination_type.is_signed()) {
+                            module.report_error();
+                        }
+                    },
+                    .truncate => |value_to_truncate| {
+                        module.analyze_value_type(function, value_to_truncate, .{});
+                        if (expected_type.get_bit_size() >= value_to_truncate.type.?.get_bit_size()) {
                             module.report_error();
                         }
                     },
@@ -2862,6 +2932,16 @@ pub const Module = struct {
             .variable_reference => |variable| switch (value.kind) {
                 .right => variable.type,
                 else => variable.storage.?.type.?,
+            },
+            .intrinsic => |intrinsic| switch (intrinsic) {
+                // TODO: typecheck
+                .integer_max => |integer_max_type| blk: {
+                    if (integer_max_type.bb != .integer) {
+                        module.report_error();
+                    }
+                    break :blk integer_max_type;
+                },
+                else => @trap(),
             },
             else => @trap(),
         };
