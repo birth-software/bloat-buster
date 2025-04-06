@@ -1,0 +1,6 @@
+[export] main = fn [cc(c)] () s32
+{
+    >a: s32 = 0;
+    >pointer = &a;
+    return pointer.&;
+}

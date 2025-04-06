@@ -185,6 +185,11 @@ pub const Global = struct {
     };
 };
 
+pub const ResolvedType = struct {
+    handle: *llvm.Type,
+    debug: *llvm.DI.Type,
+};
+
 pub const Type = struct {
     bb: union(enum) {
         void,
@@ -204,6 +209,58 @@ pub const Type = struct {
         handle: ?*llvm.Type = null,
         debug: ?*llvm.DI.Type = null,
     } = .{},
+
+    fn resolve(ty: *Type, module: *Module) ResolvedType {
+        if (ty.llvm.handle) |llvm_handle| {
+            return .{
+                .handle = llvm_handle,
+                .debug = ty.llvm.debug orelse undefined,
+            };
+        } else {
+            const llvm_type = switch (ty.bb) {
+                .void, .noreturn => module.llvm.void_type,
+                .integer => |integer| module.llvm.context.get_integer_type(integer.bit_count).to_type(),
+                // Consider function types later since we need to deal with ABI
+                .function => null,
+                .pointer => module.llvm.pointer_type,
+                else => @trap(),
+            };
+            ty.llvm.handle = llvm_type;
+
+            const debug_type = if (module.has_debug_info) switch (ty.bb) {
+                .void => module.llvm.di_builder.create_basic_type(ty.name, 0, .void, .{}),
+                .noreturn => module.llvm.di_builder.create_basic_type(ty.name, 0, .void, .{ .no_return = true }),
+                .integer => |integer| module.llvm.di_builder.create_basic_type(ty.name, integer.bit_count, switch (integer.signed) {
+                    true => .signed,
+                    false => .unsigned,
+                }, .{}),
+                .function => |function| b: {
+                    var debug_argument_type_buffer: [64]*llvm.DI.Type = undefined;
+                    const semantic_debug_argument_types = debug_argument_type_buffer[0 .. function.semantic_argument_types.len + 1 + @intFromBool(function.is_var_args)];
+                    semantic_debug_argument_types[0] = function.semantic_return_type.llvm.debug.?;
+
+                    for (function.semantic_argument_types, semantic_debug_argument_types[1..][0..function.semantic_argument_types.len]) |semantic_type, *debug_argument_type| {
+                        debug_argument_type.* = semantic_type.llvm.debug.?;
+                    }
+
+                    if (function.is_var_args) {
+                        semantic_debug_argument_types[function.semantic_argument_types.len + 1] = module.void_type.llvm.debug.?;
+                    }
+
+                    const subroutine_type = module.llvm.di_builder.create_subroutine_type(module.llvm.file, semantic_debug_argument_types, .{});
+                    break :b subroutine_type.to_type();
+                },
+                .pointer => |pointer| module.llvm.di_builder.create_pointer_type(pointer.type.llvm.debug.?, 64, 64, 0, ty.name).to_type(),
+                else => @trap(),
+            } else null;
+            ty.llvm.debug = debug_type;
+
+            return .{
+                .handle = if (llvm_type) |lt| lt else undefined,
+                .debug = if (debug_type) |dt| dt else undefined,
+            };
+        }
+    }
 
     pub const Integer = struct {
         bit_count: u32,
@@ -428,13 +485,6 @@ const Binary = struct {
     };
 };
 
-fn negate_llvm_value(value: *llvm.Value, is_constant: bool) *llvm.Value {
-    return switch (is_constant) {
-        true => value.to_constant().negate().to_value(),
-        false => @trap(),
-    };
-}
-
 pub const Value = struct {
     bb: union(enum) {
         function: Function,
@@ -444,9 +494,11 @@ pub const Value = struct {
         variable_reference: *Variable,
         local,
         intrinsic: Intrinsic,
+        dereference: *Value,
     },
     type: ?*Type = null,
     llvm: ?*llvm.Value = null,
+    kind: Kind = .right,
 
     const Intrinsic = union(Id) {
         byte_size,
@@ -487,6 +539,7 @@ pub const Value = struct {
     fn is_constant(value: *Value) bool {
         return switch (value.bb) {
             .constant_integer => true,
+            .variable_reference => false,
             else => @trap(),
         };
     }
@@ -683,6 +736,8 @@ pub const Module = struct {
         di_builder: *llvm.DI.Builder,
         file: *llvm.DI.File,
         compile_unit: *llvm.DI.CompileUnit,
+        pointer_type: *llvm.Type,
+        void_type: *llvm.Type,
     };
 
     pub fn integer_type(module: *Module, bit_count: u32, sign: bool) *Type {
@@ -1653,6 +1708,7 @@ pub const Module = struct {
             .bb = .{
                 .variable_reference = variable,
             },
+            .kind = value_builder.kind,
         };
         return value;
     }
@@ -1747,34 +1803,32 @@ pub const Module = struct {
             .none => unreachable,
             .@"-" => .@"-",
             .@"+" => .@"+",
+            .@"&" => .@"&",
             else => @trap(),
         };
 
         const right = module.parse_precedence(value_builder.with_precedence(.prefix).with_token(.none).with_kind(if (unary_id == .@"&") .left else value_builder.kind));
 
-        const value = switch (unary_id) {
-            .@"+" => @trap(),
-            .@"-" => blk: {
-                const value = module.values.add();
-                value.* = .{
-                    .bb = .{
-                        .unary = .{
-                            .id = unary_id,
-                            .value = right,
-                        },
-                    },
-                };
-                break :blk value;
+        const value = module.values.add();
+        value.* = .{
+            .bb = .{
+                .unary = .{
+                    .id = unary_id,
+                    .value = right,
+                },
             },
-            else => @trap(),
         };
         return value;
     }
 
     fn rule_after_dereference(noalias module: *Module, value_builder: Value.Builder) *Value {
-        _ = module;
-        _ = value_builder;
-        @trap();
+        const value = module.values.add();
+        value.* = .{
+            .bb = .{
+                .dereference = value_builder.left orelse unreachable,
+            },
+        };
+        return value;
     }
 
     fn rule_before_parenthesis(noalias module: *Module, value_builder: Value.Builder) *Value {
@@ -2022,6 +2076,8 @@ pub const Module = struct {
             .di_builder = di_builder,
             .file = file,
             .compile_unit = compile_unit,
+            .void_type = context.get_void_type(),
+            .pointer_type = context.get_pointer_type(0).to_type(),
         };
     }
 
@@ -2048,50 +2104,6 @@ pub const Module = struct {
 
     pub fn emit(module: *Module) void {
         module.initialize_llvm();
-
-        const llvm_pointer_type = module.llvm.context.get_pointer_type(0).to_type();
-        const void_type = module.llvm.context.get_void_type();
-        for (module.types.get_slice()) |*ty| {
-            const llvm_type = switch (ty.bb) {
-                .void, .noreturn => void_type,
-                .integer => |integer| module.llvm.context.get_integer_type(integer.bit_count).to_type(),
-                // Consider function types later since we need to deal with ABI
-                .function => null,
-                .pointer => llvm_pointer_type,
-                else => @trap(),
-            };
-            ty.llvm.handle = llvm_type;
-
-            if (module.has_debug_info) {
-                const debug_type = switch (ty.bb) {
-                    .void => module.llvm.di_builder.create_basic_type(ty.name, 0, .void, .{}),
-                    .noreturn => module.llvm.di_builder.create_basic_type(ty.name, 0, .void, .{ .no_return = true }),
-                    .integer => |integer| module.llvm.di_builder.create_basic_type(ty.name, integer.bit_count, switch (integer.signed) {
-                        true => .signed,
-                        false => .unsigned,
-                    }, .{}),
-                    .function => |function| blk: {
-                        var debug_argument_type_buffer: [64]*llvm.DI.Type = undefined;
-                        const semantic_debug_argument_types = debug_argument_type_buffer[0 .. function.semantic_argument_types.len + 1 + @intFromBool(function.is_var_args)];
-                        semantic_debug_argument_types[0] = function.semantic_return_type.llvm.debug.?;
-
-                        for (function.semantic_argument_types, semantic_debug_argument_types[1..][0..function.semantic_argument_types.len]) |semantic_type, *debug_argument_type| {
-                            debug_argument_type.* = semantic_type.llvm.debug.?;
-                        }
-
-                        if (function.is_var_args) {
-                            semantic_debug_argument_types[function.semantic_argument_types.len + 1] = module.void_type.llvm.debug.?;
-                        }
-
-                        const subroutine_type = module.llvm.di_builder.create_subroutine_type(module.llvm.file, semantic_debug_argument_types, .{});
-                        break :blk subroutine_type.to_type();
-                    },
-                    .pointer => |pointer| module.llvm.di_builder.create_pointer_type(pointer.type.llvm.debug.?, 64, 64, 0, ty.name).to_type(),
-                    else => @trap(),
-                };
-                ty.llvm.debug = debug_type;
-            }
-        }
 
         for (module.globals.get_slice()) |*global| {
             switch (global.variable.storage.?.bb) {
@@ -2158,7 +2170,7 @@ pub const Module = struct {
                         },
                     }
                     const llvm_abi_argument_types = llvm_abi_argument_type_buffer[0..abi_argument_type_count];
-                    const llvm_function_type = llvm.Type.Function.get(function_type.abi_return_type.llvm.handle.?, llvm_abi_argument_types, function_type.is_var_args);
+                    const llvm_function_type = llvm.Type.Function.get(function_type.abi_return_type.resolve(module).handle, llvm_abi_argument_types, function_type.is_var_args);
 
                     const subroutine_type_flags = llvm.DI.Flags{};
                     const subroutine_type = if (module.has_debug_info) blk: {
@@ -2619,7 +2631,12 @@ pub const Module = struct {
                         module.emit_value(function, unary.value);
                         break :b unary.value.llvm orelse unreachable;
                     };
-                    break :blk negate_llvm_value(unary_value, unary.value.is_constant());
+                    break :blk module.negate_llvm_value(unary_value, unary.value.is_constant());
+                },
+                .@"&" => blk: {
+                    assert(value_type == unary.value.type);
+                    module.emit_value(function, unary.value);
+                    break :blk unary.value.llvm orelse unreachable;
                 },
                 else => @trap(),
             },
@@ -2684,7 +2701,12 @@ pub const Module = struct {
                 }),
                 .aggregate => @trap(),
                 .complex => @trap(),
-            } else @trap(),
+            } else if (variable.storage.?.type == value_type) blk: {
+                assert(value.kind == .left);
+                break :blk variable.storage.?.llvm.?;
+            } else {
+                @trap();
+            },
             .intrinsic => |intrinsic| switch (intrinsic) {
                 .extend => |extended_value| blk: {
                     if (extended_value.llvm == null) {
@@ -2699,6 +2721,18 @@ pub const Module = struct {
                     break :blk extension_instruction;
                 },
                 else => @trap(),
+            },
+            .dereference => |dereferenceable_value| blk: {
+                module.emit_value(function, dereferenceable_value);
+                const result = switch (value.kind) {
+                    .left => @trap(),
+                    .right => module.create_load(.{
+                        .type = dereferenceable_value.type.?.bb.pointer.type,
+                        .value = dereferenceable_value.llvm.?,
+                        .alignment = dereferenceable_value.type.?.bb.pointer.alignment,
+                    }),
+                };
+                break :blk result;
             },
             else => @trap(),
         };
@@ -2779,6 +2813,16 @@ pub const Module = struct {
                     },
                     else => @trap(),
                 },
+                .dereference => |dereferenceable_value| {
+                    module.analyze_value_type(function, dereferenceable_value, .{});
+                    if (dereferenceable_value.type.?.bb != .pointer) {
+                        module.report_error();
+                    }
+
+                    if (dereferenceable_value.type.?.bb.pointer.type != expected_type) {
+                        module.report_error();
+                    }
+                },
                 else => @trap(),
             },
             else => @trap(),
@@ -2786,6 +2830,10 @@ pub const Module = struct {
 
         // Resolve the value type. If a result type does not exist, compute it
         const value_type = if (analysis.type) |expected_type| expected_type else switch (value.bb) {
+            .unary => |unary| blk: {
+                module.analyze_value_type(function, unary.value, .{});
+                break :blk unary.value.type.?;
+            },
             .binary => |binary| blk: {
                 if (binary.left.bb == .constant_integer and binary.right.bb == .constant_integer) {
                     module.report_error();
@@ -2811,8 +2859,9 @@ pub const Module = struct {
                 assert(binary.left.type == binary.right.type);
                 break :blk binary.left.type.?;
             },
-            .variable_reference => |variable| blk: {
-                break :blk variable.type;
+            .variable_reference => |variable| switch (value.kind) {
+                .right => variable.type,
+                else => variable.storage.?.type.?,
             },
             else => @trap(),
         };
@@ -3072,7 +3121,7 @@ pub const Module = struct {
             false => options.type,
         };
         const alignment: c_uint = if (options.alignment) |a| a else @intCast(abi_type.get_byte_alignment());
-        const v = module.llvm.builder.create_alloca(abi_type.llvm.handle.?, options.name);
+        const v = module.llvm.builder.create_alloca(abi_type.resolve(module).handle, options.name);
         v.set_alignment(alignment);
         return v;
     }
@@ -3118,6 +3167,13 @@ pub const Module = struct {
             false => module.llvm.builder.create_truncate(options.value, options.destination_type.llvm.handle.?),
         };
         return result;
+    }
+
+    fn negate_llvm_value(module: *Module, value: *llvm.Value, is_constant: bool) *llvm.Value {
+        return switch (is_constant) {
+            true => value.to_constant().negate().to_value(),
+            false => module.llvm.builder.create_neg(value),
+        };
     }
 };
 
