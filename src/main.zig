@@ -188,8 +188,10 @@ const names = &[_][]const u8{
     "minimal_stack_arithmetic3",
     "extend",
     "stack_negation",
-    "basic_pointer",
+    "stack_add",
     "integer_max",
     "integer_hex",
+    "basic_pointer",
+    "basic_call",
     // "pointer",
 };

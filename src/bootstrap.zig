@@ -485,6 +485,11 @@ const Binary = struct {
     };
 };
 
+pub const Call = struct {
+    callable: *Value,
+    arguments: []const *Value,
+};
+
 pub const Value = struct {
     bb: union(enum) {
         function: Function,
@@ -495,6 +500,7 @@ pub const Value = struct {
         local,
         intrinsic: Intrinsic,
         dereference: *Value,
+        call: Call,
     },
     type: ?*Type = null,
     llvm: ?*llvm.Value = null,
@@ -652,7 +658,7 @@ pub const Scope = struct {
     column: u32,
     llvm: ?*llvm.DI.Scope = null,
     kind: Kind,
-    parent: ?*Scope = null,
+    parent: ?*Scope,
 
     pub const Kind = enum {
         global,
@@ -668,7 +674,7 @@ pub const LexicalBlock = struct {
 };
 
 pub const Function = struct {
-    arguments: Local.Buffer,
+    arguments: []*Local,
     attributes: Attributes,
     main_block: *LexicalBlock,
     scope: Scope,
@@ -1707,10 +1713,24 @@ pub const Module = struct {
         const variable = blk: while (scope_it) |scope| : (scope_it = scope.parent) {
             switch (scope.kind) {
                 .global => {
-                    @trap();
+                    const m: *Module = @fieldParentPtr("scope", scope);
+                    assert(m == module);
+                    for (module.globals.get_slice()) |*global| {
+                        if (lib.string.equal(global.variable.name, identifier)) {
+                            break :blk &global.variable;
+                        }
+                    }
+
+                    assert(scope.parent == null);
                 },
                 .function => {
-                    @trap();
+                    const function: *Function = @fieldParentPtr("scope", scope);
+                    for (function.arguments) |argument| {
+                        if (lib.string.equal(argument.variable.name, identifier)) {
+                            break :blk &argument.variable;
+                        }
+                    }
+                    assert(scope.parent != null);
                 },
                 .local => {
                     const block: *LexicalBlock = @fieldParentPtr("scope", scope);
@@ -1719,6 +1739,7 @@ pub const Module = struct {
                             break :blk &local.variable;
                         }
                     }
+                    assert(scope.parent != null);
                 },
             }
         } else {
@@ -1886,9 +1907,41 @@ pub const Module = struct {
     }
 
     fn rule_after_call(noalias module: *Module, value_builder: Value.Builder) *Value {
-        _ = module;
-        _ = value_builder;
-        @trap();
+        const may_be_callable = value_builder.left orelse module.report_error();
+        assert(value_builder.token == .@"(");
+        var semantic_argument_count: u32 = 0;
+        _ = &semantic_argument_count;
+        var semantic_argument_buffer: [64]*Value = undefined;
+        _ = &semantic_argument_buffer;
+
+        while (true) {
+            module.skip_space();
+
+            if (module.consume_character_if_match(right_parenthesis)) {
+                break;
+            }
+
+            // const argument = module.parse_value(.{});
+            // const argument_index = semantic_argument_count;
+            // semantic_argument_buffer[argument_index] = argument;
+            // semantic_argument_count = argument_index + 1;
+            @trap();
+        }
+
+        const arguments: []const *Value = if (semantic_argument_count != 0) {
+            @trap();
+        } else &.{};
+
+        const call = module.values.add();
+        call.* = .{
+            .bb = .{
+                .call = .{
+                    .arguments = arguments,
+                    .callable = may_be_callable,
+                },
+            },
+        };
+        return call;
     }
 
     pub fn get_anonymous_struct_pair(module: *Module, pair: [2]*Type) *Type {
@@ -2070,12 +2123,13 @@ pub const Module = struct {
                                 storage.bb = .{
                                     .function = .{
                                         .main_block = undefined,
-                                        .arguments = .initialize(),
+                                        .arguments = &.{},
                                         .attributes = .{},
                                         .scope = .{
                                             .kind = .function,
                                             .line = global_line,
                                             .column = global_column,
+                                            .parent = &module.scope,
                                         },
                                     },
                                 };
@@ -2157,7 +2211,7 @@ pub const Module = struct {
             switch (global.variable.storage.?.bb) {
                 .function => {
                     const function_type = &global.variable.storage.?.type.?.bb.pointer.type.bb.function;
-                    const argument_variables = global.variable.storage.?.bb.function.arguments.get_slice();
+                    const argument_variables = global.variable.storage.?.bb.function.arguments;
                     function_type.argument_abis = module.arena.allocate(Abi.Information, argument_variables.len);
 
                     const resolved_calling_convention = function_type.calling_convention.resolve(module.target);
@@ -2323,7 +2377,7 @@ pub const Module = struct {
                         //semantic_arguments,
                         function_type.argument_abis, argument_variables, 0..) |
                     //semantic_argument,
-                    argument_abi, *argument_variable, argument_index| {
+                    argument_abi, argument_variable, argument_index| {
                         const abi_arguments = llvm_abi_arguments[argument_abi.abi_start..][0..argument_abi.abi_count];
                         assert(argument_abi.flags.kind == .ignore or argument_abi.abi_count != 0);
                         const argument_abi_kind = argument_abi.flags.kind;
@@ -2796,6 +2850,19 @@ pub const Module = struct {
                 };
                 break :blk result;
             },
+            .call => |call| blk: {
+                const llvm_callable = switch (call.callable.bb) {
+                    .variable_reference => |variable| variable.storage.?.llvm.?,
+                    else => @trap(),
+                };
+                const function_type = switch (call.callable.bb) {
+                    .variable_reference => |variable| variable.storage.?.type.?.bb.pointer.type,
+                    else => @trap(),
+                };
+                const llvm_function_type = function_type.resolve(module).handle;
+                const llvm_call = module.llvm.builder.create_call(llvm_function_type.to_function(), llvm_callable, &.{});
+                break :blk llvm_call;
+            },
             else => @trap(),
         };
 
@@ -2807,9 +2874,9 @@ pub const Module = struct {
         assert(value.llvm == null);
 
         // If a result type exists, then do the analysis against it
-        if (analysis.type) |expected_type| switch (expected_type.bb) {
-            .integer => |integer| switch (value.bb) {
-                .constant_integer => |constant_integer| switch (constant_integer.signed) {
+        if (analysis.type) |expected_type| switch (value.bb) {
+            .constant_integer => |constant_integer| switch (expected_type.bb) {
+                .integer => |integer| switch (constant_integer.signed) {
                     true => {
                         if (!integer.signed) {
                             module.report_error();
@@ -2826,74 +2893,80 @@ pub const Module = struct {
                         }
                     },
                 },
-                .unary => |unary| {
-                    switch (unary.id) {
-                        .@"+" => @trap(),
-                        .@"-" => {
-                            module.analyze_value_type(function, unary.value, analysis);
-                            if (!unary.value.type.?.is_signed()) {
-                                module.report_error();
-                            }
-
-                            assert(expected_type == unary.value.type);
-                        },
-                        .@"&" => @trap(),
-                    }
-                },
-                .binary => |binary| {
-                    const is_boolean = binary.id.is_boolean();
-
-                    const boolean_type = module.integer_type(1, false);
-
-                    if (is_boolean and expected_type != boolean_type) {
-                        module.report_error();
-                    }
-
-                    module.analyze_value_type(function, binary.left, .{
-                        .type = if (is_boolean) null else expected_type,
-                    });
-
-                    module.analyze_value_type(function, binary.right, .{
-                        .type = binary.left.type,
-                    });
-                },
-                .variable_reference => |variable| {
-                    if (variable.type != expected_type) {
-                        module.report_error();
-                    }
-                },
-                .intrinsic => |intrinsic| switch (intrinsic) {
-                    .extend => |extended_value| {
-                        module.analyze_value_type(function, extended_value, .{});
-                        assert(extended_value.type != null);
-                        const destination_type = expected_type;
-                        const source_type = extended_value.type.?;
-
-                        if (source_type.get_bit_size() > destination_type.get_bit_size()) {
-                            module.report_error();
-                        } else if (source_type.get_bit_size() == destination_type.get_bit_size() and source_type.is_signed() == destination_type.is_signed()) {
+                else => @trap(),
+            },
+            .unary => |unary| {
+                switch (unary.id) {
+                    .@"+" => @trap(),
+                    .@"-" => {
+                        module.analyze_value_type(function, unary.value, analysis);
+                        if (!unary.value.type.?.is_signed()) {
                             module.report_error();
                         }
+
+                        assert(expected_type == unary.value.type);
                     },
-                    .truncate => |value_to_truncate| {
-                        module.analyze_value_type(function, value_to_truncate, .{});
-                        if (expected_type.get_bit_size() >= value_to_truncate.type.?.get_bit_size()) {
-                            module.report_error();
-                        }
-                    },
-                    else => @trap(),
-                },
-                .dereference => |dereferenceable_value| {
-                    module.analyze_value_type(function, dereferenceable_value, .{});
-                    if (dereferenceable_value.type.?.bb != .pointer) {
+                    .@"&" => @trap(),
+                }
+            },
+            .binary => |binary| {
+                const is_boolean = binary.id.is_boolean();
+
+                const boolean_type = module.integer_type(1, false);
+
+                if (is_boolean and expected_type != boolean_type) {
+                    module.report_error();
+                }
+
+                module.analyze_value_type(function, binary.left, .{
+                    .type = if (is_boolean) null else expected_type,
+                });
+
+                module.analyze_value_type(function, binary.right, .{
+                    .type = binary.left.type,
+                });
+            },
+            .variable_reference => |variable| {
+                if (variable.type != expected_type) {
+                    module.report_error();
+                }
+            },
+            .intrinsic => |intrinsic| switch (intrinsic) {
+                .extend => |extended_value| {
+                    module.analyze_value_type(function, extended_value, .{});
+                    assert(extended_value.type != null);
+                    const destination_type = expected_type;
+                    const source_type = extended_value.type.?;
+
+                    if (source_type.get_bit_size() > destination_type.get_bit_size()) {
+                        module.report_error();
+                    } else if (source_type.get_bit_size() == destination_type.get_bit_size() and source_type.is_signed() == destination_type.is_signed()) {
                         module.report_error();
                     }
-
-                    if (dereferenceable_value.type.?.bb.pointer.type != expected_type) {
+                },
+                .truncate => |value_to_truncate| {
+                    module.analyze_value_type(function, value_to_truncate, .{});
+                    if (expected_type.get_bit_size() >= value_to_truncate.type.?.get_bit_size()) {
                         module.report_error();
                     }
                 },
                 else => @trap(),
+            },
+            .dereference => |dereferenceable_value| {
+                module.analyze_value_type(function, dereferenceable_value, .{});
+                if (dereferenceable_value.type.?.bb != .pointer) {
+                    module.report_error();
+                }
+
+                if (dereferenceable_value.type.?.bb.pointer.type != expected_type) {
+                    module.report_error();
+                }
+            },
+            .call => |call| {
+                module.analyze_value_type(function, call.callable, .{});
+                for (call.arguments) |argument| {
+                    module.analyze_value_type(function, argument, .{});
+                }
             },
             else => @trap(),
         };
@@ -4352,6 +4425,7 @@ pub fn compile(arena: *Arena, options: Options) void {
             .kind = .global,
             .column = 0,
             .line = 0,
+            .parent = null,
         },
         .name = options.name,
         .path = options.path,
