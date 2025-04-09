@@ -193,5 +193,5 @@ const names = &[_][]const u8{
     "integer_hex",
     "basic_pointer",
     "basic_call",
-    // "pointer",
+    "pointer",
 };
