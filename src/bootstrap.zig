@@ -380,7 +380,7 @@ pub const Type = struct {
 
     pub fn get_byte_size(ty: *const Type) u64 {
         const byte_size: u64 = switch (ty.bb) {
-            .integer => |integer| @max(8, lib.next_power_of_two(integer.bit_count)),
+            .integer => |integer| @divExact(@max(8, lib.next_power_of_two(integer.bit_count)), 8),
             else => @trap(),
         };
         return byte_size;
@@ -3512,6 +3512,7 @@ pub const Module = struct {
                         .function => pointer.type,
                         else => @trap(),
                     },
+                    .function => call.callable.type.?,
                     else => @trap(),
                 };
 
@@ -4462,7 +4463,11 @@ pub const Abi = struct {
                                 return ty;
                             }
                         },
-                        else => return module.integer_type(@intCast(@min(ty.get_byte_size() - source_offset, 8) * 8), integer_type.signed),
+                        else => {
+                            const byte_count = @min(ty.get_byte_size() - source_offset, 8);
+                            const bit_count = byte_count * 8;
+                            return module.integer_type(@intCast(bit_count), integer_type.signed);
+                        },
                     }
                 },
                 .pointer => return if (offset == 0) ty else @trap(),

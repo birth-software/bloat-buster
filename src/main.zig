@@ -194,4 +194,5 @@ const names = &[_][]const u8{
     "basic_pointer",
     "basic_call",
     "pointer",
+    "u1_return",
 };
