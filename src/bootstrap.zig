@@ -512,6 +512,7 @@ pub const Value = struct {
         variable_reference: *Variable,
         local,
         argument,
+        global,
         intrinsic: Intrinsic,
         dereference: *Value,
         call: Call,
@@ -959,7 +960,10 @@ pub const Module = struct {
                 .call_no_builtins = false,
 
                 // DEFINITION-SITE ATTRIBUTES
-                .definition_frame_pointer_kind = .none,
+                .definition_frame_pointer_kind = switch (module.has_debug_info) {
+                    true => .all,
+                    false => .none,
+                },
                 .definition_less_precise_fpmad = false,
                 .definition_null_pointer_is_valid = false,
                 .definition_no_trapping_fp_math = false,
@@ -2267,6 +2271,30 @@ pub const Module = struct {
                     module.offset -= global_string.len;
                 }
             }
+
+            if (!global_keyword) {
+                const v = module.parse_value(.{});
+                module.skip_space();
+                module.expect_character(';');
+
+                const global = module.globals.add();
+                const global_storage = module.values.add();
+                global_storage.* = .{
+                    .bb = .global,
+                };
+                global.* = .{
+                    .variable = .{
+                        .storage = global_storage,
+                        .initial_value = v,
+                        .type = global_type,
+                        .scope = &module.scope,
+                        .name = global_name,
+                        .line = global_line,
+                        .column = global_column,
+                    },
+                    .linkage = .internal,
+                };
+            }
         }
     }
 
@@ -2761,6 +2789,29 @@ pub const Module = struct {
                         }
                     }
                 },
+                .global => {
+                    module.analyze(null, global.variable.initial_value, .{ .type = global.variable.type });
+                    const global_variable = module.llvm.module.create_global_variable(.{
+                        .linkage = switch (global.linkage) {
+                            .internal => .InternalLinkage,
+                            .external => .ExternalLinkage,
+                        },
+                        .name = global.variable.name,
+                        .initial_value = global.variable.initial_value.llvm.?.to_constant(),
+                        .type = global.variable.type.?.resolve(module).handle,
+                    });
+                    global_variable.to_value().set_alignment(global.variable.type.?.get_byte_alignment());
+                    global.variable.storage.?.llvm = global_variable.to_value();
+                    global.variable.storage.?.type = module.get_pointer_type(.{ .type = global.variable.type.? });
+
+                    if (module.has_debug_info) {
+                        const linkage_name = global.variable.name;
+                        const local_to_unit = global.linkage == .internal;
+                        const alignment = 0; // TODO
+                        const global_variable_expression = module.llvm.di_builder.create_global_variable(module.scope.llvm.?, global.variable.name, linkage_name, module.llvm.file, global.variable.line, global.variable.type.?.llvm.debug.?, local_to_unit, module.llvm.di_builder.null_expression(), alignment);
+                        global_variable.add_debug_info(global_variable_expression);
+                    }
+                },
                 else => @trap(),
             }
         }
@@ -2828,12 +2879,12 @@ pub const Module = struct {
         type: ?*Type = null,
     };
 
-    pub fn analyze(module: *Module, function: *Global, value: *Value, analysis: ValueAnalysis) void {
+    pub fn analyze(module: *Module, function: ?*Global, value: *Value, analysis: ValueAnalysis) void {
         module.analyze_value_type(function, value, analysis);
         module.emit_value(function, value);
     }
 
-    pub fn emit_value(module: *Module, function: *Global, value: *Value) void {
+    pub fn emit_value(module: *Module, function: ?*Global, value: *Value) void {
         const value_type = value.type orelse unreachable;
         assert(value.llvm == null);
 
@@ -3345,7 +3396,7 @@ pub const Module = struct {
         value.llvm = llvm_value;
     }
 
-    pub fn analyze_value_type(module: *Module, function: *Global, value: *Value, analysis: ValueAnalysis) void {
+    pub fn analyze_value_type(module: *Module, function: ?*Global, value: *Value, analysis: ValueAnalysis) void {
         assert(value.type == null);
         assert(value.llvm == null);
 

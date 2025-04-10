@@ -197,4 +197,6 @@ const names = &[_][]const u8{
     "pointer",
     "pointer_cast",
     "u1_return",
+    "local_type_inference",
+    "global",
 };
