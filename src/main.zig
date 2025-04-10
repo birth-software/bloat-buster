@@ -189,10 +189,12 @@ const names = &[_][]const u8{
     "extend",
     "stack_negation",
     "stack_add",
+    "stack_sub",
     "integer_max",
     "integer_hex",
     "basic_pointer",
     "basic_call",
     "pointer",
+    "pointer_cast",
     "u1_return",
 };

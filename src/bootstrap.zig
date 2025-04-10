@@ -529,7 +529,7 @@ pub const Value = struct {
         integer_max: *Type,
         int_from_enum,
         int_from_pointer,
-        pointer_cast,
+        pointer_cast: *Value,
         select,
         trap,
         truncate: *Value,
@@ -1852,6 +1852,20 @@ pub const Module = struct {
                     },
                 };
             },
+            .pointer_cast => blk: {
+                module.skip_space();
+                module.expect_character(left_parenthesis);
+                module.skip_space();
+                const v = module.parse_value(.{});
+                module.expect_character(right_parenthesis);
+                break :blk .{
+                    .bb = .{
+                        .intrinsic = .{
+                            .pointer_cast = v,
+                        },
+                    },
+                };
+            },
             .truncate => blk: {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
@@ -2934,6 +2948,10 @@ pub const Module = struct {
                     const truncate = module.llvm.builder.create_truncate(llvm_value, value_type.llvm.handle.?);
                     break :blk truncate;
                 },
+                .pointer_cast => |pointer_value| blk: {
+                    module.emit_value(function, pointer_value);
+                    break :blk pointer_value.llvm.?;
+                },
                 else => @trap(),
             },
             .dereference => |dereferenceable_value| blk: {
@@ -3409,6 +3427,21 @@ pub const Module = struct {
                     if (source_type.get_bit_size() > destination_type.get_bit_size()) {
                         module.report_error();
                     } else if (source_type.get_bit_size() == destination_type.get_bit_size() and source_type.is_signed() == destination_type.is_signed()) {
+                        module.report_error();
+                    }
+                },
+                .pointer_cast => |pointer_value| {
+                    if (expected_type.bb != .pointer) {
+                        module.report_error();
+                    }
+                    module.analyze_value_type(function, pointer_value, .{});
+                    const pointer_type = pointer_value.type orelse module.report_error();
+
+                    if (pointer_type == expected_type) {
+                        module.report_error();
+                    }
+
+                    if (pointer_type.bb != .pointer) {
                         module.report_error();
                     }
                 },
