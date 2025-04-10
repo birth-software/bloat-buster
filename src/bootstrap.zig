@@ -505,6 +505,7 @@ pub const Call = struct {
 
 pub const Value = struct {
     bb: union(enum) {
+        external_function,
         function: Function,
         constant_integer: ConstantInteger,
         unary: Unary,
@@ -1053,8 +1054,7 @@ pub const Module = struct {
                     const ty = module.integer_type(bit_count, signedness);
                     return ty;
                 } else if (lib.string.equal(identifier, "noreturn")) {
-                    @trap();
-                    // return module.noreturn_type;
+                    return module.noreturn_type;
                 } else {
                     const ty = module.types.find_by_name(identifier) orelse @trap();
                     return ty;
@@ -1716,7 +1716,7 @@ pub const Module = struct {
                             }
                         } else {
                             module.offset -= statement_start_identifier.len;
-                            
+
                             const left = module.parse_value(.{
                                 .kind = .left,
                             });
@@ -1814,7 +1814,7 @@ pub const Module = struct {
                 .variable_reference = variable,
             },
             .kind = value_builder.kind,
-                // if (variable.type != null and variable.type.?.bb == .function) .left else value_builder.kind, 
+            // if (variable.type != null and variable.type.?.bb == .function) .left else value_builder.kind,
         };
         return value;
     }
@@ -2262,8 +2262,7 @@ pub const Module = struct {
 
                                 storage.bb.function.main_block = module.parse_block();
                             } else {
-                                // TODO: initialize value.bb
-                                @trap();
+                                storage.bb = .external_function;
                             }
                         },
                         else => @trap(),
@@ -2355,10 +2354,9 @@ pub const Module = struct {
 
         for (module.globals.get_slice()) |*global| {
             switch (global.variable.storage.?.bb) {
-                .function => {
+                .function, .external_function => {
                     const function_type = &global.variable.storage.?.type.?.bb.pointer.type.bb.function;
-                    const argument_variables = global.variable.storage.?.bb.function.arguments;
-                    function_type.argument_abis = module.arena.allocate(Abi.Information, argument_variables.len);
+                    function_type.argument_abis = module.arena.allocate(Abi.Information, function_type.semantic_argument_types.len);
 
                     const resolved_calling_convention = function_type.calling_convention.resolve(module.target);
                     const is_reg_call = resolved_calling_convention == .system_v and false; // TODO: regcall calling_convention
@@ -2366,6 +2364,7 @@ pub const Module = struct {
                     var llvm_abi_argument_type_buffer: [64]*llvm.Type = undefined;
                     var abi_argument_type_buffer: [64]*Type = undefined;
                     var abi_argument_type_count: u16 = 0;
+
                     switch (resolved_calling_convention) {
                         .system_v => {
                             function_type.available_registers = switch (resolved_calling_convention) {
@@ -2417,6 +2416,7 @@ pub const Module = struct {
                             @trap();
                         },
                     }
+
                     const llvm_abi_argument_types = llvm_abi_argument_type_buffer[0..abi_argument_type_count];
                     const llvm_function_type = llvm.Type.Function.get(function_type.abi_return_type.resolve(module).handle, llvm_abi_argument_types, function_type.is_var_args);
 
@@ -2459,7 +2459,10 @@ pub const Module = struct {
                         .abi_argument_types = function_type.abi_argument_types,
                         .argument_type_abis = function_type.argument_abis,
                         .return_type_abi = function_type.return_abi,
-                        .attributes = global.variable.storage.?.bb.function.attributes,
+                        .attributes = switch (global.variable.storage.?.bb) {
+                            .function => |function| function.attributes,
+                            else => .{},
+                        },
                         .call_site = false,
                     });
 
@@ -2474,6 +2477,7 @@ pub const Module = struct {
                         const flags = llvm.DI.Flags{};
                         const is_definition = switch (global.variable.storage.?.bb) {
                             .function => true,
+                            .external_function => false,
                             else => @trap(),
                         };
                         const name = global.variable.name;
@@ -2483,297 +2487,300 @@ pub const Module = struct {
 
                         break :blk @ptrCast(subprogram);
                     } else undefined;
-                    global.variable.storage.?.bb.function.scope.llvm = function_scope;
 
-                    const entry_block = module.llvm.context.create_basic_block("entry", llvm_function_value);
-                    global.variable.storage.?.bb.function.return_block = module.llvm.context.create_basic_block("ret_block", null);
+                    if (global.variable.storage.?.bb == .function) {
+                        global.variable.storage.?.bb.function.scope.llvm = function_scope;
 
-                    module.llvm.builder.position_at_end(entry_block);
-                    module.llvm.builder.set_current_debug_location(null);
+                        const entry_block = module.llvm.context.create_basic_block("entry", llvm_function_value);
+                        global.variable.storage.?.bb.function.return_block = module.llvm.context.create_basic_block("ret_block", null);
 
-                    var llvm_abi_argument_buffer: [64]*llvm.Argument = undefined;
-                    llvm_function_value.get_arguments(&llvm_abi_argument_buffer);
+                        module.llvm.builder.position_at_end(entry_block);
+                        module.llvm.builder.set_current_debug_location(null);
 
-                    const llvm_abi_arguments = llvm_abi_argument_buffer[0..function_type.abi_argument_types.len];
+                        var llvm_abi_argument_buffer: [64]*llvm.Argument = undefined;
+                        llvm_function_value.get_arguments(&llvm_abi_argument_buffer);
 
-                    const return_abi_kind = function_type.return_abi.flags.kind;
-                    switch (return_abi_kind) {
-                        .ignore => {},
-                        .indirect => {
-                            const indirect_argument_index = @intFromBool(function_type.return_abi.flags.sret_after_this);
-                            if (function_type.return_abi.flags.sret_after_this) {
+                        const llvm_abi_arguments = llvm_abi_argument_buffer[0..function_type.abi_argument_types.len];
+
+                        const return_abi_kind = function_type.return_abi.flags.kind;
+                        switch (return_abi_kind) {
+                            .ignore => {},
+                            .indirect => {
+                                const indirect_argument_index = @intFromBool(function_type.return_abi.flags.sret_after_this);
+                                if (function_type.return_abi.flags.sret_after_this) {
+                                    @trap();
+                                }
+                                global.variable.storage.?.bb.function.return_alloca = llvm_abi_arguments[indirect_argument_index].to_value();
+                                if (!function_type.return_abi.flags.indirect_by_value) {
+                                    @trap();
+                                }
+                            },
+                            .in_alloca => {
                                 @trap();
-                            }
-                            global.variable.storage.?.bb.function.return_alloca = llvm_abi_arguments[indirect_argument_index].to_value();
-                            if (!function_type.return_abi.flags.indirect_by_value) {
-                                @trap();
-                            }
-                        },
-                        .in_alloca => {
-                            @trap();
-                        },
-                        else => {
-                            const alloca = module.create_alloca(.{ .type = function_type.return_abi.semantic_type, .name = "retval" });
-                            global.variable.storage.?.bb.function.return_alloca = alloca;
-                        },
-                    }
+                            },
+                            else => {
+                                const alloca = module.create_alloca(.{ .type = function_type.return_abi.semantic_type, .name = "retval" });
+                                global.variable.storage.?.bb.function.return_alloca = alloca;
+                            },
+                        }
 
-                    // const argument_variables = global.value.bb.function.arguments.add_many(semantic_argument_count);
-                    for (
-                        //semantic_arguments,
-                        function_type.argument_abis, argument_variables, 0..) |
-                    //semantic_argument,
-                    argument_abi, argument_variable, argument_index| {
-                        const abi_arguments = llvm_abi_arguments[argument_abi.abi_start..][0..argument_abi.abi_count];
-                        assert(argument_abi.flags.kind == .ignore or argument_abi.abi_count != 0);
-                        const argument_abi_kind = argument_abi.flags.kind;
-                        const semantic_argument_storage = switch (argument_abi_kind) {
-                            .direct, .extend => blk: {
-                                const first_argument = abi_arguments[0];
-                                const coerce_to_type = argument_abi.get_coerce_to_type();
-                                if (coerce_to_type.bb != .structure and coerce_to_type.is_abi_equal(argument_abi.semantic_type) and argument_abi.attributes.direct.offset == 0) {
-                                    assert(argument_abi.abi_count == 1);
-                                    const is_promoted = false;
-                                    var v = first_argument.to_value();
-                                    v = switch (coerce_to_type.llvm.handle == v.get_type()) {
-                                        true => v,
-                                        false => @trap(),
-                                    };
-                                    if (is_promoted) {
-                                        @trap();
-                                    }
-
-                                    switch (argument_abi.semantic_type.is_arbitrary_bit_integer()) {
-                                        true => {
-                                            const bit_count = argument_abi.semantic_type.get_bit_size();
-                                            const abi_bit_count: u32 = @intCast(@max(8, lib.next_power_of_two(bit_count)));
-                                            const is_signed = argument_abi.semantic_type.is_signed();
-                                            const destination_type = module.align_integer_type(argument_abi.semantic_type);
-                                            const alloca = module.create_alloca(.{ .type = destination_type, .name = argument_variable.variable.name });
-                                            const result = switch (bit_count < abi_bit_count) {
-                                                true => switch (is_signed) {
-                                                    true => module.llvm.builder.create_sign_extend(first_argument.to_value(), destination_type.llvm.handle.?),
-                                                    false => module.llvm.builder.create_zero_extend(first_argument.to_value(), destination_type.llvm.handle.?),
-                                                },
-                                                false => @trap(),
-                                            };
-                                            _ = module.create_store(.{ .source_value = result, .destination_value = alloca, .source_type = destination_type, .destination_type = destination_type });
-                                            break :blk alloca;
-                                        },
-                                        false => { // TODO: ExtVectorBoolType
-                                            const alloca = module.create_alloca(.{ .type = argument_abi.semantic_type, .name = argument_variable.variable.name });
-                                            _ = module.create_store(.{ .source_value = first_argument.to_value(), .destination_value = alloca, .source_type = argument_abi.semantic_type, .destination_type = argument_abi.semantic_type });
-                                            break :blk alloca;
-                                        },
-                                    }
-                                } else {
-                                    const is_fixed_vector_type = false;
-                                    if (is_fixed_vector_type) {
-                                        @trap();
-                                    }
-
-                                    if (coerce_to_type.bb == .structure and coerce_to_type.bb.structure.fields.len > 1 and argument_abi.flags.kind == .direct and !argument_abi.flags.can_be_flattened) {
-                                        const contains_homogeneous_scalable_vector_types = false;
-                                        if (contains_homogeneous_scalable_vector_types) {
+                        const argument_variables = global.variable.storage.?.bb.function.arguments;
+                        for (
+                            //semantic_arguments,
+                            function_type.argument_abis, argument_variables, 0..) |
+                        //semantic_argument,
+                        argument_abi, argument_variable, argument_index| {
+                            const abi_arguments = llvm_abi_arguments[argument_abi.abi_start..][0..argument_abi.abi_count];
+                            assert(argument_abi.flags.kind == .ignore or argument_abi.abi_count != 0);
+                            const argument_abi_kind = argument_abi.flags.kind;
+                            const semantic_argument_storage = switch (argument_abi_kind) {
+                                .direct, .extend => blk: {
+                                    const first_argument = abi_arguments[0];
+                                    const coerce_to_type = argument_abi.get_coerce_to_type();
+                                    if (coerce_to_type.bb != .structure and coerce_to_type.is_abi_equal(argument_abi.semantic_type) and argument_abi.attributes.direct.offset == 0) {
+                                        assert(argument_abi.abi_count == 1);
+                                        const is_promoted = false;
+                                        var v = first_argument.to_value();
+                                        v = switch (coerce_to_type.llvm.handle == v.get_type()) {
+                                            true => v,
+                                            false => @trap(),
+                                        };
+                                        if (is_promoted) {
                                             @trap();
                                         }
-                                    }
 
-                                    const alloca = module.create_alloca(.{ .type = argument_abi.semantic_type });
-                                    const pointer = switch (argument_abi.attributes.direct.offset > 0) {
-                                        true => @trap(),
-                                        false => alloca,
-                                    };
-                                    const pointer_type = switch (argument_abi.attributes.direct.offset > 0) {
-                                        true => @trap(),
-                                        false => argument_abi.semantic_type,
-                                    };
-
-                                    if (coerce_to_type.bb == .structure and coerce_to_type.bb.structure.fields.len > 1 and argument_abi.flags.kind == .direct and argument_abi.flags.can_be_flattened) {
-                                        const struct_size = coerce_to_type.get_byte_size();
-                                        const pointer_element_size = pointer_type.get_byte_size(); // TODO: fix
-                                        const is_scalable = false;
-
-                                        switch (is_scalable) {
-                                            true => @trap(),
-                                            false => {
-                                                const source_size = struct_size;
-                                                const destination_size = pointer_element_size;
-                                                const address_alignment = argument_abi.semantic_type.get_byte_alignment();
-                                                const address = switch (source_size <= destination_size) {
-                                                    true => alloca,
-                                                    false => module.create_alloca(.{ .type = coerce_to_type, .alignment = address_alignment, .name = "coerce" }),
+                                        switch (argument_abi.semantic_type.is_arbitrary_bit_integer()) {
+                                            true => {
+                                                const bit_count = argument_abi.semantic_type.get_bit_size();
+                                                const abi_bit_count: u32 = @intCast(@max(8, lib.next_power_of_two(bit_count)));
+                                                const is_signed = argument_abi.semantic_type.is_signed();
+                                                const destination_type = module.align_integer_type(argument_abi.semantic_type);
+                                                const alloca = module.create_alloca(.{ .type = destination_type, .name = argument_variable.variable.name });
+                                                const result = switch (bit_count < abi_bit_count) {
+                                                    true => switch (is_signed) {
+                                                        true => module.llvm.builder.create_sign_extend(first_argument.to_value(), destination_type.llvm.handle.?),
+                                                        false => module.llvm.builder.create_zero_extend(first_argument.to_value(), destination_type.llvm.handle.?),
+                                                    },
+                                                    false => @trap(),
                                                 };
-                                                assert(coerce_to_type.bb.structure.fields.len == argument_abi.abi_count);
-                                                for (coerce_to_type.bb.structure.fields, abi_arguments, 0..) |field, abi_argument, field_index| {
-                                                    const gep = module.llvm.builder.create_struct_gep(coerce_to_type.llvm.handle.?.to_struct(), address, @intCast(field_index));
-                                                    // TODO: check if alignment is right
-                                                    _ = module.create_store(.{ .source_value = abi_argument.to_value(), .destination_value = gep, .source_type = field.type, .destination_type = field.type });
-                                                }
-
-                                                if (source_size > destination_size) {
-                                                    _ = module.llvm.builder.create_memcpy(pointer, pointer_type.get_byte_alignment(), address, address_alignment, module.integer_type(64, false).llvm.handle.?.to_integer().get_constant(destination_size, @intFromBool(false)).to_value());
-                                                }
+                                                _ = module.create_store(.{ .source_value = result, .destination_value = alloca, .source_type = destination_type, .destination_type = destination_type });
+                                                break :blk alloca;
+                                            },
+                                            false => { // TODO: ExtVectorBoolType
+                                                const alloca = module.create_alloca(.{ .type = argument_abi.semantic_type, .name = argument_variable.variable.name });
+                                                _ = module.create_store(.{ .source_value = first_argument.to_value(), .destination_value = alloca, .source_type = argument_abi.semantic_type, .destination_type = argument_abi.semantic_type });
+                                                break :blk alloca;
                                             },
                                         }
                                     } else {
-                                        assert(argument_abi.abi_count == 1);
-                                        const abi_argument_type = function_type.abi_argument_types[argument_abi.abi_start];
-                                        const destination_size = pointer_type.get_byte_size() - argument_abi.attributes.direct.offset;
-                                        const is_volatile = false;
-                                        _ = abi_argument_type;
-                                        _ = destination_size;
-                                        _ = is_volatile;
-                                        @trap();
-                                        // module.create_coerced_store(abi_arguments[0].to_value(), abi_argument_type, pointer, pointer_type, destination_size, is_volatile);
-                                    }
+                                        const is_fixed_vector_type = false;
+                                        if (is_fixed_vector_type) {
+                                            @trap();
+                                        }
 
+                                        if (coerce_to_type.bb == .structure and coerce_to_type.bb.structure.fields.len > 1 and argument_abi.flags.kind == .direct and !argument_abi.flags.can_be_flattened) {
+                                            const contains_homogeneous_scalable_vector_types = false;
+                                            if (contains_homogeneous_scalable_vector_types) {
+                                                @trap();
+                                            }
+                                        }
+
+                                        const alloca = module.create_alloca(.{ .type = argument_abi.semantic_type });
+                                        const pointer = switch (argument_abi.attributes.direct.offset > 0) {
+                                            true => @trap(),
+                                            false => alloca,
+                                        };
+                                        const pointer_type = switch (argument_abi.attributes.direct.offset > 0) {
+                                            true => @trap(),
+                                            false => argument_abi.semantic_type,
+                                        };
+
+                                        if (coerce_to_type.bb == .structure and coerce_to_type.bb.structure.fields.len > 1 and argument_abi.flags.kind == .direct and argument_abi.flags.can_be_flattened) {
+                                            const struct_size = coerce_to_type.get_byte_size();
+                                            const pointer_element_size = pointer_type.get_byte_size(); // TODO: fix
+                                            const is_scalable = false;
+
+                                            switch (is_scalable) {
+                                                true => @trap(),
+                                                false => {
+                                                    const source_size = struct_size;
+                                                    const destination_size = pointer_element_size;
+                                                    const address_alignment = argument_abi.semantic_type.get_byte_alignment();
+                                                    const address = switch (source_size <= destination_size) {
+                                                        true => alloca,
+                                                        false => module.create_alloca(.{ .type = coerce_to_type, .alignment = address_alignment, .name = "coerce" }),
+                                                    };
+                                                    assert(coerce_to_type.bb.structure.fields.len == argument_abi.abi_count);
+                                                    for (coerce_to_type.bb.structure.fields, abi_arguments, 0..) |field, abi_argument, field_index| {
+                                                        const gep = module.llvm.builder.create_struct_gep(coerce_to_type.llvm.handle.?.to_struct(), address, @intCast(field_index));
+                                                        // TODO: check if alignment is right
+                                                        _ = module.create_store(.{ .source_value = abi_argument.to_value(), .destination_value = gep, .source_type = field.type, .destination_type = field.type });
+                                                    }
+
+                                                    if (source_size > destination_size) {
+                                                        _ = module.llvm.builder.create_memcpy(pointer, pointer_type.get_byte_alignment(), address, address_alignment, module.integer_type(64, false).llvm.handle.?.to_integer().get_constant(destination_size, @intFromBool(false)).to_value());
+                                                    }
+                                                },
+                                            }
+                                        } else {
+                                            assert(argument_abi.abi_count == 1);
+                                            const abi_argument_type = function_type.abi_argument_types[argument_abi.abi_start];
+                                            const destination_size = pointer_type.get_byte_size() - argument_abi.attributes.direct.offset;
+                                            const is_volatile = false;
+                                            _ = abi_argument_type;
+                                            _ = destination_size;
+                                            _ = is_volatile;
+                                            @trap();
+                                            // module.create_coerced_store(abi_arguments[0].to_value(), abi_argument_type, pointer, pointer_type, destination_size, is_volatile);
+                                        }
+
+                                        switch (argument_abi.semantic_type.get_evaluation_kind()) {
+                                            .scalar => @trap(),
+                                            else => {
+                                                // TODO
+                                            },
+                                        }
+
+                                        break :blk alloca;
+                                    }
+                                },
+                                .indirect, .indirect_aliased => blk: {
+                                    assert(argument_abi.abi_count == 1);
                                     switch (argument_abi.semantic_type.get_evaluation_kind()) {
                                         .scalar => @trap(),
                                         else => {
-                                            // TODO
+                                            if (argument_abi.flags.indirect_realign or argument_abi.flags.kind == .indirect_aliased) {
+                                                @trap();
+                                            }
+
+                                            const use_indirect_debug_address = !argument_abi.flags.indirect_by_value;
+                                            if (use_indirect_debug_address) {
+                                                @trap();
+                                            }
+
+                                            const llvm_argument = abi_arguments[0];
+                                            break :blk llvm_argument.to_value();
                                         },
                                     }
+                                },
+                                else => @trap(),
+                            };
 
-                                    break :blk alloca;
-                                }
-                            },
-                            .indirect, .indirect_aliased => blk: {
-                                assert(argument_abi.abi_count == 1);
-                                switch (argument_abi.semantic_type.get_evaluation_kind()) {
-                                    .scalar => @trap(),
-                                    else => {
-                                        if (argument_abi.flags.indirect_realign or argument_abi.flags.kind == .indirect_aliased) {
-                                            @trap();
-                                        }
+                            const storage = module.values.add();
+                            storage.* = .{
+                                .bb = .argument,
+                                .type = module.get_pointer_type(.{
+                                    .type = argument_variable.variable.type.?,
+                                }),
+                                .llvm = semantic_argument_storage,
+                            };
+                            argument_variable.variable.storage = storage;
 
-                                        const use_indirect_debug_address = !argument_abi.flags.indirect_by_value;
-                                        if (use_indirect_debug_address) {
-                                            @trap();
-                                        }
-
-                                        const llvm_argument = abi_arguments[0];
-                                        break :blk llvm_argument.to_value();
-                                    },
-                                }
-                            },
-                            else => @trap(),
-                        };
-
-                        const storage = module.values.add();
-                        storage.* = .{
-                            .bb = .argument,
-                            .type = module.get_pointer_type(.{
-                                .type = argument_variable.variable.type.?,
-                            }),
-                            .llvm = semantic_argument_storage,
-                        };
-                        argument_variable.variable.storage = storage;
-
-                        // no pointer
-                        const argument_type = argument_variable.variable.storage.?.type.?.bb.pointer.type;
-                        if (module.has_debug_info) {
-                            const always_preserve = true;
-                            const flags = llvm.DI.Flags{};
-                            const parameter_variable = module.llvm.di_builder.create_parameter_variable(function_scope, argument_variable.variable.name, @intCast(argument_index + 1), module.llvm.file, argument_variable.variable.line, argument_type.llvm.debug.?, always_preserve, flags);
-                            const inlined_at: ?*llvm.DI.Metadata = null; // TODO
-                            const debug_location = llvm.DI.create_debug_location(module.llvm.context, argument_variable.variable.line, argument_variable.variable.column, function_scope, inlined_at);
-                            _ = module.llvm.di_builder.insert_declare_record_at_end(semantic_argument_storage, parameter_variable, module.llvm.di_builder.null_expression(), debug_location, entry_block);
-                        }
-                    }
-
-                    module.analyze_block(global, global.variable.storage.?.bb.function.main_block);
-
-                    // Handle jump to the return block
-                    const return_block = global.variable.storage.?.bb.function.return_block orelse module.report_error();
-
-                    if (module.llvm.builder.get_insert_block()) |current_basic_block| {
-                        assert(current_basic_block.get_terminator() == null);
-
-                        if (current_basic_block.is_empty() or current_basic_block.to_value().use_empty()) {
-                            return_block.to_value().replace_all_uses_with(current_basic_block.to_value());
-                            return_block.delete();
-                        } else {
-                            module.emit_block(global, return_block);
-                        }
-                    } else {
-                        var is_reachable = false;
-
-                        if (return_block.to_value().has_one_use()) {
-                            if (llvm.Value.to_branch(return_block.user_begin())) |branch| {
-                                is_reachable = !branch.is_conditional() and branch.get_successor(0) == return_block;
-
-                                if (is_reachable) {
-                                    module.llvm.builder.position_at_end(branch.to_instruction().get_parent());
-                                    branch.to_instruction().erase_from_parent();
-                                    return_block.delete();
-                                }
+                            // no pointer
+                            const argument_type = argument_variable.variable.storage.?.type.?.bb.pointer.type;
+                            if (module.has_debug_info) {
+                                const always_preserve = true;
+                                const flags = llvm.DI.Flags{};
+                                const parameter_variable = module.llvm.di_builder.create_parameter_variable(function_scope, argument_variable.variable.name, @intCast(argument_index + 1), module.llvm.file, argument_variable.variable.line, argument_type.llvm.debug.?, always_preserve, flags);
+                                const inlined_at: ?*llvm.DI.Metadata = null; // TODO
+                                const debug_location = llvm.DI.create_debug_location(module.llvm.context, argument_variable.variable.line, argument_variable.variable.column, function_scope, inlined_at);
+                                _ = module.llvm.di_builder.insert_declare_record_at_end(semantic_argument_storage, parameter_variable, module.llvm.di_builder.null_expression(), debug_location, entry_block);
                             }
                         }
 
-                        if (!is_reachable) {
-                            module.emit_block(global, return_block);
-                        }
-                    }
+                        module.analyze_block(global, global.variable.storage.?.bb.function.main_block);
 
-                    // End function debug info
-                    if (llvm_function_value.get_subprogram()) |subprogram| {
-                        module.llvm.di_builder.finalize_subprogram(subprogram);
-                    }
+                        // Handle jump to the return block
+                        const return_block = global.variable.storage.?.bb.function.return_block orelse module.report_error();
 
-                    if (function_type.return_abi.semantic_type == module.noreturn_type or global.variable.storage.?.bb.function.attributes.naked) {
-                        @trap();
-                    } else if (function_type.return_abi.semantic_type == module.void_type) {
-                        module.llvm.builder.create_ret_void();
-                    } else {
-                        const abi_kind = function_type.return_abi.flags.kind;
-                        const return_value: ?*llvm.Value = switch (abi_kind) {
-                            .direct, .extend => blk: {
-                                const coerce_to_type = function_type.return_abi.get_coerce_to_type();
-                                const return_alloca = global.variable.storage.?.bb.function.return_alloca orelse unreachable;
+                        if (module.llvm.builder.get_insert_block()) |current_basic_block| {
+                            assert(current_basic_block.get_terminator() == null);
 
-                                if (function_type.return_abi.semantic_type.is_abi_equal(coerce_to_type) and function_type.return_abi.attributes.direct.offset == 0) {
-                                    if (module.llvm.builder.find_return_value_dominating_store(return_alloca, function_type.return_abi.semantic_type.llvm.handle.?)) |store| {
-                                        const store_instruction = store.to_instruction();
-                                        const return_value = store_instruction.to_value().get_operand(0);
-                                        const alloca = store_instruction.to_value().get_operand(1);
-                                        assert(alloca == return_alloca);
-                                        store_instruction.erase_from_parent();
-                                        assert(alloca.use_empty());
-                                        alloca.to_instruction().erase_from_parent();
-                                        break :blk return_value;
-                                    } else {
-                                        const load_value = module.create_load(.{ .type = function_type.return_abi.semantic_type, .value = return_alloca });
-                                        break :blk load_value;
-                                    }
-                                } else {
-                                    const source = switch (function_type.return_abi.attributes.direct.offset == 0) {
-                                        true => return_alloca,
-                                        false => @trap(),
-                                    };
-
-                                    const source_type = function_type.return_abi.semantic_type;
-                                    const destination_type = coerce_to_type;
-                                    _ = source;
-                                    _ = source_type;
-                                    _ = destination_type;
-                                    @trap();
-                                    // const result = module.create_coerced_load(source, source_type, destination_type);
-                                    // break :blk result;
-                                }
-                            },
-                            .indirect => switch (function_type.return_abi.semantic_type.get_evaluation_kind()) {
-                                .complex => @trap(),
-                                .aggregate => null,
-                                .scalar => @trap(),
-                            },
-                            else => @trap(),
-                        };
-
-                        if (return_value) |rv| {
-                            module.llvm.builder.create_ret(rv);
+                            if (current_basic_block.is_empty() or current_basic_block.to_value().use_empty()) {
+                                return_block.to_value().replace_all_uses_with(current_basic_block.to_value());
+                                return_block.delete();
+                            } else {
+                                module.emit_block(global, return_block);
+                            }
                         } else {
+                            var is_reachable = false;
+
+                            if (return_block.to_value().has_one_use()) {
+                                if (llvm.Value.to_branch(return_block.user_begin())) |branch| {
+                                    is_reachable = !branch.is_conditional() and branch.get_successor(0) == return_block;
+
+                                    if (is_reachable) {
+                                        module.llvm.builder.position_at_end(branch.to_instruction().get_parent());
+                                        branch.to_instruction().erase_from_parent();
+                                        return_block.delete();
+                                    }
+                                }
+                            }
+
+                            if (!is_reachable) {
+                                module.emit_block(global, return_block);
+                            }
+                        }
+
+                        // End function debug info
+                        if (llvm_function_value.get_subprogram()) |subprogram| {
+                            module.llvm.di_builder.finalize_subprogram(subprogram);
+                        }
+
+                        if (function_type.return_abi.semantic_type == module.noreturn_type or global.variable.storage.?.bb.function.attributes.naked) {
+                            @trap();
+                        } else if (function_type.return_abi.semantic_type == module.void_type) {
                             module.llvm.builder.create_ret_void();
+                        } else {
+                            const abi_kind = function_type.return_abi.flags.kind;
+                            const return_value: ?*llvm.Value = switch (abi_kind) {
+                                .direct, .extend => blk: {
+                                    const coerce_to_type = function_type.return_abi.get_coerce_to_type();
+                                    const return_alloca = global.variable.storage.?.bb.function.return_alloca orelse unreachable;
+
+                                    if (function_type.return_abi.semantic_type.is_abi_equal(coerce_to_type) and function_type.return_abi.attributes.direct.offset == 0) {
+                                        if (module.llvm.builder.find_return_value_dominating_store(return_alloca, function_type.return_abi.semantic_type.llvm.handle.?)) |store| {
+                                            const store_instruction = store.to_instruction();
+                                            const return_value = store_instruction.to_value().get_operand(0);
+                                            const alloca = store_instruction.to_value().get_operand(1);
+                                            assert(alloca == return_alloca);
+                                            store_instruction.erase_from_parent();
+                                            assert(alloca.use_empty());
+                                            alloca.to_instruction().erase_from_parent();
+                                            break :blk return_value;
+                                        } else {
+                                            const load_value = module.create_load(.{ .type = function_type.return_abi.semantic_type, .value = return_alloca });
+                                            break :blk load_value;
+                                        }
+                                    } else {
+                                        const source = switch (function_type.return_abi.attributes.direct.offset == 0) {
+                                            true => return_alloca,
+                                            false => @trap(),
+                                        };
+
+                                        const source_type = function_type.return_abi.semantic_type;
+                                        const destination_type = coerce_to_type;
+                                        _ = source;
+                                        _ = source_type;
+                                        _ = destination_type;
+                                        @trap();
+                                        // const result = module.create_coerced_load(source, source_type, destination_type);
+                                        // break :blk result;
+                                    }
+                                },
+                                .indirect => switch (function_type.return_abi.semantic_type.get_evaluation_kind()) {
+                                    .complex => @trap(),
+                                    .aggregate => null,
+                                    .scalar => @trap(),
+                                },
+                                else => @trap(),
+                            };
+
+                            if (return_value) |rv| {
+                                module.llvm.builder.create_ret(rv);
+                            } else {
+                                module.llvm.builder.create_ret_void();
+                            }
                         }
                     }
 
@@ -3085,13 +3092,13 @@ pub const Module = struct {
                     const semantic_argument_type = switch (is_named_argument) {
                         true => function_type.argument_abis[semantic_argument_index].semantic_type,
                         false => @trap(), // TODO: below
-                                          //     if (semantic_argument_value.lvalue and semantic_argument_value.dereference_to_assign) blk: {
-                                          //     const t = semantic_argument_value.type;
-                                          //     assert(t.bb == .pointer);
-                                          //     assert(t.bb.pointer.type.bb == .structure);
-                                          //     break :blk t.bb.pointer.type;
-                                          // } else semantic_argument_value.type,
-                                      };
+                        //     if (semantic_argument_value.lvalue and semantic_argument_value.dereference_to_assign) blk: {
+                        //     const t = semantic_argument_value.type;
+                        //     assert(t.bb == .pointer);
+                        //     assert(t.bb.pointer.type.bb == .structure);
+                        //     break :blk t.bb.pointer.type;
+                        // } else semantic_argument_value.type,
+                    };
 
                     const argument_abi = if (is_named_argument) function_type.argument_abis[semantic_argument_index] else Abi.SystemV.classify_argument(module, &available_registers, &llvm_abi_argument_type_buffer, &abi_argument_type_buffer, .{
                         .type = semantic_argument_type,
@@ -3269,128 +3276,128 @@ pub const Module = struct {
                         },
                         .ignore => unreachable,
                         else => @trap(),
+                    }
+
+                    assert(abi_argument_count == argument_abi.abi_start + argument_abi.abi_count);
+                }
+
+                if (function_type.is_var_args) {
+                    assert(abi_argument_count >= function_type.abi_argument_types.len);
+                } else {
+                    // TODO
+                    assert(abi_argument_count == function_type.abi_argument_types.len);
+                }
+
+                const llvm_abi_argument_values = llvm_abi_argument_value_buffer[0..abi_argument_count];
+                const llvm_call = module.llvm.builder.create_call(raw_function_type.llvm.handle.?.to_function(), llvm_callable, llvm_abi_argument_values);
+
+                const attribute_list = module.build_attribute_list(.{
+                    .return_type_abi = function_type.return_abi,
+                    .abi_return_type = function_type.abi_return_type,
+                    .abi_argument_types = abi_argument_type_buffer[0..abi_argument_count],
+                    .argument_type_abis = argument_type_abi_buffer[0..call.arguments.len],
+                    .attributes = .{},
+                    .call_site = true,
+                });
+
+                const call_base = llvm_call.to_instruction().to_call_base();
+                call_base.set_calling_convention(llvm_calling_convention);
+                call_base.set_attributes(attribute_list);
+
+                const return_type_abi = &function_type.return_abi;
+                const return_abi_kind = return_type_abi.flags.kind;
+
+                switch (return_abi_kind) {
+                    .ignore => {
+                        assert(return_type_abi.semantic_type == module.noreturn_type or return_type_abi.semantic_type == module.void_type);
+                        break :c llvm_call;
+                    },
+                    .direct, .extend => {
+                        const coerce_to_type = return_type_abi.get_coerce_to_type();
+
+                        if (return_type_abi.semantic_type.is_abi_equal(coerce_to_type) and return_type_abi.attributes.direct.offset == 0) {
+                            const coerce_to_type_kind = coerce_to_type.get_evaluation_kind();
+                            switch (coerce_to_type_kind) {
+                                .aggregate => {},
+                                .complex => @trap(),
+                                .scalar => {
+                                    break :c llvm_call;
+                                    // TODO: maybe a bug?
+                                    // const v = module.values.add();
+                                    // v.* = .{
+                                    //     .llvm = llvm_call,
+                                    //     .bb = .instruction,
+                                    //     .type = return_type_abi.semantic_type,
+                                    //     .lvalue = false,
+                                    //     .dereference_to_assign = false,
+                                    // };
+                                    // break :c v;
+                                },
+                            }
                         }
 
-                        assert(abi_argument_count == argument_abi.abi_start + argument_abi.abi_count);
-                    }
-
-                    if (function_type.is_var_args) {
-                        assert(abi_argument_count >= function_type.abi_argument_types.len);
-                    } else {
-                        // TODO
-                        assert(abi_argument_count == function_type.abi_argument_types.len);
-                    }
-
-                    const llvm_abi_argument_values = llvm_abi_argument_value_buffer[0..abi_argument_count];
-                    const llvm_call = module.llvm.builder.create_call(raw_function_type.llvm.handle.?.to_function(), llvm_callable, llvm_abi_argument_values);
-
-                    const attribute_list = module.build_attribute_list(.{
-                        .return_type_abi = function_type.return_abi,
-                        .abi_return_type = function_type.abi_return_type,
-                        .abi_argument_types = abi_argument_type_buffer[0..abi_argument_count],
-                        .argument_type_abis = argument_type_abi_buffer[0..call.arguments.len],
-                        .attributes = .{},
-                        .call_site = true,
-                    });
-
-                    const call_base = llvm_call.to_instruction().to_call_base();
-                    call_base.set_calling_convention(llvm_calling_convention);
-                    call_base.set_attributes(attribute_list);
-
-                    const return_type_abi = &function_type.return_abi;
-                    const return_abi_kind = return_type_abi.flags.kind;
-
-                    switch (return_abi_kind) {
-                        .ignore => {
-                            assert(return_type_abi.semantic_type == module.noreturn_type or return_type_abi.semantic_type == module.void_type);
-                            break :c llvm_call;
-                        },
-                        .direct, .extend => {
-                            const coerce_to_type = return_type_abi.get_coerce_to_type();
-
-                            if (return_type_abi.semantic_type.is_abi_equal(coerce_to_type) and return_type_abi.attributes.direct.offset == 0) {
-                                const coerce_to_type_kind = coerce_to_type.get_evaluation_kind();
-                                switch (coerce_to_type_kind) {
-                                    .aggregate => {},
-                                    .complex => @trap(),
-                                    .scalar => {
-                                        break :c llvm_call;
-                                               // TODO: maybe a bug?
-                                        // const v = module.values.add();
-                                        // v.* = .{
-                                        //     .llvm = llvm_call,
-                                        //     .bb = .instruction,
-                                        //     .type = return_type_abi.semantic_type,
-                                        //     .lvalue = false,
-                                        //     .dereference_to_assign = false,
-                                        // };
-                                        // break :c v;
-                                    },
-                                }
-                            }
-
-                            // TODO: if
-                            const fixed_vector_type = false;
-                            if (fixed_vector_type) {
-                                @trap();
-                            }
-
-                            const coerce_alloca = module.create_alloca(.{ .type = return_type_abi.semantic_type, .name = "coerce" });
-                            var destination_pointer = switch (return_type_abi.attributes.direct.offset == 0) {
-                                true => coerce_alloca,
-                                false => @trap(),
-                            };
-                            _ = &destination_pointer;
-
-                            if (return_type_abi.semantic_type.bb.structure.fields.len > 0) {
-                                // CreateCoercedStore(
-                                // CI, StorePtr,
-                                // llvm::TypeSize::getFixed(DestSize - RetAI.getDirectOffset()),
-                                // DestIsVolatile);
-
-                                // const source_value = llvm_call;
-                                // const source_type = function_type.abi_return_type;
-                                // // const source_size = source_type.get_byte_size();
-                                // var destination_type = return_type_abi.semantic_type;
-                                // const destination_size = destination_type.get_byte_size();
-                                // // const destination_alignment = destination_type.get_byte_alignment();
-                                // const left_destination_size = destination_size - return_type_abi.attributes.direct.offset;
-                                //
-                                // const is_destination_volatile = false; // TODO
-                                // module.create_coerced_store(source_value, source_type, destination_pointer, destination_type, left_destination_size, is_destination_volatile);
-
-                                // TODO: 
-                                @trap();
-                            } else {
-                                @trap();
-                            }
-
-                            const v = module.values.add();
-                            v.* = .{
-                                .llvm = destination_pointer,
-                                .bb = .instruction,
-                                .type = module.get_pointer_type(.{ .type = return_type_abi.semantic_type }),
-                                .lvalue = true,
-                                .dereference_to_assign = true,
-                            };
-                            break :c v;
-                        },
-                        .indirect => {
+                        // TODO: if
+                        const fixed_vector_type = false;
+                        if (fixed_vector_type) {
                             @trap();
-                            // TODO
-                            // const v = module.values.add();
-                            // v.* = .{
-                            //     .llvm = llvm_indirect_return_value,
-                            //     .bb = .instruction,
-                            //     .type = module.get_pointer_type(.{ .type = return_type_abi.semantic_type }),
-                            //     .lvalue = true,
-                            //     .dereference_to_assign = true,
-                            // };
-                            // break :c v;
-                        },
-                        else => @trap(),
-                    }
-                },
+                        }
+
+                        const coerce_alloca = module.create_alloca(.{ .type = return_type_abi.semantic_type, .name = "coerce" });
+                        var destination_pointer = switch (return_type_abi.attributes.direct.offset == 0) {
+                            true => coerce_alloca,
+                            false => @trap(),
+                        };
+                        _ = &destination_pointer;
+
+                        if (return_type_abi.semantic_type.bb.structure.fields.len > 0) {
+                            // CreateCoercedStore(
+                            // CI, StorePtr,
+                            // llvm::TypeSize::getFixed(DestSize - RetAI.getDirectOffset()),
+                            // DestIsVolatile);
+
+                            // const source_value = llvm_call;
+                            // const source_type = function_type.abi_return_type;
+                            // // const source_size = source_type.get_byte_size();
+                            // var destination_type = return_type_abi.semantic_type;
+                            // const destination_size = destination_type.get_byte_size();
+                            // // const destination_alignment = destination_type.get_byte_alignment();
+                            // const left_destination_size = destination_size - return_type_abi.attributes.direct.offset;
+                            //
+                            // const is_destination_volatile = false; // TODO
+                            // module.create_coerced_store(source_value, source_type, destination_pointer, destination_type, left_destination_size, is_destination_volatile);
+
+                            // TODO:
+                            @trap();
+                        } else {
+                            @trap();
+                        }
+
+                        const v = module.values.add();
+                        v.* = .{
+                            .llvm = destination_pointer,
+                            .bb = .instruction,
+                            .type = module.get_pointer_type(.{ .type = return_type_abi.semantic_type }),
+                            .lvalue = true,
+                            .dereference_to_assign = true,
+                        };
+                        break :c v;
+                    },
+                    .indirect => {
+                        @trap();
+                        // TODO
+                        // const v = module.values.add();
+                        // v.* = .{
+                        //     .llvm = llvm_indirect_return_value,
+                        //     .bb = .instruction,
+                        //     .type = module.get_pointer_type(.{ .type = return_type_abi.semantic_type }),
+                        //     .lvalue = true,
+                        //     .dereference_to_assign = true,
+                        // };
+                        // break :c v;
+                    },
+                    else => @trap(),
+                }
+            },
             else => @trap(),
         };
 
@@ -3467,7 +3474,7 @@ pub const Module = struct {
                     if (variable.type != expected_type) {
                         module.report_error();
                     }
-                }
+                },
             },
             .intrinsic => |intrinsic| switch (intrinsic) {
                 .extend => |extended_value| {
@@ -3533,7 +3540,9 @@ pub const Module = struct {
                     module.report_error();
                 }
                 for (call.arguments, call.function_type.bb.function.semantic_argument_types) |argument, argument_type| {
-                    module.analyze_value_type(function, argument, .{ .type = argument_type, });
+                    module.analyze_value_type(function, argument, .{
+                        .type = argument_type,
+                    });
                 }
 
                 if (call.function_type.bb.function.semantic_return_type != expected_type) {
@@ -4408,8 +4417,7 @@ pub const Abi = struct {
             result[current_index] = .memory;
 
             switch (ty.bb) {
-                .void => result[current_index] = .none,
-                // .noreturn => result[current_index] = .none,
+                .void, .noreturn => result[current_index] = .none,
                 // .bits => result[current_index] = .integer,
                 .pointer => result[current_index] = .integer,
                 .integer => |integer| {
