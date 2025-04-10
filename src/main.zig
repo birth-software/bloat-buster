@@ -201,4 +201,5 @@ const names = &[_][]const u8{
     "global",
     "function_pointer",
     "extern",
+    "byte_size",
 };

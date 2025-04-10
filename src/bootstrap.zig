@@ -524,7 +524,7 @@ pub const Value = struct {
     kind: Kind = .right,
 
     const Intrinsic = union(Id) {
-        byte_size,
+        byte_size: *Type,
         cast,
         cast_to,
         extend: *Value,
@@ -1829,6 +1829,20 @@ pub const Module = struct {
         const intrinsic = value_builder.token.value_intrinsic;
         const value = module.values.add();
         value.* = switch (intrinsic) {
+            .byte_size => blk: {
+                module.skip_space();
+                module.expect_character(left_parenthesis);
+                module.skip_space();
+                const ty = module.parse_type();
+                module.expect_character(right_parenthesis);
+                break :blk .{
+                    .bb = .{
+                        .intrinsic = .{
+                            .byte_size = ty,
+                        },
+                    },
+                };
+            },
             .extend => blk: {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
@@ -2981,6 +2995,11 @@ pub const Module = struct {
                 @trap();
             },
             .intrinsic => |intrinsic| switch (intrinsic) {
+                .byte_size => |ty| blk: {
+                    const byte_size = ty.get_byte_size();
+                    const constant_integer = value_type.resolve(module).handle.to_integer().get_constant(byte_size, @intFromBool(false));
+                    break :blk constant_integer.to_value();
+                },
                 .extend => |extended_value| blk: {
                     if (extended_value.llvm == null) {
                         module.emit_value(function, extended_value);
@@ -3477,6 +3496,18 @@ pub const Module = struct {
                 },
             },
             .intrinsic => |intrinsic| switch (intrinsic) {
+                .byte_size => |ty| {
+                    // TODO
+                    if (expected_type.bb != .integer) {
+                        module.report_error();
+                    }
+
+                    const size = ty.get_byte_size();
+                    const max_value = if (expected_type.bb.integer.bit_count == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(expected_type.bb.integer.bit_count - @intFromBool(expected_type.bb.integer.signed))) - 1;
+                    if (size > max_value) {
+                        module.report_error();
+                    }
+                },
                 .extend => |extended_value| {
                     module.analyze_value_type(function, extended_value, .{});
                     assert(extended_value.type != null);
