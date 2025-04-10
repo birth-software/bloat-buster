@@ -433,6 +433,11 @@ pub const Statement = struct {
         @"return": ?*Value,
         assignment: Assignment,
         expression: *Value,
+        @"if": struct {
+            condition: *Value,
+            if_block: *LexicalBlock,
+            else_block: ?*LexicalBlock,
+        },
     },
     line: u32,
     column: u32,
@@ -1431,10 +1436,13 @@ pub const Module = struct {
                     break :blk .{ .integer = .{ .value = decimal, .kind = .decimal } };
                 }
             },
-            '+', '-', '*', '/', '%', '&', '|', '^' => |c| blk: {
+            '+', '-', '*', '/', '%', '&', '|', '^', '!' => |c| blk: {
                 const next_ch = module.content[start_index + 1];
                 const token_id: Token.Id = switch (next_ch) {
-                    '=' => @trap(),
+                    '=' => switch (c) {
+                        '!' => .@"!=",
+                        else => @trap(),
+                    },
                     else => switch (c) {
                         '+' => .@"+",
                         '-' => .@"-",
@@ -1458,6 +1466,7 @@ pub const Module = struct {
                     .@"&",
                     .@"|",
                     .@"^",
+                    .@"!=",
                     => |tid| @unionInit(Token, @tagName(tid), {}),
                 };
 
@@ -1708,7 +1717,44 @@ pub const Module = struct {
                                     .@"return" = module.parse_value(.{}),
                                 },
                                 .@"if" => {
-                                    @trap();
+                                    module.skip_space();
+
+                                    module.expect_character(left_parenthesis);
+                                    module.skip_space();
+
+                                    const condition = module.parse_value(.{});
+
+                                    module.skip_space();
+                                    module.expect_character(right_parenthesis);
+
+                                    module.skip_space();
+
+                                    const if_block = module.parse_block();
+
+                                    module.skip_space();
+
+                                    var is_else = false;
+                                    if (is_identifier_start_ch(module.content[module.offset])) {
+                                        const identifier = module.parse_identifier();
+                                        is_else = lib.string.equal(identifier, "else");
+                                        if (!is_else) {
+                                            module.offset -= identifier.len;
+                                        } else {
+                                            module.skip_space();
+                                        }
+                                    }
+
+                                    const else_block = if (is_else) module.parse_block() else null;
+
+                                    require_semicolon = false;
+
+                                    break :blk .{
+                                        .@"if" = .{
+                                            .condition = condition,
+                                            .if_block = if_block,
+                                            .else_block = else_block,
+                                        },
+                                    };
                                 },
                                 .@"while" => {
                                     @trap();
@@ -3675,6 +3721,8 @@ pub const Module = struct {
             block.scope.llvm = lexical_block.to_scope();
         }
 
+        const current_function = &function.variable.storage.?.bb.function;
+
         var last_line: u32 = 0;
         var last_column: u32 = 0;
         var last_statement_debug_location: *llvm.DI.Location = undefined;
@@ -3820,6 +3868,59 @@ pub const Module = struct {
                 },
                 .expression => |expression_value| {
                     module.analyze(function, expression_value, .{});
+                },
+                .@"if" => |if_statement| {
+                    const llvm_function = function.variable.storage.?.llvm.?.to_function();
+                    const taken_block = module.llvm.context.create_basic_block("if.true", llvm_function);
+                    const not_taken_block = module.llvm.context.create_basic_block("if.false", llvm_function);
+                    const exit_block = module.llvm.context.create_basic_block("if.end", null);
+
+                    module.analyze(function, if_statement.condition, .{});
+                    const llvm_condition = switch (if_statement.condition.type.?.bb) {
+                        .integer => |integer| if (integer.bit_count != 1) {
+                            module.report_error();
+                        } else if_statement.condition.llvm.?,
+                        else => @trap(),
+                    };
+
+                    _ = module.llvm.builder.create_conditional_branch(llvm_condition, taken_block, not_taken_block);
+                    module.llvm.builder.position_at_end(taken_block);
+
+                    const previous_exit_block = current_function.exit_block;
+                    defer current_function.exit_block = previous_exit_block;
+
+                    current_function.exit_block = exit_block;
+
+                    module.analyze_block(function, if_statement.if_block);
+
+                    const if_final_block = module.llvm.builder.get_insert_block();
+
+                    module.llvm.builder.position_at_end(not_taken_block);
+                    var is_second_block_terminated = false;
+                    if (if_statement.else_block) |else_block| {
+                        current_function.exit_block = exit_block;
+                        module.analyze_block(function, else_block);
+                        is_second_block_terminated = module.llvm.builder.get_insert_block() == null;
+                    } else {
+                        @trap();
+                    }
+
+                    if (!(if_final_block == null and is_second_block_terminated)) {
+                        if (if_final_block != null) {
+                            // @trap();
+                        }
+
+                        if (!is_second_block_terminated) {
+                            // if (is_else) {
+                            //     @trap();
+                            // } else {}
+                        }
+                    } else {
+                        assert(exit_block.get_parent() == null);
+                        // TODO:
+                        // if call `exit_block.erase_from_paren()`, it crashes, investigate
+                        exit_block.delete();
+                    }
                 },
             }
         }
