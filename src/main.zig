@@ -199,4 +199,5 @@ const names = &[_][]const u8{
     "u1_return",
     "local_type_inference",
     "global",
+    "function_pointer",
 };

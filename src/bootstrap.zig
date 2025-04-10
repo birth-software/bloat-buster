@@ -1814,6 +1814,7 @@ pub const Module = struct {
                 .variable_reference = variable,
             },
             .kind = value_builder.kind,
+                // if (variable.type != null and variable.type.?.bb == .function) .left else value_builder.kind, 
         };
         return value;
     }
@@ -3018,21 +3019,21 @@ pub const Module = struct {
                 break :blk result;
             },
             .call => |call| c: {
+                const raw_function_type = call.function_type;
+                // TODO: improve this code, which works for now
                 const llvm_callable = switch (call.callable.bb) {
-                    .variable_reference => |variable| variable.storage.?.llvm.?,
+                    .variable_reference => |variable| switch (call.callable.kind) {
+                        .left => switch (call.callable.type == raw_function_type) {
+                            true => unreachable,
+                            false => variable.storage.?.llvm.?,
+                        },
+                        .right => switch (call.callable.type == raw_function_type) {
+                            true => variable.storage.?.llvm.?,
+                            false => module.create_load(.{ .type = module.get_pointer_type(.{ .type = raw_function_type }), .value = variable.storage.?.llvm.? }),
+                        },
+                    },
                     else => @trap(),
                 };
-                const raw_function_type = switch (call.callable.bb) {
-                    .variable_reference => |variable| variable.storage.?.type.?.bb.pointer.type,
-                    else => @trap(),
-                };
-                // const llvm_function_type = raw_function_type.resolve(module).handle;
-                // const llvm_call = module.llvm.builder.create_call(llvm_function_type.to_function(), llvm_callable, &.{});
-
-                // const llvm_callable = switch (child_type == raw_function_type) {
-                //     true => may_be_callable.llvm,
-                //     else => module.create_load(.{ .type = pointer_type, .value = may_be_callable.llvm }),
-                // };
 
                 const function_type = &raw_function_type.bb.function;
                 const calling_convention = function_type.calling_convention;
@@ -3517,9 +3518,17 @@ pub const Module = struct {
             .call => |*call| {
                 module.analyze_value_type(function, call.callable, .{});
                 call.function_type = switch (call.callable.type.?.bb) {
-                    .function => call.callable.type.?,
+                    .function => blk: {
+                        assert(call.callable.kind == .right);
+                        break :blk call.callable.type.?;
+                    },
+                    .pointer => |pointer| switch (pointer.type.bb) {
+                        .function => pointer.type,
+                        else => @trap(),
+                    },
                     else => @trap(),
                 };
+
                 if (call.arguments.len != call.function_type.bb.function.semantic_argument_types.len) {
                     module.report_error();
                 }
@@ -3596,7 +3605,10 @@ pub const Module = struct {
                         .function => pointer.type,
                         else => @trap(),
                     },
-                    .function => call.callable.type.?,
+                    .function => b: {
+                        assert(call.callable.kind == .right);
+                        break :b call.callable.type.?;
+                    },
                     else => @trap(),
                 };
 
@@ -3859,7 +3871,7 @@ pub const Module = struct {
                     false => options.type,
                 };
                 const alignment: c_uint = if (options.alignment) |a| a else @intCast(storage_type.get_byte_alignment());
-                const v = module.llvm.builder.create_load(storage_type.llvm.handle.?, options.value);
+                const v = module.llvm.builder.create_load(storage_type.resolve(module).handle, options.value);
                 v.set_alignment(alignment);
                 return switch (storage_type == options.type) {
                     true => v,
