@@ -471,6 +471,16 @@ pub const Statement = struct {
 
         const Operator = enum {
             @"=",
+            @"+=",
+            @"-=",
+            @"*=",
+            @"/=",
+            @"%=",
+            @">>=",
+            @"<<=",
+            @"&=",
+            @"|=",
+            @"^=",
         };
     };
 };
@@ -1549,6 +1559,14 @@ pub const Module = struct {
                 const token_id: Token.Id = switch (next_ch) {
                     '=' => switch (c) {
                         '!' => .@"!=",
+                        '+' => .@"+=",
+                        '-' => .@"-=",
+                        '*' => .@"*=",
+                        '/' => .@"/=",
+                        '%' => .@"%=",
+                        '^' => .@"^=",
+                        '|' => .@"|=",
+                        '&' => .@"&=",
                         else => @trap(),
                     },
                     else => switch (c) {
@@ -1575,6 +1593,14 @@ pub const Module = struct {
                     .@"|",
                     .@"^",
                     .@"!=",
+                    .@"+=",
+                    .@"-=",
+                    .@"*=",
+                    .@"/=",
+                    .@"%=",
+                    .@"&=",
+                    .@"|=",
+                    .@"^=",
                     => |tid| @unionInit(Token, @tagName(tid), {}),
                 };
 
@@ -1897,12 +1923,72 @@ pub const Module = struct {
                                 };
                             } else {
                                 const operator_start_character = module.content[module.offset];
+                                const operator_next_character = module.content[module.offset + 1];
+                                const operator_next_next_character = module.content[module.offset + 2];
                                 const operator: Statement.Assignment.Operator = switch (operator_start_character) {
                                     '=' => .@"=",
+                                    '+' => switch (operator_next_character) {
+                                        '=' => .@"+=",
+                                        else => @trap(),
+                                    },
+                                    '-' => switch (operator_next_character) {
+                                        '=' => .@"-=",
+                                        else => @trap(),
+                                    },
+                                    '*' => switch (operator_next_character) {
+                                        '=' => .@"*=",
+                                        else => @trap(),
+                                    },
+                                    '/' => switch (operator_next_character) {
+                                        '=' => .@"/=",
+                                        else => @trap(),
+                                    },
+                                    '%' => switch (operator_next_character) {
+                                        '=' => .@"%=",
+                                        else => @trap(),
+                                    },
+                                    '>' => switch (operator_next_character) {
+                                        '>' => switch (operator_next_next_character) {
+                                            '=' => .@">>=",
+                                            else => @trap(),
+                                        },
+                                        else => @trap(),
+                                    },
+                                    '<' => switch (operator_next_character) {
+                                        '<' => switch (operator_next_next_character) {
+                                            '=' => .@"<<=",
+                                            else => @trap(),
+                                        },
+                                        else => @trap(),
+                                    },
+                                    '&' => switch (operator_next_character) {
+                                        '=' => .@"&=",
+                                        else => @trap(),
+                                    },
+                                    '|' => switch (operator_next_character) {
+                                        '=' => .@"|=",
+                                        else => @trap(),
+                                    },
+                                    '^' => switch (operator_next_character) {
+                                        '=' => .@"^=",
+                                        else => @trap(),
+                                    },
                                     else => @trap(),
                                 };
                                 module.offset += switch (operator) {
                                     .@"=" => 1,
+                                    .@"+=",
+                                    .@"-=",
+                                    .@"*=",
+                                    .@"/=",
+                                    .@"%=",
+                                    .@"&=",
+                                    .@"|=",
+                                    .@"^=",
+                                    => 2,
+                                    .@">>=",
+                                    .@"<<=",
+                                    => 3,
                                 };
 
                                 module.skip_space();
@@ -3728,6 +3814,11 @@ pub const Module = struct {
                         }
                     },
                 },
+                .pointer => |pointer| {
+                    _ = pointer; // TODO: pointer arithmetic
+                    value.type = module.integer_type(64, false);
+                    return;
+                },
                 else => @trap(),
             },
             .unary => |unary| {
@@ -4173,11 +4264,90 @@ pub const Module = struct {
                     module.emit_assignment(function, local.variable.storage.?, local.variable.initial_value);
                 },
                 .assignment => |assignment| {
+                    module.analyze(function, assignment.left, .{});
                     switch (assignment.kind) {
                         .@"=" => {
-                            module.analyze(function, assignment.left, .{});
                             module.analyze_value_type(function, assignment.right, .{ .type = assignment.left.type.?.bb.pointer.type });
                             module.emit_assignment(function, assignment.left, assignment.right);
+                        },
+                        else => |kind| {
+                            const pointer_type = assignment.left.type.?.bb.pointer;
+                            const element_type = pointer_type.type;
+                            assert(element_type.get_evaluation_kind() == .scalar);
+                            const load = module.create_load(.{ .type = element_type, .value = assignment.left.llvm.?, .alignment = pointer_type.alignment });
+                            module.analyze(function, assignment.right, .{ .type = element_type });
+                            const a = load;
+                            const b = assignment.right.llvm.?;
+                            const right = switch (kind) {
+                                .@"+=" => switch (element_type.bb) {
+                                    .integer => module.llvm.builder.create_add(a, b),
+                                    .pointer => |pointer| module.llvm.builder.create_gep(.{
+                                        .type = pointer.type.llvm.handle.?,
+                                        .aggregate = a,
+                                        .indices = &.{b},
+                                    }),
+                                    else => module.report_error(),
+                                },
+                                .@"-=" => switch (element_type.bb) {
+                                    .integer => module.llvm.builder.create_sub(a, b),
+                                    .pointer => |pointer| module.llvm.builder.create_gep(.{
+                                        .type = pointer.type.llvm.handle.?,
+                                        .aggregate = a,
+                                        .indices = &.{module.negate_llvm_value(b, assignment.right.is_constant())},
+                                    }),
+                                    else => module.report_error(),
+                                },
+                                .@"*=" => switch (element_type.bb) {
+                                    .integer => module.llvm.builder.create_mul(a, b),
+                                    else => module.report_error(),
+                                },
+                                .@"/=" => switch (element_type.bb) {
+                                    .integer => |integer| switch (integer.signed) {
+                                        true => module.llvm.builder.create_sdiv(a, b),
+                                        false => module.llvm.builder.create_udiv(a, b),
+                                    },
+                                    else => module.report_error(),
+                                },
+                                .@"%=" => switch (element_type.bb) {
+                                    .integer => |integer| switch (integer.signed) {
+                                        true => module.llvm.builder.create_srem(a, b),
+                                        false => module.llvm.builder.create_urem(a, b),
+                                    },
+                                    else => module.report_error(),
+                                },
+                                .@"&=" => switch (element_type.bb) {
+                                    .integer => module.llvm.builder.create_and(a, b),
+                                    else => module.report_error(),
+                                },
+                                .@"|=" => switch (element_type.bb) {
+                                    .integer => module.llvm.builder.create_or(a, b),
+                                    else => module.report_error(),
+                                },
+                                .@"^=" => switch (element_type.bb) {
+                                    .integer => module.llvm.builder.create_xor(a, b),
+                                    else => module.report_error(),
+                                },
+                                .@">>=" => switch (element_type.bb) {
+                                    .integer => |integer| switch (integer.signed) {
+                                        true => module.llvm.builder.create_ashr(a, b),
+                                        false => module.llvm.builder.create_lshr(a, b),
+                                    },
+                                    else => module.report_error(),
+                                },
+                                .@"<<=" => switch (element_type.bb) {
+                                    .integer => module.llvm.builder.create_shl(a, b),
+                                    else => module.report_error(),
+                                },
+                                else => @trap(),
+                            };
+
+                            _ = module.create_store(.{
+                                .source_value = right,
+                                .destination_value = assignment.left.llvm.?,
+                                .source_type = element_type,
+                                .destination_type = element_type,
+                                .alignment = pointer_type.alignment,
+                            });
                         },
                     }
                 },

@@ -205,4 +205,5 @@ const names = &[_][]const u8{
     "basic_branch",
     "basic_array",
     "argv",
+    "assignment_operators",
 };
