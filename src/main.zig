@@ -204,4 +204,5 @@ const names = &[_][]const u8{
     "byte_size",
     "basic_branch",
     "basic_array",
+    "argv",
 };

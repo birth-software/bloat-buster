@@ -3655,28 +3655,48 @@ pub const Module = struct {
                 },
                 false => @trap(),
             },
-            .array_expression => |array_expression| switch (array_expression.array_like.type.?.bb) {
-                .pointer => |pointer| switch (pointer.type.bb) {
-                    .array => |array| blk: {
-                        const zero_index = module.integer_type(64, false).resolve(module).handle.to_integer().get_constant(0, @intFromBool(false)).to_value();
+            .array_expression => |array_expression| switch (array_expression.array_like.kind) {
+                .left => switch (array_expression.array_like.type.?.bb) {
+                    .pointer => |pointer| switch (pointer.type.bb) {
+                        .array => |array| blk: {
+                            module.emit_value(function, array_expression.array_like);
+                            module.emit_value(function, array_expression.index);
+                            const zero_index = module.integer_type(64, false).resolve(module).handle.to_integer().get_constant(0, @intFromBool(false)).to_value();
+                            const gep = module.llvm.builder.create_gep(.{
+                                .type = pointer.type.llvm.handle.?,
+                                .aggregate = array_expression.array_like.llvm.?,
+                                .indices = &.{ zero_index, array_expression.index.llvm.? },
+                            });
+
+                            const v = switch (value.kind) {
+                                .left => gep,
+                                .right => module.create_load(.{ .type = array.element_type, .value = gep }),
+                            };
+
+                            break :blk v;
+                        },
+                        else => @trap(),
+                    },
+                    else => unreachable,
+                },
+                .right => switch (array_expression.array_like.type.?.bb) {
+                    .pointer => |pointer| blk: {
                         module.emit_value(function, array_expression.array_like);
                         module.emit_value(function, array_expression.index);
                         const gep = module.llvm.builder.create_gep(.{
                             .type = pointer.type.llvm.handle.?,
                             .aggregate = array_expression.array_like.llvm.?,
-                            .indices = &.{ zero_index, array_expression.index.llvm.? },
+                            .indices = &.{ array_expression.index.llvm.? },
                         });
-
                         const v = switch (value.kind) {
                             .left => gep,
-                            .right => module.create_load(.{ .type = array.element_type, .value = gep }),
+                            .right => module.create_load(.{ .type = pointer.type, .value = gep }),
                         };
 
                         break :blk v;
                     },
                     else => @trap(),
                 },
-                else => unreachable,
             },
             else => @trap(),
         };
@@ -3972,6 +3992,38 @@ pub const Module = struct {
 
                 break :blk call.function_type.bb.function.semantic_return_type;
             },
+            .array_expression => |array_expression| blk: {
+                module.analyze_value_type(function, array_expression.index, .{
+                    .type = module.integer_type(64, false),
+                });
+                module.analyze_value_type(function, array_expression.array_like, .{});
+
+                switch (array_expression.array_like.kind) {
+                    .left => {
+                        const element_type = switch (array_expression.array_like.type.?.bb) {
+                            .pointer => |pointer| switch (pointer.type.bb) {
+                                .array => |array| array.element_type,
+                                else => @trap(),
+                            },
+                            else => module.report_error(),
+                        };
+                        break :blk switch (value.kind) {
+                            .left => @trap(),
+                            .right => element_type,
+                        };
+                    },
+                    .right => {
+                        const element_type = switch (array_expression.array_like.type.?.bb) {
+                            .pointer => |pointer| pointer.type,
+                            else => @trap(),
+                        };
+                        break :blk switch (value.kind) {
+                            .left => @trap(),
+                            .right => element_type,
+                        };
+                    },
+                }
+            },
             else => @trap(),
         };
 
@@ -4165,7 +4217,20 @@ pub const Module = struct {
                         module.analyze_block(function, else_block);
                         is_second_block_terminated = module.llvm.builder.get_insert_block() == null;
                     } else {
-                        @trap();
+                        if (if_final_block) |final_block| {
+                            const current_insert_block = module.llvm.builder.get_insert_block();
+                            defer if (current_insert_block) |b| {
+                                module.llvm.builder.position_at_end(b);
+                            };
+                            module.llvm.builder.position_at_end(final_block);
+                            _ = module.llvm.builder.create_branch(not_taken_block);
+                            module.llvm.builder.clear_insertion_position();
+                        }
+
+                        assert(exit_block.to_value().use_empty());
+                        not_taken_block.to_value().set_name("if.end");
+                        assert(exit_block.get_parent() == null);
+                        exit_block.delete();
                     }
 
                     if (!(if_final_block == null and is_second_block_terminated)) {
