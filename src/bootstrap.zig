@@ -13,6 +13,20 @@ pub const OperatingSystem = enum {
     linux,
 };
 
+fn array_type_name(arena: *Arena, element_type: *Type, element_count: u64) [:0]const u8 {
+    var buffer: [256]u8 = undefined;
+    var i: u64 = 0;
+    buffer[i] = left_bracket;
+    i += 1;
+    i += lib.string_format.integer_decimal(buffer[i..], element_count);
+    buffer[i] = right_bracket;
+    i += 1;
+    const element_name = element_type.name;
+    @memcpy(buffer[i..][0..element_name.len], element_name);
+    i += element_name.len;
+    return arena.duplicate_string(buffer[0..i]);
+}
+
 pub const BuildMode = enum {
     debug_none,
     debug_fast,
@@ -200,7 +214,7 @@ pub const Type = struct {
         bits,
         pointer: Type.Pointer,
         function: Type.Function,
-        array,
+        array: Type.Array,
         structure: Type.Struct,
         vector,
     },
@@ -223,6 +237,7 @@ pub const Type = struct {
                 // Consider function types later since we need to deal with ABI
                 .function => null,
                 .pointer => module.llvm.pointer_type,
+                .array => |array| array.element_type.resolve(module).handle.get_array_type(array.element_count).to_type(),
                 else => @trap(),
             };
             ty.llvm.handle = llvm_type;
@@ -251,6 +266,7 @@ pub const Type = struct {
                     break :b subroutine_type.to_type();
                 },
                 .pointer => |pointer| module.llvm.di_builder.create_pointer_type(pointer.type.resolve(module).debug, 64, 64, 0, ty.name).to_type(),
+                .array => |array| module.llvm.di_builder.create_array_type(array.element_count, 0, array.element_type.llvm.debug.?, &.{}).to_type(),
                 else => @trap(),
             } else null;
             ty.llvm.debug = debug_type;
@@ -287,6 +303,11 @@ pub const Type = struct {
 
     pub const Struct = struct {
         fields: []Field,
+    };
+
+    pub const Array = struct {
+        element_type: *Type,
+        element_count: u64,
     };
 
     pub const Buffer = struct {
@@ -368,6 +389,7 @@ pub const Type = struct {
             .integer => |integer| @intCast(@min(@divExact(@max(8, lib.next_power_of_two(integer.bit_count)), 8), 16)),
             .pointer => 8,
             .function => 1,
+            .array => |array| array.element_type.get_byte_alignment(),
             else => @trap(),
         };
         return result;
@@ -523,10 +545,22 @@ pub const Value = struct {
         dereference: *Value,
         call: Call,
         infer_or_ignore,
+        array_initialization: ArrayInitialization,
+        array_expression: ArrayExpression,
     },
     type: ?*Type = null,
     llvm: ?*llvm.Value = null,
     kind: Kind = .right,
+
+    pub const ArrayExpression = struct {
+        array_like: *Value,
+        index: *Value,
+    };
+
+    pub const ArrayInitialization = struct {
+        values: []const *Value,
+        is_constant: bool,
+    };
 
     const Intrinsic = union(Id) {
         byte_size: *Type,
@@ -1074,6 +1108,60 @@ pub const Module = struct {
                 });
                 return pointer_type;
             },
+            left_bracket => {
+                module.offset += 1;
+                module.skip_space();
+
+                const is_slice = module.consume_character_if_match(right_bracket);
+                switch (is_slice) {
+                    true => {
+                        @trap();
+                    },
+                    false => {
+                        var length_inferred = false;
+                        const offset = module.offset;
+                        if (module.consume_character_if_match('_')) {
+                            module.skip_space();
+                            if (module.consume_character_if_match(']')) {
+                                length_inferred = true;
+                            } else {
+                                module.offset = offset;
+                            }
+                        }
+
+                        const element_count: u64 = switch (length_inferred) {
+                            true => 0,
+                            false => @trap(),
+                        };
+                        if (!length_inferred) {
+                            module.skip_space();
+                            module.expect_character(right_bracket);
+                        }
+
+                        module.skip_space();
+
+                        const element_type = module.parse_type();
+
+                        const array_type = switch (element_count) {
+                            0 => blk: {
+                                const array_type = module.types.append(.{
+                                    .name = "",
+                                    .bb = .{
+                                        .array = .{
+                                            .element_type = element_type,
+                                            .element_count = element_count,
+                                        },
+                                    },
+                                });
+                                break :blk array_type;
+                            },
+                            else => @trap(),
+                        };
+
+                        return array_type;
+                    },
+                }
+            },
             else => @trap(),
         }
     }
@@ -1363,6 +1451,26 @@ pub const Module = struct {
         };
         count += 1;
 
+        r[@intFromEnum(Token.Id.@"[")] = .{
+            .before = rule_before_bracket,
+            .after = rule_after_bracket,
+            .precedence = .postfix,
+        };
+        count += 1;
+        r[@intFromEnum(Token.Id.@"]")] = .{
+            .before = null,
+            .after = null,
+            .precedence = .none,
+        };
+        count += 1;
+
+        r[@intFromEnum(Token.Id.@",")] = .{
+            .before = null,
+            .after = null,
+            .precedence = .none,
+        };
+        count += 1;
+
         assert(count == r.len);
         break :blk r;
     };
@@ -1565,13 +1673,25 @@ pub const Module = struct {
                 };
                 break :blk token;
             },
-            '(' => blk: {
+            left_parenthesis => blk: {
                 module.offset += 1;
                 break :blk .@"(";
             },
-            ')' => blk: {
+            right_parenthesis => blk: {
                 module.offset += 1;
                 break :blk .@")";
+            },
+            left_bracket => blk: {
+                module.offset += 1;
+                break :blk .@"[";
+            },
+            right_bracket => blk: {
+                module.offset += 1;
+                break :blk .@"]";
+            },
+            ',' => blk: {
+                module.offset += 1;
+                break :blk .@",";
             },
             else => @trap(),
         };
@@ -1580,6 +1700,7 @@ pub const Module = struct {
 
         return result;
     }
+
     const Rule = struct {
         before: ?*const Rule.Function,
         after: ?*const Rule.Function,
@@ -1859,7 +1980,11 @@ pub const Module = struct {
             .bb = .{
                 .variable_reference = variable,
             },
-            .kind = value_builder.kind,
+            .kind = if (variable.type) |t| switch (t.bb) {
+                .array, .function => .left,
+                .integer, .pointer => value_builder.kind,
+                else => @trap(),
+            } else value_builder.kind,
             // if (variable.type != null and variable.type.?.bb == .function) .left else value_builder.kind,
         };
         return value;
@@ -2033,6 +2158,59 @@ pub const Module = struct {
         value.* = .{
             .bb = .{
                 .dereference = value_builder.left orelse unreachable,
+            },
+        };
+        return value;
+    }
+
+    // Array initialization
+    fn rule_before_bracket(noalias module: *Module, value_builder: Value.Builder) *Value {
+        assert(value_builder.left == null);
+
+        var value_buffer: [64]*Value = undefined;
+        _ = &value_buffer;
+        var element_count: u64 = 0;
+
+        while (true) : (element_count += 1) {
+            module.skip_space();
+
+            if (module.consume_character_if_match(right_bracket)) {
+                break;
+            }
+            const v = module.parse_value(.{});
+            value_buffer[element_count] = v;
+
+            _ = module.consume_character_if_match(',');
+        }
+
+        const values = module.arena.allocate(*Value, element_count);
+        @memcpy(values, value_buffer[0..element_count]);
+
+        const value = module.values.add();
+        value.* = .{
+            .bb = .{
+                .array_initialization = .{
+                    .values = values,
+                    .is_constant = false,
+                },
+            },
+        };
+
+        return value;
+    }
+
+    // Array subscript
+    fn rule_after_bracket(noalias module: *Module, value_builder: Value.Builder) *Value {
+        const left = value_builder.left orelse module.report_error();
+        const index = module.parse_value(.{});
+        module.expect_character(right_bracket);
+        const value = module.values.add();
+        value.* = .{
+            .bb = .{
+                .array_expression = .{
+                    .array_like = left,
+                    .index = index,
+                },
             },
         };
         return value;
@@ -3463,6 +3641,43 @@ pub const Module = struct {
                     else => @trap(),
                 }
             },
+            .array_initialization => |array_initialization| switch (array_initialization.is_constant) {
+                true => blk: {
+                    var llvm_value_buffer: [64]*llvm.Constant = undefined;
+                    const element_count = array_initialization.values.len;
+                    const llvm_values = llvm_value_buffer[0..element_count];
+                    for (array_initialization.values, llvm_values) |v, *llvm_value| {
+                        module.emit_value(function, v);
+                        llvm_value.* = v.llvm.?.to_constant();
+                    }
+                    const array_value = value_type.bb.array.element_type.resolve(module).handle.get_constant_array(llvm_values);
+                    break :blk array_value.to_value();
+                },
+                false => @trap(),
+            },
+            .array_expression => |array_expression| switch (array_expression.array_like.type.?.bb) {
+                .pointer => |pointer| switch (pointer.type.bb) {
+                    .array => |array| blk: {
+                        const zero_index = module.integer_type(64, false).resolve(module).handle.to_integer().get_constant(0, @intFromBool(false)).to_value();
+                        module.emit_value(function, array_expression.array_like);
+                        module.emit_value(function, array_expression.index);
+                        const gep = module.llvm.builder.create_gep(.{
+                            .type = pointer.type.llvm.handle.?,
+                            .aggregate = array_expression.array_like.llvm.?,
+                            .indices = &.{ zero_index, array_expression.index.llvm.? },
+                        });
+
+                        const v = switch (value.kind) {
+                            .left => gep,
+                            .right => module.create_load(.{ .type = array.element_type, .value = gep }),
+                        };
+
+                        break :blk v;
+                    },
+                    else => @trap(),
+                },
+                else => unreachable,
+            },
             else => @trap(),
         };
 
@@ -3624,6 +3839,54 @@ pub const Module = struct {
 
                 if (call.function_type.bb.function.semantic_return_type != expected_type) {
                     module.report_error();
+                }
+            },
+            .array_initialization => |*array_initialization| {
+                switch (expected_type.bb) {
+                    .array => |*array| {
+                        if (array.element_count == 0) {
+                            array.element_count = array_initialization.values.len;
+                            assert(lib.string.equal(expected_type.name, ""));
+                            expected_type.name = array_type_name(module.arena, array.element_type, array.element_count);
+                        } else {
+                            if (array.element_count != array_initialization.values.len) {
+                                module.report_error();
+                            }
+                        }
+
+                        var is_constant = true;
+                        for (array_initialization.values) |v| {
+                            module.analyze_value_type(function, v, .{
+                                .type = array.element_type,
+                            });
+                            is_constant = is_constant and v.is_constant();
+                        }
+
+                        array_initialization.is_constant = is_constant;
+                    },
+                    else => @trap(),
+                }
+            },
+            .array_expression => |array_expression| {
+                module.analyze_value_type(function, array_expression.index, .{
+                    .type = module.integer_type(64, false),
+                });
+                if (array_expression.array_like.kind != .left) {
+                    module.report_error();
+                }
+                module.analyze_value_type(function, array_expression.array_like, .{});
+                const element_type = switch (array_expression.array_like.type.?.bb) {
+                    .pointer => |pointer| switch (pointer.type.bb) {
+                        .array => |array| array.element_type,
+                        else => @trap(),
+                    },
+                    else => module.report_error(),
+                };
+                switch (value.kind) {
+                    .left => @trap(),
+                    .right => if (element_type != expected_type) {
+                        module.report_error();
+                    },
                 }
             },
             else => @trap(),
@@ -3945,7 +4208,26 @@ pub const Module = struct {
                     .alignment = pointer_type.bb.pointer.alignment,
                 });
             },
-            .aggregate => @trap(),
+            .aggregate => switch (right.bb) {
+                .array_initialization => |array_initialization| switch (array_initialization.is_constant) {
+                    true => {
+                        module.emit_value(function, right);
+                        const global_variable = module.llvm.module.create_global_variable(.{
+                            .linkage = .InternalLinkage,
+                            .name = "constarray", // TODO: format properly
+                            .initial_value = right.llvm.?.to_constant(),
+                            .type = value_type.resolve(module).handle,
+                        });
+                        global_variable.set_unnamed_address(.global);
+                        const element_type = value_type.bb.array.element_type;
+                        const alignment = element_type.get_byte_alignment();
+                        global_variable.to_value().set_alignment(alignment);
+                        _ = module.llvm.builder.create_memcpy(left.llvm.?, pointer_type.bb.pointer.alignment, global_variable.to_value(), alignment, module.integer_type(64, false).resolve(module).handle.to_integer().get_constant(array_initialization.values.len * pointer_type.bb.pointer.type.bb.array.element_type.get_byte_size(), @intFromBool(false)).to_value());
+                    },
+                    false => @trap(),
+                },
+                else => @trap(),
+            },
             .complex => @trap(),
         }
     }
@@ -4153,6 +4435,11 @@ const Token = union(Id) {
     // Parenthesis
     @"(",
     @")",
+    // Bracket
+    @"[",
+    @"]",
+
+    @",",
 
     const Id = enum {
         none,
@@ -4205,6 +4492,11 @@ const Token = union(Id) {
         // Parenthesis
         @"(",
         @")",
+        // Bracket
+        @"[",
+        @"]",
+
+        @",",
     };
 
     const Integer = struct {
