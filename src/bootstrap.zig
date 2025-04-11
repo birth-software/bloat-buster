@@ -204,12 +204,24 @@ pub const ResolvedType = struct {
     debug: *llvm.DI.Type,
 };
 
+pub const Enumerator = struct {
+    fields: []const Enumerator.Field,
+    backing_type: *Type,
+    line: u32,
+    implicit_backing_type: bool,
+
+    pub const Field = struct {
+        name: []const u8,
+        value: u64,
+    };
+};
+
 pub const Type = struct {
     bb: union(enum) {
         void,
         noreturn,
         integer: Type.Integer,
-        enumerator,
+        enumerator: Enumerator,
         float,
         bits,
         pointer: Type.Pointer,
@@ -233,6 +245,7 @@ pub const Type = struct {
         } else {
             const llvm_type = switch (ty.bb) {
                 .void, .noreturn => module.llvm.void_type,
+                .enumerator => |enumerator| enumerator.backing_type.resolve(module).handle,
                 .integer => |integer| module.llvm.context.get_integer_type(integer.bit_count).to_type(),
                 // Consider function types later since we need to deal with ABI
                 .function => null,
@@ -249,6 +262,16 @@ pub const Type = struct {
                     true => .signed,
                     false => .unsigned,
                 }, .{}),
+                .enumerator => |enumerator| blk: {
+                    var enumerator_buffer: [64]*llvm.DI.Enumerator = undefined;
+                    const enumerators = enumerator_buffer[0..enumerator.fields.len];
+                    for (enumerators, enumerator.fields) |*enumerator_pointer, *field| {
+                        enumerator_pointer.* = module.llvm.di_builder.create_enumerator(field.name, @bitCast(field.value), false);
+                    }
+                    const alignment = 0; // TODO
+                    const enumeration_type = module.llvm.di_builder.create_enumeration_type(module.scope.llvm.?, ty.name, module.llvm.file, enumerator.line, enumerator.backing_type.get_bit_size(), alignment, enumerators, enumerator.backing_type.llvm.debug.?);
+                    break :blk enumeration_type.to_type();
+                },
                 .function => |function| b: {
                     var debug_argument_type_buffer: [64]*llvm.DI.Type = undefined;
                     const semantic_debug_argument_types = debug_argument_type_buffer[0 .. function.semantic_argument_types.len + 1 + @intFromBool(function.is_var_args)];
@@ -390,6 +413,7 @@ pub const Type = struct {
             .pointer => 8,
             .function => 1,
             .array => |array| array.element_type.get_byte_alignment(),
+            .enumerator => |enumerator| enumerator.backing_type.get_byte_alignment(),
             else => @trap(),
         };
         return result;
@@ -557,6 +581,7 @@ pub const Value = struct {
         infer_or_ignore,
         array_initialization: ArrayInitialization,
         array_expression: ArrayExpression,
+        enum_literal: []const u8,
     },
     type: ?*Type = null,
     llvm: ?*llvm.Value = null,
@@ -578,7 +603,7 @@ pub const Value = struct {
         cast_to,
         extend: *Value,
         integer_max: *Type,
-        int_from_enum,
+        int_from_enum: *Value,
         int_from_pointer,
         pointer_cast: *Value,
         select,
@@ -1480,6 +1505,12 @@ pub const Module = struct {
             .precedence = .none,
         };
         count += 1;
+        r[@intFromEnum(Token.Id.@".")] = .{
+            .before = rule_before_dot,
+            .after = rule_after_dot,
+            .precedence = .postfix,
+        };
+        count += 1;
 
         assert(count == r.len);
         break :blk r;
@@ -1667,17 +1698,19 @@ pub const Module = struct {
             '.' => blk: {
                 const next_ch = module.content[start_index + 1];
                 const token_id: Token.Id = switch (next_ch) {
+                    else => .@".",
                     '&' => .@".&",
-                    else => @trap(),
                 };
 
                 module.offset += switch (token_id) {
+                    .@"." => 1,
                     .@".&" => 2,
                     else => @trap(),
                 };
                 const token = switch (token_id) {
                     else => unreachable,
                     inline .@".&",
+                    .@".",
                     => |tid| @unionInit(Token, @tagName(tid), {}),
                 };
                 break :blk token;
@@ -2020,6 +2053,26 @@ pub const Module = struct {
         return block;
     }
 
+    fn rule_before_dot(noalias module: *Module, value_builder: Value.Builder) *Value {
+        _ = value_builder;
+        module.skip_space();
+        const identifier = module.parse_identifier();
+
+        const value = module.values.add();
+        value.* = .{
+            .bb = .{
+                .enum_literal = identifier,
+            },
+        };
+        return value;
+    }
+
+    fn rule_after_dot(noalias module: *Module, value_builder: Value.Builder) *Value {
+        _ = module;
+        _ = value_builder;
+        @trap();
+    }
+
     fn rule_before_identifier(noalias module: *Module, value_builder: Value.Builder) *Value {
         const identifier = value_builder.token.identifier;
         assert(!lib.string.equal(identifier, ""));
@@ -2068,7 +2121,7 @@ pub const Module = struct {
             },
             .kind = if (variable.type) |t| switch (t.bb) {
                 .array, .function => .left,
-                .integer, .pointer => value_builder.kind,
+                .integer, .pointer, .enumerator => value_builder.kind,
                 else => @trap(),
             } else value_builder.kind,
             // if (variable.type != null and variable.type.?.bb == .function) .left else value_builder.kind,
@@ -2124,6 +2177,20 @@ pub const Module = struct {
                     .bb = .{
                         .intrinsic = .{
                             .integer_max = ty,
+                        },
+                    },
+                };
+            },
+            .int_from_enum => blk: {
+                module.skip_space();
+                module.expect_character(left_parenthesis);
+                module.skip_space();
+                const arg_value = module.parse_value(.{});
+                module.expect_character(right_parenthesis);
+                break :blk .{
+                    .bb = .{
+                        .intrinsic = .{
+                            .int_from_enum = arg_value,
                         },
                     },
                 };
@@ -2303,9 +2370,11 @@ pub const Module = struct {
     }
 
     fn rule_before_parenthesis(noalias module: *Module, value_builder: Value.Builder) *Value {
-        _ = module;
         _ = value_builder;
-        @trap();
+        module.skip_space();
+        const v = module.parse_value(.{});
+        module.expect_character(right_parenthesis);
+        return v;
     }
 
     fn rule_after_call(noalias module: *Module, value_builder: Value.Builder) *Value {
@@ -2589,6 +2658,86 @@ pub const Module = struct {
                                 storage.bb = .external_function;
                             }
                         },
+                        .@"enum" => {
+                            const is_implicit_type = module.content[module.offset] == left_brace;
+                            const maybe_backing_type: ?*Type = switch (is_implicit_type) {
+                                true => null,
+                                false => module.parse_type(),
+                            };
+
+                            module.skip_space();
+
+                            module.expect_character(left_brace);
+
+                            var highest_value: u64 = 0;
+                            var lowest_value = ~@as(u64, 0);
+
+                            var field_buffer: [64]Enumerator.Field = undefined;
+                            var field_count: u64 = 0;
+
+                            while (true) : (field_count += 1) {
+                                module.skip_space();
+
+                                if (module.consume_character_if_match(right_brace)) {
+                                    break;
+                                }
+
+                                const field_index = field_count;
+                                const field_name = module.parse_identifier();
+                                module.skip_space();
+
+                                const field_value = if (module.consume_character_if_match('=')) blk: {
+                                    module.skip_space();
+                                    const field_value = module.parse_integer_value(false);
+                                    break :blk field_value;
+                                } else {
+                                    @trap();
+                                };
+
+                                field_buffer[field_index] = .{
+                                    .name = field_name,
+                                    .value = field_value,
+                                };
+
+                                highest_value = @max(highest_value, field_value);
+                                lowest_value = @min(lowest_value, field_value);
+
+                                module.skip_space();
+                                module.expect_character(',');
+                            }
+
+                            module.skip_space();
+
+                            _ = module.consume_character_if_match(';');
+
+                            const backing_type = maybe_backing_type orelse blk: {
+                                const bits_needed = 64 - @clz(highest_value);
+                                const int_type = module.integer_type(bits_needed, false);
+                                break :blk int_type;
+                            };
+
+                            if (maybe_backing_type) |bt| {
+                                const bits_needed = 64 - @clz(highest_value);
+                                if (bits_needed > bt.get_bit_size()) {
+                                    module.report_error();
+                                }
+                            }
+
+                            const fields = module.arena.allocate(Enumerator.Field, field_count);
+                            @memcpy(fields, field_buffer[0..field_count]);
+
+                            _ = module.types.append(.{
+                                .bb = .{
+                                    .enumerator = .{
+                                        .backing_type = backing_type,
+                                        .fields = fields,
+                                        .implicit_backing_type = is_implicit_type,
+                                        .line = global_line,
+                                    },
+                                },
+                                .name = global_name,
+                            });
+                        },
                         else => @trap(),
                     }
                 } else {
@@ -2620,6 +2769,51 @@ pub const Module = struct {
                 };
             }
         }
+    }
+
+    fn parse_integer_value(module: *Module, sign: bool) u64 {
+        const start = module.offset;
+        const integer_start_ch = module.content[start];
+        assert(!is_space(integer_start_ch));
+        assert(is_decimal_ch(integer_start_ch));
+
+        const absolute_value: u64 = switch (integer_start_ch) {
+            '0' => blk: {
+                module.offset += 1;
+
+                const next_ch = module.content[module.offset];
+                break :blk switch (sign) {
+                    false => switch (next_ch) {
+                        'x' => b: {
+                            module.offset += 1;
+                            break :b module.parse_hexadecimal();
+                        },
+                        'o' => {
+                            // TODO: parse octal
+                            module.report_error();
+                        },
+                        'b' => {
+                            // TODO: parse binary
+                            module.report_error();
+                        },
+                        '0'...'9' => {
+                            module.report_error();
+                        },
+                        // Zero literal
+                        else => 0,
+                    },
+                    true => switch (next_ch) {
+                        'x', 'o', 'b', '0' => module.report_error(),
+                        '1'...'9' => module.parse_decimal(),
+                        else => unreachable,
+                    },
+                };
+            },
+            '1'...'9' => module.parse_decimal(),
+            else => unreachable,
+        };
+
+        return absolute_value;
     }
 
     fn initialize_llvm(module: *Module) void {
@@ -3328,6 +3522,14 @@ pub const Module = struct {
                     const constant_integer = max_type.resolve(module).handle.to_integer().get_constant(max_value, @intFromBool(false));
                     break :blk constant_integer.to_value();
                 },
+                .int_from_enum => |enum_value| blk: {
+                    module.emit_value(function, enum_value);
+                    break :blk enum_value.llvm.?;
+                },
+                .pointer_cast => |pointer_value| blk: {
+                    module.emit_value(function, pointer_value);
+                    break :blk pointer_value.llvm.?;
+                },
                 .truncate => |value_to_truncate| blk: {
                     if (value_to_truncate.llvm == null) {
                         module.emit_value(function, value_to_truncate);
@@ -3335,10 +3537,6 @@ pub const Module = struct {
                     const llvm_value = value_to_truncate.llvm orelse unreachable;
                     const truncate = module.llvm.builder.create_truncate(llvm_value, value_type.llvm.handle.?);
                     break :blk truncate;
-                },
-                .pointer_cast => |pointer_value| blk: {
-                    module.emit_value(function, pointer_value);
-                    break :blk pointer_value.llvm.?;
                 },
                 else => @trap(),
             },
@@ -3772,7 +3970,7 @@ pub const Module = struct {
                         const gep = module.llvm.builder.create_gep(.{
                             .type = pointer.type.llvm.handle.?,
                             .aggregate = array_expression.array_like.llvm.?,
-                            .indices = &.{ array_expression.index.llvm.? },
+                            .indices = &.{array_expression.index.llvm.?},
                         });
                         const v = switch (value.kind) {
                             .left => gep,
@@ -3783,6 +3981,15 @@ pub const Module = struct {
                     },
                     else => @trap(),
                 },
+            },
+            .enum_literal => |enum_literal_name| blk: {
+                const enum_int_value = for (value_type.bb.enumerator.fields) |*field| {
+                    if (lib.string.equal(enum_literal_name, field.name)) {
+                        break field.value;
+                    } 
+                } else module.report_error();
+                const llvm_value = value_type.llvm.handle.?.to_integer().get_constant(enum_int_value, @intFromBool(false));
+                break :blk llvm_value.to_value();
             },
             else => @trap(),
         };
@@ -4000,6 +4207,19 @@ pub const Module = struct {
                     },
                 }
             },
+            .enum_literal => |enum_literal| {
+                _ = enum_literal;
+                if (expected_type.bb != .enumerator) {
+                    module.report_error();
+                }
+                // const field = for (expected_type.bb.enumerator.fields) |*field| {
+                //     if (lib.string.equal(field.name, enum_literal)) {
+                //         break field;
+                //     }
+                // } else {
+                //     module.report_error();
+                // };
+            },
             else => @trap(),
         };
 
@@ -4047,6 +4267,15 @@ pub const Module = struct {
                         module.report_error();
                     }
                     break :blk integer_max_type;
+                },
+                .int_from_enum => |enum_value| blk: {
+                    module.analyze_value_type(function, enum_value, .{});
+                    if (enum_value.type.?.bb != .enumerator) {
+                        module.report_error();
+                    }
+
+                    const enum_backing_type = enum_value.type.?.bb.enumerator.backing_type;
+                    break :blk enum_backing_type;
                 },
                 else => @trap(),
             },
@@ -4675,6 +4904,7 @@ const Token = union(Id) {
     @"]",
 
     @",",
+    @".",
 
     const Id = enum {
         none,
@@ -4732,6 +4962,7 @@ const Token = union(Id) {
         @"]",
 
         @",",
+        @".",
     };
 
     const Integer = struct {
