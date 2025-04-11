@@ -79,6 +79,7 @@ pub extern fn LLVMBuildICmp(builder: *llvm.Builder, predicate: llvm.IntPredicate
 pub extern fn LLVMBuildBr(builder: *llvm.Builder, block: *llvm.BasicBlock) *llvm.Value;
 pub extern fn LLVMBuildCondBr(builder: *llvm.Builder, condition: *llvm.Value, taken: *llvm.BasicBlock, not_taken: *llvm.BasicBlock) *llvm.Value;
 pub extern fn LLVMBuildNeg(builder: *llvm.Builder, value: *llvm.Value, name: [*:0]const u8) *llvm.Value;
+pub extern fn LLVMBuildNot(builder: *llvm.Builder, value: *llvm.Value, name: [*:0]const u8) *llvm.Value;
 
 pub extern fn llvm_builder_create_alloca(builder: *llvm.Builder, ty: *llvm.Type, address_space: c_uint, name: llvm.String) *llvm.Value;
 pub extern fn LLVMBuildStore(builder: *llvm.Builder, value: *llvm.Value, pointer: *llvm.Value) *llvm.Value;

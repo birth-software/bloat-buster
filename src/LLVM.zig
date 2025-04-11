@@ -978,6 +978,10 @@ pub const Builder = opaque {
     pub fn create_neg(builder: *Builder, value: *Value) *Value {
         return api.LLVMBuildNeg(builder, value, "");
     }
+
+    pub fn create_not(builder: *Builder, value: *Value) *Value {
+        return api.LLVMBuildNot(builder, value, "");
+    }
 };
 
 pub const GlobalValue = opaque {

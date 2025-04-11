@@ -251,6 +251,15 @@ pub const Type = struct {
                 .function => null,
                 .pointer => module.llvm.pointer_type,
                 .array => |array| array.element_type.resolve(module).handle.get_array_type(array.element_count).to_type(),
+                .structure => |structure| blk: {
+                    var llvm_type_buffer: [64]*llvm.Type = undefined;
+                    const llvm_types = llvm_type_buffer[0..structure.fields.len];
+                    for (llvm_types, structure.fields) |*llvm_type, *field| {
+                        llvm_type.* = field.type.resolve(module).handle;
+                    }
+                    const struct_type = module.llvm.context.get_struct_type(llvm_types);
+                    break :blk struct_type.to_type();
+                },
                 else => @trap(),
             };
             ty.llvm.handle = llvm_type;
@@ -290,6 +299,24 @@ pub const Type = struct {
                 },
                 .pointer => |pointer| module.llvm.di_builder.create_pointer_type(pointer.type.resolve(module).debug, 64, 64, 0, ty.name).to_type(),
                 .array => |array| module.llvm.di_builder.create_array_type(array.element_count, 0, array.element_type.llvm.debug.?, &.{}).to_type(),
+                .structure => |structure| blk: {
+                    const struct_type = module.llvm.di_builder.create_replaceable_composite_type(module.llvm.debug_tag, ty.name, module.scope.llvm.?, module.llvm.file, structure.line);
+                    ty.llvm.debug = struct_type.to_type();
+                    module.llvm.debug_tag += 1;
+
+                    var llvm_debug_member_type_buffer: [64]*llvm.DI.Type.Derived = undefined;
+                    const llvm_debug_member_types = llvm_debug_member_type_buffer[0..structure.fields.len];
+
+                    for (structure.fields, llvm_debug_member_types) |field, *llvm_debug_member_type| {
+                        const member_type = module.llvm.di_builder.create_member_type(module.scope.llvm.?, field.name, module.llvm.file, field.line, field.type.get_bit_size(), @intCast(field.type.get_bit_alignment()), field.bit_offset, .{}, field.type.resolve(module).debug);
+                        llvm_debug_member_type.* = member_type;
+                    }
+
+                    const debug_struct_type = module.llvm.di_builder.create_struct_type(module.scope.llvm.?, ty.name, module.llvm.file, structure.line, structure.bit_size, @intCast(structure.bit_alignment), .{}, llvm_debug_member_types);
+                    const forward_declared: *llvm.DI.Type.Composite = @ptrCast(ty.llvm.debug);
+                    forward_declared.replace_all_uses_with(debug_struct_type);
+                    break :blk debug_struct_type.to_type();
+                },
                 else => @trap(),
             } else null;
             ty.llvm.debug = debug_type;
@@ -326,6 +353,12 @@ pub const Type = struct {
 
     pub const Struct = struct {
         fields: []Field,
+        byte_size: u64,
+        bit_size: u64,
+        byte_alignment: u32,
+        bit_alignment: u32,
+        line: u32,
+        is_slice: bool,
     };
 
     pub const Array = struct {
@@ -414,19 +447,25 @@ pub const Type = struct {
             .function => 1,
             .array => |array| array.element_type.get_byte_alignment(),
             .enumerator => |enumerator| enumerator.backing_type.get_byte_alignment(),
+            .structure => |structure| structure.byte_alignment,
             else => @trap(),
         };
         return result;
     }
 
     pub fn get_bit_alignment(ty: *const Type) u32 {
-        _ = ty;
-        @trap();
+        return switch (ty.bb) {
+            .integer => |integer| integer.bit_count, // TODO: is this correct?
+            .pointer => 64,
+            else => @trap(),
+        };
     }
 
     pub fn get_byte_size(ty: *const Type) u64 {
         const byte_size: u64 = switch (ty.bb) {
             .integer => |integer| @divExact(@max(8, lib.next_power_of_two(integer.bit_count)), 8),
+            .structure => |structure| structure.byte_size,
+            .pointer => 8,
             else => @trap(),
         };
         return byte_size;
@@ -434,6 +473,7 @@ pub const Type = struct {
     pub fn get_bit_size(ty: *const Type) u64 {
         const bit_size: u64 = switch (ty.bb) {
             .integer => |integer| integer.bit_count,
+            .pointer => 64,
             else => @trap(),
         };
         return bit_size;
@@ -517,6 +557,7 @@ const Unary = struct {
         @"-",
         @"+",
         @"&",
+        @"!",
     };
 };
 
@@ -564,6 +605,11 @@ pub const Call = struct {
     function_type: *Type = undefined,
 };
 
+pub const FieldAccess = struct {
+    aggregate: *Value,
+    field: []const u8,
+};
+
 pub const Value = struct {
     bb: union(enum) {
         external_function,
@@ -582,6 +628,7 @@ pub const Value = struct {
         array_initialization: ArrayInitialization,
         array_expression: ArrayExpression,
         enum_literal: []const u8,
+        field_access: FieldAccess,
     },
     type: ?*Type = null,
     llvm: ?*llvm.Value = null,
@@ -809,6 +856,8 @@ pub const Module = struct {
     globals: Global.Buffer,
     values: Value.Buffer,
     pointer_types: IndexBuffer,
+    slice_types: IndexBuffer,
+    pair_struct_types: IndexBuffer,
     void_type: *Type,
     noreturn_type: *Type,
     void_value: *Value,
@@ -836,6 +885,15 @@ pub const Module = struct {
         compile_unit: *llvm.DI.CompileUnit,
         pointer_type: *llvm.Type,
         void_type: *llvm.Type,
+        intrinsic_table: IntrinsicTable,
+        debug_tag: u32,
+
+        const IntrinsicTable = struct {
+            trap: llvm.Intrinsic.Id,
+            va_start: llvm.Intrinsic.Id,
+            va_end: llvm.Intrinsic.Id,
+            va_copy: llvm.Intrinsic.Id,
+        };
     };
 
     pub fn integer_type(module: *Module, bit_count: u32, sign: bool) *Type {
@@ -1150,7 +1208,10 @@ pub const Module = struct {
                 const is_slice = module.consume_character_if_match(right_bracket);
                 switch (is_slice) {
                     true => {
-                        @trap();
+                        module.skip_space();
+                        const element_type = module.parse_type();
+                        const slice_type = module.get_slice_type(.{ .type = element_type });
+                        return slice_type;
                     },
                     false => {
                         var length_inferred = false;
@@ -1198,6 +1259,69 @@ pub const Module = struct {
                 }
             },
             else => @trap(),
+        }
+    }
+
+    const Slice = struct {
+        type: *Type,
+        alignment: ?u32 = null,
+    };
+
+    pub fn get_slice_type(module: *Module, slice: Slice) *Type {
+        const alignment = if (slice.alignment) |a| a else slice.type.get_byte_alignment();
+        const all_types = module.types.get_slice();
+
+        for (module.slice_types.get_slice()) |slice_type_index| {
+            const ty = &all_types[slice_type_index];
+            const struct_type = &all_types[slice_type_index].bb.structure;
+            assert(struct_type.is_slice);
+            assert(struct_type.fields.len == 2);
+            const pointer_type = struct_type.fields[0].type;
+            if (pointer_type.bb.pointer.type == slice.type and pointer_type.bb.pointer.alignment == alignment) {
+                return ty;
+            }
+        } else {
+            const pointer_type = module.get_pointer_type(.{
+                .type = slice.type,
+                .alignment = slice.alignment,
+            });
+            const length_type = module.integer_type(64, false);
+
+            const name = module.arena.join_string(&.{ "[]", slice.type.name });
+
+            const fields = module.arena.allocate(Field, 2);
+            fields[0] = .{
+                .bit_offset = 0,
+                .byte_offset = 0,
+                .type = pointer_type,
+                .name = "pointer",
+                .line = 0,
+            };
+            fields[1] = .{
+                .bit_offset = 64,
+                .byte_offset = 8,
+                .type = length_type,
+                .name = "length",
+                .line = 0,
+            };
+
+            const slice_type = module.types.append(.{
+                .bb = .{
+                    .structure = .{
+                        .fields = fields,
+                        .byte_size = 16,
+                        .bit_size = 128,
+                        .byte_alignment = 8,
+                        .bit_alignment = 64,
+                        .line = 0,
+                        .is_slice = true,
+                    },
+                },
+                .name = name,
+            });
+            const index = slice_type - module.types.get_slice().ptr;
+            _ = module.slice_types.append(@intCast(index));
+            return slice_type;
         }
     }
 
@@ -1438,6 +1562,13 @@ pub const Module = struct {
         };
         count += 1;
 
+        r[@intFromEnum(Token.Id.@"!")] = .{
+            .before = rule_before_unary,
+            .after = null,
+            .precedence = .none,
+        };
+        count += 1;
+
         const bitwise_operators = [_]Token.Id{
             .@"|",
             .@"^",
@@ -1609,6 +1740,7 @@ pub const Module = struct {
                         '&' => .@"&",
                         '|' => .@"|",
                         '^' => .@"^",
+                        '!' => .@"!",
                         else => unreachable,
                     },
                 };
@@ -1632,6 +1764,7 @@ pub const Module = struct {
                     .@"&=",
                     .@"|=",
                     .@"^=",
+                    .@"!",
                     => |tid| @unionInit(Token, @tagName(tid), {}),
                 };
 
@@ -1884,8 +2017,8 @@ pub const Module = struct {
                             .local = local,
                         };
                     },
-                    '#' => {
-                        @trap();
+                    '#' => .{
+                        .expression = module.parse_value(.{}),
                     },
                     'A'...'Z', 'a'...'z' => blk: {
                         const statement_start_identifier = module.parse_identifier();
@@ -2068,9 +2201,19 @@ pub const Module = struct {
     }
 
     fn rule_after_dot(noalias module: *Module, value_builder: Value.Builder) *Value {
-        _ = module;
-        _ = value_builder;
-        @trap();
+        module.skip_space();
+        const left = value_builder.left orelse module.report_error();
+        const identifier = module.parse_identifier();
+        const value = module.values.add();
+        value.* = .{
+            .bb = .{
+                .field_access = .{
+                    .aggregate = left,
+                    .field = identifier,
+                },
+            },
+        };
+        return value;
     }
 
     fn rule_before_identifier(noalias module: *Module, value_builder: Value.Builder) *Value {
@@ -2120,7 +2263,7 @@ pub const Module = struct {
                 .variable_reference = variable,
             },
             .kind = if (variable.type) |t| switch (t.bb) {
-                .array, .function => .left,
+                .array, .function, .structure => .left,
                 .integer, .pointer, .enumerator => value_builder.kind,
                 else => @trap(),
             } else value_builder.kind,
@@ -2138,6 +2281,7 @@ pub const Module = struct {
     fn rule_before_value_intrinsic(noalias module: *Module, value_builder: Value.Builder) *Value {
         const intrinsic = value_builder.token.value_intrinsic;
         const value = module.values.add();
+
         value.* = switch (intrinsic) {
             .byte_size => blk: {
                 module.skip_space();
@@ -2209,6 +2353,17 @@ pub const Module = struct {
                     },
                 };
             },
+            .trap => blk: {
+                module.skip_space();
+                module.expect_character(left_parenthesis);
+                module.skip_space();
+                module.expect_character(right_parenthesis);
+                break :blk .{
+                    .bb = .{
+                        .intrinsic = .trap,
+                    },
+                };
+            },
             .truncate => blk: {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
@@ -2225,6 +2380,7 @@ pub const Module = struct {
             },
             else => @trap(),
         };
+
         return value;
     }
 
@@ -2289,6 +2445,7 @@ pub const Module = struct {
             .@"-" => .@"-",
             .@"+" => .@"+",
             .@"&" => .@"&",
+            .@"!" => .@"!",
             else => @trap(),
         };
 
@@ -2420,9 +2577,50 @@ pub const Module = struct {
     }
 
     pub fn get_anonymous_struct_pair(module: *Module, pair: [2]*Type) *Type {
-        _ = module;
-        _ = pair;
-        @trap();
+        const all_types = module.types.get_slice();
+        const struct_type = for (module.pair_struct_types.get_slice()) |struct_type_index| {
+            const struct_type = all_types[struct_type_index];
+            _ = struct_type;
+            @trap();
+        } else blk: {
+                        const byte_alignment = @max(pair[0].get_byte_alignment(), pair[1].get_byte_alignment());
+            const byte_size = lib.align_forward_u64(pair[0].get_byte_size() + pair[1].get_byte_size(), byte_alignment);
+
+                        const fields = module.arena.allocate(Field, 2);
+            fields[0] = .{
+                .bit_offset = 0,
+                .byte_offset = 0,
+                .type = pair[0],
+                .name = "",
+                .line = 0,
+            };
+            fields[1] = .{
+                .bit_offset = pair[0].get_bit_size(), // TODO
+                .byte_offset = pair[0].get_byte_size(), // TODO
+                .type = pair[1],
+                .name = "",
+                .line = 0,
+            };
+            const pair_type = module.types.append(.{
+                .name = "",
+                .bb = .{
+                    .structure = .{
+                        .bit_alignment = byte_alignment * 8,
+                        .byte_alignment = byte_alignment,
+                        .byte_size = byte_size,
+                        .bit_size = byte_size * 8,
+                        .fields = fields,
+                        .line = 0,
+                        .is_slice = false,
+                    },
+                },
+            });
+            const struct_type_index = pair_type - all_types.ptr;
+            _ = module.pair_struct_types.append(@intCast(struct_type_index));
+
+            break :blk pair_type;
+        };
+        return struct_type;
     }
 
     pub fn parse(module: *Module) void {
@@ -2843,6 +3041,13 @@ pub const Module = struct {
             .compile_unit = compile_unit,
             .void_type = context.get_void_type(),
             .pointer_type = context.get_pointer_type(0).to_type(),
+            .intrinsic_table = .{
+                .trap = llvm.lookup_intrinsic_id("llvm.trap"),
+                .va_start = llvm.lookup_intrinsic_id("llvm.va_start"),
+                .va_end = llvm.lookup_intrinsic_id("llvm.va_end"),
+                .va_copy = llvm.lookup_intrinsic_id("llvm.va_copy"),
+            },
+            .debug_tag = 0,
         };
     }
 
@@ -3130,7 +3335,7 @@ pub const Module = struct {
                                                     };
                                                     assert(coerce_to_type.bb.structure.fields.len == argument_abi.abi_count);
                                                     for (coerce_to_type.bb.structure.fields, abi_arguments, 0..) |field, abi_argument, field_index| {
-                                                        const gep = module.llvm.builder.create_struct_gep(coerce_to_type.llvm.handle.?.to_struct(), address, @intCast(field_index));
+                                                        const gep = module.llvm.builder.create_struct_gep(coerce_to_type.resolve(module).handle.to_struct(), address, @intCast(field_index));
                                                         // TODO: check if alignment is right
                                                         _ = module.create_store(.{ .source_value = abi_argument.to_value(), .destination_value = gep, .source_type = field.type, .destination_type = field.type });
                                                     }
@@ -3410,6 +3615,414 @@ pub const Module = struct {
         module.emit_value(function, value);
     }
 
+    pub fn analyze_value_type(module: *Module, function: ?*Global, value: *Value, analysis: ValueAnalysis) void {
+        assert(value.type == null);
+        assert(value.llvm == null);
+
+        // If a result type exists, then do the analysis against it
+        if (analysis.type) |expected_type| switch (value.bb) {
+            .constant_integer => |constant_integer| switch (expected_type.bb) {
+                .integer => |integer| switch (constant_integer.signed) {
+                    true => {
+                        if (!integer.signed) {
+                            module.report_error();
+                        }
+
+                        @trap();
+                    },
+                    false => {
+                        const bit_count = integer.bit_count;
+                        const max_value = if (bit_count == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(bit_count - @intFromBool(integer.signed))) - 1;
+
+                        if (constant_integer.value > max_value) {
+                            module.report_error();
+                        }
+                    },
+                },
+                .pointer => |pointer| {
+                    _ = pointer; // TODO: pointer arithmetic
+                    value.type = module.integer_type(64, false);
+                    return;
+                },
+                else => @trap(),
+            },
+            .unary => |unary| {
+                switch (unary.id) {
+                    .@"+" => @trap(),
+                    .@"-" => {
+                        module.analyze_value_type(function, unary.value, analysis);
+                        if (!unary.value.type.?.is_signed()) {
+                            module.report_error();
+                        }
+
+                        assert(expected_type == unary.value.type);
+                    },
+                    .@"&" => {
+                        module.analyze_value_type(function, unary.value, analysis);
+                        assert(expected_type == unary.value.type);
+                    },
+                    .@"!" => {
+                        @trap();
+                        // module.analyze_value_type(function, unary.value, .{});
+                        // const boolean_type = module.integer_type(1, false);
+                        // if (expected_type != boolean_type) {
+                        //     module.report_error();
+                        // }
+                        // switch (unary.value.type.?) {
+                        //     else => @trap(),
+                        // }
+                    },
+                }
+            },
+            .binary => |binary| {
+                const is_boolean = binary.id.is_boolean();
+
+                const boolean_type = module.integer_type(1, false);
+
+                if (is_boolean and expected_type != boolean_type) {
+                    module.report_error();
+                }
+
+                module.analyze_value_type(function, binary.left, .{
+                    .type = if (is_boolean) null else expected_type,
+                });
+
+                module.analyze_value_type(function, binary.right, .{
+                    .type = binary.left.type,
+                });
+            },
+            .variable_reference => |variable| switch (value.kind) {
+                .left => {
+                    switch (expected_type.bb) {
+                        .pointer => |pointer| if (pointer.type != variable.type) {
+                            module.report_error();
+                        },
+                        // This is the case where we coerce an array-like expression into a slice
+                        .structure => |structure| switch (structure.is_slice) {
+                            true => switch (variable.type.?.bb) {
+                                .array => |array| if (array.element_type != structure.fields[0].type.bb.pointer.type) {
+                                    module.report_error();
+                                },
+                                else => @trap(),
+                            },
+                            false => module.report_error(),
+                        },
+                        else => @trap(),
+                    }
+                },
+                .right => {
+                    if (variable.type != expected_type) {
+                        module.report_error();
+                    }
+                },
+            },
+            .intrinsic => |intrinsic| switch (intrinsic) {
+                .byte_size => |ty| {
+                    // TODO
+                    if (expected_type.bb != .integer) {
+                        module.report_error();
+                    }
+
+                    const size = ty.get_byte_size();
+                    const max_value = if (expected_type.bb.integer.bit_count == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(expected_type.bb.integer.bit_count - @intFromBool(expected_type.bb.integer.signed))) - 1;
+                    if (size > max_value) {
+                        module.report_error();
+                    }
+                },
+                .extend => |extended_value| {
+                    module.analyze_value_type(function, extended_value, .{});
+                    assert(extended_value.type != null);
+                    const destination_type = expected_type;
+                    const source_type = extended_value.type.?;
+
+                    if (source_type.get_bit_size() > destination_type.get_bit_size()) {
+                        module.report_error();
+                    } else if (source_type.get_bit_size() == destination_type.get_bit_size() and source_type.is_signed() == destination_type.is_signed()) {
+                        module.report_error();
+                    }
+                },
+                .pointer_cast => |pointer_value| {
+                    if (expected_type.bb != .pointer) {
+                        module.report_error();
+                    }
+                    module.analyze_value_type(function, pointer_value, .{});
+                    const pointer_type = pointer_value.type orelse module.report_error();
+
+                    if (pointer_type == expected_type) {
+                        module.report_error();
+                    }
+
+                    if (pointer_type.bb != .pointer) {
+                        module.report_error();
+                    }
+                },
+                .truncate => |value_to_truncate| {
+                    module.analyze_value_type(function, value_to_truncate, .{});
+                    if (expected_type.get_bit_size() >= value_to_truncate.type.?.get_bit_size()) {
+                        module.report_error();
+                    }
+                },
+                else => @trap(),
+            },
+            .dereference => |dereferenceable_value| {
+                module.analyze_value_type(function, dereferenceable_value, .{});
+                if (dereferenceable_value.type.?.bb != .pointer) {
+                    module.report_error();
+                }
+
+                if (dereferenceable_value.type.?.bb.pointer.type != expected_type) {
+                    module.report_error();
+                }
+            },
+            .call => |*call| {
+                module.analyze_value_type(function, call.callable, .{});
+                call.function_type = switch (call.callable.type.?.bb) {
+                    .function => blk: {
+                        assert(call.callable.kind == .right);
+                        break :blk call.callable.type.?;
+                    },
+                    .pointer => |pointer| switch (pointer.type.bb) {
+                        .function => pointer.type,
+                        else => @trap(),
+                    },
+                    else => @trap(),
+                };
+
+                if (call.arguments.len != call.function_type.bb.function.semantic_argument_types.len) {
+                    module.report_error();
+                }
+                for (call.arguments, call.function_type.bb.function.semantic_argument_types) |argument, argument_type| {
+                    module.analyze_value_type(function, argument, .{
+                        .type = argument_type,
+                    });
+                }
+
+                if (call.function_type.bb.function.semantic_return_type != expected_type) {
+                    module.report_error();
+                }
+            },
+            .array_initialization => |*array_initialization| {
+                switch (expected_type.bb) {
+                    .array => |*array| {
+                        if (array.element_count == 0) {
+                            array.element_count = array_initialization.values.len;
+                            assert(lib.string.equal(expected_type.name, ""));
+                            expected_type.name = array_type_name(module.arena, array.element_type, array.element_count);
+                        } else {
+                            if (array.element_count != array_initialization.values.len) {
+                                module.report_error();
+                            }
+                        }
+
+                        var is_constant = true;
+                        for (array_initialization.values) |v| {
+                            module.analyze_value_type(function, v, .{
+                                .type = array.element_type,
+                            });
+                            is_constant = is_constant and v.is_constant();
+                        }
+
+                        array_initialization.is_constant = is_constant;
+                    },
+                    else => @trap(),
+                }
+            },
+            .array_expression => |array_expression| {
+                module.analyze_value_type(function, array_expression.index, .{
+                    .type = module.integer_type(64, false),
+                });
+                if (array_expression.array_like.kind != .left) {
+                    module.report_error();
+                }
+                module.analyze_value_type(function, array_expression.array_like, .{});
+                const element_type = switch (array_expression.array_like.type.?.bb) {
+                    .pointer => |pointer| switch (pointer.type.bb) {
+                        .array => |array| array.element_type,
+                        else => @trap(),
+                    },
+                    else => module.report_error(),
+                };
+                switch (value.kind) {
+                    .left => @trap(),
+                    .right => if (element_type != expected_type) {
+                        module.report_error();
+                    },
+                }
+            },
+            .enum_literal => |enum_literal| {
+                _ = enum_literal;
+                if (expected_type.bb != .enumerator) {
+                    module.report_error();
+                }
+                // const field = for (expected_type.bb.enumerator.fields) |*field| {
+                //     if (lib.string.equal(field.name, enum_literal)) {
+                //         break field;
+                //     }
+                // } else {
+                //     module.report_error();
+                // };
+            },
+            else => @trap(),
+        };
+
+        // Resolve the value type. If a result type does not exist, compute it
+        const value_type = if (analysis.type) |expected_type| expected_type else switch (value.bb) {
+            .unary => |unary| blk: {
+                module.analyze_value_type(function, unary.value, .{});
+                break :blk unary.value.type.?;
+            },
+            .binary => |binary| blk: {
+                if (binary.left.bb == .constant_integer and binary.right.bb == .constant_integer) {
+                    module.report_error();
+                }
+
+                if (binary.left.bb == .constant_integer) {
+                    module.analyze_value_type(function, binary.right, .{});
+                    module.analyze_value_type(function, binary.left, .{
+                        .type = binary.right.type,
+                    });
+                } else if (binary.right.bb == .constant_integer) {
+                    module.analyze_value_type(function, binary.left, .{});
+                    module.analyze_value_type(function, binary.right, .{
+                        .type = binary.left.type,
+                    });
+                } else {
+                    module.analyze_value_type(function, binary.left, .{});
+                    module.analyze_value_type(function, binary.right, .{});
+                }
+
+                const is_boolean = binary.id.is_boolean();
+
+                assert(binary.left.type != null);
+                assert(binary.right.type != null);
+                assert(binary.left.type == binary.right.type);
+                break :blk if (is_boolean) module.integer_type(1, false) else binary.left.type.?;
+            },
+            .variable_reference => |variable| switch (value.kind) {
+                .right => variable.type,
+                else => variable.storage.?.type.?,
+            },
+            .intrinsic => |intrinsic| switch (intrinsic) {
+                // TODO: typecheck
+                .integer_max => |integer_max_type| blk: {
+                    if (integer_max_type.bb != .integer) {
+                        module.report_error();
+                    }
+                    break :blk integer_max_type;
+                },
+                .int_from_enum => |enum_value| blk: {
+                    module.analyze_value_type(function, enum_value, .{});
+                    if (enum_value.type.?.bb != .enumerator) {
+                        module.report_error();
+                    }
+
+                    const enum_backing_type = enum_value.type.?.bb.enumerator.backing_type;
+                    break :blk enum_backing_type;
+                },
+                .trap => module.noreturn_type,
+                else => @trap(),
+            },
+            .dereference => |dereferenced_value| blk: {
+                module.analyze_value_type(function, dereferenced_value, .{});
+                const dereference_type = switch (value.kind) {
+                    .left => @trap(),
+                    .right => dereferenced_value.type.?.bb.pointer.type,
+                };
+                break :blk dereference_type;
+            },
+            .call => |*call| blk: {
+                module.analyze_value_type(function, call.callable, .{});
+                call.function_type = switch (call.callable.type.?.bb) {
+                    .pointer => |pointer| switch (pointer.type.bb) {
+                        .function => pointer.type,
+                        else => @trap(),
+                    },
+                    .function => b: {
+                        assert(call.callable.kind == .right);
+                        break :b call.callable.type.?;
+                    },
+                    else => @trap(),
+                };
+
+                const argument_types = call.function_type.bb.function.semantic_argument_types;
+                if (argument_types.len != call.arguments.len) {
+                    module.report_error();
+                }
+
+                for (argument_types, call.arguments) |argument_type, call_argument| {
+                    module.analyze_value_type(function, call_argument, .{ .type = argument_type });
+                }
+
+                break :blk call.function_type.bb.function.semantic_return_type;
+            },
+            .array_expression => |array_expression| blk: {
+                module.analyze_value_type(function, array_expression.index, .{
+                    .type = module.integer_type(64, false),
+                });
+                module.analyze_value_type(function, array_expression.array_like, .{});
+
+                switch (array_expression.array_like.kind) {
+                    .left => {
+                        const element_type = switch (array_expression.array_like.type.?.bb) {
+                            .pointer => |pointer| switch (pointer.type.bb) {
+                                .array => |array| array.element_type,
+                                .structure => |structure| b: {
+                                    assert(structure.is_slice);
+                                    const element_type = structure.fields[0].type.bb.pointer.type;
+                                    break :b element_type;
+                                },
+                                else => @trap(),
+                            },
+                            else => module.report_error(),
+                        };
+                        break :blk switch (value.kind) {
+                            .left => @trap(),
+                            .right => element_type,
+                        };
+                    },
+                    .right => {
+                        const element_type = switch (array_expression.array_like.type.?.bb) {
+                            .pointer => |pointer| pointer.type,
+                            else => @trap(),
+                        };
+                        break :blk switch (value.kind) {
+                            .left => @trap(),
+                            .right => element_type,
+                        };
+                    },
+                }
+            },
+            .field_access => |field_access| blk: {
+                assert(field_access.aggregate.kind == .left);
+                module.analyze_value_type(function, field_access.aggregate, .{});
+                const field_name = field_access.field;
+                switch (field_access.aggregate.type.?.bb) {
+                    .pointer => |pointer| switch (pointer.type.bb) {
+                        .structure => |structure| {
+                            const field_type = for (structure.fields) |*field| {
+                                if (lib.string.equal(field_name, field.name)) {
+                                    break field.type;
+                                }
+                            } else {
+                                module.report_error();
+                            };
+
+                            break :blk switch (value.kind) {
+                                .left => @trap(),
+                                .right => field_type,
+                            };
+                        },
+                        else => @trap(),
+                    },
+                    else => module.report_error(),
+                }
+            },
+            else => @trap(),
+        };
+
+        value.type = value_type;
+    }
+
     pub fn emit_value(module: *Module, function: ?*Global, value: *Value) void {
         const value_type = value.type orelse unreachable;
         assert(value.llvm == null);
@@ -3428,6 +4041,13 @@ pub const Module = struct {
                     assert(value_type == unary.value.type);
                     module.emit_value(function, unary.value);
                     break :blk unary.value.llvm orelse unreachable;
+                },
+                .@"!" => switch (unary.value.type == value_type) {
+                    true => b: {
+                        module.emit_value(function, unary.value);
+                        break :b module.llvm.builder.create_not(unary.value.llvm.?);
+                    },
+                    false => @trap(),
                 },
                 else => @trap(),
             },
@@ -3484,19 +4104,42 @@ pub const Module = struct {
                 };
                 break :blk result;
             },
-            .variable_reference => |variable| if (variable.type == value_type) switch (value_type.get_evaluation_kind()) {
-                .scalar => module.create_load(.{
-                    .type = value_type,
-                    .value = variable.storage.?.llvm.?,
-                    .alignment = variable.storage.?.type.?.bb.pointer.alignment,
-                }),
-                .aggregate => @trap(),
-                .complex => @trap(),
-            } else if (variable.storage.?.type == value_type) blk: {
-                assert(value.kind == .left);
-                break :blk variable.storage.?.llvm.?;
-            } else {
-                @trap();
+            .variable_reference => |variable| switch (value.kind) {
+                .left => switch (variable.storage.?.type == value_type) {
+                    true => variable.storage.?.llvm.?,
+                    false => switch (value_type.bb) {
+                        .structure => |structure| switch (structure.is_slice) {
+                            true => switch (variable.storage.?.type.?.bb) {
+                                .pointer => |pointer| switch (pointer.type.bb) {
+                                    .array => |array| blk: {
+                                        value.kind = .right; // TODO: TODO: TODO: WARN: is this wise?
+                                        const slice_poison = value_type.llvm.handle.?.get_poison();
+                                        const pointer_insert = module.llvm.builder.create_insert_value(slice_poison, variable.storage.?.llvm.?, 0);
+                                        const length_insert = module.llvm.builder.create_insert_value(pointer_insert, module.integer_type(64, false).resolve(module).handle.to_integer().get_constant(array.element_count, @intFromBool(false)).to_value(), 1);
+                                        const slice_value = length_insert;
+                                        break :blk slice_value;
+                                    },
+                                    else => @trap(),
+                                },
+                                else => @trap(),
+                            },
+                            false => @trap(),
+                        },
+                        else => module.report_error(),
+                    },
+                },
+                .right => switch (variable.type == value_type) {
+                    true => switch (value_type.get_evaluation_kind()) {
+                        .scalar => module.create_load(.{
+                            .type = value_type,
+                            .value = variable.storage.?.llvm.?,
+                            .alignment = variable.storage.?.type.?.bb.pointer.alignment,
+                        }),
+                        .aggregate => @trap(),
+                        .complex => @trap(),
+                    },
+                    false => module.report_error(),
+                },
             },
             .intrinsic => |intrinsic| switch (intrinsic) {
                 .byte_size => |ty| blk: {
@@ -3529,6 +4172,19 @@ pub const Module = struct {
                 .pointer_cast => |pointer_value| blk: {
                     module.emit_value(function, pointer_value);
                     break :blk pointer_value.llvm.?;
+                },
+                .trap => blk: {
+                    // TODO: lookup in advance
+                    const intrinsic_id = module.llvm.intrinsic_table.trap;
+                    const argument_types: []const *llvm.Type = &.{};
+                    const argument_values: []const *llvm.Value = &.{};
+                    const intrinsic_function = module.llvm.module.get_intrinsic_declaration(intrinsic_id, argument_types);
+                    const intrinsic_function_type = module.llvm.context.get_intrinsic_type(intrinsic_id, argument_types);
+                    const llvm_call = module.llvm.builder.create_call(intrinsic_function_type, intrinsic_function, argument_values);
+                    _ = module.llvm.builder.create_unreachable();
+                    module.llvm.builder.clear_insertion_position();
+
+                    break :blk llvm_call;
                 },
                 .truncate => |value_to_truncate| blk: {
                     if (value_to_truncate.llvm == null) {
@@ -3704,37 +4360,34 @@ pub const Module = struct {
                                                 _ = module.llvm.builder.create_memcpy(destination, alignment, source, alignment, module.integer_type(64, false).llvm.handle.?.to_integer().get_constant(semantic_argument_type.get_byte_size(), @intFromBool(false)).to_value());
                                                 break :blk temporal_alloca;
                                             },
-                                            false => src.llvm,
+                                            false => src.llvm.?,
                                         };
-                                        _ = source;
 
                                         // TODO:
                                         assert(argument_abi.attributes.direct.offset == 0);
 
-                                        @trap();
+                                        switch (semantic_argument_value.kind) {
+                                            .left => {
+                                                for (coerce_to_type.bb.structure.fields, 0..) |field, field_index| {
+                                                    const gep = module.llvm.builder.create_struct_gep(coerce_to_type.llvm.handle.?.to_struct(), source, @intCast(field_index));
+                                                    const maybe_undef = false;
+                                                    if (maybe_undef) {
+                                                        @trap();
+                                                    }
+                                                    const load = module.create_load(.{ .value = gep, .type = field.type, .alignment = alignment });
 
-                                        // switch (semantic_argument_value.lvalue) {
-                                        //     true => {
-                                        //         for (coerce_to_type.bb.structure.fields, 0..) |field, field_index| {
-                                        //             const gep = module.llvm.builder.create_struct_gep(coerce_to_type.llvm.handle.to_struct(), source, @intCast(field_index));
-                                        //             const maybe_undef = false;
-                                        //             if (maybe_undef) {
-                                        //                 @trap();
-                                        //             }
-                                        //             const load = module.create_load(.{ .value = gep, .type = field.type, .alignment = alignment });
-                                        //
-                                        //             llvm_abi_argument_value_buffer[abi_argument_count] = load;
-                                        //             abi_argument_count += 1;
-                                        //         }
-                                        //     },
-                                        //     false => {
-                                        //         for (0..coerce_to_type.bb.structure.fields.len) |field_index| {
-                                        //             const extract_value = module.llvm.builder.create_extract_value(source, @intCast(field_index));
-                                        //             llvm_abi_argument_value_buffer[abi_argument_count] = extract_value;
-                                        //             abi_argument_count += 1;
-                                        //         }
-                                        //     },
-                                        // }
+                                                    llvm_abi_argument_value_buffer[abi_argument_count] = load;
+                                                    abi_argument_count += 1;
+                                                }
+                                            },
+                                            .right => {
+                                                for (0..coerce_to_type.bb.structure.fields.len) |field_index| {
+                                                    const extract_value = module.llvm.builder.create_extract_value(source, @intCast(field_index));
+                                                    llvm_abi_argument_value_buffer[abi_argument_count] = extract_value;
+                                                    abi_argument_count += 1;
+                                                }
+                                            },
+                                        }
                                     }
                                 } else {
                                     assert(argument_abi.abi_count == 1);
@@ -3959,6 +4612,24 @@ pub const Module = struct {
 
                             break :blk v;
                         },
+                        .structure => |structure| blk: {
+                            assert(structure.is_slice);
+                            module.emit_value(function, array_expression.array_like);
+                            module.emit_value(function, array_expression.index);
+                            const pointer_type = structure.fields[0].type;
+                            const element_type = pointer_type.bb.pointer.type;
+                            const pointer_load = module.create_load(.{ .type = structure.fields[0].type, .value = array_expression.array_like.llvm.? });
+                            const gep = module.llvm.builder.create_gep(.{
+                                .type = element_type.llvm.handle.?,
+                                .aggregate = pointer_load,
+                                .indices = &.{ array_expression.index.llvm.? },
+                            });
+
+                            break :blk switch (value.kind) {
+                                .left => gep,
+                                .right => module.create_load(.{ .type = element_type, .value = gep, }),
+                            };
+                        },
                         else => @trap(),
                     },
                     else => unreachable,
@@ -3986,368 +4657,42 @@ pub const Module = struct {
                 const enum_int_value = for (value_type.bb.enumerator.fields) |*field| {
                     if (lib.string.equal(enum_literal_name, field.name)) {
                         break field.value;
-                    } 
+                    }
                 } else module.report_error();
                 const llvm_value = value_type.llvm.handle.?.to_integer().get_constant(enum_int_value, @intFromBool(false));
                 break :blk llvm_value.to_value();
+            },
+            .field_access => |field_access| blk: {
+                module.emit_value(function, field_access.aggregate);
+                const field_name = field_access.field;
+                switch (field_access.aggregate.type.?.bb) {
+                    .pointer => |pointer| switch (pointer.type.bb) {
+                        .structure => |structure| {
+                            const field_index: u32 = for (structure.fields, 0..) |field, field_index| {
+                                if (lib.string.equal(field_name, field.name)) {
+                                    break @intCast(field_index);
+                                }
+                            } else module.report_error();
+
+                            const gep = module.llvm.builder.create_struct_gep(pointer.type.resolve(module).handle.to_struct(), field_access.aggregate.llvm.?, field_index);
+                            break :blk switch (value.kind) {
+                                .left => gep,
+                                .right => module.create_load(.{
+                                    .type = structure.fields[field_index].type,
+                                    .value = gep,
+                                }),
+                            };
+                        },
+                        else => @trap(),
+                    },
+                    else => @trap(),
+                }
+                @trap();
             },
             else => @trap(),
         };
 
         value.llvm = llvm_value;
-    }
-
-    pub fn analyze_value_type(module: *Module, function: ?*Global, value: *Value, analysis: ValueAnalysis) void {
-        assert(value.type == null);
-        assert(value.llvm == null);
-
-        // If a result type exists, then do the analysis against it
-        if (analysis.type) |expected_type| switch (value.bb) {
-            .constant_integer => |constant_integer| switch (expected_type.bb) {
-                .integer => |integer| switch (constant_integer.signed) {
-                    true => {
-                        if (!integer.signed) {
-                            module.report_error();
-                        }
-
-                        @trap();
-                    },
-                    false => {
-                        const bit_count = integer.bit_count;
-                        const max_value = if (bit_count == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(bit_count - @intFromBool(integer.signed))) - 1;
-
-                        if (constant_integer.value > max_value) {
-                            module.report_error();
-                        }
-                    },
-                },
-                .pointer => |pointer| {
-                    _ = pointer; // TODO: pointer arithmetic
-                    value.type = module.integer_type(64, false);
-                    return;
-                },
-                else => @trap(),
-            },
-            .unary => |unary| {
-                switch (unary.id) {
-                    .@"+" => @trap(),
-                    .@"-" => {
-                        module.analyze_value_type(function, unary.value, analysis);
-                        if (!unary.value.type.?.is_signed()) {
-                            module.report_error();
-                        }
-
-                        assert(expected_type == unary.value.type);
-                    },
-                    .@"&" => {
-                        module.analyze_value_type(function, unary.value, analysis);
-                        assert(expected_type == unary.value.type);
-                    },
-                }
-            },
-            .binary => |binary| {
-                const is_boolean = binary.id.is_boolean();
-
-                const boolean_type = module.integer_type(1, false);
-
-                if (is_boolean and expected_type != boolean_type) {
-                    module.report_error();
-                }
-
-                module.analyze_value_type(function, binary.left, .{
-                    .type = if (is_boolean) null else expected_type,
-                });
-
-                module.analyze_value_type(function, binary.right, .{
-                    .type = binary.left.type,
-                });
-            },
-            .variable_reference => |variable| switch (value.kind) {
-                .left => {
-                    if (variable.type != expected_type.bb.pointer.type) {
-                        module.report_error();
-                    }
-                },
-                .right => {
-                    if (variable.type != expected_type) {
-                        module.report_error();
-                    }
-                },
-            },
-            .intrinsic => |intrinsic| switch (intrinsic) {
-                .byte_size => |ty| {
-                    // TODO
-                    if (expected_type.bb != .integer) {
-                        module.report_error();
-                    }
-
-                    const size = ty.get_byte_size();
-                    const max_value = if (expected_type.bb.integer.bit_count == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(expected_type.bb.integer.bit_count - @intFromBool(expected_type.bb.integer.signed))) - 1;
-                    if (size > max_value) {
-                        module.report_error();
-                    }
-                },
-                .extend => |extended_value| {
-                    module.analyze_value_type(function, extended_value, .{});
-                    assert(extended_value.type != null);
-                    const destination_type = expected_type;
-                    const source_type = extended_value.type.?;
-
-                    if (source_type.get_bit_size() > destination_type.get_bit_size()) {
-                        module.report_error();
-                    } else if (source_type.get_bit_size() == destination_type.get_bit_size() and source_type.is_signed() == destination_type.is_signed()) {
-                        module.report_error();
-                    }
-                },
-                .pointer_cast => |pointer_value| {
-                    if (expected_type.bb != .pointer) {
-                        module.report_error();
-                    }
-                    module.analyze_value_type(function, pointer_value, .{});
-                    const pointer_type = pointer_value.type orelse module.report_error();
-
-                    if (pointer_type == expected_type) {
-                        module.report_error();
-                    }
-
-                    if (pointer_type.bb != .pointer) {
-                        module.report_error();
-                    }
-                },
-                .truncate => |value_to_truncate| {
-                    module.analyze_value_type(function, value_to_truncate, .{});
-                    if (expected_type.get_bit_size() >= value_to_truncate.type.?.get_bit_size()) {
-                        module.report_error();
-                    }
-                },
-                else => @trap(),
-            },
-            .dereference => |dereferenceable_value| {
-                module.analyze_value_type(function, dereferenceable_value, .{});
-                if (dereferenceable_value.type.?.bb != .pointer) {
-                    module.report_error();
-                }
-
-                if (dereferenceable_value.type.?.bb.pointer.type != expected_type) {
-                    module.report_error();
-                }
-            },
-            .call => |*call| {
-                module.analyze_value_type(function, call.callable, .{});
-                call.function_type = switch (call.callable.type.?.bb) {
-                    .function => blk: {
-                        assert(call.callable.kind == .right);
-                        break :blk call.callable.type.?;
-                    },
-                    .pointer => |pointer| switch (pointer.type.bb) {
-                        .function => pointer.type,
-                        else => @trap(),
-                    },
-                    else => @trap(),
-                };
-
-                if (call.arguments.len != call.function_type.bb.function.semantic_argument_types.len) {
-                    module.report_error();
-                }
-                for (call.arguments, call.function_type.bb.function.semantic_argument_types) |argument, argument_type| {
-                    module.analyze_value_type(function, argument, .{
-                        .type = argument_type,
-                    });
-                }
-
-                if (call.function_type.bb.function.semantic_return_type != expected_type) {
-                    module.report_error();
-                }
-            },
-            .array_initialization => |*array_initialization| {
-                switch (expected_type.bb) {
-                    .array => |*array| {
-                        if (array.element_count == 0) {
-                            array.element_count = array_initialization.values.len;
-                            assert(lib.string.equal(expected_type.name, ""));
-                            expected_type.name = array_type_name(module.arena, array.element_type, array.element_count);
-                        } else {
-                            if (array.element_count != array_initialization.values.len) {
-                                module.report_error();
-                            }
-                        }
-
-                        var is_constant = true;
-                        for (array_initialization.values) |v| {
-                            module.analyze_value_type(function, v, .{
-                                .type = array.element_type,
-                            });
-                            is_constant = is_constant and v.is_constant();
-                        }
-
-                        array_initialization.is_constant = is_constant;
-                    },
-                    else => @trap(),
-                }
-            },
-            .array_expression => |array_expression| {
-                module.analyze_value_type(function, array_expression.index, .{
-                    .type = module.integer_type(64, false),
-                });
-                if (array_expression.array_like.kind != .left) {
-                    module.report_error();
-                }
-                module.analyze_value_type(function, array_expression.array_like, .{});
-                const element_type = switch (array_expression.array_like.type.?.bb) {
-                    .pointer => |pointer| switch (pointer.type.bb) {
-                        .array => |array| array.element_type,
-                        else => @trap(),
-                    },
-                    else => module.report_error(),
-                };
-                switch (value.kind) {
-                    .left => @trap(),
-                    .right => if (element_type != expected_type) {
-                        module.report_error();
-                    },
-                }
-            },
-            .enum_literal => |enum_literal| {
-                _ = enum_literal;
-                if (expected_type.bb != .enumerator) {
-                    module.report_error();
-                }
-                // const field = for (expected_type.bb.enumerator.fields) |*field| {
-                //     if (lib.string.equal(field.name, enum_literal)) {
-                //         break field;
-                //     }
-                // } else {
-                //     module.report_error();
-                // };
-            },
-            else => @trap(),
-        };
-
-        // Resolve the value type. If a result type does not exist, compute it
-        const value_type = if (analysis.type) |expected_type| expected_type else switch (value.bb) {
-            .unary => |unary| blk: {
-                module.analyze_value_type(function, unary.value, .{});
-                break :blk unary.value.type.?;
-            },
-            .binary => |binary| blk: {
-                if (binary.left.bb == .constant_integer and binary.right.bb == .constant_integer) {
-                    module.report_error();
-                }
-
-                if (binary.left.bb == .constant_integer) {
-                    module.analyze_value_type(function, binary.right, .{});
-                    module.analyze_value_type(function, binary.left, .{
-                        .type = binary.right.type,
-                    });
-                } else if (binary.right.bb == .constant_integer) {
-                    module.analyze_value_type(function, binary.left, .{});
-                    module.analyze_value_type(function, binary.right, .{
-                        .type = binary.left.type,
-                    });
-                } else {
-                    module.analyze_value_type(function, binary.left, .{});
-                    module.analyze_value_type(function, binary.right, .{});
-                }
-
-                const is_boolean = binary.id.is_boolean();
-
-                assert(binary.left.type != null);
-                assert(binary.right.type != null);
-                assert(binary.left.type == binary.right.type);
-                break :blk if (is_boolean) module.integer_type(1, false) else binary.left.type.?;
-            },
-            .variable_reference => |variable| switch (value.kind) {
-                .right => variable.type,
-                else => variable.storage.?.type.?,
-            },
-            .intrinsic => |intrinsic| switch (intrinsic) {
-                // TODO: typecheck
-                .integer_max => |integer_max_type| blk: {
-                    if (integer_max_type.bb != .integer) {
-                        module.report_error();
-                    }
-                    break :blk integer_max_type;
-                },
-                .int_from_enum => |enum_value| blk: {
-                    module.analyze_value_type(function, enum_value, .{});
-                    if (enum_value.type.?.bb != .enumerator) {
-                        module.report_error();
-                    }
-
-                    const enum_backing_type = enum_value.type.?.bb.enumerator.backing_type;
-                    break :blk enum_backing_type;
-                },
-                else => @trap(),
-            },
-            .dereference => |dereferenced_value| blk: {
-                module.analyze_value_type(function, dereferenced_value, .{});
-                const dereference_type = switch (value.kind) {
-                    .left => @trap(),
-                    .right => dereferenced_value.type.?.bb.pointer.type,
-                };
-                break :blk dereference_type;
-            },
-            .call => |*call| blk: {
-                module.analyze_value_type(function, call.callable, .{});
-                call.function_type = switch (call.callable.type.?.bb) {
-                    .pointer => |pointer| switch (pointer.type.bb) {
-                        .function => pointer.type,
-                        else => @trap(),
-                    },
-                    .function => b: {
-                        assert(call.callable.kind == .right);
-                        break :b call.callable.type.?;
-                    },
-                    else => @trap(),
-                };
-
-                const argument_types = call.function_type.bb.function.semantic_argument_types;
-                if (argument_types.len != call.arguments.len) {
-                    module.report_error();
-                }
-
-                for (argument_types, call.arguments) |argument_type, call_argument| {
-                    module.analyze_value_type(function, call_argument, .{ .type = argument_type });
-                }
-
-                break :blk call.function_type.bb.function.semantic_return_type;
-            },
-            .array_expression => |array_expression| blk: {
-                module.analyze_value_type(function, array_expression.index, .{
-                    .type = module.integer_type(64, false),
-                });
-                module.analyze_value_type(function, array_expression.array_like, .{});
-
-                switch (array_expression.array_like.kind) {
-                    .left => {
-                        const element_type = switch (array_expression.array_like.type.?.bb) {
-                            .pointer => |pointer| switch (pointer.type.bb) {
-                                .array => |array| array.element_type,
-                                else => @trap(),
-                            },
-                            else => module.report_error(),
-                        };
-                        break :blk switch (value.kind) {
-                            .left => @trap(),
-                            .right => element_type,
-                        };
-                    },
-                    .right => {
-                        const element_type = switch (array_expression.array_like.type.?.bb) {
-                            .pointer => |pointer| pointer.type,
-                            else => @trap(),
-                        };
-                        break :blk switch (value.kind) {
-                            .left => @trap(),
-                            .right => element_type,
-                        };
-                    },
-                }
-            },
-            else => @trap(),
-        };
-
-        value.type = value_type;
     }
 
     pub fn analyze_block(module: *Module, function: *Global, block: *LexicalBlock) void {
@@ -4834,6 +5179,10 @@ pub const Module = struct {
             false => module.llvm.builder.create_neg(value),
         };
     }
+
+    pub fn dump(module: *Module) void {
+        lib.print_string(module.llvm.module.to_string());
+    }
 };
 
 pub const Options = struct {
@@ -4894,6 +5243,8 @@ const Token = union(Id) {
     // Shifting operators
     @"<<",
     @">>",
+    // Logical NOT operator
+    @"!",
     // Pointer dereference
     @".&",
     // Parenthesis
@@ -4952,6 +5303,8 @@ const Token = union(Id) {
         // Shifting operators
         @"<<",
         @">>",
+        // Logical NOT operator
+        @"!",
         // Pointer dereference
         @".&",
         // Parenthesis
@@ -5319,80 +5672,80 @@ pub const Abi = struct {
                         @trap();
                     }
                 },
-                // .structure => |struct_type| {
-                //     if (struct_type.byte_size <= 64) {
-                //         const has_variable_array = false;
-                //         if (!has_variable_array) {
-                //             // const struct_type = ty.get_payload(.@"struct");
-                //             result[current_index] = .none;
-                //             const is_union = false;
-                //             var member_offset: u32 = 0;
-                //             for (struct_type.fields) |field| {
-                //                 const offset = options.base_offset + member_offset;
-                //                 const member_size = field.type.get_byte_size();
-                //                 const member_alignment = field.type.get_byte_alignment();
-                //                 member_offset = @intCast(lib.align_forward_u64(member_offset + member_size, ty.get_byte_alignment()));
-                //                 const native_vector_size = 16;
-                //                 if (ty.get_byte_size() > 16 and ((!is_union and ty.get_byte_size() != member_size) or ty.get_byte_size() > native_vector_size)) {
-                //                     result[0] = .memory;
-                //                     const r = classify_post_merge(ty.get_byte_size(), result);
-                //                     return r;
-                //                 }
-                //
-                //                 if (offset % member_alignment != 0) {
-                //                     result[0] = .memory;
-                //                     const r = classify_post_merge(ty.get_byte_size(), result);
-                //                     return r;
-                //                 }
-                //
-                //                 const member_classes = classify(field.type, .{
-                //                     .base_offset = offset,
-                //                     .is_named_argument = false,
-                //                 });
-                //                 for (&result, member_classes) |*r, m| {
-                //                     const merge_result = r.merge(m);
-                //                     r.* = merge_result;
-                //                 }
-                //
-                //                 if (result[0] == .memory or result[1] == .memory) break;
-                //             }
-                //
-                //             const final = classify_post_merge(ty.get_byte_size(), result);
-                //             result = final;
-                //         }
-                //     }
-                // },
-                // .array => |*array_type| {
-                //     if (ty.get_byte_size() <= 64) {
-                //         if (options.base_offset % ty.get_byte_alignment() == 0) {
-                //             result[current_index] = .none;
-                //
-                //             const vector_size = 16;
-                //             if (ty.get_byte_size() > 16 and (ty.get_byte_size() != array_type.element_type.get_byte_size() or ty.get_byte_size() > vector_size)) {
-                //                 unreachable;
-                //             } else {
-                //                 var offset = options.base_offset;
-                //
-                //                 for (0..array_type.element_count.?) |_| {
-                //                     const element_classes = classify(array_type.element_type, .{
-                //                         .base_offset = offset,
-                //                         .is_named_argument = false,
-                //                     });
-                //                     offset += array_type.element_type.get_byte_size();
-                //                     const merge_result = [2]Class{ result[0].merge(element_classes[0]), result[1].merge(element_classes[1]) };
-                //                     result = merge_result;
-                //                     if (result[0] == .memory or result[1] == .memory) {
-                //                         break;
-                //                     }
-                //                 }
-                //
-                //                 const final_result = classify_post_merge(ty.get_byte_size(), result);
-                //                 assert(final_result[1] != .sseup or final_result[0] != .sse);
-                //                 result = final_result;
-                //             }
-                //         }
-                //     }
-                // },
+                .structure => |struct_type| {
+                    if (struct_type.byte_size <= 64) {
+                        const has_variable_array = false;
+                        if (!has_variable_array) {
+                            // const struct_type = ty.get_payload(.@"struct");
+                            result[current_index] = .none;
+                            const is_union = false;
+                            var member_offset: u32 = 0;
+                            for (struct_type.fields) |field| {
+                                const offset = options.base_offset + member_offset;
+                                const member_size = field.type.get_byte_size();
+                                const member_alignment = field.type.get_byte_alignment();
+                                member_offset = @intCast(lib.align_forward_u64(member_offset + member_size, ty.get_byte_alignment()));
+                                const native_vector_size = 16;
+                                if (ty.get_byte_size() > 16 and ((!is_union and ty.get_byte_size() != member_size) or ty.get_byte_size() > native_vector_size)) {
+                                    result[0] = .memory;
+                                    const r = classify_post_merge(ty.get_byte_size(), result);
+                                    return r;
+                                }
+
+                                if (offset % member_alignment != 0) {
+                                    result[0] = .memory;
+                                    const r = classify_post_merge(ty.get_byte_size(), result);
+                                    return r;
+                                }
+
+                                const member_classes = classify(field.type, .{
+                                    .base_offset = offset,
+                                    .is_named_argument = false,
+                                });
+                                for (&result, member_classes) |*r, m| {
+                                    const merge_result = r.merge(m);
+                                    r.* = merge_result;
+                                }
+
+                                if (result[0] == .memory or result[1] == .memory) break;
+                            }
+
+                            const final = classify_post_merge(ty.get_byte_size(), result);
+                            result = final;
+                        }
+                    }
+                },
+                .array => |*array_type| {
+                    if (ty.get_byte_size() <= 64) {
+                        if (options.base_offset % ty.get_byte_alignment() == 0) {
+                            result[current_index] = .none;
+
+                            const vector_size = 16;
+                            if (ty.get_byte_size() > 16 and (ty.get_byte_size() != array_type.element_type.get_byte_size() or ty.get_byte_size() > vector_size)) {
+                                unreachable;
+                            } else {
+                                var offset = options.base_offset;
+
+                                for (0..array_type.element_count) |_| {
+                                    const element_classes = classify(array_type.element_type, .{
+                                        .base_offset = offset,
+                                        .is_named_argument = false,
+                                    });
+                                    offset += array_type.element_type.get_byte_size();
+                                    const merge_result = [2]Class{ result[0].merge(element_classes[0]), result[1].merge(element_classes[1]) };
+                                    result = merge_result;
+                                    if (result[0] == .memory or result[1] == .memory) {
+                                        break;
+                                    }
+                                }
+
+                                const final_result = classify_post_merge(ty.get_byte_size(), result);
+                                assert(final_result[1] != .sseup or final_result[0] != .sse);
+                                result = final_result;
+                            }
+                        }
+                    }
+                },
                 else => @trap(),
             }
 
@@ -5465,18 +5818,18 @@ pub const Abi = struct {
                     }
                 },
                 .pointer => return if (offset == 0) ty else @trap(),
-                // .structure => {
-                //     if (get_member_at_offset(ty, offset)) |field| {
-                //         return get_int_type_at_offset(module, field.type, @intCast(offset - field.byte_offset), source_type, source_offset);
-                //     }
-                //     unreachable;
-                // },
-                // .array => |array_type| {
-                //     const element_type = array_type.element_type;
-                //     const element_size = element_type.get_byte_size();
-                //     const element_offset = (offset / element_size) * element_size;
-                //     return get_int_type_at_offset(module, element_type, @intCast(offset - element_offset), source_type, source_offset);
-                // },
+                .structure => {
+                    if (get_member_at_offset(ty, offset)) |field| {
+                        return get_int_type_at_offset(module, field.type, @intCast(offset - field.byte_offset), source_type, source_offset);
+                    }
+                    unreachable;
+                },
+                .array => |array_type| {
+                    const element_type = array_type.element_type;
+                    const element_size = element_type.get_byte_size();
+                    const element_offset = (offset / element_size) * element_size;
+                    return get_int_type_at_offset(module, element_type, @intCast(offset - element_offset), source_type, source_offset);
+                },
                 else => |t| @panic(@tagName(t)),
             }
 
@@ -5516,33 +5869,29 @@ pub const Abi = struct {
                 return true;
             }
 
-            _ = end;
-            // TODO: uncomment the structure and array below because otherwise a bug is going to happen
-            if (true) @trap();
-
             switch (ty.bb) {
-                // .structure => |*struct_type| {
-                //     var offset: u64 = 0;
-                //
-                //     for (struct_type.fields) |field| {
-                //         if (offset >= end) break;
-                //         const field_start = if (offset < start) start - offset else 0;
-                //         if (!contains_no_user_data(field.type, field_start, end - offset)) return false;
-                //         offset += field.type.get_byte_size();
-                //     }
-                //
-                //     return true;
-                // },
-                // .array => |array_type| {
-                //     for (0..array_type.element_count.?) |i| {
-                //         const offset = i * array_type.element_type.get_byte_size();
-                //         if (offset >= end) break;
-                //         const element_start = if (offset < start) start - offset else 0;
-                //         if (!contains_no_user_data(array_type.element_type, element_start, end - offset)) return false;
-                //     }
-                //
-                //     return true;
-                // },
+                .structure => |*struct_type| {
+                    var offset: u64 = 0;
+
+                    for (struct_type.fields) |field| {
+                        if (offset >= end) break;
+                        const field_start = if (offset < start) start - offset else 0;
+                        if (!contains_no_user_data(field.type, field_start, end - offset)) return false;
+                        offset += field.type.get_byte_size();
+                    }
+
+                    return true;
+                },
+                .array => |array_type| {
+                    for (0..array_type.element_count) |i| {
+                        const offset = i * array_type.element_type.get_byte_size();
+                        if (offset >= end) break;
+                        const element_start = if (offset < start) start - offset else 0;
+                        if (!contains_no_user_data(array_type.element_type, element_start, end - offset)) return false;
+                    }
+
+                    return true;
+                },
                 else => return false,
             }
         }
@@ -5661,22 +6010,20 @@ pub const Abi = struct {
 
                     const count: u16 = switch (flattened_struct) {
                         false => 1,
-                        true => @trap(),
-                        // true => @intCast(argument_type_abi.get_coerce_to_type().bb.structure.fields.len),
+                        true => @intCast(argument_type_abi.get_coerce_to_type().bb.structure.fields.len),
                     };
 
                     switch (flattened_struct) {
                         false => {
-                            llvm_abi_argument_type_buffer[argument_type_abi.abi_start] = coerce_to_type.llvm.handle.?;
+                            llvm_abi_argument_type_buffer[argument_type_abi.abi_start] = coerce_to_type.resolve(module).handle;
                             abi_argument_type_buffer[argument_type_abi.abi_start] = coerce_to_type;
                         },
                         true => {
-                            @trap();
-                            // for (coerce_to_type.bb.structure.fields, 0..) |field, field_index| {
-                            //     const index = argument_type_abi.abi_start + field_index;
-                            //     llvm_abi_argument_type_buffer[index] = field.type.llvm.handle.?;
-                            //     abi_argument_type_buffer[index] = field.type;
-                            // }
+                            for (coerce_to_type.bb.structure.fields, 0..) |field, field_index| {
+                                const index = argument_type_abi.abi_start + field_index;
+                                llvm_abi_argument_type_buffer[index] = field.type.llvm.handle.?;
+                                abi_argument_type_buffer[index] = field.type;
+                            }
                         },
                     }
 
@@ -5706,10 +6053,8 @@ pub const Abi = struct {
                 @trap();
             } else low;
             const result = module.get_anonymous_struct_pair(.{ new_low, high });
-            _ = result;
-            @trap();
-            // assert(result.bb.structure.fields[1].byte_offset == 8);
-            // return result;
+            assert(result.bb.structure.fields[1].byte_offset == 8);
+            return result;
         }
 
         pub fn classify_return_type(module: *Module, return_type: *Type) Abi.Information {
@@ -5878,6 +6223,7 @@ const Field = struct {
     type: *Type,
     bit_offset: u64,
     byte_offset: u64,
+    line: u32,
 };
 
 pub fn compile(arena: *Arena, options: Options) void {
@@ -5946,6 +6292,8 @@ pub fn compile(arena: *Arena, options: Options) void {
         .locals = .initialize(),
         .values = values,
         .pointer_types = .initialize(),
+        .slice_types = .initialize(),
+        .pair_struct_types = .initialize(),
         .lexical_blocks = .initialize(),
         .statements = .initialize(),
         .void_type = void_type,

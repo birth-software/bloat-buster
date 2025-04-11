@@ -208,4 +208,5 @@ const names = &[_][]const u8{
     "argv",
     "assignment_operators",
     "basic_enum",
+    "basic_slice",
 };
