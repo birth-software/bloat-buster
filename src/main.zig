@@ -209,4 +209,5 @@ const names = &[_][]const u8{
     "assignment_operators",
     "basic_enum",
     "basic_slice",
+    "basic_string",
 };

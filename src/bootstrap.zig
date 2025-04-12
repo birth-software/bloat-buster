@@ -629,6 +629,7 @@ pub const Value = struct {
         array_expression: ArrayExpression,
         enum_literal: []const u8,
         field_access: FieldAccess,
+        string_literal: []const u8,
     },
     type: ?*Type = null,
     llvm: ?*llvm.Value = null,
@@ -1438,6 +1439,12 @@ pub const Module = struct {
             .precedence = .none,
         };
         count += 1;
+        r[@intFromEnum(Token.Id.string_literal)] = .{
+            .before = &rule_before_string_literal,
+            .after = null,
+            .precedence = .none,
+        };
+        count += 1;
         r[@intFromEnum(Token.Id.value_keyword)] = .{
             .before = &rule_before_value_keyword,
             .after = null,
@@ -1885,6 +1892,35 @@ pub const Module = struct {
                 module.offset += 1;
                 break :blk .@",";
             },
+            '"' => blk: {
+                module.offset += 1;
+
+                const string_literal_start = start_index + 1;
+                while (module.offset < module.content.len) : (module.offset += 1) {
+                    if (module.consume_character_if_match('"')) {
+                        break;
+                    }
+                }
+
+                const string_slice = module.content[string_literal_start..][0..(module.offset - 1) - string_literal_start];
+
+                break :blk .{
+                    .string_literal = string_slice,
+                };
+            },
+            '\'' => blk: {
+                module.offset += 1;
+                const ch = module.content[module.offset];
+                module.offset += 1;
+                module.expect_character('\'');
+
+                break :blk .{
+                    .integer = .{
+                        .value = ch,
+                        .kind = .decimal,
+                    },
+                };
+            },
             else => @trap(),
         };
 
@@ -2211,6 +2247,16 @@ pub const Module = struct {
                     .aggregate = left,
                     .field = identifier,
                 },
+            },
+        };
+        return value;
+    }
+
+    fn rule_before_string_literal(noalias module: *Module, value_builder: Value.Builder) *Value {
+        const value = module.values.add();
+        value.* = .{
+            .bb = .{
+                .string_literal = value_builder.token.string_literal,
             },
         };
         return value;
@@ -3983,6 +4029,10 @@ pub const Module = struct {
                     .right => {
                         const element_type = switch (array_expression.array_like.type.?.bb) {
                             .pointer => |pointer| pointer.type,
+                            .structure => |structure| switch (structure.is_slice) {
+                                true => structure.fields[0].type.bb.pointer.type,
+                                false => module.report_error(),
+                            },
                             else => @trap(),
                         };
                         break :blk switch (value.kind) {
@@ -4017,6 +4067,7 @@ pub const Module = struct {
                     else => module.report_error(),
                 }
             },
+            .string_literal => module.get_slice_type(.{ .type = module.integer_type(8, false) }),
             else => @trap(),
         };
 
@@ -4135,7 +4186,12 @@ pub const Module = struct {
                             .value = variable.storage.?.llvm.?,
                             .alignment = variable.storage.?.type.?.bb.pointer.alignment,
                         }),
-                        .aggregate => @trap(),
+                        // TODO: this might be wrong
+                        .aggregate => module.create_load(.{
+                            .type = value_type,
+                            .value = variable.storage.?.llvm.?,
+                            .alignment = variable.storage.?.type.?.bb.pointer.alignment,
+                        }),
                         .complex => @trap(),
                     },
                     false => module.report_error(),
@@ -4650,6 +4706,26 @@ pub const Module = struct {
 
                         break :blk v;
                     },
+                    .structure => |structure| switch (structure.is_slice) {
+                        true => blk: {
+                            module.emit_value(function, array_expression.array_like);
+                            module.emit_value(function, array_expression.index);
+                            const pointer_extract = module.llvm.builder.create_extract_value(array_expression.array_like.llvm.?, 0);
+                            const element_type = structure.fields[0].type.bb.pointer.type;
+                            const gep = module.llvm.builder.create_gep(.{
+                                .type = element_type.llvm.handle.?,
+                                .aggregate = pointer_extract,
+                                .indices = &.{array_expression.index.llvm.?},
+                            });
+                            const v = switch (value.kind) {
+                                .left => gep,
+                                .right => module.create_load(.{ .type = element_type, .value = gep }),
+                            };
+
+                            break :blk v;
+                        },
+                        false => module.report_error(),
+                    },
                     else => @trap(),
                 },
             },
@@ -5035,6 +5111,52 @@ pub const Module = struct {
                     },
                     false => @trap(),
                 },
+                .string_literal => |string_literal| {
+                    const null_terminate = true;
+                    const constant_string = module.llvm.context.get_constant_string(string_literal, null_terminate);
+
+                    const u8_type = module.integer_type(8, false);
+                    const global_variable = module.llvm.module.create_global_variable(.{
+                        .linkage = .InternalLinkage,
+                        .name = module.arena.join_string(&.{ "conststring" }),
+                        .initial_value = constant_string,
+                        .type = u8_type.llvm.handle.?.get_array_type(string_literal.len + @intFromBool(null_terminate)).to_type(),
+                    });
+                    global_variable.set_unnamed_address(.global);
+
+                    const slice_type = module.get_slice_type(.{
+                        .type = u8_type,
+                    });
+
+                    switch (value_type.bb) {
+                        .structure => |structure| switch (structure.is_slice) {
+                            true => switch (slice_type == value_type) {
+                                true => {
+                                    const pointer_to_pointer = module.llvm.builder.create_struct_gep(slice_type.llvm.handle.?.to_struct(), left.llvm.?, 0);
+                                    const slice_pointer_type = slice_type.bb.structure.fields[0].type;
+                                    _ = module.create_store(.{
+                                        .destination_value = pointer_to_pointer,
+                                        .source_value = global_variable.to_value(),
+                                        .source_type = slice_pointer_type,
+                                        .destination_type = slice_pointer_type,
+                                    });
+                                    const pointer_to_length = module.llvm.builder.create_struct_gep(slice_type.llvm.handle.?.to_struct(), left.llvm.?, 1);
+                                    const slice_length_type = slice_type.bb.structure.fields[1].type;
+                                    const slice_length_value = slice_length_type.llvm.handle.?.to_integer().get_constant(string_literal.len, @intFromBool(false)).to_value();
+                                    _ = module.create_store(.{
+                                        .destination_value = pointer_to_length,
+                                        .source_value = slice_length_value,
+                                        .source_type = slice_length_type,
+                                        .destination_type = slice_length_type,
+                                    });
+                                },
+                                false => module.report_error(),
+                            },
+                            false => module.report_error(),
+                        },
+                        else => @trap(),
+                    }
+                },
                 else => @trap(),
             },
             .complex => @trap(),
@@ -5202,6 +5324,7 @@ const Token = union(Id) {
     end_of_statement,
     integer: Integer,
     identifier: []const u8,
+    string_literal: []const u8,
     value_keyword: Value.Keyword,
     value_intrinsic: Value.Intrinsic.Id,
     // Assignment operators
@@ -5262,6 +5385,7 @@ const Token = union(Id) {
         end_of_statement,
         integer,
         identifier,
+        string_literal,
         value_keyword,
         value_intrinsic,
         // Assignment operators
