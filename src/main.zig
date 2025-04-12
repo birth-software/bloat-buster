@@ -210,4 +210,5 @@ const names = &[_][]const u8{
     "basic_enum",
     "basic_slice",
     "basic_string",
+    "basic_varargs",
 };
