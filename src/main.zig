@@ -217,4 +217,6 @@ const names = &[_][]const u8{
     "bits_no_backing_type",
     "bits_return_u1",
     "bits_zero",
+    "comparison",
+    "global_struct",
 };

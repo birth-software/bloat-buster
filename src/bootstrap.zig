@@ -229,6 +229,7 @@ pub const Type = struct {
         array: Type.Array,
         structure: Type.Struct,
         vector,
+        forward_declaration,
     },
     name: []const u8,
     llvm: struct {
@@ -2687,7 +2688,7 @@ pub const Module = struct {
                 value_buffer[field_count] = value;
                 module.skip_space();
 
-            _ = module.consume_character_if_match(',');
+                _ = module.consume_character_if_match(',');
             } else {
                 const token = module.tokenize();
                 switch (token) {
@@ -3292,7 +3293,94 @@ pub const Module = struct {
                                 },
                             });
                         },
-                        else => @trap(),
+                        .@"struct" => {
+                            module.skip_space();
+
+                            module.expect_character(left_brace);
+
+                            if (module.types.find_by_name(global_name) != null) {
+                                @trap();
+                            }
+
+                            const struct_type = module.types.append(.{
+                                .name = global_name,
+                                .bb = .forward_declaration,
+                            });
+
+                            var field_buffer: [256]Field = undefined;
+                            var field_count: u64 = 0;
+                            var byte_offset: u64 = 0;
+                            var byte_alignment: u32 = 1;
+                            var bit_alignment: u32 = 1;
+
+                            while (true) {
+                                module.skip_space();
+
+                                if (module.consume_character_if_match(right_brace)) {
+                                    break;
+                                }
+
+                                const field_line = module.get_line();
+                                const field_name = module.parse_identifier();
+
+                                module.skip_space();
+
+                                module.expect_character(':');
+
+                                module.skip_space();
+
+                                const field_type = module.parse_type();
+
+                                const field_byte_alignment = field_type.get_byte_alignment();
+                                const field_bit_alignment = field_type.get_bit_alignment();
+                                const field_byte_size = field_type.get_byte_size();
+
+                                const field_byte_offset = lib.align_forward_u64(byte_offset, field_byte_alignment);
+                                const field_bit_offset = field_byte_offset * 8;
+
+                                field_buffer[field_count] = .{
+                                    .byte_offset = field_byte_offset,
+                                    .bit_offset = field_bit_offset,
+                                    .type = field_type,
+                                    .name = field_name,
+                                    .line = field_line,
+                                };
+
+                                byte_alignment = @max(byte_alignment, field_byte_alignment);
+                                bit_alignment = @max(bit_alignment, field_bit_alignment);
+                                byte_offset = field_byte_offset + field_byte_size;
+
+                                field_count += 1;
+
+                                module.skip_space();
+
+                                switch (module.content[module.offset]) {
+                                    ',' => module.offset += 1,
+                                    else => {},
+                                }
+                            }
+
+                            module.skip_space();
+
+                            _ = module.consume_character_if_match(';');
+
+                            const byte_size = byte_offset;
+
+                            const fields = module.arena.allocate(Field, field_count);
+                            @memcpy(fields, field_buffer[0..field_count]);
+
+                            struct_type.bb = .{
+                                .structure = .{
+                                    .bit_size = byte_size * 8,
+                                    .byte_size = byte_size,
+                                    .bit_alignment = bit_alignment,
+                                    .byte_alignment = byte_alignment,
+                                    .fields = fields,
+                                    .is_slice = false,
+                                    .line = global_line,
+                                },
+                            };
+                        },
                     }
                 } else {
                     module.offset -= global_string.len;
@@ -4299,6 +4387,24 @@ pub const Module = struct {
                         }
 
                         aggregate_initialization.is_constant = is_constant;
+                    },
+                    .structure => |structure| {
+                        var is_ordered = true;
+                        var is_constant = true;
+                        for (aggregate_initialization.names, aggregate_initialization.values, 0..) |field_name, field_value, initialization_index| {
+                            const declaration_index = for (structure.fields, 0..) |field, declaration_index| {
+                                if (lib.string.equal(field.name, field_name)) {
+                                    break declaration_index;
+                                }
+                            } else module.report_error();
+                            is_ordered = is_ordered and declaration_index == initialization_index;
+                            const field = &structure.fields[declaration_index];
+                            const declaration_type = field.type;
+                            module.analyze_value_type(function, field_value, .{ .type = declaration_type });
+                            is_constant = is_constant and field_value.is_constant();
+                        }
+
+                        aggregate_initialization.is_constant = is_constant and is_ordered;
                     },
                     else => @trap(),
                 }
@@ -5404,6 +5510,23 @@ pub const Module = struct {
                         @trap();
                     },
                 },
+                .structure => |structure| switch (aggregate_initialization.is_constant) {
+                    true => blk: {
+                        _ = structure;
+                        var constant_buffer: [64]*llvm.Constant = undefined;
+                        const constants = constant_buffer[0..aggregate_initialization.values.len];
+                        _ = &constant_buffer;
+                        for (aggregate_initialization.values, constants) |field_value, *constant| {
+                            module.emit_value(function, field_value);
+                            constant.* = field_value.llvm.?.to_constant();
+                        }
+                        const constant_struct = value_type.resolve(module).handle.to_struct().get_constant(constants);
+                        break :blk constant_struct.to_value();
+                    },
+                    false => {
+                        @trap();
+                    },
+                },
                 else => @trap(),
             },
             .zero => value_type.resolve(module).handle.get_zero().to_value(),
@@ -5911,6 +6034,7 @@ pub const Module = struct {
             => unreachable,
             .array => unreachable,
             .function => unreachable,
+            .forward_declaration => unreachable,
             .vector => @trap(),
             .bits, .float, .integer, .pointer, .enumerator, .structure => {
                 const storage_type = switch (options.type.is_arbitrary_bit_integer()) {
