@@ -213,4 +213,8 @@ const names = &[_][]const u8{
     "basic_varargs",
     "basic_while",
     "not_pointer",
+    "bits",
+    "bits_no_backing_type",
+    "bits_return_u1",
+    "bits_zero",
 };

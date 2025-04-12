@@ -223,7 +223,7 @@ pub const Type = struct {
         integer: Type.Integer,
         enumerator: Enumerator,
         float,
-        bits,
+        bits: Type.Bits,
         pointer: Type.Pointer,
         function: Type.Function,
         array: Type.Array,
@@ -260,6 +260,7 @@ pub const Type = struct {
                     const struct_type = module.llvm.context.get_struct_type(llvm_types);
                     break :blk struct_type.to_type();
                 },
+                .bits => |bits| bits.backing_type.resolve(module).handle,
                 else => @trap(),
             };
             ty.llvm.handle = llvm_type;
@@ -317,6 +318,16 @@ pub const Type = struct {
                     forward_declared.replace_all_uses_with(debug_struct_type);
                     break :blk debug_struct_type.to_type();
                 },
+                .bits => |bits| blk: {
+                    var llvm_debug_member_type_buffer: [64]*llvm.DI.Type.Derived = undefined;
+                    const llvm_debug_member_types = llvm_debug_member_type_buffer[0..bits.fields.len];
+                    for (bits.fields, llvm_debug_member_types) |field, *llvm_debug_member_type| {
+                        llvm_debug_member_type.* = module.llvm.di_builder.create_bit_field_member_type(module.scope.llvm.?, field.name, module.llvm.file, field.line, field.type.get_bit_size(), field.bit_offset, 0, .{}, bits.backing_type.llvm.debug.?);
+                    }
+
+                    const struct_type = module.llvm.di_builder.create_struct_type(module.scope.llvm.?, ty.name, module.llvm.file, bits.line, ty.get_bit_size(), @intCast(ty.get_bit_alignment()), .{}, llvm_debug_member_types);
+                    break :blk struct_type.to_type();
+                },
                 else => @trap(),
             } else null;
             ty.llvm.debug = debug_type;
@@ -327,6 +338,13 @@ pub const Type = struct {
             };
         }
     }
+
+    const Bits = struct {
+        fields: []const Field,
+        backing_type: *Type,
+        line: u32,
+        implicit_backing_type: bool,
+    };
 
     pub const Integer = struct {
         bit_count: u32,
@@ -425,8 +443,7 @@ pub const Type = struct {
                 8, 16, 32, 64, 128 => false,
                 else => true,
             },
-            .bits => @trap(),
-            // .bits => |bits| bits.backing_type.is_arbitrary_bit_integer(),
+            .bits => |bits| bits.backing_type.is_arbitrary_bit_integer(),
             else => false,
         };
     }
@@ -448,6 +465,7 @@ pub const Type = struct {
             .array => |array| array.element_type.get_byte_alignment(),
             .enumerator => |enumerator| enumerator.backing_type.get_byte_alignment(),
             .structure => |structure| structure.byte_alignment,
+            .bits => |bits| bits.backing_type.get_byte_alignment(),
             else => @trap(),
         };
         return result;
@@ -457,6 +475,7 @@ pub const Type = struct {
         return switch (ty.bb) {
             .integer => |integer| integer.bit_count, // TODO: is this correct?
             .pointer => 64,
+            .bits => |bits| bits.backing_type.get_bit_alignment(),
             else => @trap(),
         };
     }
@@ -474,6 +493,7 @@ pub const Type = struct {
         const bit_size: u64 = switch (ty.bb) {
             .integer => |integer| integer.bit_count,
             .pointer => 64,
+            .bits => |bits| bits.backing_type.get_bit_size(),
             else => @trap(),
         };
         return bit_size;
@@ -641,6 +661,8 @@ pub const Value = struct {
         enum_literal: []const u8,
         field_access: FieldAccess,
         string_literal: []const u8,
+        aggregate_initialization: AggregateInitialization,
+        zero,
     },
     type: ?*Type = null,
     llvm: ?*llvm.Value = null,
@@ -656,6 +678,12 @@ pub const Value = struct {
         is_constant: bool,
     };
 
+    pub const AggregateInitialization = struct {
+        names: []const []const u8,
+        values: []const *Value,
+        is_constant: bool,
+        zero: bool,
+    };
 
     const Intrinsic = union(Id) {
         byte_size: *Type,
@@ -1654,6 +1682,19 @@ pub const Module = struct {
         };
         count += 1;
 
+        r[@intFromEnum(Token.Id.@"{")] = .{
+            .before = rule_before_brace,
+            .after = null, // TODO: is this correct?
+            .precedence = .none,
+        };
+        count += 1;
+        r[@intFromEnum(Token.Id.@"}")] = .{
+            .before = null,
+            .after = null,
+            .precedence = .none,
+        };
+        count += 1;
+
         r[@intFromEnum(Token.Id.@",")] = .{
             .before = null,
             .after = null,
@@ -1905,6 +1946,14 @@ pub const Module = struct {
                 module.offset += 1;
                 break :blk .@"]";
             },
+            left_brace => blk: {
+                module.offset += 1;
+                break :blk .@"{";
+            },
+            right_brace => blk: {
+                module.offset += 1;
+                break :blk .@"}";
+            },
             ',' => blk: {
                 module.offset += 1;
                 break :blk .@",";
@@ -1919,7 +1968,7 @@ pub const Module = struct {
                     }
                 }
 
-                const string_slice = module.content[string_literal_start..][0..(module.offset - 1) - string_literal_start];
+                const string_slice = module.content[string_literal_start..][0 .. (module.offset - 1) - string_literal_start];
 
                 break :blk .{
                     .string_literal = string_slice,
@@ -2123,7 +2172,7 @@ pub const Module = struct {
                                     };
                                 },
                                 .@"while" => {
-                                                                        module.skip_space();
+                                    module.skip_space();
 
                                     module.expect_character(left_parenthesis);
                                     module.skip_space();
@@ -2348,7 +2397,7 @@ pub const Module = struct {
             },
             .kind = if (variable.type) |t| switch (t.bb) {
                 .array, .function, .structure => .left,
-                .integer, .pointer, .enumerator => value_builder.kind,
+                .integer, .pointer, .enumerator, .bits => value_builder.kind,
                 else => @trap(),
             } else value_builder.kind,
             // if (variable.type != null and variable.type.?.bb == .function) .left else value_builder.kind,
@@ -2357,9 +2406,15 @@ pub const Module = struct {
     }
 
     fn rule_before_value_keyword(noalias module: *Module, value_builder: Value.Builder) *Value {
-        _ = value_builder;
-        _ = module;
-        @trap();
+        const value = module.values.add();
+        const new_value: Value = switch (value_builder.token.value_keyword) {
+            .zero => .{
+                .bb = .zero,
+            },
+            else => @trap(),
+        };
+        value.* = new_value;
+        return value;
     }
 
     fn rule_before_value_intrinsic(noalias module: *Module, value_builder: Value.Builder) *Value {
@@ -2603,6 +2658,84 @@ pub const Module = struct {
         return value;
     }
 
+    fn rule_before_brace(noalias module: *Module, value_builder: Value.Builder) *Value {
+        assert(value_builder.left == null);
+
+        var name_buffer: [64][]const u8 = undefined;
+        var value_buffer: [64]*Value = undefined;
+        var field_count: u32 = 0;
+        var zero = false;
+
+        while (true) : (field_count += 1) {
+            module.skip_space();
+
+            if (module.consume_character_if_match(right_brace)) {
+                break;
+            }
+
+            if (module.consume_character_if_match('.')) {
+                const name = module.parse_identifier();
+                name_buffer[field_count] = name;
+
+                module.skip_space();
+
+                module.expect_character('=');
+
+                module.skip_space();
+
+                const value = module.parse_value(.{});
+                value_buffer[field_count] = value;
+                module.skip_space();
+
+            _ = module.consume_character_if_match(',');
+            } else {
+                const token = module.tokenize();
+                switch (token) {
+                    .value_keyword => |vkw| switch (vkw) {
+                        .zero => {
+                            zero = true;
+                            module.skip_space();
+
+                            if (module.consume_character_if_match(',')) {
+                                module.skip_space();
+                            }
+
+                            module.expect_character(right_brace);
+                            break;
+                        },
+                        else => module.report_error(),
+                    },
+                    else => module.report_error(),
+                }
+            }
+        }
+
+        const blob = module.arena.allocate_bytes(field_count * @sizeOf([]const u8) + field_count * @sizeOf(*Value), @max(@alignOf([]const u8), @alignOf(*Value)));
+        const names = @as([*][]const u8, @alignCast(@ptrCast(blob)))[0..field_count];
+        @memcpy(names, name_buffer[0..field_count]);
+        const values = @as([*]*Value, @alignCast(@ptrCast(blob + (@sizeOf([]const u8) * field_count))))[0..field_count];
+        @memcpy(values, value_buffer[0..field_count]);
+
+        const value = module.values.add();
+        value.* = .{
+            .bb = .{
+                .aggregate_initialization = .{
+                    .names = names,
+                    .values = values,
+                    .is_constant = false,
+                    .zero = zero,
+                },
+            },
+        };
+        return value;
+    }
+
+    fn rule_after_brace(noalias module: *Module, value_builder: Value.Builder) *Value {
+        _ = module;
+        _ = value_builder;
+        @trap();
+    }
+
     // Array initialization
     fn rule_before_bracket(noalias module: *Module, value_builder: Value.Builder) *Value {
         assert(value_builder.left == null);
@@ -2713,10 +2846,10 @@ pub const Module = struct {
             _ = struct_type;
             @trap();
         } else blk: {
-                        const byte_alignment = @max(pair[0].get_byte_alignment(), pair[1].get_byte_alignment());
+            const byte_alignment = @max(pair[0].get_byte_alignment(), pair[1].get_byte_alignment());
             const byte_size = lib.align_forward_u64(pair[0].get_byte_size() + pair[1].get_byte_size(), byte_alignment);
 
-                        const fields = module.arena.allocate(Field, 2);
+            const fields = module.arena.allocate(Field, 2);
             fields[0] = .{
                 .bit_offset = 0,
                 .byte_offset = 0,
@@ -3075,6 +3208,88 @@ pub const Module = struct {
                                     },
                                 },
                                 .name = global_name,
+                            });
+                        },
+                        .bits => {
+                            const is_implicit_type = module.content[module.offset] == left_brace;
+                            const maybe_backing_type: ?*Type = switch (is_implicit_type) {
+                                true => null,
+                                false => module.parse_type(),
+                            };
+
+                            module.skip_space();
+
+                            module.expect_character(left_brace);
+
+                            var field_buffer: [128]Field = undefined;
+                            var field_line_buffer: [128]u32 = undefined;
+                            var field_count: u64 = 0;
+
+                            var field_bit_offset: u64 = 0;
+
+                            while (true) : (field_count += 1) {
+                                module.skip_space();
+
+                                if (module.consume_character_if_match(right_brace)) {
+                                    break;
+                                }
+
+                                const field_line = module.get_line();
+                                field_line_buffer[field_count] = field_line;
+
+                                const field_name = module.parse_identifier();
+
+                                module.skip_space();
+
+                                module.expect_character(':');
+
+                                module.skip_space();
+
+                                const field_type = module.parse_type();
+
+                                field_buffer[field_count] = .{
+                                    .name = field_name,
+                                    .type = field_type,
+                                    .bit_offset = field_bit_offset,
+                                    .byte_offset = 0,
+                                    .line = field_line,
+                                };
+
+                                const field_bit_size = field_type.get_bit_size();
+
+                                field_bit_offset += field_bit_size;
+
+                                module.skip_space();
+
+                                _ = module.consume_character_if_match(',');
+                            }
+
+                            _ = module.consume_character_if_match(';');
+
+                            const fields = module.arena.allocate(Field, field_count);
+                            @memcpy(fields, field_buffer[0..field_count]);
+
+                            // const field_lines = field_line_buffer[0..field_count];
+
+                            const backing_type = if (maybe_backing_type) |bt| bt else module.integer_type(@intCast(@max(8, lib.next_power_of_two(field_bit_offset))), false);
+                            if (backing_type.bb != .integer) {
+                                module.report_error();
+                            }
+
+                            if (backing_type.get_bit_size() > 64) {
+                                module.report_error();
+                            }
+
+                            _ = module.types.append(.{
+                                .name = global_name,
+                                .bb = .{
+                                    .bits = .{
+                                        .fields = fields,
+                                        .backing_type = backing_type,
+                                        .line = global_line,
+                                        .implicit_backing_type = is_implicit_type,
+                                    },
+                                },
                             });
                         },
                         else => @trap(),
@@ -3780,11 +3995,11 @@ pub const Module = struct {
                         .is_slice = false,
                         .line = 0,
                     },
-                    },
-                });
+                },
+            });
 
             const element_count = 1;
-                const element_type = result;
+            const element_type = result;
             const ty = module.types.append(.{
                 .name = array_type_name(module.arena, element_type, element_count),
                 .bb = .{
@@ -4065,6 +4280,76 @@ pub const Module = struct {
                 //     module.report_error();
                 // };
             },
+            .aggregate_initialization => |*aggregate_initialization| {
+                switch (expected_type.bb) {
+                    .bits => |bits| {
+                        var is_ordered = true;
+                        var is_constant = true;
+                        for (aggregate_initialization.names, aggregate_initialization.values, 0..) |field_name, field_value, initialization_index| {
+                            const declaration_index = for (bits.fields, 0..) |field, declaration_index| {
+                                if (lib.string.equal(field.name, field_name)) {
+                                    break declaration_index;
+                                }
+                            } else module.report_error();
+                            is_ordered = is_ordered and declaration_index == initialization_index;
+                            const field = &bits.fields[declaration_index];
+                            const declaration_type = field.type;
+                            module.analyze_value_type(function, field_value, .{ .type = declaration_type });
+                            is_constant = is_constant and field_value.is_constant();
+                        }
+
+                        aggregate_initialization.is_constant = is_constant;
+                    },
+                    else => @trap(),
+                }
+            },
+            .field_access => |field_access| {
+                module.analyze_value_type(function, field_access.aggregate, .{});
+                const field_name = field_access.field;
+                switch (field_access.aggregate.kind) {
+                    .left => switch (field_access.aggregate.type.?.bb) {
+                        .pointer => |pointer| switch (pointer.type.bb) {
+                            .structure => |structure| {
+                                const field_type = for (structure.fields) |*field| {
+                                    if (lib.string.equal(field_name, field.name)) {
+                                        break field.type;
+                                    }
+                                } else {
+                                    module.report_error();
+                                };
+
+                                _ = field_type;
+                                @trap();
+                                // break :blk switch (value.kind) {
+                                //     .left => @trap(),
+                                //     .right => field_type,
+                                // };
+                            },
+                            else => @trap(),
+                        },
+                        else => module.report_error(),
+                    },
+                    .right => switch (field_access.aggregate.type.?.bb) {
+                        .bits => |bits| {
+                            const field_type = for (bits.fields) |*field| {
+                                if (lib.string.equal(field_name, field.name)) {
+                                    break field.type;
+                                }
+                            } else {
+                                module.report_error();
+                            };
+                            switch (value.kind) {
+                                .left => module.report_error(),
+                                .right => if (field_type != expected_type) {
+                                    module.report_error();
+                                },
+                            }
+                        },
+                        else => @trap(),
+                    },
+                }
+            },
+            .zero => {},
             else => @trap(),
         };
 
@@ -4214,28 +4499,45 @@ pub const Module = struct {
                 }
             },
             .field_access => |field_access| blk: {
-                assert(field_access.aggregate.kind == .left);
                 module.analyze_value_type(function, field_access.aggregate, .{});
                 const field_name = field_access.field;
-                switch (field_access.aggregate.type.?.bb) {
-                    .pointer => |pointer| switch (pointer.type.bb) {
-                        .structure => |structure| {
-                            const field_type = for (structure.fields) |*field| {
+                switch (field_access.aggregate.kind) {
+                    .left => switch (field_access.aggregate.type.?.bb) {
+                        .pointer => |pointer| switch (pointer.type.bb) {
+                            .structure => |structure| {
+                                const field_type = for (structure.fields) |*field| {
+                                    if (lib.string.equal(field_name, field.name)) {
+                                        break field.type;
+                                    }
+                                } else {
+                                    module.report_error();
+                                };
+
+                                break :blk switch (value.kind) {
+                                    .left => @trap(),
+                                    .right => field_type,
+                                };
+                            },
+                            else => @trap(),
+                        },
+                        else => module.report_error(),
+                    },
+                    .right => switch (field_access.aggregate.type.?.bb) {
+                        .bits => |bits| {
+                            const field_type = for (bits.fields) |*field| {
                                 if (lib.string.equal(field_name, field.name)) {
                                     break field.type;
                                 }
                             } else {
                                 module.report_error();
                             };
-
                             break :blk switch (value.kind) {
-                                .left => @trap(),
+                                .left => module.report_error(),
                                 .right => field_type,
                             };
                         },
                         else => @trap(),
                     },
-                    else => module.report_error(),
                 }
             },
             .string_literal => module.get_slice_type(.{ .type = module.integer_type(8, false) }),
@@ -4969,12 +5271,15 @@ pub const Module = struct {
                             const gep = module.llvm.builder.create_gep(.{
                                 .type = element_type.llvm.handle.?,
                                 .aggregate = pointer_load,
-                                .indices = &.{ array_expression.index.llvm.? },
+                                .indices = &.{array_expression.index.llvm.?},
                             });
 
                             break :blk switch (value.kind) {
                                 .left => gep,
-                                .right => module.create_load(.{ .type = element_type, .value = gep, }),
+                                .right => module.create_load(.{
+                                    .type = element_type,
+                                    .value = gep,
+                                }),
                             };
                         },
                         else => @trap(),
@@ -5032,29 +5337,76 @@ pub const Module = struct {
             .field_access => |field_access| blk: {
                 module.emit_value(function, field_access.aggregate);
                 const field_name = field_access.field;
-                switch (field_access.aggregate.type.?.bb) {
-                    .pointer => |pointer| switch (pointer.type.bb) {
-                        .structure => |structure| {
-                            const field_index: u32 = for (structure.fields, 0..) |field, field_index| {
+                switch (field_access.aggregate.kind) {
+                    .left => switch (field_access.aggregate.type.?.bb) {
+                        .pointer => |pointer| switch (pointer.type.bb) {
+                            .structure => |structure| {
+                                const field_index: u32 = for (structure.fields, 0..) |field, field_index| {
+                                    if (lib.string.equal(field_name, field.name)) {
+                                        break @intCast(field_index);
+                                    }
+                                } else module.report_error();
+
+                                const gep = module.llvm.builder.create_struct_gep(pointer.type.resolve(module).handle.to_struct(), field_access.aggregate.llvm.?, field_index);
+                                break :blk switch (value.kind) {
+                                    .left => gep,
+                                    .right => module.create_load(.{
+                                        .type = structure.fields[field_index].type,
+                                        .value = gep,
+                                    }),
+                                };
+                            },
+                            else => @trap(),
+                        },
+                        else => @trap(),
+                    },
+                    .right => switch (field_access.aggregate.type.?.bb) {
+                        .bits => |bits| {
+                            const field_index: u32 = for (bits.fields, 0..) |field, field_index| {
                                 if (lib.string.equal(field_name, field.name)) {
                                     break @intCast(field_index);
                                 }
                             } else module.report_error();
+                            const field = bits.fields[field_index];
 
-                            const gep = module.llvm.builder.create_struct_gep(pointer.type.resolve(module).handle.to_struct(), field_access.aggregate.llvm.?, field_index);
-                            break :blk switch (value.kind) {
-                                .left => gep,
-                                .right => module.create_load(.{
-                                    .type = structure.fields[field_index].type,
-                                    .value = gep,
-                                }),
-                            };
+                            const shift = module.llvm.builder.create_lshr(field_access.aggregate.llvm.?, bits.backing_type.llvm.handle.?.to_integer().get_constant(field.bit_offset, 0).to_value());
+                            const trunc = module.llvm.builder.create_truncate(shift, field.type.resolve(module).handle);
+                            break :blk trunc;
                         },
                         else => @trap(),
                     },
-                    else => @trap(),
                 }
             },
+            .aggregate_initialization => |aggregate_initialization| switch (value_type.bb) {
+                .bits => |bits| switch (aggregate_initialization.is_constant) {
+                    true => blk: {
+                        var bits_value: u64 = 0;
+                        for (aggregate_initialization.names, aggregate_initialization.values) |field_name, field_value| {
+                            const declaration_index = for (bits.fields, 0..) |field, declaration_index| {
+                                if (lib.string.equal(field_name, field.name)) {
+                                    break declaration_index;
+                                }
+                            } else unreachable;
+                            const field = &bits.fields[declaration_index];
+                            _ = field.bit_offset;
+
+                            const fv = switch (field_value.bb) {
+                                .constant_integer => |ci| ci.value,
+                                else => @trap(),
+                            };
+                            bits_value |= fv << @intCast(field.bit_offset);
+                        }
+
+                        const llvm_value = bits.backing_type.resolve(module).handle.to_integer().get_constant(bits_value, @intFromBool(false));
+                        break :blk llvm_value.to_value();
+                    },
+                    false => {
+                        @trap();
+                    },
+                },
+                else => @trap(),
+            },
+            .zero => value_type.resolve(module).handle.get_zero().to_value(),
             else => @trap(),
         };
 
@@ -5446,7 +5798,7 @@ pub const Module = struct {
                     const u8_type = module.integer_type(8, false);
                     const global_variable = module.llvm.module.create_global_variable(.{
                         .linkage = .InternalLinkage,
-                        .name = module.arena.join_string(&.{ "conststring" }),
+                        .name = module.arena.join_string(&.{"conststring"}),
                         .initial_value = constant_string,
                         .type = u8_type.llvm.handle.?.get_array_type(string_literal.len + @intFromBool(null_terminate)).to_type(),
                     });
@@ -5718,6 +6070,9 @@ const Token = union(Id) {
     // Bracket
     @"[",
     @"]",
+    // Brace
+    @"{",
+    @"}",
 
     @",",
     @".",
@@ -5779,6 +6134,9 @@ const Token = union(Id) {
         // Bracket
         @"[",
         @"]",
+        // Brace
+        @"{",
+        @"}",
 
         @",",
         @".",
