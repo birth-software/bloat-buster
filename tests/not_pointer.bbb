@@ -1,0 +1,7 @@
+[export] main = fn [cc(c)] () s32
+{
+    >a: s32 = 0;
+    >ptr = &a;
+    >b = !ptr;
+    return #extend(b);
+}

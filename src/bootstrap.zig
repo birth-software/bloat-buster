@@ -524,6 +524,10 @@ pub const Statement = struct {
             if_block: *LexicalBlock,
             else_block: ?*LexicalBlock,
         },
+        @"while": struct {
+            condition: *Value,
+            block: *LexicalBlock,
+        },
     },
     line: u32,
     column: u32,
@@ -558,6 +562,13 @@ const Unary = struct {
         @"+",
         @"&",
         @"!",
+
+        pub fn is_boolean(id: Id) bool {
+            return switch (id) {
+                .@"+", .@"-", .@"&" => false,
+                .@"!" => true,
+            };
+        }
     };
 };
 
@@ -653,7 +664,7 @@ pub const Value = struct {
         extend: *Value,
         integer_max: *Type,
         int_from_enum: *Value,
-        int_from_pointer,
+        int_from_pointer: *Value,
         pointer_cast: *Value,
         select,
         trap,
@@ -2112,7 +2123,28 @@ pub const Module = struct {
                                     };
                                 },
                                 .@"while" => {
-                                    @trap();
+                                                                        module.skip_space();
+
+                                    module.expect_character(left_parenthesis);
+                                    module.skip_space();
+
+                                    const condition = module.parse_value(.{});
+
+                                    module.skip_space();
+                                    module.expect_character(right_parenthesis);
+
+                                    module.skip_space();
+
+                                    const while_block = module.parse_block();
+
+                                    require_semicolon = false;
+
+                                    break :blk .{
+                                        .@"while" = .{
+                                            .condition = condition,
+                                            .block = while_block,
+                                        },
+                                    };
                                 },
                             }
                         } else {
@@ -2387,6 +2419,20 @@ pub const Module = struct {
                     .bb = .{
                         .intrinsic = .{
                             .int_from_enum = arg_value,
+                        },
+                    },
+                };
+            },
+            .int_from_pointer => blk: {
+                module.skip_space();
+                module.expect_character(left_parenthesis);
+                module.skip_space();
+                const arg_value = module.parse_value(.{});
+                module.expect_character(right_parenthesis);
+                break :blk .{
+                    .bb = .{
+                        .intrinsic = .{
+                            .int_from_pointer = arg_value,
                         },
                     },
                 };
@@ -3888,6 +3934,16 @@ pub const Module = struct {
                         module.report_error();
                     }
                 },
+                .int_from_pointer => |pointer_value| {
+                    module.analyze_value_type(function, pointer_value, .{});
+                    assert(pointer_value.type != null);
+                    if (pointer_value.type.?.bb != .pointer) {
+                        module.report_error();
+                    }
+                    if (expected_type != module.integer_type(64, false)) {
+                        module.report_error();
+                    }
+                },
                 .pointer_cast => |pointer_value| {
                     if (expected_type.bb != .pointer) {
                         module.report_error();
@@ -4016,7 +4072,10 @@ pub const Module = struct {
         const value_type = if (analysis.type) |expected_type| expected_type else switch (value.bb) {
             .unary => |unary| blk: {
                 module.analyze_value_type(function, unary.value, .{});
-                break :blk unary.value.type.?;
+                break :blk switch (unary.id.is_boolean()) {
+                    true => module.integer_type(1, false),
+                    false => unary.value.type.?,
+                };
             },
             .binary => |binary| blk: {
                 if (binary.left.bb == .constant_integer and binary.right.bb == .constant_integer) {
@@ -4210,7 +4269,13 @@ pub const Module = struct {
                         module.emit_value(function, unary.value);
                         break :b module.llvm.builder.create_not(unary.value.llvm.?);
                     },
-                    false => @trap(),
+                    false => switch (unary.value.type.?.bb) {
+                        .pointer => b: {
+                            module.emit_value(function, unary.value);
+                            break :b module.llvm.builder.create_integer_compare(.eq, unary.value.llvm.?, unary.value.type.?.llvm.handle.?.get_zero().to_value());
+                        },
+                        else => @trap(),
+                    },
                 },
                 else => @trap(),
             },
@@ -4262,6 +4327,19 @@ pub const Module = struct {
                             true => module.llvm.builder.create_integer_compare(.sle, left, right),
                             false => module.llvm.builder.create_integer_compare(.ule, left, right),
                         },
+                    },
+                    .pointer => |pointer| switch (binary.id) {
+                        .@"+" => module.llvm.builder.create_gep(.{
+                            .type = pointer.type.llvm.handle.?,
+                            .aggregate = left,
+                            .indices = &.{right},
+                        }),
+                        .@"-" => module.llvm.builder.create_gep(.{
+                            .type = pointer.type.llvm.handle.?,
+                            .aggregate = left,
+                            .indices = &.{module.negate_llvm_value(right, binary.right.is_constant())},
+                        }),
+                        else => module.report_error(),
                     },
                     else => @trap(),
                 };
@@ -4336,6 +4414,11 @@ pub const Module = struct {
                 .int_from_enum => |enum_value| blk: {
                     module.emit_value(function, enum_value);
                     break :blk enum_value.llvm.?;
+                },
+                .int_from_pointer => |pointer_value| blk: {
+                    module.emit_value(function, pointer_value);
+                    const int = module.llvm.builder.create_ptr_to_int(pointer_value.llvm.?, value_type.llvm.handle.?);
+                    break :blk int;
                 },
                 .pointer_cast => |pointer_value| blk: {
                     module.emit_value(function, pointer_value);
@@ -4979,6 +5062,7 @@ pub const Module = struct {
     }
 
     pub fn analyze_block(module: *Module, function: *Global, block: *LexicalBlock) void {
+        const llvm_function = function.variable.storage.?.llvm.?.to_function();
         if (module.has_debug_info) {
             const lexical_block = module.llvm.di_builder.create_lexical_block(block.scope.parent.?.llvm.?, module.llvm.file, block.scope.line, block.scope.column);
             block.scope.llvm = lexical_block.to_scope();
@@ -5212,7 +5296,6 @@ pub const Module = struct {
                     module.analyze(function, expression_value, .{});
                 },
                 .@"if" => |if_statement| {
-                    const llvm_function = function.variable.storage.?.llvm.?.to_function();
                     const taken_block = module.llvm.context.create_basic_block("if.true", llvm_function);
                     const not_taken_block = module.llvm.context.create_basic_block("if.false", llvm_function);
                     const exit_block = module.llvm.context.create_basic_block("if.end", null);
@@ -5222,6 +5305,7 @@ pub const Module = struct {
                         .integer => |integer| if (integer.bit_count != 1) {
                             module.report_error();
                         } else if_statement.condition.llvm.?,
+                        .pointer => module.llvm.builder.create_integer_compare(.ne, if_statement.condition.llvm.?, if_statement.condition.type.?.llvm.handle.?.get_zero().to_value()),
                         else => @trap(),
                     };
 
@@ -5276,6 +5360,43 @@ pub const Module = struct {
                         // if call `exit_block.erase_from_paren()`, it crashes, investigate
                         exit_block.delete();
                     }
+                },
+                .@"while" => |while_loop| {
+                    const loop_entry_block = module.llvm.context.create_basic_block("while.entry", llvm_function);
+                    _ = module.llvm.builder.create_branch(loop_entry_block);
+                    module.llvm.builder.position_at_end(loop_entry_block);
+
+                    module.analyze(function, while_loop.condition, .{});
+
+                    const boolean_type = module.integer_type(1, false);
+                    const condition_value = switch (while_loop.condition.type == boolean_type) {
+                        true => while_loop.condition.llvm.?,
+                        false => switch (while_loop.condition.type.?.bb) {
+                            .integer => module.llvm.builder.create_integer_compare(.ne, while_loop.condition.llvm.?, while_loop.condition.type.?.llvm.handle.?.to_integer().get_constant(0, @intFromBool(false)).to_value()),
+                            else => @trap(),
+                        },
+                    };
+
+                    const loop_body_block = module.llvm.context.create_basic_block("while.body", llvm_function);
+                    const loop_end_block = module.llvm.context.create_basic_block("while.end", llvm_function);
+                    _ = module.llvm.builder.create_conditional_branch(condition_value, loop_body_block, loop_end_block);
+                    module.llvm.builder.position_at_end(loop_body_block);
+
+                    module.analyze_block(function, while_loop.block);
+
+                    if (module.llvm.builder.get_insert_block() != null) {
+                        _ = module.llvm.builder.create_branch(loop_entry_block);
+                    }
+
+                    if (loop_body_block.to_value().use_empty()) {
+                        @trap();
+                    }
+
+                    if (loop_end_block.to_value().use_empty()) {
+                        @trap();
+                    }
+
+                    module.llvm.builder.position_at_end(loop_end_block);
                 },
             }
         }
@@ -5399,7 +5520,7 @@ pub const Module = struct {
         };
         if (module.has_debug_info) {
             module.llvm.builder.set_current_debug_location(statement_debug_location);
-            const debug_type = resolved_type.llvm.debug.?;
+            const debug_type = resolved_type.resolve(module).debug;
             const always_preserve = true;
             // TODO:
             const alignment = 0;
@@ -5505,12 +5626,13 @@ pub const Module = struct {
         assert(options.source_type != options.destination_type);
         const source_size = options.source_type.get_bit_size();
         const destination_size = options.destination_type.get_bit_size();
+        const llvm_destination_type = options.destination_type.resolve(module).handle;
         const result = switch (source_size < destination_size) {
             true => switch (options.source_type.is_signed()) {
-                true => module.llvm.builder.create_sign_extend(options.value, options.destination_type.llvm.handle.?),
-                false => module.llvm.builder.create_zero_extend(options.value, options.destination_type.llvm.handle.?),
+                true => module.llvm.builder.create_sign_extend(options.value, llvm_destination_type),
+                false => module.llvm.builder.create_zero_extend(options.value, llvm_destination_type),
             },
-            false => module.llvm.builder.create_truncate(options.value, options.destination_type.llvm.handle.?),
+            false => module.llvm.builder.create_truncate(options.value, llvm_destination_type),
         };
         return result;
     }

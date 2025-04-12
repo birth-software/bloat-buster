@@ -211,4 +211,6 @@ const names = &[_][]const u8{
     "basic_slice",
     "basic_string",
     "basic_varargs",
+    "basic_while",
+    "not_pointer",
 };
