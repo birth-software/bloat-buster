@@ -216,7 +216,6 @@ pub const Enumerator = struct {
     };
 };
 
-
 pub const Type = struct {
     bb: union(enum) {
         void,
@@ -250,7 +249,7 @@ pub const Type = struct {
     };
 
     pub const Intrinsic = struct {
-        const Id = enum{
+        const Id = enum {
             ReturnType,
             foo,
         };
@@ -721,7 +720,7 @@ pub const Value = struct {
         int_from_enum: *Value,
         int_from_pointer: *Value,
         pointer_cast: *Value,
-        select,
+        select: Select,
         trap,
         truncate: *Value,
         va_start,
@@ -746,6 +745,13 @@ pub const Value = struct {
             va_copy,
             va_arg,
         };
+
+        const Select = struct {
+            condition: *Value,
+            true_value: *Value,
+            false_value: *Value,
+        };
+
         const VaArg = struct {
             list: *Value,
             type: *Type,
@@ -1084,7 +1090,6 @@ pub const Module = struct {
         }
 
         for (options.argument_type_abis) |argument_type_abi| {
-
             for (argument_type_abi.abi_start..argument_type_abi.abi_start + argument_type_abi.abi_count) |abi_index| {
                 const argument_attribute = &argument_attributes[abi_index];
 
@@ -2556,6 +2561,29 @@ pub const Module = struct {
                     },
                 };
             },
+            .select => blk: {
+                module.skip_space();
+                module.expect_character(left_parenthesis);
+                module.skip_space();
+                const condition = module.parse_value(function, .{});
+                module.expect_character(',');
+                module.skip_space();
+                const true_value = module.parse_value(function, .{});
+                module.expect_character(',');
+                module.skip_space();
+                const false_value = module.parse_value(function, .{});
+                module.skip_space();
+                module.expect_character(right_parenthesis);
+                break :blk .{ .bb = .{
+                    .intrinsic = .{
+                        .select = .{
+                            .condition = condition,
+                            .true_value = true_value,
+                            .false_value = false_value,
+                        },
+                    },
+                } };
+            },
             .trap => blk: {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
@@ -3666,7 +3694,6 @@ pub const Module = struct {
                         .scalar => module.create_load(.{ .type = va_arg.type, .value = llvm_address }),
                         .aggregate => if (left) |l| b: {
                             _ = module.llvm.builder.create_memcpy(l.llvm.?, l.type.?.bb.pointer.alignment, llvm_address, va_arg.type.get_byte_alignment(), module.integer_type(64, false).resolve(module).handle.to_integer().get_constant(va_arg.type.get_byte_size(), 0).to_value());
-// pub extern fn LLVMBuildMemCpy(builder: *llvm.Builder, destination: *llvm.Value, destination_alignment: c_uint, source: *llvm.Value, source_alignment: c_uint, size: *llvm.Value) *llvm.Value;
                             break :b l.llvm.?;
                         } else llvm_address,
                         .complex => @trap(),
@@ -3941,14 +3968,13 @@ pub const Module = struct {
                                     @trap();
                                 }
 
-
                                 // const indirect_alignment = argument_abi.attributes.indirect.alignment;
                                 // const address_alignment = semantic_argument_type.get_byte_alignment();
                                 // const get_or_enforce_known_alignment = indirect_alignment;
                                 // llvm::getOrEnforceKnownAlignment(Addr.emitRawPointer(*this),
                                 //      Align.getAsAlign(),
                                 //      *TD) < Align.getAsAlign()) {
-                                
+
                                 // TODO
                                 // const need_copy = switch (address_alignment < indirect_alignment and get_or_enforce_known_alignment < indirect_alignment) {
                                 //     true => @trap(),
@@ -4848,6 +4874,11 @@ pub const Module = struct {
                         module.report_error();
                     }
                 },
+                .select => |select| {
+                    module.analyze_value_type(function, select.condition, .{});
+                    module.analyze_value_type(function, select.true_value, .{ .type = expected_type });
+                    module.analyze_value_type(function, select.false_value, .{ .type = expected_type });
+                },
                 .truncate => |value_to_truncate| {
                     module.analyze_value_type(function, value_to_truncate, .{});
                     if (expected_type.get_bit_size() >= value_to_truncate.type.?.get_bit_size()) {
@@ -5415,6 +5446,20 @@ pub const Module = struct {
                     module.emit_value(function, pointer_value);
                     break :blk pointer_value.llvm.?;
                 },
+                .select => |select| blk: {
+                    module.emit_value(function, select.condition);
+                    const condition = switch (select.condition.type.?.bb) {
+                        .integer => |integer| switch (integer.bit_count) {
+                            1 => select.condition.llvm.?,
+                            else => @trap(),
+                        },
+                        else => @trap(),
+                    };
+                    module.emit_value(function, select.true_value);
+                    module.emit_value(function, select.false_value);
+                    const result = module.llvm.builder.create_select(condition, select.true_value.llvm.?, select.false_value.llvm.?);
+                    break :blk result;
+                },
                 .trap => blk: {
                     // TODO: lookup in advance
                     const intrinsic_id = module.llvm.intrinsic_table.trap;
@@ -5589,7 +5634,7 @@ pub const Module = struct {
                                 } else module.report_error();
                                 const field = bits.fields[field_index];
 
-                                const load = module.create_load(.{ .type = pointer.type, .alignment = pointer.alignment, .value = field_access.aggregate.llvm.?});
+                                const load = module.create_load(.{ .type = pointer.type, .alignment = pointer.alignment, .value = field_access.aggregate.llvm.? });
                                 const shift = module.llvm.builder.create_lshr(load, bits.backing_type.llvm.handle.?.to_integer().get_constant(field.bit_offset, 0).to_value());
                                 const trunc = module.llvm.builder.create_truncate(shift, field.type.resolve(module).handle);
                                 break :blk trunc;
