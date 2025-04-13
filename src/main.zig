@@ -231,4 +231,5 @@ const names = &[_][]const u8{
     "slice",
     "small_struct_ints",
     "struct_assignment",
+    "struct",
 };

@@ -3902,12 +3902,18 @@ pub const Module = struct {
                                 };
 
                                 if (coerce_to_type.bb == .structure and argument_abi.flags.kind == .direct and argument_abi.flags.can_be_flattened) {
-                                    module.emit_value(function, semantic_argument_value);
-
                                     const source_type_size_is_scalable = false; // TODO
                                     if (source_type_size_is_scalable) {
                                         @trap();
                                     } else {
+                                        if (src.kind == .right) {
+                                            if (src.bb == .variable_reference) {
+                                                src.type = null;
+                                                src.kind = .left;
+                                                module.analyze_value_type(function, src, .{});
+                                            }
+                                        }
+                                        module.emit_value(function, semantic_argument_value);
                                         const destination_size = coerce_to_type.get_byte_size();
                                         const source_size = argument_abi.semantic_type.get_byte_size();
 
@@ -7524,7 +7530,7 @@ pub const Abi = struct {
                         true => {
                             for (coerce_to_type.bb.structure.fields, 0..) |field, field_index| {
                                 const index = argument_type_abi.abi_start + field_index;
-                                llvm_abi_argument_type_buffer[index] = field.type.llvm.handle.?;
+                                llvm_abi_argument_type_buffer[index] = field.type.resolve(module).handle;
                                 abi_argument_type_buffer[index] = field.type;
                             }
                         },
