@@ -219,4 +219,9 @@ const names = &[_][]const u8{
     "bits_zero",
     "comparison",
     "global_struct",
+    "if_no_else",
+    "if_no_else_void",
+    "indirect",
+    "indirect_struct",
+    "indirect_varargs",
 };

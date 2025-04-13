@@ -2125,6 +2125,10 @@ const Module = struct {
         const llvm_abi_argument_values = llvm_abi_argument_value_buffer[0..abi_argument_count];
         const llvm_call = module.llvm.builder.create_call(raw_function_type.llvm.handle.to_function(), llvm_callable, llvm_abi_argument_values);
 
+        if (function_type.is_var_args) {
+            @breakpoint();
+        }
+
         const attribute_list = module.build_attribute_list(.{
             .return_type_abi = function_type.return_type_abi,
             .abi_return_type = function_type.abi_return_type,
