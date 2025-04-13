@@ -3912,6 +3912,7 @@ pub const Module = struct {
                     const argument_abi_kind = argument_abi.flags.kind;
                     switch (argument_abi_kind) {
                         .direct, .extend => {
+                            // if (argument_abi_kind == .direct) @breakpoint();
                             const coerce_to_type = argument_abi.get_coerce_to_type();
                             if (coerce_to_type.bb != .structure and semantic_argument_type.is_abi_equal(coerce_to_type, module) and argument_abi.attributes.direct.offset == 0) {
                                 module.emit_value(function, semantic_argument_value);
@@ -3998,10 +3999,40 @@ pub const Module = struct {
                                                 }
                                             },
                                             .right => {
-                                                for (0..coerce_to_type.bb.structure.fields.len) |field_index| {
-                                                    const extract_value = module.llvm.builder.create_extract_value(source, @intCast(field_index));
-                                                    llvm_abi_argument_value_buffer[abi_argument_count] = extract_value;
-                                                    abi_argument_count += 1;
+                                                if (coerce_to_type.is_abi_equal(semantic_argument_type, module)) {
+                                                    for (0..coerce_to_type.bb.structure.fields.len) |field_index| {
+                                                        const extract_value = module.llvm.builder.create_extract_value(source, @intCast(field_index));
+                                                        llvm_abi_argument_value_buffer[abi_argument_count] = extract_value;
+                                                        abi_argument_count += 1;
+                                                    }
+                                                } else {
+                                                    switch (semantic_argument_value.bb) {
+                                                        .aggregate_initialization => |aggregate_initialization| switch (aggregate_initialization.is_constant) {
+                                                            true => {
+                                                                const global_variable = module.llvm.module.create_global_variable(.{
+                                                                    .linkage = .InternalLinkage,
+                                                                    .name = "conststruct", // TODO: format properly
+                                                                    .initial_value = semantic_argument_value.llvm.?.to_constant(),
+                                                                    .type = semantic_argument_type.resolve(module).handle,
+                                                                });
+                                                                global_variable.set_unnamed_address(.global);
+                                                                global_variable.to_value().set_alignment(semantic_argument_type.get_byte_alignment());
+                                                                for (coerce_to_type.bb.structure.fields, 0..) |field, field_index| {
+                                                                    const gep = module.llvm.builder.create_struct_gep(coerce_to_type.resolve(module).handle.to_struct(), global_variable.to_value(), @intCast(field_index));
+                                                                    const maybe_undef = false;
+                                                                    if (maybe_undef) {
+                                                                        @trap();
+                                                                    }
+                                                                    const load = module.create_load(.{ .value = gep, .type = field.type, .alignment = alignment });
+
+                                                                    llvm_abi_argument_value_buffer[abi_argument_count] = load;
+                                                                    abi_argument_count += 1;
+                                                                }
+                                                            },
+                                                            false => @trap(),
+                                                        },
+                                                        else => @trap(),
+                                                    }
                                                 }
                                             },
                                         }
@@ -7008,7 +7039,7 @@ pub const Abi = struct {
         system_v: Abi.SystemV.RegisterCount,
     };
 
-    const Flags = packed struct {
+    const Flags = struct {
         kind: Kind,
         padding_in_reg: bool = false,
         in_alloca_sret: bool = false,

@@ -243,4 +243,5 @@ const names = &[_][]const u8{
     "c_ret_struct_array",
     "c_split_struct_ints",
     "c_string_to_slice",
+    "c_struct_with_array",
 };
