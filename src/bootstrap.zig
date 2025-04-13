@@ -498,10 +498,12 @@ pub const Type = struct {
     }
 
     pub fn get_bit_alignment(ty: *const Type) u32 {
+        // TODO: fix
         return switch (ty.bb) {
             .integer => |integer| integer.bit_count, // TODO: is this correct?
             .pointer => 64,
             .bits => |bits| bits.backing_type.get_bit_alignment(),
+            .array => |array| array.element_type.get_bit_alignment(),
             else => @trap(),
         };
     }
@@ -511,15 +513,18 @@ pub const Type = struct {
             .integer => |integer| @divExact(@max(8, lib.next_power_of_two(integer.bit_count)), 8),
             .structure => |structure| structure.byte_size,
             .pointer => 8,
+            .array => |array| array.element_type.get_byte_size() * array.element_count,
             else => @trap(),
         };
         return byte_size;
     }
     pub fn get_bit_size(ty: *const Type) u64 {
+        // TODO: fix
         const bit_size: u64 = switch (ty.bb) {
             .integer => |integer| integer.bit_count,
             .pointer => 64,
             .bits => |bits| bits.backing_type.get_bit_size(),
+            .array => |array| array.element_type.get_bit_size() * array.element_count,
             else => @trap(),
         };
         return bit_size;
@@ -772,6 +777,7 @@ pub const Value = struct {
             .variable_reference => false,
             .aggregate_initialization => |aggregate_initialization| aggregate_initialization.is_constant,
             .field_access => false,
+            .array_initialization => |array_initialization| array_initialization.is_constant,
             else => @trap(),
         };
     }
@@ -946,6 +952,7 @@ pub const Module = struct {
     pointer_types: IndexBuffer,
     slice_types: IndexBuffer,
     pair_struct_types: IndexBuffer,
+    array_types: IndexBuffer,
     void_type: *Type,
     noreturn_type: *Type,
     va_list_type: ?*Type = null,
@@ -1317,8 +1324,15 @@ pub const Module = struct {
 
                         const element_count: u64 = switch (length_inferred) {
                             true => 0,
-                            false => @trap(),
+                           false => b: {
+                               const v = module.parse_integer_value(false);
+                               if (v == 0) {
+                                   module.report_error();
+                               }
+                               break :b v;
+                           },
                         };
+
                         if (!length_inferred) {
                             module.skip_space();
                             module.expect_character(right_bracket);
@@ -1341,7 +1355,26 @@ pub const Module = struct {
                                 });
                                 break :blk array_type;
                             },
-                            else => @trap(),
+                            else => b: {
+                                const all_types = module.types.get_slice();
+                                const array_type = for (module.array_types.get_slice()) |array_type_index| {
+                                    const array_type = &all_types[array_type_index];
+                                    assert(array_type.bb == .array);
+                                    if (array_type.bb.array.element_count == element_count and array_type.bb.array.element_type == element_type) {
+                                        break array_type;
+                                    }
+                                } else module.types.append(.{
+                                    .name = array_type_name(module.arena, element_type, element_count),
+                                    .bb = .{
+                                        .array = .{
+                                            .element_type = element_type,
+                                            .element_count = element_count,
+                                        },
+                                    },
+                                });
+
+                                break :b array_type;
+                            },
                         };
 
                         return array_type;
@@ -7858,6 +7891,7 @@ pub fn compile(arena: *Arena, options: Options) void {
         .pointer_types = .initialize(),
         .slice_types = .initialize(),
         .pair_struct_types = .initialize(),
+        .array_types = .initialize(),
         .lexical_blocks = .initialize(),
         .statements = .initialize(),
         .void_type = void_type,

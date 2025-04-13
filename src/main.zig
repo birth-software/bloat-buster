@@ -240,4 +240,5 @@ const names = &[_][]const u8{
     "c_abi0",
     "c_abi1",
     "c_med_struct_ints",
+    "c_ret_struct_array",
 };
