@@ -770,6 +770,7 @@ pub const Value = struct {
             .constant_integer => true,
             .variable_reference => false,
             .aggregate_initialization => |aggregate_initialization| aggregate_initialization.is_constant,
+            .field_access => false,
             else => @trap(),
         };
     }
@@ -5091,12 +5092,12 @@ pub const Module = struct {
                                     module.report_error();
                                 };
 
-                                _ = field_type;
-                                @trap();
-                                // break :blk switch (value.kind) {
-                                //     .left => @trap(),
-                                //     .right => field_type,
-                                // };
+                                switch (value.kind) {
+                                    .left => @trap(),
+                                    .right => if (field_type != expected_type) {
+                                        module.report_error();
+                                    },
+                                }
                             },
                             .bits => |bits| {
                                 const field_type = for (bits.fields) |*field| {
@@ -6172,7 +6173,26 @@ pub const Module = struct {
                         global_variable.to_value().set_alignment(alignment);
                         _ = module.llvm.builder.create_memcpy(left.llvm.?, pointer_type.bb.pointer.alignment, global_variable.to_value(), alignment, module.integer_type(64, false).resolve(module).handle.to_integer().get_constant(value_type.get_byte_size(), @intFromBool(false)).to_value());
                     },
-                    false => @trap(),
+                    false => {
+                        for (aggregate_initialization.values, aggregate_initialization.names) |initialization_value, initialization_name| {
+                            const field_index = for (value_type.bb.structure.fields, 0..) |*field, field_index| {
+                                if (lib.string.equal(field.name, initialization_name)) {
+                                    break field_index;
+                                }
+                            } else module.report_error();
+                            const field = &value_type.bb.structure.fields[field_index];
+                            const destination_pointer = module.llvm.builder.create_struct_gep(value_type.llvm.handle.?.to_struct(), left.llvm.?, @intCast(field_index));
+                            // Create an auxiliary value
+                            const destination_value = module.values.add();
+                            destination_value.* = .{
+                                .bb = .local, // This does not matter
+                                .llvm = destination_pointer,
+                                .type = module.get_pointer_type(.{ .type = field.type }),
+                                .kind = .left,
+                            };
+                            module.emit_assignment(function, destination_value, initialization_value);
+                        }
+                    },
                 },
                 .string_literal => |string_literal| {
                     const null_terminate = true;
