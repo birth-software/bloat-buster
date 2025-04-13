@@ -237,4 +237,7 @@ const names = &[_][]const u8{
     "struct_zero",
     "unreachable",
     "varargs",
+    "c_abi0",
+    "c_abi1",
+    "c_med_struct_ints",
 };
