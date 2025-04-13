@@ -229,4 +229,5 @@ const names = &[_][]const u8{
     "return_u64_u64",
     "select",
     "slice",
+    "small_struct_ints",
 };

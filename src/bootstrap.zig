@@ -457,8 +457,8 @@ pub const Type = struct {
     pub fn is_integral_or_enumeration_type(ty: *Type) bool {
         return switch (ty.bb) {
             .integer => true,
-            // .bits => true,
-            // .structure => false,
+            .bits => true,
+            .structure => false,
             else => @trap(),
         };
     }
@@ -3886,8 +3886,6 @@ pub const Module = struct {
                                     @trap();
                                 }
 
-                                module.emit_value(function, semantic_argument_value);
-
                                 const evaluation_kind = semantic_argument_type.get_evaluation_kind();
                                 var src = switch (evaluation_kind) {
                                     .aggregate => semantic_argument_value,
@@ -3903,6 +3901,8 @@ pub const Module = struct {
                                 };
 
                                 if (coerce_to_type.bb == .structure and argument_abi.flags.kind == .direct and argument_abi.flags.can_be_flattened) {
+                                    module.emit_value(function, semantic_argument_value);
+
                                     const source_type_size_is_scalable = false; // TODO
                                     if (source_type_size_is_scalable) {
                                         @trap();
@@ -3950,25 +3950,33 @@ pub const Module = struct {
                                     }
                                 } else {
                                     assert(argument_abi.abi_count == 1);
-                                    @trap();
-                                    // TODO
-                                    // assert(src.type.bb == .pointer);
-                                    // const source_type = src.type.bb.pointer.type;
-                                    // assert(source_type == argument_abi.semantic_type);
-                                    // const destination_type = argument_abi.get_coerce_to_type();
-                                    // const load = module.create_coerced_load(src.llvm, source_type, destination_type);
-                                    //
-                                    // const is_cmse_ns_call = false;
-                                    // if (is_cmse_ns_call) {
-                                    //     @trap();
-                                    // }
-                                    // const maybe_undef = false;
-                                    // if (maybe_undef) {
-                                    //     @trap();
-                                    // }
-                                    //
-                                    // llvm_abi_argument_value_buffer[abi_argument_count] = load;
-                                    // abi_argument_count += 1;
+                                    // TODO: handmade change
+                                    if (src.type.?.bb != .pointer) {
+                                        assert(src.kind == .right);
+                                        assert(src.type.?.bb == .structure);
+                                        src.type = null;
+                                        src.kind = .left;
+                                        module.analyze_value_type(function, src, .{});
+                                    }
+                                    module.emit_value(function, src);
+
+                                    assert(src.type.?.bb == .pointer);
+                                    const source_type = src.type.?.bb.pointer.type;
+                                    assert(source_type == argument_abi.semantic_type);
+                                    const destination_type = argument_abi.get_coerce_to_type();
+                                    const load = module.create_coerced_load(src.llvm.?, source_type, destination_type);
+
+                                    const is_cmse_ns_call = false;
+                                    if (is_cmse_ns_call) {
+                                        @trap();
+                                    }
+                                    const maybe_undef = false;
+                                    if (maybe_undef) {
+                                        @trap();
+                                    }
+
+                                    llvm_abi_argument_value_buffer[abi_argument_count] = load;
+                                    abi_argument_count += 1;
                                 }
                             }
                         },
@@ -4455,11 +4463,7 @@ pub const Module = struct {
                                             const abi_argument_type = function_type.abi_argument_types[argument_abi.abi_start];
                                             const destination_size = pointer_type.get_byte_size() - argument_abi.attributes.direct.offset;
                                             const is_volatile = false;
-                                            _ = abi_argument_type;
-                                            _ = destination_size;
-                                            _ = is_volatile;
-                                            @trap();
-                                            // module.create_coerced_store(abi_arguments[0].to_value(), abi_argument_type, pointer, pointer_type, destination_size, is_volatile);
+                                            module.create_coerced_store(abi_arguments[0].to_value(), abi_argument_type, pointer, pointer_type, destination_size, is_volatile);
                                         }
 
                                         switch (argument_abi.semantic_type.get_evaluation_kind()) {
@@ -4588,12 +4592,8 @@ pub const Module = struct {
 
                                         const source_type = function_type.return_abi.semantic_type;
                                         const destination_type = coerce_to_type;
-                                        _ = source;
-                                        _ = source_type;
-                                        _ = destination_type;
-                                        @trap();
-                                        // const result = module.create_coerced_load(source, source_type, destination_type);
-                                        // break :blk result;
+                                        const result = module.create_coerced_load(source, source_type, destination_type);
+                                        break :blk result;
                                     }
                                 },
                                 .indirect => switch (function_type.return_abi.semantic_type.get_evaluation_kind()) {
@@ -6567,6 +6567,91 @@ pub const Module = struct {
                 .alignment = source_alloca_alignment,
             });
             _ = module.llvm.builder.create_memcpy(destination_pointer, original_destination_alignment, source_alloca, source_alloca_alignment, module.integer_type(64, false).llvm.handle.?.to_integer().get_constant(destination_size, @intFromBool(false)).to_value());
+        }
+    }
+
+    pub fn create_coerced_load(module: *Module, source: *llvm.Value, source_ty: *Type, destination_type: *Type) *llvm.Value {
+        var source_pointer = source;
+        var source_type = source_ty;
+
+        const result = switch (source_type.is_abi_equal(destination_type, module)) {
+            true => module.create_load(.{
+                .type = destination_type,
+                .value = source_pointer,
+            }),
+            false => res: {
+                const destination_size = destination_type.get_byte_size();
+                if (source_type.bb == .structure) {
+                    const src = module.enter_struct_pointer_for_coerced_access(source_pointer, source_type, destination_size);
+                    source_pointer = src.value;
+                    source_type = src.type;
+                }
+
+                if (source_type.is_integer_backing() and destination_type.is_integer_backing()) {
+                    const load = module.create_load(.{
+                        .type = destination_type,
+                        .value = source_pointer,
+                    });
+                    const result = module.coerce_int_or_pointer_to_int_or_pointer(load, source_type, destination_type);
+                    return result;
+                } else {
+                    const source_size = source_type.get_byte_size();
+
+                    const is_source_type_scalable = false;
+                    const is_destination_type_scalable = false;
+                    if (!is_source_type_scalable and !is_destination_type_scalable and source_size >= destination_size) {
+                        const load = module.create_load(.{ .type = destination_type, .value = source, .alignment = source_type.get_byte_alignment() });
+                        break :res load;
+                    } else {
+                        const is_destination_scalable_vector_type = false;
+                        if (is_destination_scalable_vector_type) {
+                            @trap();
+                        }
+
+                        // Coercion through memory
+                        const original_destination_alignment = destination_type.get_byte_alignment();
+                        const source_alignment = source_type.get_byte_alignment();
+                        const destination_alignment = @max(original_destination_alignment, source_alignment);
+                        const destination_alloca = module.create_alloca(.{ .type = destination_type, .name = "coerce", .alignment = destination_alignment });
+                        _ = module.llvm.builder.create_memcpy(destination_alloca, destination_alignment, source, source_alignment, module.integer_type(64, false).llvm.handle.?.to_integer().get_constant(source_size, @intFromBool(false)).to_value());
+                        const load = module.create_load(.{ .type = destination_type, .value = destination_alloca, .alignment = destination_alignment });
+                        return load;
+                    }
+                }
+            },
+        };
+        return result;
+    }
+
+    pub fn coerce_int_or_pointer_to_int_or_pointer(module: *Module, source: *llvm.Value, source_ty: *Type, destination_ty: *Type) *llvm.Value {
+        const source_type = source_ty;
+        var destination_type = destination_ty;
+        switch (source_type == destination_type) {
+            true => return source,
+            false => {
+                if (source_type.bb == .pointer and destination_type.bb == .pointer) {
+                    @trap();
+                } else {
+                    if (source_type.bb == .pointer) {
+                        @trap();
+                    }
+
+                    if (destination_type.bb == .pointer) {
+                        destination_type = module.integer_type(64, false);
+                    }
+
+                    if (source_type != destination_type) {
+                        @trap();
+                    }
+
+                    // This is the original destination type
+                    if (destination_ty.bb == .pointer) {
+                        @trap();
+                    }
+
+                    @trap();
+                }
+            },
         }
     }
 };
