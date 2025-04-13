@@ -6228,6 +6228,63 @@ const Module = struct {
 
         return value;
     }
+
+    pub fn create_coerced_store(module: *Module, source_value: *llvm.Value, source_type: *Type, destination: *llvm.Value, destination_ty: *Type, destination_size: u64, destination_volatile: bool) void {
+        _ = destination_volatile;
+        var destination_type = destination_ty;
+        var destination_pointer = destination;
+        const source_size = source_type.get_byte_size();
+        if (!source_type.is_abi_equal(destination_type)) {
+            const r = module.enter_struct_pointer_for_coerced_access(destination_pointer, destination_type, source_size);
+            destination_pointer = r.value;
+            destination_type = r.type;
+        }
+
+        const is_scalable = false; // TODO
+        if (is_scalable or source_size <= destination_size) {
+            const destination_alignment = destination_type.get_byte_alignment();
+            if (source_type.bb == .integer and destination_type.bb == .pointer and source_size == lib.align_forward_u64(destination_size, destination_alignment)) {
+                @trap();
+            } else if (source_type.bb == .structure) {
+                for (source_type.bb.structure.fields, 0..) |field, field_index| {
+                    // TODO: volatile
+                    const gep = module.llvm.builder.create_struct_gep(source_type.llvm.handle.to_struct(), destination_pointer, @intCast(field_index));
+                    const field_value = module.llvm.builder.create_extract_value(source_value, @intCast(field_index));
+                    _ = module.create_store(.{
+                        .source_value = field_value,
+                        .source_type = field.type,
+                        .destination_value = gep,
+                        .destination_type = field.type,
+                        .alignment = destination_alignment,
+                    });
+                }
+            } else {
+                _ = module.create_store(.{
+                    .source_value = source_value,
+                    .source_type = source_type,
+                    .destination_value = destination_pointer,
+                    .destination_type = destination_type,
+                    .alignment = destination_alignment,
+                });
+            }
+            // TODO: is this valid for pointers too?
+        } else if (source_type.is_integer_backing()) {
+            @trap();
+        } else {
+            // Coercion through memory
+            const original_destination_alignment = destination_type.get_byte_alignment();
+            const source_alloca_alignment = @max(original_destination_alignment, source_type.get_byte_alignment());
+            const source_alloca = module.create_alloca(.{ .type = source_type, .alignment = source_alloca_alignment, .name = "coerce" });
+            _ = module.create_store(.{
+                .source_value = source_value,
+                .destination_value = source_alloca,
+                .source_type = source_type,
+                .destination_type = source_type,
+                .alignment = source_alloca_alignment,
+            });
+            _ = module.llvm.builder.create_memcpy(destination_pointer, original_destination_alignment, source_alloca, source_alloca_alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(destination_size, @intFromBool(false)).to_value());
+        }
+    }
 };
 
 fn is_space(ch: u8) bool {

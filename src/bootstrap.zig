@@ -216,13 +216,14 @@ pub const Enumerator = struct {
     };
 };
 
+
 pub const Type = struct {
     bb: union(enum) {
         void,
         noreturn,
         integer: Type.Integer,
         enumerator: Enumerator,
-        float,
+        float: Float,
         bits: Type.Bits,
         pointer: Type.Pointer,
         function: Type.Function,
@@ -237,12 +238,30 @@ pub const Type = struct {
         debug: ?*llvm.DI.Type = null,
     } = .{},
 
+    pub const Float = struct {
+        const Kind = enum {
+            half,
+            bfloat,
+            float,
+            double,
+            fp128,
+        };
+        kind: Kind,
+    };
+
     pub const Intrinsic = struct {
         const Id = enum{
             ReturnType,
             foo,
         };
     };
+
+    pub fn is_integer_backing(ty: *Type) bool {
+        return switch (ty.bb) {
+            .enumerator, .integer, .bits, .pointer => true,
+            else => false,
+        };
+    }
 
     fn resolve(ty: *Type, module: *Module) ResolvedType {
         if (ty.llvm.handle) |llvm_handle| {
@@ -4031,7 +4050,10 @@ pub const Module = struct {
                             @trap();
                         }
 
-                        const coerce_alloca = module.create_alloca(.{ .type = return_type_abi.semantic_type, .name = "coerce" });
+                        const coerce_alloca = if (left) |l| b: {
+                            assert(l.type.?.bb.pointer.type == return_type_abi.semantic_type);
+                            break :b l.llvm.?;
+                        } else module.create_alloca(.{ .type = return_type_abi.semantic_type, .name = "coerce" });
                         var destination_pointer = switch (return_type_abi.attributes.direct.offset == 0) {
                             true => coerce_alloca,
                             false => @trap(),
@@ -4044,32 +4066,21 @@ pub const Module = struct {
                             // llvm::TypeSize::getFixed(DestSize - RetAI.getDirectOffset()),
                             // DestIsVolatile);
 
-                            // const source_value = llvm_call;
-                            // const source_type = function_type.abi_return_type;
-                            // // const source_size = source_type.get_byte_size();
-                            // var destination_type = return_type_abi.semantic_type;
-                            // const destination_size = destination_type.get_byte_size();
-                            // // const destination_alignment = destination_type.get_byte_alignment();
-                            // const left_destination_size = destination_size - return_type_abi.attributes.direct.offset;
-                            //
-                            // const is_destination_volatile = false; // TODO
-                            // module.create_coerced_store(source_value, source_type, destination_pointer, destination_type, left_destination_size, is_destination_volatile);
+                            const source_value = llvm_call;
+                            const source_type = function_type.abi_return_type;
+                            // const source_size = source_type.get_byte_size();
+                            var destination_type = return_type_abi.semantic_type;
+                            const destination_size = destination_type.get_byte_size();
+                            // const destination_alignment = destination_type.get_byte_alignment();
+                            const left_destination_size = destination_size - return_type_abi.attributes.direct.offset;
 
-                            // TODO:
-                            @trap();
+                            const is_destination_volatile = false; // TODO
+                            module.create_coerced_store(source_value, source_type, destination_pointer, destination_type, left_destination_size, is_destination_volatile);
                         } else {
                             @trap();
                         }
 
-                        const v = module.values.add();
-                        v.* = .{
-                            .llvm = destination_pointer,
-                            .bb = .instruction,
-                            .type = module.get_pointer_type(.{ .type = return_type_abi.semantic_type }),
-                            .lvalue = true,
-                            .dereference_to_assign = true,
-                        };
-                        @trap();
+                        return destination_pointer;
                     },
                     .indirect => {
                         return llvm_indirect_return_value;
@@ -6115,6 +6126,17 @@ pub const Module = struct {
                 .call => {
                     const result = module.emit_call(function, right, left);
                     assert(result == left.llvm);
+                    // if (result != left.llvm) {
+                    //     const call_ret_type_ev_kind = right.type.?.get_evaluation_kind();
+                    //     switch (call_ret_type_ev_kind) {
+                    //         .aggregate => switch (right.kind) {
+                    //             .left => @trap(),
+                    //             .right => @trap(),
+                    //         },
+                    //         else => @trap(),
+                    //     }
+                    //     @trap();
+                    // }
                 },
                 else => @trap(),
             },
@@ -6265,6 +6287,83 @@ pub const Module = struct {
 
     pub fn dump(module: *Module) void {
         lib.print_string(module.llvm.module.to_string());
+    }
+
+    pub fn enter_struct_pointer_for_coerced_access(module: *Module, source_value: *llvm.Value, source_ty: *Type, destination_size: u64) struct {
+        value: *llvm.Value,
+        type: *Type,
+    } {
+        _ = module;
+        var source_pointer = source_value;
+        var source_type = source_ty;
+        assert(source_type.bb == .structure and source_type.bb.structure.fields.len > 0);
+        const first_field_type = source_type.bb.structure.fields[0].type;
+        const first_field_size = first_field_type.get_byte_size();
+        const source_size = source_type.get_byte_size();
+
+        source_pointer = switch (first_field_size < destination_size and first_field_size < source_size) {
+            true => source_pointer,
+            false => @trap(), // TODO: make sure `source_type` is also updated here
+        };
+
+        return .{ .value = source_pointer, .type = source_type };
+    }
+
+    pub fn create_coerced_store(module: *Module, source_value: *llvm.Value, source_type: *Type, destination: *llvm.Value, destination_ty: *Type, destination_size: u64, destination_volatile: bool) void {
+        _ = destination_volatile;
+        var destination_type = destination_ty;
+        var destination_pointer = destination;
+        const source_size = source_type.get_byte_size();
+        if (!source_type.is_abi_equal(destination_type, module)) {
+            const r = module.enter_struct_pointer_for_coerced_access(destination_pointer, destination_type, source_size);
+            destination_pointer = r.value;
+            destination_type = r.type;
+        }
+
+        const is_scalable = false; // TODO
+        if (is_scalable or source_size <= destination_size) {
+            const destination_alignment = destination_type.get_byte_alignment();
+            if (source_type.bb == .integer and destination_type.bb == .pointer and source_size == lib.align_forward_u64(destination_size, destination_alignment)) {
+                @trap();
+            } else if (source_type.bb == .structure) {
+                for (source_type.bb.structure.fields, 0..) |field, field_index| {
+                    // TODO: volatile
+                    const gep = module.llvm.builder.create_struct_gep(source_type.llvm.handle.?.to_struct(), destination_pointer, @intCast(field_index));
+                    const field_value = module.llvm.builder.create_extract_value(source_value, @intCast(field_index));
+                    _ = module.create_store(.{
+                        .source_value = field_value,
+                        .source_type = field.type,
+                        .destination_value = gep,
+                        .destination_type = field.type,
+                        .alignment = destination_alignment,
+                    });
+                }
+            } else {
+                _ = module.create_store(.{
+                    .source_value = source_value,
+                    .source_type = source_type,
+                    .destination_value = destination_pointer,
+                    .destination_type = destination_type,
+                    .alignment = destination_alignment,
+                });
+            }
+            // TODO: is this valid for pointers too?
+        } else if (source_type.is_integer_backing()) {
+            @trap();
+        } else {
+            // Coercion through memory
+            const original_destination_alignment = destination_type.get_byte_alignment();
+            const source_alloca_alignment = @max(original_destination_alignment, source_type.get_byte_alignment());
+            const source_alloca = module.create_alloca(.{ .type = source_type, .alignment = source_alloca_alignment, .name = "coerce" });
+            _ = module.create_store(.{
+                .source_value = source_value,
+                .destination_value = source_alloca,
+                .source_type = source_type,
+                .destination_type = source_type,
+                .alignment = source_alloca_alignment,
+            });
+            _ = module.llvm.builder.create_memcpy(destination_pointer, original_destination_alignment, source_alloca, source_alloca_alignment, module.integer_type(64, false).llvm.handle.?.to_integer().get_constant(destination_size, @intFromBool(false)).to_value());
+        }
     }
 };
 
@@ -7225,22 +7324,20 @@ pub const Abi = struct {
             const high_alignment = pair[1].get_byte_alignment();
             const high_offset = lib.align_forward_u64(low_size, high_alignment);
             assert(high_offset != 0 and high_offset <= 8);
-            _ = module;
-            @trap();
-            // const low = if (high_offset != 8)
-            //     if ((pair[0].bb == .float and pair[0].bb.float.kind == .half) or (pair[0].bb == .float and pair[0].bb.float.kind == .float)) {
-            //         @trap();
-            //     } else {
-            //         assert(pair[0].is_integer_backing());
-            //         @trap();
-            //     }
-            // else
-            //     pair[0];
-            // const high = pair[1];
-            // const struct_type = module.get_anonymous_struct_pair(.{ low, high });
-            // assert(struct_type.bb.structure.fields[1].byte_offset == 8);
-            //
-            // return struct_type;
+            const low = if (high_offset != 8)
+                if ((pair[0].bb == .float and pair[0].bb.float.kind == .half) or (pair[0].bb == .float and pair[0].bb.float.kind == .float)) {
+                    @trap();
+                } else {
+                    assert(pair[0].is_integer_backing());
+                    @trap();
+                }
+            else
+                pair[0];
+            const high = pair[1];
+            const struct_type = module.get_anonymous_struct_pair(.{ low, high });
+            assert(struct_type.bb.structure.fields[1].byte_offset == 8);
+
+            return struct_type;
         }
 
         const IndirectReturn = struct {

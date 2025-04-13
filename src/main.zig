@@ -226,4 +226,5 @@ const names = &[_][]const u8{
     "indirect_varargs",
     "ret_c_bool",
     "return_type_builtin",
+    "return_u64_u64",
 };
