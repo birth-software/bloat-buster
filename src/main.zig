@@ -232,4 +232,6 @@ const names = &[_][]const u8{
     "small_struct_ints",
     "struct_assignment",
     "struct",
+    "struct_u64_u64",
+    "struct_varargs",
 };
