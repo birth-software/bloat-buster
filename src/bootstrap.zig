@@ -5066,12 +5066,22 @@ pub const Module = struct {
                 // Overwrite side of the expression
                 array_expression.array_like.kind = .left;
                 module.analyze_value_type(function, array_expression.array_like, .{});
-                const element_type = switch (array_expression.array_like.type.?.bb) {
-                    .pointer => |pointer| switch (pointer.type.bb) {
-                        .array => |array| array.element_type,
-                        else => @trap(),
+                const element_type = switch (array_expression.array_like.kind) {
+                    .left => switch (array_expression.array_like.type.?.bb) {
+                        .pointer => |pointer| switch (pointer.type.bb) {
+                            .array => |array| array.element_type,
+                            .structure => |structure| {
+                                if (!structure.is_slice) {
+                                    module.report_error();
+                                }
+                                @trap();
+                            },
+                            .pointer => |p| p.type,
+                            else => @trap(),
+                        },
+                        else => module.report_error(),
                     },
-                    else => module.report_error(),
+                    .right => @trap(),
                 };
                 switch (value.kind) {
                     .left => @trap(),
@@ -5179,6 +5189,35 @@ pub const Module = struct {
                 }
             },
             .zero => {},
+            .slice_expression => |slice_expression| {
+                module.analyze_value_type(function, slice_expression.array_like, .{});
+                const sliceable_type = slice_expression.array_like.type.?;
+                const element_type = switch (sliceable_type.bb) {
+                    .pointer => |pointer| pointer.type,
+                    .structure => |structure| b: {
+                        if (!structure.is_slice) {
+                            module.report_error();
+                        }
+                        break :b structure.fields[0].type.bb.pointer.type;
+                    },
+                    else => @trap(),
+                };
+                const index_type = module.integer_type(64, false);
+                module.analyze_value_type(function, slice_expression.start, .{ .type = index_type });
+                if (slice_expression.start.type.?.bb != .integer) {
+                    module.report_error();
+                }
+                if (slice_expression.end) |end| {
+                    module.analyze_value_type(function, end, .{ .type = index_type });
+                    if (end.type.?.bb != .integer) {
+                        module.report_error();
+                    }
+                }
+                const slice_type = module.get_slice_type(.{ .type = element_type });
+                if (slice_type != expected_type) {
+                    module.report_error();
+                }
+            },
             else => @trap(),
         };
 
@@ -5408,6 +5447,64 @@ pub const Module = struct {
         };
 
         value.type = value_type;
+    }
+
+    pub fn emit_slice_expression(module: *Module, function: ?*Global, value: *Value) struct { *llvm.Value, *llvm.Value } {
+        const value_type = value.type.?;
+        switch (value.bb) {
+            .slice_expression => |slice_expression| {
+                module.emit_value(function, slice_expression.array_like);
+                switch (slice_expression.array_like.type.?.bb) {
+                    .pointer => |pointer| switch (slice_expression.array_like.kind) {
+                        .left => @trap(),
+                        .right => {
+                            const start = slice_expression.start;
+                            module.emit_value(function, start);
+                            const end = slice_expression.end orelse module.report_error();
+                            module.emit_value(function, end);
+                            const slice_pointer = module.llvm.builder.create_gep(.{
+                                .type = pointer.type.llvm.handle.?,
+                                .aggregate = slice_expression.array_like.llvm.?,
+                                .indices = &.{ start.llvm.? },
+                            });
+                            const slice_length = module.llvm.builder.create_sub(end.llvm.?, start.llvm.?);
+                            return .{ slice_pointer, slice_length };
+                        },
+                    },
+                    .structure => |structure| switch (slice_expression.array_like.kind) {
+                        .left => @trap(),
+                        .right => {
+                            assert(structure.is_slice);
+                            const slice_pointer_type = value_type.bb.structure.fields[0].type;
+                            const slice_element_type = slice_pointer_type.bb.pointer.type;
+                            const is_start_zero = slice_expression.start.bb == .constant_integer and slice_expression.start.bb.constant_integer.value == 0;
+                            if (slice_expression.end) |end| {
+                                _ = end;
+                                @trap();
+                            } else {
+                                if (is_start_zero) {
+                                    // TODO: consider if we should emit an error here or it be a NOP
+                                    module.report_error();
+                                } else {
+                                    module.emit_value(function, slice_expression.start);
+                                    const old_slice_pointer = module.llvm.builder.create_extract_value(slice_expression.array_like.llvm.?, 0);
+                                    const old_slice_length = module.llvm.builder.create_extract_value(slice_expression.array_like.llvm.?, 1);
+                                    const slice_pointer = module.llvm.builder.create_gep(.{
+                                        .type = slice_element_type.llvm.handle.?,
+                                        .aggregate = old_slice_pointer,
+                                        .indices = &.{ slice_expression.start.llvm.? },
+                                    });
+                                    const slice_length = module.llvm.builder.create_sub(old_slice_length, slice_expression.start.llvm.?);
+                                    return .{ slice_pointer, slice_length };
+                                }
+                            }
+                        },
+                        },
+                    else => @trap(),
+                }
+            },
+            else => unreachable,
+        }
     }
 
     pub fn emit_value(module: *Module, function: ?*Global, value: *Value) void {
@@ -5706,6 +5803,25 @@ pub const Module = struct {
                                 }),
                             };
                         },
+                        .pointer => |real_pointer| blk: {
+                            module.emit_value(function, array_expression.array_like);
+                            module.emit_value(function, array_expression.index);
+                            // TODO: consider not emitting the and doing straight GEP?
+                            const pointer_load = module.create_load(.{ .type = pointer.type, .value = array_expression.array_like.llvm.? });
+                            const element_type = real_pointer.type;
+                            const gep = module.llvm.builder.create_gep(.{
+                                .type = element_type.llvm.handle.?,
+                                .aggregate = pointer_load,
+                                .indices = &.{array_expression.index.llvm.?},
+                            });
+                            break :blk switch (value.kind) {
+                                .left => gep,
+                                .right => module.create_load(.{
+                                    .type = element_type,
+                                    .value = gep,
+                                }),
+                            };
+                        },
                         else => @trap(),
                     },
                     else => unreachable,
@@ -5862,6 +5978,15 @@ pub const Module = struct {
                 const unreachable_value = module.llvm.builder.create_unreachable();
                 module.llvm.builder.clear_insertion_position();
                 break :b unreachable_value;
+            },
+            .slice_expression => blk: {
+                assert(value.kind == .right);
+                const slice_values = module.emit_slice_expression(function, value);
+                const slice_poison = value_type.resolve(module).handle.get_poison();
+                const slice_pointer = module.llvm.builder.create_insert_value(slice_poison, slice_values[0], 0);
+                const slice_length = module.llvm.builder.create_insert_value(slice_pointer, slice_values[1], 1);
+                const slice_value = slice_length;
+                break :blk slice_value;
             },
             else => @trap(),
         };
@@ -6375,85 +6500,22 @@ pub const Module = struct {
                     // }
                 },
                 .slice_expression => |slice_expression| {
-                    module.emit_value(function, slice_expression.array_like);
-                    switch (slice_expression.array_like.type.?.bb) {
-                        .pointer => |pointer| switch (slice_expression.array_like.kind) {
-                            .left => @trap(),
-                            .right => {
-                                const start = slice_expression.start;
-                                module.emit_value(function, start);
-                                const end = slice_expression.end orelse module.report_error();
-                                module.emit_value(function, end);
-                                const slice_pointer = module.llvm.builder.create_gep(.{
-                                    .type = pointer.type.llvm.handle.?,
-                                    .aggregate = slice_expression.array_like.llvm.?,
-                                    .indices = &.{ start.llvm.? },
-                                });
-                                _ = module.create_store(.{
-                                    .source_value = slice_pointer,
-                                    .destination_value = left.llvm.?,
-                                    .source_type = pointer.type,
-                                    .destination_type = pointer.type,
-                                    .alignment = pointer.alignment,
-                                });
-                                const slice_length = module.llvm.builder.create_sub(end.llvm.?, start.llvm.?);
-                                const slice_length_destination = module.llvm.builder.create_struct_gep(value_type.llvm.handle.?.to_struct(), left.llvm.?, 1);
-                                _ = module.create_store(.{
-                                    .source_value = slice_length,
-                                    .destination_value = slice_length_destination,
-                                    .source_type = slice_expression.start.type.?,
-                                    .destination_type = slice_expression.start.type.?,
-                                });
-                            },
-                        },
-                        .structure => |structure| switch (slice_expression.array_like.kind) {
-                            .left => @trap(),
-                            .right => {
-                                assert(structure.is_slice);
-                                const slice_pointer_type = value_type.bb.structure.fields[0].type;
-                                const slice_element_type = slice_pointer_type.bb.pointer.type;
-                                const is_start_zero = slice_expression.start.bb == .constant_integer and slice_expression.start.bb.constant_integer.value == 0;
-                                if (slice_expression.end) |end| {
-                                    _ = end;
-                                    @trap();
-                                } else {
-                                    if (is_start_zero) {
-                                        // TODO: consider if we should emit an error here or it be a NOP
-                                        _ = module.create_store(.{
-                                            .source_value = slice_expression.array_like.llvm.?,
-                                            .destination_value = left.llvm.?,
-                                            .source_type = value_type,
-                                            .destination_type = value_type,
-                                        });
-                                    } else {
-                                        module.emit_value(function, slice_expression.start);
-                                        const old_slice_pointer = module.llvm.builder.create_extract_value(slice_expression.array_like.llvm.?, 0);
-                                        const old_slice_length = module.llvm.builder.create_extract_value(slice_expression.array_like.llvm.?, 1);
-                                        const slice_pointer = module.llvm.builder.create_gep(.{
-                                            .type = slice_element_type.llvm.handle.?,
-                                            .aggregate = old_slice_pointer,
-                                            .indices = &.{ slice_expression.start.llvm.? },
-                                        });
-                                        _ = module.create_store(.{
-                                            .source_value = slice_pointer,
-                                            .destination_value = left.llvm.?,
-                                            .source_type = slice_pointer_type,
-                                            .destination_type = slice_pointer_type,
-                                        });
-                                        const slice_length = module.llvm.builder.create_sub(old_slice_length, slice_expression.start.llvm.?);
-                                        const slice_length_destination = module.llvm.builder.create_struct_gep(value_type.llvm.handle.?.to_struct(), left.llvm.?, 1);
-                                        _ = module.create_store(.{
-                                            .source_value = slice_length,
-                                            .destination_value = slice_length_destination,
-                                            .source_type = slice_expression.start.type.?,
-                                            .destination_type = slice_expression.start.type.?,
-                                        });
-                                    }
-                                }
-                            },
-                        },
-                        else => @trap(),
-                    }
+                    const slice_values = module.emit_slice_expression(function, right);
+                    const slice_pointer_type = value_type.bb.structure.fields[0].type;
+                    _ = module.create_store(.{
+                        .source_value = slice_values[0],
+                        .destination_value = left.llvm.?,
+                        .source_type = slice_pointer_type,
+                        .destination_type = slice_pointer_type,
+                        .alignment = pointer_type.bb.pointer.alignment,
+                    });
+                    const slice_length_destination = module.llvm.builder.create_struct_gep(value_type.llvm.handle.?.to_struct(), left.llvm.?, 1);
+                    _ = module.create_store(.{
+                        .source_value = slice_values[1],
+                        .destination_value = slice_length_destination,
+                        .source_type = slice_expression.start.type.?,
+                        .destination_type = slice_expression.start.type.?,
+                    });
                 },
                 .zero => {
                     _ = module.llvm.builder.create_memset(left.llvm.?, module.integer_type(8, false).resolve(module).handle.get_zero().to_value(), module.integer_type(64, false).resolve(module).handle.to_integer().get_constant(value_type.get_byte_size(), 0).to_value(), pointer_type.bb.pointer.alignment);
