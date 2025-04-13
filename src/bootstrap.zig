@@ -689,10 +689,17 @@ pub const Value = struct {
         string_literal: []const u8,
         aggregate_initialization: AggregateInitialization,
         zero,
+        slice_expression: SliceExpression,
     },
     type: ?*Type = null,
     llvm: ?*llvm.Value = null,
     kind: Kind = .right,
+
+    pub const SliceExpression = struct {
+        array_like: *Value,
+        start: *Value,
+        end: ?*Value,
+    };
 
     pub const ArrayExpression = struct {
         array_like: *Value,
@@ -1755,6 +1762,18 @@ pub const Module = struct {
             .precedence = .postfix,
         };
         count += 1;
+        r[@intFromEnum(Token.Id.@"..")] = .{
+            .before = null,
+            .after = null,
+            .precedence = .none,
+        };
+        count += 1;
+        r[@intFromEnum(Token.Id.@"...")] = .{
+            .before = null,
+            .after = null,
+            .precedence = .none,
+        };
+        count += 1;
 
         assert(count == r.len);
         break :blk r;
@@ -1815,7 +1834,7 @@ pub const Module = struct {
                     },
                 };
 
-                if (module.content[module.offset] == '.') {
+                if (module.content[module.offset] == '.' and module.content[module.offset + 1] != '.') {
                     @trap();
                 } else {
                     break :blk .{ .integer = .{ .value = value, .kind = token_integer_kind } };
@@ -1823,7 +1842,7 @@ pub const Module = struct {
             },
             '1'...'9' => blk: {
                 const decimal = module.parse_decimal();
-                if (module.content[module.offset] == '.') {
+                if (module.content[module.offset] == '.' and module.content[module.offset + 1] != '.') {
                     @trap();
                 } else {
                     break :blk .{ .integer = .{ .value = decimal, .kind = .decimal } };
@@ -1945,18 +1964,26 @@ pub const Module = struct {
                 const next_ch = module.content[start_index + 1];
                 const token_id: Token.Id = switch (next_ch) {
                     else => .@".",
+                    '.' => switch (module.content[start_index + 2]) {
+                        '.' => .@"...",
+                        else => .@"..",
+                    },
                     '&' => .@".&",
                 };
 
                 module.offset += switch (token_id) {
                     .@"." => 1,
                     .@".&" => 2,
+                    .@".." => 2,
+                    .@"..." => 3,
                     else => @trap(),
                 };
                 const token = switch (token_id) {
                     else => unreachable,
                     inline .@".&",
                     .@".",
+                    .@"..",
+                    .@"...",
                     => |tid| @unionInit(Token, @tagName(tid), {}),
                 };
                 break :blk token;
@@ -2852,20 +2879,42 @@ pub const Module = struct {
         return value;
     }
 
-    // Array subscript
+    // Array-like subscript
     fn rule_after_bracket(noalias module: *Module, function: ?*Global, value_builder: Value.Builder) *Value {
         const left = value_builder.left orelse module.report_error();
         const index = module.parse_value(function, .{});
-        module.expect_character(right_bracket);
         const value = module.values.add();
-        value.* = .{
-            .bb = .{
-                .array_expression = .{
-                    .array_like = left,
-                    .index = index,
+        if (module.consume_character_if_match(right_bracket)) {
+            value.* = .{
+                .bb = .{
+                    .array_expression = .{
+                        .array_like = left,
+                        .index = index,
+                    },
+                    },
+                };
+        } else {
+            const start = index;
+            module.expect_character('.');
+            module.expect_character('.');
+            const end = switch (module.consume_character_if_match(right_bracket)) {
+                true => null,
+                false => b: {
+                    const end = module.parse_value(function, .{});
+                    module.expect_character(right_bracket);
+                    break :b end;
                 },
-            },
-        };
+            };
+            value.* = .{
+                .bb = .{
+                    .slice_expression = .{
+                        .array_like = left,
+                        .start = start,
+                        .end = end,
+                    },
+                },
+            };
+        }
         return value;
     }
 
@@ -5108,7 +5157,9 @@ pub const Module = struct {
 
                 assert(binary.left.type != null);
                 assert(binary.right.type != null);
-                assert(binary.left.type == binary.right.type);
+                if (binary.left.type.?.bb != .pointer and binary.right.type.?.bb != .pointer) {
+                    assert(binary.left.type == binary.right.type);
+                }
                 break :blk if (is_boolean) module.integer_type(1, false) else binary.left.type.?;
             },
             .variable_reference => |variable| switch (value.kind) {
@@ -5261,6 +5312,33 @@ pub const Module = struct {
                 }
             },
             .string_literal => module.get_slice_type(.{ .type = module.integer_type(8, false) }),
+            .slice_expression => |slice_expression| blk: {
+                module.analyze_value_type(function, slice_expression.array_like, .{});
+                const sliceable_type = slice_expression.array_like.type.?;
+                const element_type = switch (sliceable_type.bb) {
+                    .pointer => |pointer| pointer.type,
+                    .structure => |structure| b: {
+                        if (!structure.is_slice) {
+                            module.report_error();
+                        }
+                        break :b structure.fields[0].type.bb.pointer.type;
+                    },
+                    else => @trap(),
+                };
+                const index_type = module.integer_type(64, false);
+                module.analyze_value_type(function, slice_expression.start, .{ .type = index_type });
+                if (slice_expression.start.type.?.bb != .integer) {
+                    module.report_error();
+                }
+                if (slice_expression.end) |end| {
+                    module.analyze_value_type(function, end, .{ .type = index_type });
+                    if (end.type.?.bb != .integer) {
+                        module.report_error();
+                    }
+                }
+                const slice_type = module.get_slice_type(.{ .type = element_type });
+                break :blk slice_type;
+            },
             else => @trap(),
         };
 
@@ -6183,6 +6261,87 @@ pub const Module = struct {
                     //     @trap();
                     // }
                 },
+                .slice_expression => |slice_expression| {
+                    module.emit_value(function, slice_expression.array_like);
+                    switch (slice_expression.array_like.type.?.bb) {
+                        .pointer => |pointer| switch (slice_expression.array_like.kind) {
+                            .left => @trap(),
+                            .right => {
+                                const start = slice_expression.start;
+                                module.emit_value(function, start);
+                                const end = slice_expression.end orelse module.report_error();
+                                module.emit_value(function, end);
+                                const slice_pointer = module.llvm.builder.create_gep(.{
+                                    .type = pointer.type.llvm.handle.?,
+                                    .aggregate = slice_expression.array_like.llvm.?,
+                                    .indices = &.{ start.llvm.? },
+                                });
+                                _ = module.create_store(.{
+                                    .source_value = slice_pointer,
+                                    .destination_value = left.llvm.?,
+                                    .source_type = pointer.type,
+                                    .destination_type = pointer.type,
+                                    .alignment = pointer.alignment,
+                                });
+                                const slice_length = module.llvm.builder.create_sub(end.llvm.?, start.llvm.?);
+                                const slice_length_destination = module.llvm.builder.create_struct_gep(value_type.llvm.handle.?.to_struct(), left.llvm.?, 1);
+                                _ = module.create_store(.{
+                                    .source_value = slice_length,
+                                    .destination_value = slice_length_destination,
+                                    .source_type = slice_expression.start.type.?,
+                                    .destination_type = slice_expression.start.type.?,
+                                });
+                            },
+                        },
+                        .structure => |structure| switch (slice_expression.array_like.kind) {
+                            .left => @trap(),
+                            .right => {
+                                assert(structure.is_slice);
+                                const slice_pointer_type = value_type.bb.structure.fields[0].type;
+                                const slice_element_type = slice_pointer_type.bb.pointer.type;
+                                const is_start_zero = slice_expression.start.bb == .constant_integer and slice_expression.start.bb.constant_integer.value == 0;
+                                if (slice_expression.end) |end| {
+                                    _ = end;
+                                    @trap();
+                                } else {
+                                    if (is_start_zero) {
+                                        // TODO: consider if we should emit an error here or it be a NOP
+                                        _ = module.create_store(.{
+                                            .source_value = slice_expression.array_like.llvm.?,
+                                            .destination_value = left.llvm.?,
+                                            .source_type = value_type,
+                                            .destination_type = value_type,
+                                        });
+                                    } else {
+                                        module.emit_value(function, slice_expression.start);
+                                        const old_slice_pointer = module.llvm.builder.create_extract_value(slice_expression.array_like.llvm.?, 0);
+                                        const old_slice_length = module.llvm.builder.create_extract_value(slice_expression.array_like.llvm.?, 1);
+                                        const slice_pointer = module.llvm.builder.create_gep(.{
+                                            .type = slice_element_type.llvm.handle.?,
+                                            .aggregate = old_slice_pointer,
+                                            .indices = &.{ slice_expression.start.llvm.? },
+                                        });
+                                        _ = module.create_store(.{
+                                            .source_value = slice_pointer,
+                                            .destination_value = left.llvm.?,
+                                            .source_type = slice_pointer_type,
+                                            .destination_type = slice_pointer_type,
+                                        });
+                                        const slice_length = module.llvm.builder.create_sub(old_slice_length, slice_expression.start.llvm.?);
+                                        const slice_length_destination = module.llvm.builder.create_struct_gep(value_type.llvm.handle.?.to_struct(), left.llvm.?, 1);
+                                        _ = module.create_store(.{
+                                            .source_value = slice_length,
+                                            .destination_value = slice_length_destination,
+                                            .source_type = slice_expression.start.type.?,
+                                            .destination_type = slice_expression.start.type.?,
+                                        });
+                                    }
+                                }
+                            },
+                        },
+                        else => @trap(),
+                    }
+                },
                 else => @trap(),
             },
             .complex => @trap(),
@@ -6487,6 +6646,8 @@ const Token = union(Id) {
 
     @",",
     @".",
+    @"..",
+    @"...",
 
     const Id = enum {
         none,
@@ -6551,6 +6712,8 @@ const Token = union(Id) {
 
         @",",
         @".",
+        @"..",
+        @"...",
     };
 
     const Integer = struct {
