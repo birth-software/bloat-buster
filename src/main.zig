@@ -224,4 +224,6 @@ const names = &[_][]const u8{
     "indirect",
     "indirect_struct",
     "indirect_varargs",
+    "ret_c_bool",
+    "return_type_builtin",
 };
