@@ -5762,13 +5762,22 @@ pub const Module = struct {
                 },
                 .structure => |structure| switch (aggregate_initialization.is_constant) {
                     true => blk: {
-                        _ = structure;
                         var constant_buffer: [64]*llvm.Constant = undefined;
-                        const constants = constant_buffer[0..aggregate_initialization.values.len];
+                        const constants = constant_buffer[0..structure.fields.len];
                         _ = &constant_buffer;
-                        for (aggregate_initialization.values, constants) |field_value, *constant| {
+                        for (aggregate_initialization.values, constants[0..aggregate_initialization.values.len]) |field_value, *constant| {
                             module.emit_value(function, field_value);
                             constant.* = field_value.llvm.?.to_constant();
+                        }
+
+                        if (aggregate_initialization.zero) {
+                            if (aggregate_initialization.values.len == structure.fields.len) {
+                                module.report_error();
+                            }
+
+                            for (constants[aggregate_initialization.values.len..], structure.fields[aggregate_initialization.values.len..]) |*constant, *field| {
+                                constant.* = field.type.resolve(module).handle.get_zero();
+                            }
                         }
                         const constant_struct = value_type.resolve(module).handle.to_struct().get_constant(constants);
                         break :blk constant_struct.to_value();
@@ -6198,6 +6207,10 @@ pub const Module = struct {
                             };
                             module.emit_assignment(function, destination_value, initialization_value);
                         }
+
+                        if (aggregate_initialization.zero) {
+                            @trap();
+                        }
                     },
                 },
                 .string_literal => |string_literal| {
@@ -6367,6 +6380,9 @@ pub const Module = struct {
                         },
                         else => @trap(),
                     }
+                },
+                .zero => {
+                    _ = module.llvm.builder.create_memset(left.llvm.?, module.integer_type(8, false).resolve(module).handle.get_zero().to_value(), module.integer_type(64, false).resolve(module).handle.to_integer().get_constant(value_type.get_byte_size(), 0).to_value(), pointer_type.bb.pointer.alignment);
                 },
                 else => @trap(),
             },
