@@ -235,4 +235,6 @@ const names = &[_][]const u8{
     "struct_u64_u64",
     "struct_varargs",
     "struct_zero",
+    "unreachable",
+    "varargs",
 };

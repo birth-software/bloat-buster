@@ -690,6 +690,7 @@ pub const Value = struct {
         aggregate_initialization: AggregateInitialization,
         zero,
         slice_expression: SliceExpression,
+        @"unreachable",
     },
     type: ?*Type = null,
     llvm: ?*llvm.Value = null,
@@ -731,7 +732,7 @@ pub const Value = struct {
         trap,
         truncate: *Value,
         va_start,
-        va_end,
+        va_end: *Value,
         va_copy,
         va_arg: VaArg,
 
@@ -2494,6 +2495,9 @@ pub const Module = struct {
             .zero => .{
                 .bb = .zero,
             },
+            .@"unreachable" => .{
+                .bb = .@"unreachable",
+            },
             else => @trap(),
         };
         value.* = new_value;
@@ -2645,6 +2649,20 @@ pub const Module = struct {
                 break :blk .{
                     .bb = .{
                         .intrinsic = .va_start,
+                    },
+                };
+            },
+            .va_end => blk: {
+                module.skip_space();
+                module.expect_character(left_parenthesis);
+                module.skip_space();
+                const va_list = module.parse_value(function, .{});
+                module.expect_character(right_parenthesis);
+                break :blk .{
+                    .bb = .{
+                        .intrinsic = .{
+                            .va_end = va_list,
+                        },
                     },
                 };
             },
@@ -3935,7 +3953,7 @@ pub const Module = struct {
                                         switch (semantic_argument_value.kind) {
                                             .left => {
                                                 for (coerce_to_type.bb.structure.fields, 0..) |field, field_index| {
-                                                    const gep = module.llvm.builder.create_struct_gep(coerce_to_type.llvm.handle.?.to_struct(), source, @intCast(field_index));
+                                                    const gep = module.llvm.builder.create_struct_gep(coerce_to_type.resolve(module).handle.to_struct(), source, @intCast(field_index));
                                                     const maybe_undef = false;
                                                     if (maybe_undef) {
                                                         @trap();
@@ -5192,6 +5210,12 @@ pub const Module = struct {
                 },
                 .trap => module.noreturn_type,
                 .va_start => module.get_va_list_type(),
+                .va_end => |va_list| blk: {
+                    module.analyze_value_type(function, va_list, .{
+                        .type = module.get_pointer_type(.{ .type = module.get_va_list_type() }),
+                    });
+                    break :blk module.void_type;
+                },
                 .va_arg => |va_arg| blk: {
                     module.analyze_value_type(function, va_arg.list, .{
                         .type = module.get_pointer_type(.{ .type = module.get_va_list_type() }),
@@ -5346,6 +5370,7 @@ pub const Module = struct {
                 const slice_type = module.get_slice_type(.{ .type = element_type });
                 break :blk slice_type;
             },
+            .@"unreachable" => module.noreturn_type,
             else => @trap(),
         };
 
@@ -5567,6 +5592,17 @@ pub const Module = struct {
                     break :blk truncate;
                 },
                 .va_arg => module.emit_va_arg(function.?, value, null),
+                .va_end => |va_list| blk: {
+                    module.emit_value(function, va_list);
+
+                    const intrinsic_id = module.llvm.intrinsic_table.va_end;
+                    const argument_types: []const *llvm.Type = &.{module.llvm.pointer_type};
+                    const intrinsic_function = module.llvm.module.get_intrinsic_declaration(intrinsic_id, argument_types);
+                    const intrinsic_function_type = module.llvm.context.get_intrinsic_type(intrinsic_id, argument_types);
+                    const argument_values: []const *llvm.Value = &.{va_list.llvm.?};
+                    const llvm_value = module.llvm.builder.create_call(intrinsic_function_type, intrinsic_function, argument_values);
+                    break :blk llvm_value;
+                },
                 else => @trap(),
             },
             .dereference => |dereferenceable_value| blk: {
@@ -5789,6 +5825,11 @@ pub const Module = struct {
                 else => @trap(),
             },
             .zero => value_type.resolve(module).handle.get_zero().to_value(),
+            .@"unreachable" => b: {
+                const unreachable_value = module.llvm.builder.create_unreachable();
+                module.llvm.builder.clear_insertion_position();
+                break :b unreachable_value;
+            },
             else => @trap(),
         };
 
