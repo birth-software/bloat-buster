@@ -449,7 +449,7 @@ pub const Type = struct {
     pub fn is_signed(ty: *const Type) bool {
         return switch (ty.bb) {
             .integer => |integer| integer.signed,
-            // .bits => |bits| bits.backing_type.is_signed(),
+            .bits => |bits| bits.backing_type.is_signed(),
             else => @trap(),
         };
     }
@@ -477,7 +477,7 @@ pub const Type = struct {
     pub fn is_promotable_integer_type_for_abi(ty: *Type) bool {
         return switch (ty.bb) {
             .integer => |integer| integer.bit_count < 32,
-            // .bits => |bits| bits.backing_type.is_promotable_integer_type_for_abi(),
+            .bits => |bits| bits.backing_type.is_promotable_integer_type_for_abi(),
             else => @trap(),
         };
     }
@@ -504,6 +504,7 @@ pub const Type = struct {
             .pointer => 64,
             .bits => |bits| bits.backing_type.get_bit_alignment(),
             .array => |array| array.element_type.get_bit_alignment(),
+            .structure => |structure| structure.bit_alignment,
             else => @trap(),
         };
     }
@@ -514,6 +515,7 @@ pub const Type = struct {
             .structure => |structure| structure.byte_size,
             .pointer => 8,
             .array => |array| array.element_type.get_byte_size() * array.element_count,
+            .bits => |bits| bits.backing_type.get_byte_size(),
             else => @trap(),
         };
         return byte_size;
@@ -525,6 +527,7 @@ pub const Type = struct {
             .pointer => 64,
             .bits => |bits| bits.backing_type.get_bit_size(),
             .array => |array| array.element_type.get_bit_size() * array.element_count,
+            .structure => |structure| structure.bit_size,
             else => @trap(),
         };
         return bit_size;
@@ -1110,8 +1113,8 @@ pub const Module = struct {
                 const argument_attribute = &argument_attributes[abi_index];
 
                 argument_attribute.* = .{
-                    .semantic_type = argument_type_abi.semantic_type.llvm.handle.?,
-                    .abi_type = options.abi_argument_types[abi_index].llvm.handle.?,
+                    .semantic_type = argument_type_abi.semantic_type.resolve(module).handle,
+                    .abi_type = options.abi_argument_types[abi_index].resolve(module).handle,
                     .dereferenceable_bytes = 0,
                     .alignment = if (argument_type_abi.flags.kind == .indirect) 8 else 0,
                     .flags = .{
@@ -3813,15 +3816,13 @@ pub const Module = struct {
                 const raw_function_type = call.function_type;
                 // TODO: improve this code, which works for now
                 const llvm_callable = switch (call.callable.bb) {
-                    .variable_reference => |variable| switch (call.callable.kind) {
-                        .left => switch (call.callable.type == raw_function_type) {
-                            true => unreachable,
-                            false => variable.storage.?.llvm.?,
+                    .variable_reference => |variable| switch (variable.type.?.bb) {
+                        .pointer => |pointer| switch (pointer.type.bb) {
+                            .function => module.create_load(.{ .type = module.get_pointer_type(.{ .type = raw_function_type }), .value = variable.storage.?.llvm.? }),
+                            else => @trap(),
                         },
-                        .right => switch (call.callable.type == raw_function_type) {
-                            true => variable.storage.?.llvm.?,
-                            false => module.create_load(.{ .type = module.get_pointer_type(.{ .type = raw_function_type }), .value = variable.storage.?.llvm.? }),
-                        },
+                        .function => variable.storage.?.llvm.?,
+                        else => @trap(),
                     },
                     else => @trap(),
                 };
@@ -5037,13 +5038,13 @@ pub const Module = struct {
             },
             .call => |*call| {
                 module.analyze_value_type(function, call.callable, .{});
-                call.function_type = switch (call.callable.type.?.bb) {
-                    .function => blk: {
-                        assert(call.callable.kind == .right);
-                        break :blk call.callable.type.?;
-                    },
-                    .pointer => |pointer| switch (pointer.type.bb) {
-                        .function => pointer.type,
+                call.function_type = switch (call.callable.bb) {
+                    .variable_reference => |variable| switch (variable.type.?.bb) {
+                        .function => variable.type.?,
+                        .pointer => |pointer| switch (pointer.type.bb) {
+                            .function => pointer.type,
+                            else => @trap(),
+                        },
                         else => @trap(),
                     },
                     else => @trap(),
@@ -5311,6 +5312,14 @@ pub const Module = struct {
                     const enum_backing_type = enum_value.type.?.bb.enumerator.backing_type;
                     break :blk enum_backing_type;
                 },
+                .int_from_pointer => |pointer_value| blk: {
+                    module.analyze_value_type(function, pointer_value, .{});
+                    if (pointer_value.type.?.bb != .pointer) {
+                        module.report_error();
+                    }
+                    const int_ty = module.integer_type(64, false);
+                    break :blk int_ty;
+                },
                 .trap => module.noreturn_type,
                 .va_start => module.get_va_list_type(),
                 .va_end => |va_list| blk: {
@@ -5337,14 +5346,14 @@ pub const Module = struct {
             },
             .call => |*call| blk: {
                 module.analyze_value_type(function, call.callable, .{});
-                call.function_type = switch (call.callable.type.?.bb) {
-                    .pointer => |pointer| switch (pointer.type.bb) {
-                        .function => pointer.type,
+                call.function_type = switch (call.callable.bb) {
+                    .variable_reference => |variable| switch (variable.type.?.bb) {
+                        .function => variable.type.?,
+                        .pointer => |pointer| switch (pointer.type.bb) {
+                            .function => pointer.type,
+                            else => @trap(),
+                        },
                         else => @trap(),
-                    },
-                    .function => b: {
-                        assert(call.callable.kind == .right);
-                        break :b call.callable.type.?;
                     },
                     else => @trap(),
                 };
@@ -7353,7 +7362,7 @@ pub const Abi = struct {
 
             switch (ty.bb) {
                 .void, .noreturn => result[current_index] = .none,
-                // .bits => result[current_index] = .integer,
+                .bits => result[current_index] = .integer,
                 .pointer => result[current_index] = .integer,
                 .integer => |integer| {
                     if (integer.bit_count <= 64) {
@@ -7488,9 +7497,9 @@ pub const Abi = struct {
 
         fn get_int_type_at_offset(module: *Module, ty: *Type, offset: u32, source_type: *Type, source_offset: u32) *Type {
             switch (ty.bb) {
-                // .bits => |bits| {
-                //     return get_int_type_at_offset(module, bits.backing_type, offset, if (source_type == ty) bits.backing_type else source_type, source_offset);
-                // },
+                .bits => |bits| {
+                    return get_int_type_at_offset(module, bits.backing_type, offset, if (source_type == ty) bits.backing_type else source_type, source_offset);
+                },
                 .integer => |integer_type| {
                     switch (integer_type.bit_count) {
                         64 => return ty,

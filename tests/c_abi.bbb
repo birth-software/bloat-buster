@@ -330,7 +330,7 @@ require = fn (ok: u1) void
 
 [export] bb_ptr = fn [cc(c)] (x: &u8) void
 {
-    require(#cast_to(u64, x) == 0xdeadbeef);
+    require(#int_from_pointer(x) == 0xdeadbeef);
 }
 
 [export] bb_five_integers = fn [cc(c)] (a: s32, b: s32, c: s32, d: s32, e: s32) void
