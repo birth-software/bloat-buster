@@ -22,7 +22,7 @@ c_string_to_slice = fn (c_string: &u8) []u8
 
 string_equal = fn(a: []u8, b: []u8) u1
 {
-    >result: #ReturnType() = 0;
+    >result: #ReturnType = 0;
 
     if (a.length == b.length)
     {

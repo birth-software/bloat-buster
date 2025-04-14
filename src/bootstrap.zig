@@ -528,6 +528,7 @@ pub const Type = struct {
             .bits => |bits| bits.backing_type.get_bit_size(),
             .array => |array| array.element_type.get_bit_size() * array.element_count,
             .structure => |structure| structure.bit_size,
+            .enumerator => |enumerator| enumerator.backing_type.get_bit_size(),
             else => @trap(),
         };
         return bit_size;
@@ -699,6 +700,7 @@ pub const Value = struct {
         zero,
         slice_expression: SliceExpression,
         @"unreachable",
+        undefined,
     },
     type: ?*Type = null,
     llvm: ?*llvm.Value = null,
@@ -729,8 +731,6 @@ pub const Value = struct {
 
     const Intrinsic = union(Id) {
         byte_size: *Type,
-        cast,
-        cast_to,
         extend: *Value,
         integer_max: *Type,
         int_from_enum: *Value,
@@ -746,8 +746,6 @@ pub const Value = struct {
 
         const Id = enum {
             byte_size,
-            cast,
-            cast_to,
             extend,
             integer_max,
             int_from_enum,
@@ -780,7 +778,16 @@ pub const Value = struct {
             .variable_reference => false,
             .aggregate_initialization => |aggregate_initialization| aggregate_initialization.is_constant,
             .field_access => false,
+            .binary => false,
             .array_initialization => |array_initialization| array_initialization.is_constant,
+            .intrinsic => |intrinsic| switch (intrinsic) {
+                .byte_size,
+                .integer_max,
+                => true,
+                else => false,
+            },
+            .undefined => true,
+            .call => false,
             else => @trap(),
         };
     }
@@ -1327,13 +1334,13 @@ pub const Module = struct {
 
                         const element_count: u64 = switch (length_inferred) {
                             true => 0,
-                           false => b: {
-                               const v = module.parse_integer_value(false);
-                               if (v == 0) {
-                                   module.report_error();
-                               }
-                               break :b v;
-                           },
+                            false => b: {
+                                const v = module.parse_integer_value(false);
+                                if (v == 0) {
+                                    module.report_error();
+                                }
+                                break :b v;
+                            },
                         };
 
                         if (!length_inferred) {
@@ -2534,7 +2541,9 @@ pub const Module = struct {
             .@"unreachable" => .{
                 .bb = .@"unreachable",
             },
-            else => @trap(),
+            .undefined => .{
+                .bb = .undefined,
+            },
         };
         value.* = new_value;
         return value;
@@ -2766,6 +2775,10 @@ pub const Module = struct {
             .@">>" => .@">>",
             .@"==" => .@"==",
             .@"!=" => .@"!=",
+            .@">=" => .@">=",
+            .@"<=" => .@"<=",
+            .@">" => .@">",
+            .@"<" => .@"<",
             else => @trap(),
         };
 
@@ -2946,8 +2959,8 @@ pub const Module = struct {
                         .array_like = left,
                         .index = index,
                     },
-                    },
-                };
+                },
+            };
         } else {
             const start = index;
             module.expect_character('.');
@@ -3701,7 +3714,7 @@ pub const Module = struct {
         module.llvm.builder.position_at_end(block);
     }
 
-    pub fn emit_va_arg(module: *Module, function: *Global, value: *Value, left: ?*Value) *llvm.Value {
+    pub fn emit_va_arg(module: *Module, function: *Global, value: *Value, left_llvm: ?*llvm.Value, left_type: ?*Type) *llvm.Value {
         switch (value.bb) {
             .intrinsic => |intrinsic| switch (intrinsic) {
                 .va_arg => |va_arg| {
@@ -3796,9 +3809,9 @@ pub const Module = struct {
                     };
                     const result = switch (va_arg.type.get_evaluation_kind()) {
                         .scalar => module.create_load(.{ .type = va_arg.type, .value = llvm_address }),
-                        .aggregate => if (left) |l| b: {
-                            _ = module.llvm.builder.create_memcpy(l.llvm.?, l.type.?.bb.pointer.alignment, llvm_address, va_arg.type.get_byte_alignment(), module.integer_type(64, false).resolve(module).handle.to_integer().get_constant(va_arg.type.get_byte_size(), 0).to_value());
-                            break :b l.llvm.?;
+                        .aggregate => if (left_llvm) |l| b: {
+                            _ = module.llvm.builder.create_memcpy(l, left_type.?.bb.pointer.alignment, llvm_address, va_arg.type.get_byte_alignment(), module.integer_type(64, false).resolve(module).handle.to_integer().get_constant(va_arg.type.get_byte_size(), 0).to_value());
+                            break :b l;
                         } else llvm_address,
                         .complex => @trap(),
                     };
@@ -3810,7 +3823,7 @@ pub const Module = struct {
         }
     }
 
-    pub fn emit_call(module: *Module, function: *Global, value: *Value, left: ?*Value) *llvm.Value {
+    pub fn emit_call(module: *Module, function: *Global, value: *Value, left_llvm: ?*llvm.Value, left_type: ?*Type) *llvm.Value {
         switch (value.bb) {
             .call => |call| {
                 const raw_function_type = call.function_type;
@@ -3850,9 +3863,9 @@ pub const Module = struct {
                         // - virtual function pointer thunk
                         // - return alloca already exists
                         const semantic_return_type = function_type.return_abi.semantic_type;
-                        const pointer = if (left) |l| b: {
-                            assert(l.type.?.bb.pointer.type == semantic_return_type);
-                            break :b l.llvm.?;
+                        const pointer = if (left_llvm) |l| b: {
+                            assert(left_type.?.bb.pointer.type == semantic_return_type);
+                            break :b l;
                         } else b: {
                             const temporal_alloca = module.create_alloca(.{ .type = semantic_return_type, .name = "tmp" });
                             break :b temporal_alloca;
@@ -4081,36 +4094,44 @@ pub const Module = struct {
 
                                 if (abi_argument_type == semantic_argument_value.type) {
                                     @trap();
-                                } else if (abi_argument_type.bb == .pointer and abi_argument_type.bb.pointer.type == semantic_argument_value.type) {
-                                    switch (semantic_argument_value.is_constant()) {
-                                        true => {
-                                            module.emit_value(function, semantic_argument_value);
-                                            const global_variable = module.llvm.module.create_global_variable(.{
-                                                .linkage = .InternalLinkage,
-                                                .name = "conststruct", // TODO: format properly
-                                                .initial_value = semantic_argument_value.llvm.?.to_constant(),
-                                                .type = semantic_argument_type.resolve(module).handle,
-                                            });
-                                            global_variable.set_unnamed_address(.global);
-                                            const alignment = semantic_argument_type.get_byte_alignment();
-                                            global_variable.to_value().set_alignment(alignment);
-                                            llvm_abi_argument_value_buffer[abi_argument_count] = global_variable.to_value();
+                                } else if (abi_argument_type.bb == .pointer and abi_argument_type.bb.pointer.type == semantic_argument_value.type) switch (semantic_argument_value.is_constant()) {
+                                    true => {
+                                        module.emit_value(function, semantic_argument_value);
+                                        const global_variable = module.llvm.module.create_global_variable(.{
+                                            .linkage = .InternalLinkage,
+                                            .name = "conststruct", // TODO: format properly
+                                            .initial_value = semantic_argument_value.llvm.?.to_constant(),
+                                            .type = semantic_argument_type.resolve(module).handle,
+                                        });
+                                        global_variable.set_unnamed_address(.global);
+                                        const alignment = semantic_argument_type.get_byte_alignment();
+                                        global_variable.to_value().set_alignment(alignment);
+                                        llvm_abi_argument_value_buffer[abi_argument_count] = global_variable.to_value();
+                                        abi_argument_count += 1;
+                                        break :indirect;
+                                    },
+                                    false => switch (semantic_argument_value.bb) {
+                                        .variable_reference => {
+                                            const pointer_type = module.get_pointer_type(.{ .type = semantic_argument_value.type.? });
+                                            semantic_argument_value.type = null;
+                                            semantic_argument_value.kind = .left;
+                                            module.analyze(function, semantic_argument_value, .{ .type = pointer_type });
+                                            llvm_abi_argument_value_buffer[abi_argument_count] = semantic_argument_value.llvm.?;
                                             abi_argument_count += 1;
                                             break :indirect;
                                         },
-                                        false => switch (semantic_argument_value.kind) {
-                                            .left => module.report_error(),
-                                            .right => {
-                                                semantic_argument_value.kind = .left;
-                                                semantic_argument_value.type = module.get_pointer_type(.{ .type = semantic_argument_value.type.? });
-                                                module.emit_value(function, semantic_argument_value);
-                                                assert(abi_argument_type == semantic_argument_value.type);
-                                                llvm_abi_argument_value_buffer[abi_argument_count] = semantic_argument_value.llvm.?;
-                                                abi_argument_count += 1;
-                                                break :indirect;
-                                            },
+                                        else => {
+                                            assert(abi_argument_type.bb.pointer.type == semantic_argument_value.type);
+                                            const alloca = module.create_alloca(.{
+                                                .type = semantic_argument_value.type.?,
+                                            });
+                                            const pointer_type = module.get_pointer_type(.{ .type = semantic_argument_value.type.? });
+                                            module.emit_assignment(function, alloca, pointer_type, semantic_argument_value);
+                                            llvm_abi_argument_value_buffer[abi_argument_count] = alloca;
+                                            abi_argument_count += 1;
+                                            break :indirect;
                                         },
-                                    }
+                                    },
                                 } else {
                                     @trap();
                                 }
@@ -4223,9 +4244,9 @@ pub const Module = struct {
                             @trap();
                         }
 
-                        const coerce_alloca = if (left) |l| b: {
-                            assert(l.type.?.bb.pointer.type == return_type_abi.semantic_type);
-                            break :b l.llvm.?;
+                        const coerce_alloca = if (left_llvm) |l| b: {
+                            assert(left_type.?.bb.pointer.type == return_type_abi.semantic_type);
+                            break :b l;
                         } else module.create_alloca(.{ .type = return_type_abi.semantic_type, .name = "coerce" });
                         var destination_pointer = switch (return_type_abi.attributes.direct.offset == 0) {
                             true => coerce_alloca,
@@ -4717,6 +4738,15 @@ pub const Module = struct {
                 },
                 .global => {
                     module.analyze(null, global.variable.initial_value, .{ .type = global.variable.type });
+
+                    if (global.variable.type == null) {
+                        global.variable.type = global.variable.initial_value.type;
+                    }
+
+                    if (global.variable.type != global.variable.initial_value.type) {
+                        module.report_error();
+                    }
+
                     const global_variable = module.llvm.module.create_global_variable(.{
                         .linkage = switch (global.linkage) {
                             .internal => .InternalLinkage,
@@ -5250,6 +5280,13 @@ pub const Module = struct {
                     module.report_error();
                 }
             },
+            .undefined => {},
+            .string_literal => {
+                const slice_type = module.get_slice_type(.{ .type = module.integer_type(8, false) });
+                if (expected_type != slice_type) {
+                    module.report_error();
+                }
+            },
             else => @trap(),
         };
 
@@ -5505,7 +5542,7 @@ pub const Module = struct {
                             const slice_pointer = module.llvm.builder.create_gep(.{
                                 .type = pointer.type.llvm.handle.?,
                                 .aggregate = slice_expression.array_like.llvm.?,
-                                .indices = &.{ start.llvm.? },
+                                .indices = &.{start.llvm.?},
                             });
                             const slice_length = module.llvm.builder.create_sub(end.llvm.?, start.llvm.?);
                             return .{ slice_pointer, slice_length };
@@ -5532,14 +5569,14 @@ pub const Module = struct {
                                     const slice_pointer = module.llvm.builder.create_gep(.{
                                         .type = slice_element_type.llvm.handle.?,
                                         .aggregate = old_slice_pointer,
-                                        .indices = &.{ slice_expression.start.llvm.? },
+                                        .indices = &.{slice_expression.start.llvm.?},
                                     });
                                     const slice_length = module.llvm.builder.create_sub(old_slice_length, slice_expression.start.llvm.?);
                                     return .{ slice_pointer, slice_length };
                                 }
                             }
                         },
-                        },
+                    },
                     else => @trap(),
                 }
             },
@@ -5761,7 +5798,7 @@ pub const Module = struct {
                     const truncate = module.llvm.builder.create_truncate(llvm_value, value_type.llvm.handle.?);
                     break :blk truncate;
                 },
-                .va_arg => module.emit_va_arg(function.?, value, null),
+                .va_arg => module.emit_va_arg(function.?, value, null, null),
                 .va_end => |va_list| blk: {
                     module.emit_value(function, va_list);
 
@@ -5787,7 +5824,7 @@ pub const Module = struct {
                 };
                 break :blk result;
             },
-            .call => module.emit_call(function.?, value, null),
+            .call => module.emit_call(function.?, value, null, null),
             .array_initialization => |array_initialization| switch (array_initialization.is_constant) {
                 true => blk: {
                     var llvm_value_buffer: [64]*llvm.Constant = undefined;
@@ -5911,7 +5948,7 @@ pub const Module = struct {
                         break field.value;
                     }
                 } else module.report_error();
-                const llvm_value = value_type.llvm.handle.?.to_integer().get_constant(enum_int_value, @intFromBool(false));
+                const llvm_value = value_type.resolve(module).handle.to_integer().get_constant(enum_int_value, @intFromBool(false));
                 break :blk llvm_value.to_value();
             },
             .field_access => |field_access| blk: {
@@ -5969,7 +6006,6 @@ pub const Module = struct {
                                 }
                             } else unreachable;
                             const field = &bits.fields[declaration_index];
-                            _ = field.bit_offset;
 
                             const fv = switch (field_value.bb) {
                                 .constant_integer => |ci| ci.value,
@@ -5981,15 +6017,30 @@ pub const Module = struct {
                         const llvm_value = bits.backing_type.resolve(module).handle.to_integer().get_constant(bits_value, @intFromBool(false));
                         break :blk llvm_value.to_value();
                     },
-                    false => {
-                        @trap();
+                    false => blk: {
+                        const llvm_type = bits.backing_type.resolve(module).handle;
+                        const zero_value = llvm_type.get_zero();
+                        var result = zero_value.to_value();
+                        for (aggregate_initialization.names, aggregate_initialization.values) |field_name, field_value| {
+                            const declaration_index = for (bits.fields, 0..) |field, declaration_index| {
+                                if (lib.string.equal(field_name, field.name)) {
+                                    break declaration_index;
+                                }
+                            } else unreachable;
+                            const field = &bits.fields[declaration_index];
+                            module.emit_value(function, field_value);
+                            const extended = module.llvm.builder.create_zero_extend(field_value.llvm.?, llvm_type);
+                            const shl = module.llvm.builder.create_shl(extended, llvm_type.to_integer().get_constant(field.bit_offset, 0).to_value());
+                            const or_value = module.llvm.builder.create_or(result, shl);
+                            result = or_value;
+                        }
+                        break :blk result;
                     },
                 },
                 .structure => |structure| switch (aggregate_initialization.is_constant) {
                     true => blk: {
                         var constant_buffer: [64]*llvm.Constant = undefined;
                         const constants = constant_buffer[0..structure.fields.len];
-                        _ = &constant_buffer;
                         for (aggregate_initialization.values, constants[0..aggregate_initialization.values.len]) |field_value, *constant| {
                             module.emit_value(function, field_value);
                             constant.* = field_value.llvm.?.to_constant();
@@ -6011,6 +6062,7 @@ pub const Module = struct {
                         @trap();
                     },
                 },
+                .pointer => module.report_error(),
                 else => @trap(),
             },
             .zero => value_type.resolve(module).handle.get_zero().to_value(),
@@ -6025,6 +6077,30 @@ pub const Module = struct {
                 const slice_poison = value_type.resolve(module).handle.get_poison();
                 const slice_pointer = module.llvm.builder.create_insert_value(slice_poison, slice_values[0], 0);
                 const slice_length = module.llvm.builder.create_insert_value(slice_pointer, slice_values[1], 1);
+                const slice_value = slice_length;
+                break :blk slice_value;
+            },
+            .undefined => value_type.resolve(module).handle.get_poison(),
+            .string_literal => |string_literal| blk: {
+                const null_terminate = true;
+                const constant_string = module.llvm.context.get_constant_string(string_literal, null_terminate);
+
+                const u8_type = module.integer_type(8, false);
+                const global_variable = module.llvm.module.create_global_variable(.{
+                    .linkage = .InternalLinkage,
+                    .name = "conststring",
+                    .initial_value = constant_string,
+                    .type = u8_type.llvm.handle.?.get_array_type(string_literal.len + @intFromBool(null_terminate)).to_type(),
+                });
+                global_variable.set_unnamed_address(.global);
+
+                const slice_type = module.get_slice_type(.{
+                    .type = u8_type,
+                });
+                assert(value_type == slice_type);
+                const slice_poison = slice_type.resolve(module).handle.get_poison();
+                const slice_pointer = module.llvm.builder.create_insert_value(slice_poison, global_variable.to_value(), 0);
+                const slice_length = module.llvm.builder.create_insert_value(slice_pointer, module.integer_type(64, false).resolve(module).handle.to_integer().get_constant(string_literal.len, 0).to_value(), 1);
                 const slice_value = slice_length;
                 break :blk slice_value;
             },
@@ -6176,14 +6252,14 @@ pub const Module = struct {
                     if (expected_type) |lvt| assert(lvt == local.variable.type);
                     module.emit_local_storage(local, last_statement_debug_location);
 
-                    module.emit_assignment(function, local.variable.storage.?, local.variable.initial_value);
+                    module.emit_assignment(function, local.variable.storage.?.llvm.?, local.variable.storage.?.type.?, local.variable.initial_value);
                 },
                 .assignment => |assignment| {
                     module.analyze(function, assignment.left, .{});
                     switch (assignment.kind) {
                         .@"=" => {
                             module.analyze_value_type(function, assignment.right, .{ .type = assignment.left.type.?.bb.pointer.type });
-                            module.emit_assignment(function, assignment.left, assignment.right);
+                            module.emit_assignment(function, assignment.left.llvm.?, assignment.left.type.?, assignment.right);
                         },
                         else => |kind| {
                             const pointer_type = assignment.left.type.?.bb.pointer;
@@ -6376,10 +6452,9 @@ pub const Module = struct {
         }
     }
 
-    fn emit_assignment(module: *Module, function: *Global, left: *Value, right: *Value) void {
-        assert(left.llvm != null);
+    fn emit_assignment(module: *Module, function: *Global, left_llvm: *llvm.Value, left_type: *Type, right: *Value) void {
         assert(right.llvm == null);
-        const pointer_type = left.type.?;
+        const pointer_type = left_type;
         const value_type = right.type.?;
         assert(pointer_type.bb == .pointer);
         assert(pointer_type.bb.pointer.type == value_type);
@@ -6389,7 +6464,7 @@ pub const Module = struct {
                 module.emit_value(function, right);
                 _ = module.create_store(.{
                     .source_value = right.llvm.?,
-                    .destination_value = left.llvm.?,
+                    .destination_value = left_llvm,
                     .source_type = value_type,
                     .destination_type = value_type,
                     .alignment = pointer_type.bb.pointer.alignment,
@@ -6409,7 +6484,7 @@ pub const Module = struct {
                         const element_type = value_type.bb.array.element_type;
                         const alignment = element_type.get_byte_alignment();
                         global_variable.to_value().set_alignment(alignment);
-                        _ = module.llvm.builder.create_memcpy(left.llvm.?, pointer_type.bb.pointer.alignment, global_variable.to_value(), alignment, module.integer_type(64, false).resolve(module).handle.to_integer().get_constant(array_initialization.values.len * pointer_type.bb.pointer.type.bb.array.element_type.get_byte_size(), @intFromBool(false)).to_value());
+                        _ = module.llvm.builder.create_memcpy(left_llvm, pointer_type.bb.pointer.alignment, global_variable.to_value(), alignment, module.integer_type(64, false).resolve(module).handle.to_integer().get_constant(array_initialization.values.len * pointer_type.bb.pointer.type.bb.array.element_type.get_byte_size(), @intFromBool(false)).to_value());
                     },
                     false => @trap(),
                 },
@@ -6425,30 +6500,46 @@ pub const Module = struct {
                         global_variable.set_unnamed_address(.global);
                         const alignment = value_type.get_byte_alignment();
                         global_variable.to_value().set_alignment(alignment);
-                        _ = module.llvm.builder.create_memcpy(left.llvm.?, pointer_type.bb.pointer.alignment, global_variable.to_value(), alignment, module.integer_type(64, false).resolve(module).handle.to_integer().get_constant(value_type.get_byte_size(), @intFromBool(false)).to_value());
+                        _ = module.llvm.builder.create_memcpy(left_llvm, pointer_type.bb.pointer.alignment, global_variable.to_value(), alignment, module.integer_type(64, false).resolve(module).handle.to_integer().get_constant(value_type.get_byte_size(), @intFromBool(false)).to_value());
                     },
                     false => {
+                        var max_field_index: u64 = 0;
+                        var field_mask: u64 = 0;
+                        const fields = value_type.bb.structure.fields;
+                        assert(fields.len <= 64);
                         for (aggregate_initialization.values, aggregate_initialization.names) |initialization_value, initialization_name| {
-                            const field_index = for (value_type.bb.structure.fields, 0..) |*field, field_index| {
+                            const field_index = for (fields, 0..) |*field, field_index| {
                                 if (lib.string.equal(field.name, initialization_name)) {
                                     break field_index;
                                 }
                             } else module.report_error();
-                            const field = &value_type.bb.structure.fields[field_index];
-                            const destination_pointer = module.llvm.builder.create_struct_gep(value_type.llvm.handle.?.to_struct(), left.llvm.?, @intCast(field_index));
-                            // Create an auxiliary value
-                            const destination_value = module.values.add();
-                            destination_value.* = .{
-                                .bb = .local, // This does not matter
-                                .llvm = destination_pointer,
-                                .type = module.get_pointer_type(.{ .type = field.type }),
-                                .kind = .left,
-                            };
-                            module.emit_assignment(function, destination_value, initialization_value);
+                            field_mask |= @as(@TypeOf(field_mask), 1) << @intCast(field_index);
+                            max_field_index = @max(field_index, max_field_index);
+                            const field = &fields[field_index];
+                            const destination_pointer = module.llvm.builder.create_struct_gep(value_type.llvm.handle.?.to_struct(), left_llvm, @intCast(field_index));
+                            module.emit_assignment(function, destination_pointer, module.get_pointer_type(.{ .type = field.type }), initialization_value);
                         }
 
                         if (aggregate_initialization.zero) {
-                            @trap();
+                            const buffer_field_count: u64 = @bitSizeOf(@TypeOf(field_mask));
+                            const raw_end_uninitialized_field_count = @clz(field_mask);
+                            const unused_buffer_field_count = buffer_field_count - fields.len;
+                            const end_uninitialized_field_count = raw_end_uninitialized_field_count - unused_buffer_field_count;
+                            const initialized_field_count = @popCount(field_mask);
+                            const uninitialized_field_count = fields.len - initialized_field_count;
+                            if (uninitialized_field_count != end_uninitialized_field_count) {
+                                @trap();
+                            }
+
+                            if (end_uninitialized_field_count == 0) {
+                                module.report_error();
+                            }
+
+                            const field_index_offset = fields.len - end_uninitialized_field_count;
+                            const destination_pointer = module.llvm.builder.create_struct_gep(value_type.llvm.handle.?.to_struct(), left_llvm, @intCast(field_index_offset));
+                            const start_field = &fields[field_index_offset];
+                            const memset_size = value_type.get_byte_size() - start_field.byte_offset;
+                            _ = module.llvm.builder.create_memset(destination_pointer, module.integer_type(8, false).resolve(module).handle.get_zero().to_value(), module.integer_type(64, false).resolve(module).handle.to_integer().get_constant(memset_size, 0).to_value(), pointer_type.bb.pointer.alignment);
                         }
                     },
                 },
@@ -6459,7 +6550,7 @@ pub const Module = struct {
                     const u8_type = module.integer_type(8, false);
                     const global_variable = module.llvm.module.create_global_variable(.{
                         .linkage = .InternalLinkage,
-                        .name = module.arena.join_string(&.{"conststring"}),
+                        .name = "conststring",
                         .initial_value = constant_string,
                         .type = u8_type.llvm.handle.?.get_array_type(string_literal.len + @intFromBool(null_terminate)).to_type(),
                     });
@@ -6473,7 +6564,7 @@ pub const Module = struct {
                         .structure => |structure| switch (structure.is_slice) {
                             true => switch (slice_type == value_type) {
                                 true => {
-                                    const pointer_to_pointer = module.llvm.builder.create_struct_gep(slice_type.llvm.handle.?.to_struct(), left.llvm.?, 0);
+                                    const pointer_to_pointer = module.llvm.builder.create_struct_gep(slice_type.llvm.handle.?.to_struct(), left_llvm, 0);
                                     const slice_pointer_type = slice_type.bb.structure.fields[0].type;
                                     _ = module.create_store(.{
                                         .destination_value = pointer_to_pointer,
@@ -6481,7 +6572,7 @@ pub const Module = struct {
                                         .source_type = slice_pointer_type,
                                         .destination_type = slice_pointer_type,
                                     });
-                                    const pointer_to_length = module.llvm.builder.create_struct_gep(slice_type.llvm.handle.?.to_struct(), left.llvm.?, 1);
+                                    const pointer_to_length = module.llvm.builder.create_struct_gep(slice_type.llvm.handle.?.to_struct(), left_llvm, 1);
                                     const slice_length_type = slice_type.bb.structure.fields[1].type;
                                     const slice_length_value = slice_length_type.llvm.handle.?.to_integer().get_constant(string_literal.len, @intFromBool(false)).to_value();
                                     _ = module.create_store(.{
@@ -6506,12 +6597,12 @@ pub const Module = struct {
                         const argument_types: []const *llvm.Type = &.{module.llvm.pointer_type};
                         const intrinsic_function = module.llvm.module.get_intrinsic_declaration(intrinsic_id, argument_types);
                         const intrinsic_function_type = module.llvm.context.get_intrinsic_type(intrinsic_id, argument_types);
-                        const argument_values: []const *llvm.Value = &.{left.llvm.?};
+                        const argument_values: []const *llvm.Value = &.{left_llvm};
                         _ = module.llvm.builder.create_call(intrinsic_function_type, intrinsic_function, argument_values);
                     },
                     .va_arg => {
-                        const result = module.emit_va_arg(function, right, left);
-                        switch (result == left.llvm.?) {
+                        const result = module.emit_va_arg(function, right, left_llvm, left_type);
+                        switch (result == left_llvm) {
                             true => {},
                             false => switch (value_type.get_evaluation_kind()) {
                                 .scalar => {
@@ -6525,8 +6616,8 @@ pub const Module = struct {
                     else => @trap(),
                 },
                 .call => {
-                    const result = module.emit_call(function, right, left);
-                    assert(result == left.llvm);
+                    const result = module.emit_call(function, right, left_llvm, left_type);
+                    assert(result == left_llvm);
                     // if (result != left.llvm) {
                     //     const call_ret_type_ev_kind = right.type.?.get_evaluation_kind();
                     //     switch (call_ret_type_ev_kind) {
@@ -6544,12 +6635,12 @@ pub const Module = struct {
                     const slice_pointer_type = value_type.bb.structure.fields[0].type;
                     _ = module.create_store(.{
                         .source_value = slice_values[0],
-                        .destination_value = left.llvm.?,
+                        .destination_value = left_llvm,
                         .source_type = slice_pointer_type,
                         .destination_type = slice_pointer_type,
                         .alignment = pointer_type.bb.pointer.alignment,
                     });
-                    const slice_length_destination = module.llvm.builder.create_struct_gep(value_type.llvm.handle.?.to_struct(), left.llvm.?, 1);
+                    const slice_length_destination = module.llvm.builder.create_struct_gep(value_type.llvm.handle.?.to_struct(), left_llvm, 1);
                     _ = module.create_store(.{
                         .source_value = slice_values[1],
                         .destination_value = slice_length_destination,
@@ -6558,7 +6649,7 @@ pub const Module = struct {
                     });
                 },
                 .zero => {
-                    _ = module.llvm.builder.create_memset(left.llvm.?, module.integer_type(8, false).resolve(module).handle.get_zero().to_value(), module.integer_type(64, false).resolve(module).handle.to_integer().get_constant(value_type.get_byte_size(), 0).to_value(), pointer_type.bb.pointer.alignment);
+                    _ = module.llvm.builder.create_memset(left_llvm, module.integer_type(8, false).resolve(module).handle.get_zero().to_value(), module.integer_type(64, false).resolve(module).handle.to_integer().get_constant(value_type.get_byte_size(), 0).to_value(), pointer_type.bb.pointer.alignment);
                 },
                 else => @trap(),
             },
