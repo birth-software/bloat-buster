@@ -30,9 +30,6 @@ const Compile = struct {
 };
 
 fn compile_file(arena: *Arena, compile: Compile) compiler.Options {
-    const checkpoint = arena.position;
-    defer arena.restore(checkpoint);
-
     const relative_file_path = compile.relative_file_path;
     if (relative_file_path.len < 5) {
         fail();
@@ -112,11 +109,28 @@ pub fn entry_point(arguments: []const [*:0]const u8, environment: [*:null]const 
 
     switch (command) {
         .compile => {
+            if (arguments.len < 3) {
+                lib.libc.exit(1);
+            }
+
+            var build_mode = compiler.BuildMode.debug_none;
+            var has_debug_info = true;
+
+            if (arguments.len >= 4) {
+                const build_mode_string = lib.cstring.to_slice(arguments[3]);
+                build_mode = lib.string.to_enum(compiler.BuildMode, build_mode_string) orelse lib.libc.exit(1);
+            }
+
+            if (arguments.len >= 5) {
+                const has_debug_info_string = lib.cstring.to_slice(arguments[4]);
+                has_debug_info = if (lib.string.equal(has_debug_info_string, "true")) true else if (lib.string.equal(has_debug_info_string, "false")) false else lib.libc.exit(1);
+            }
+
             const relative_file_path = lib.cstring.to_slice(arguments[2]);
             _ = compile_file(arena, .{
                 .relative_file_path = relative_file_path,
-                .build_mode = .debug_none,
-                .has_debug_info = true,
+                .build_mode = build_mode,
+                .has_debug_info = has_debug_info,
                 .silent = false,
             });
         },
@@ -154,12 +168,61 @@ pub fn entry_point(arguments: []const [*:0]const u8, environment: [*:null]const 
                         });
 
                         if (!result.is_successful()) {
-                            lib.print_string("Failed to run test ");
+                            lib.print_string("[BOOTSTRAP] Failed to run test ");
                             lib.print_string(name);
                             lib.print_string(" with build mode ");
                             lib.print_string(@tagName(build_mode));
+                            lib.print_string("\n");
+
                             if (stop_at_failure) {
                                 lib.libc.exit(1);
+                            }
+                        }
+                    }
+                }
+            }
+
+            const relative_file_path = arena.join_string(&.{"src/compiler.bbb"});
+            for (build_modes) |build_mode| {
+                for ([2]bool{ true, false }) |has_debug_info| {
+                    const position = arena.position;
+                    defer arena.restore(position);
+
+                    const compile_result = compile_file(arena, .{
+                        .relative_file_path = relative_file_path,
+                        .build_mode = build_mode,
+                        .has_debug_info = has_debug_info,
+                        .silent = true,
+                    });
+
+                    for (names) |name| {
+                        for (build_modes) |self_hosted_build_mode| {
+                            for ([2]bool{ true, false }) |self_hosted_has_debug_info| {
+                                const self_hosted_relative_file_path = arena.join_string(&.{ "tests/", name, ".bbb" });
+                                // TODO: investigar corrupcion de memoria en compile_result.executable porque compile_file borra la memoria
+                                const result = lib.os.run_child_process(arena, &.{ compile_result.executable, "compile", self_hosted_relative_file_path, @tagName(self_hosted_build_mode), if (self_hosted_has_debug_info) "true" else "false" }, environment, .{
+                                    .stdout = .inherit,
+                                    .stderr = .inherit,
+                                    .null_file_descriptor = null,
+                                });
+
+                                if (!result.is_successful()) {
+                                    lib.print_string("[SELF-HOSTED] Failed to compile ");
+                                    lib.print_string(name);
+                                    lib.print_string(" with build mode ");
+                                    lib.print_string(@tagName(build_mode));
+                                    lib.print_string(" and debug info ");
+                                    lib.print_string(if (has_debug_info) "on" else "off");
+                                    lib.print_string(", with self-hosted build mode ");
+                                    lib.print_string(@tagName(self_hosted_build_mode));
+                                    lib.print_string(" and self-hosted debug info ");
+                                    lib.print_string(if (self_hosted_has_debug_info) "on" else "off");
+                                    lib.print_string("\n");
+
+                                    if (stop_at_failure) {
+                                        lib.libc.exit(1);
+                                    }
+                                }
                             }
                         }
                     }
