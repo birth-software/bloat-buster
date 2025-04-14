@@ -227,12 +227,12 @@ global_state_initialize = fn () void
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8) s32
 {
-    if (argument_count != 2)
+    if (argument_count < 2)
     {
         return 1;
     }
 
-    >relative_file_path_pointer = argv[1];
+    >relative_file_path_pointer = argv[2];
     if (!relative_file_path_pointer)
     {
         return 1;

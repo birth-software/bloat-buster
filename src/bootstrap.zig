@@ -6516,7 +6516,7 @@ pub const Module = struct {
                             field_mask |= @as(@TypeOf(field_mask), 1) << @intCast(field_index);
                             max_field_index = @max(field_index, max_field_index);
                             const field = &fields[field_index];
-                            const destination_pointer = module.llvm.builder.create_struct_gep(value_type.llvm.handle.?.to_struct(), left_llvm, @intCast(field_index));
+                            const destination_pointer = module.llvm.builder.create_struct_gep(value_type.resolve(module).handle.to_struct(), left_llvm, @intCast(field_index));
                             module.emit_assignment(function, destination_pointer, module.get_pointer_type(.{ .type = field.type }), initialization_value);
                         }
 
