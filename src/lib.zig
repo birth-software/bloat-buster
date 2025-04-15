@@ -10,10 +10,6 @@ pub const VariableArguments = extern struct {
 extern "c" fn IsDebuggerPresent() bool;
 extern "c" fn __errno_location() *c_int;
 
-test {
-    _ = @import("lib_test.zig");
-}
-
 const CSlice = extern struct {
     pointer: ?*anyopaque,
     length: usize,
