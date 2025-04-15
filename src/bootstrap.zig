@@ -2353,30 +2353,52 @@ pub const Module = struct {
                                 while (true) {
                                     module.skip_space();
 
-                                    var case_buffer: [64]*Value = undefined;
-                                    var case_count: u64 = 0;
+                                    const is_else = is_else_blk: {
+                                        var is_else = false;
+                                        if (is_identifier_start_ch(module.content[module.offset])) {
+                                            const i = module.parse_identifier();
+                                            is_else = lib.string.equal(i, "else");
+                                            if (!is_else) {
+                                                module.offset -= i.len;
+                                            }
+                                        }
 
-                                    while (true) {
-                                        const case_value = module.parse_value(function, .{});
-                                        case_buffer[case_count] = case_value;
-                                        case_count += 1;
+                                        break :is_else_blk is_else;
+                                    };
 
-                                        _ = module.consume_character_if_match(',');
-
+                                    const clause_values: []const *Value = if (is_else) b: {
                                         module.skip_space();
 
-                                        if (module.consume_character_if_match('=')) {
-                                            module.expect_character('>');
-                                            break;
+                                        module.expect_character('=');
+                                        module.expect_character('>');
+                                        break :b &.{};
+                                    } else b: {
+                                        var case_buffer: [64]*Value = undefined;
+                                        var case_count: u64 = 0;
+
+                                        while (true) {
+                                            const case_value = module.parse_value(function, .{});
+                                            case_buffer[case_count] = case_value;
+                                            case_count += 1;
+
+                                            _ = module.consume_character_if_match(',');
+
+                                            module.skip_space();
+
+                                            if (module.consume_character_if_match('=')) {
+                                                module.expect_character('>');
+                                                break;
+                                            }
                                         }
-                                    }
+
+                                        const clause_values = module.arena.allocate(*Value, case_count);
+                                        @memcpy(clause_values, case_buffer[0..case_count]);
+                                        break :b clause_values;
+                                    };
 
                                     module.skip_space();
 
                                     const clause_block = module.parse_block(function);
-
-                                    const clause_values = module.arena.allocate(*Value, case_count);
-                                    @memcpy(clause_values, case_buffer[0..case_count]);
 
                                     clause_buffer[clause_count] = .{
                                         .values = clause_values,
@@ -6551,7 +6573,7 @@ pub const Module = struct {
                             var else_clause_index: ?usize = null;
                             var total_discriminant_cases: u32 = 0;
                             for (switch_statement.clauses, 0..) |*clause, clause_index| {
-                                clause.basic_block = module.llvm.context.create_basic_block("case_block", llvm_function);
+                                clause.basic_block = module.llvm.context.create_basic_block(if (clause.values.len == 0) "switch.else_case_block" else "switch.case_block", llvm_function);
                                 total_discriminant_cases += @intCast(clause.values.len);
                                 if (clause.values.len == 0) {
                                     if (else_clause_index != null) {
@@ -6568,7 +6590,7 @@ pub const Module = struct {
                                 }
                             }
 
-                            const else_block = if (else_clause_index) |i| switch_statement.clauses[i].basic_block else module.llvm.context.create_basic_block("else_case_block", llvm_function);
+                            const else_block = if (else_clause_index) |i| switch_statement.clauses[i].basic_block else module.llvm.context.create_basic_block("switch.else_case_block", llvm_function);
                             const switch_instruction = module.llvm.builder.create_switch(switch_statement.discriminant.llvm.?, else_block, total_discriminant_cases);
                             for (switch_statement.clauses) |clause| {
                                 for (clause.values) |v| {
@@ -6586,10 +6608,7 @@ pub const Module = struct {
 
                             current_function.exit_block = exit_block;
 
-                            if (else_clause_index) |i| {
-                                _ = i;
-                                @trap();
-                            } else {
+                            if (else_clause_index == null) {
                                 module.llvm.builder.position_at_end(else_block);
                                 _ = module.llvm.builder.create_unreachable();
                                 module.llvm.builder.clear_insertion_position();
