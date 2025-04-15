@@ -982,6 +982,8 @@ pub const Builder = opaque {
     pub fn create_not(builder: *Builder, value: *Value) *Value {
         return api.LLVMBuildNot(builder, value, "");
     }
+
+    pub const create_switch = api.LLVMBuildSwitch;
 };
 
 pub const GlobalValue = opaque {
@@ -1193,6 +1195,12 @@ pub const Instruction = opaque {
         pub fn add_incoming(phi: *Phi, values: []const *Value, basic_blocks: []const *BasicBlock) void {
             assert(values.len == basic_blocks.len);
             return api.LLVMAddIncoming(phi, values.ptr, basic_blocks.ptr, @intCast(values.len));
+        }
+    };
+
+    pub const Switch = opaque {
+        pub fn add_case(switchi: *Switch, case_value: *Value, case_block: *BasicBlock) void {
+            return api.LLVMAddCase(switchi, case_value, case_block);
         }
     };
 };

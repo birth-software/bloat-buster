@@ -99,6 +99,8 @@ pub extern fn LLVMAddIncoming(phi: *llvm.Instruction.Phi, incoming_value_pointer
 pub extern fn LLVMBuildSelect(builder: *llvm.Builder, condition: *llvm.Value, true_value: *llvm.Value, false_value: *llvm.Value, name: [*:0]const u8) *llvm.Value;
 
 pub extern fn LLVMBuildVAArg(builder: *llvm.Builder, va_list: *llvm.Value, arg_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
+pub extern fn LLVMBuildSwitch(builder: *llvm.Builder, discriminant: *llvm.Value, else_basic_block: *llvm.BasicBlock, case_count: c_uint) *llvm.Instruction.Switch;
+pub extern fn LLVMAddCase(switchi: *llvm.Instruction.Switch, case_value: *llvm.Value, case_block: *llvm.BasicBlock) void;
 
 // Casts
 pub extern fn LLVMBuildZExt(builder: *llvm.Builder, value: *llvm.Value, destination_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
