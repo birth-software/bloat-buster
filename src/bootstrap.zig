@@ -6561,7 +6561,7 @@ pub const Module = struct {
                     const previous_exit_block = current_function.exit_block;
                     defer current_function.exit_block = previous_exit_block;
 
-                    const exit_block = module.llvm.context.create_basic_block("exit_block", null);
+                    const exit_block = module.llvm.context.create_basic_block("exit_block", llvm_function);
                     current_function.exit_block = exit_block;
 
                     module.analyze(function, switch_statement.discriminant, .{});
@@ -6592,6 +6592,9 @@ pub const Module = struct {
 
                             const else_block = if (else_clause_index) |i| switch_statement.clauses[i].basic_block else module.llvm.context.create_basic_block("switch.else_case_block", llvm_function);
                             const switch_instruction = module.llvm.builder.create_switch(switch_statement.discriminant.llvm.?, else_block, total_discriminant_cases);
+
+                            var all_blocks_terminated = true;
+
                             for (switch_statement.clauses) |clause| {
                                 for (clause.values) |v| {
                                     switch_instruction.add_case(v.llvm.?, clause.basic_block);
@@ -6601,6 +6604,7 @@ pub const Module = struct {
                                 module.llvm.builder.position_at_end(clause.basic_block);
                                 module.analyze_block(function, clause.block);
                                 if (module.llvm.builder.get_insert_block() != null) {
+                                    all_blocks_terminated = false;
                                     _ = module.llvm.builder.create_branch(exit_block);
                                     module.llvm.builder.clear_insertion_position();
                                 }
@@ -6612,6 +6616,10 @@ pub const Module = struct {
                                 module.llvm.builder.position_at_end(else_block);
                                 _ = module.llvm.builder.create_unreachable();
                                 module.llvm.builder.clear_insertion_position();
+                            }
+
+                            if (!all_blocks_terminated) {
+                                module.llvm.builder.position_at_end(exit_block);
                             }
                         },
                         else => @trap(),
