@@ -1,0 +1,20 @@
+E = enum
+{
+    asd,
+    dsa,
+    gsa,
+}
+
+[export] main = fn [cc(c)] () s32
+{
+    >e = "dsa";
+    >s2e = #string_to_enum(E, e);
+    >result: s32 = 1;
+
+    if (s2e.is_valid)
+    {
+        result = #extend(s2e.enum_value != .dsa);
+    }
+
+    return result;
+}

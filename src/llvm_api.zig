@@ -103,12 +103,13 @@ pub extern fn LLVMBuildSwitch(builder: *llvm.Builder, discriminant: *llvm.Value,
 pub extern fn LLVMAddCase(switchi: *llvm.Instruction.Switch, case_value: *llvm.Value, case_block: *llvm.BasicBlock) void;
 
 // Casts
+pub extern fn LLVMBuildIntCast2(builder: *llvm.Builder, value: *llvm.Value, destination_type: *llvm.Type, is_signed: Bool, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildZExt(builder: *llvm.Builder, value: *llvm.Value, destination_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildSExt(builder: *llvm.Builder, value: *llvm.Value, destination_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
+pub extern fn LLVMBuildTrunc(builder: *llvm.Builder, value: *llvm.Value, destination_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildIntToPtr(builder: *llvm.Builder, value: *llvm.Value, destination_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildPtrToInt(builder: *llvm.Builder, value: *llvm.Value, destination_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildPointerCast(builder: *llvm.Builder, value: *llvm.Value, ty: *llvm.Type, name: [*:0]const u8) *llvm.Value;
-pub extern fn LLVMBuildTrunc(builder: *llvm.Builder, value: *llvm.Value, destination_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
 
 pub extern fn LLVMSetCurrentDebugLocation2(builder: *llvm.Builder, location: ?*llvm.DI.Location) void;
 
@@ -124,6 +125,7 @@ pub extern fn llvm_value_is_instruction(value: *llvm.Value) bool;
 
 // Intrinsics
 pub extern fn LLVMLookupIntrinsicID(name_pointer: [*]const u8, name_length: usize) llvm.Intrinsic.Id;
+pub extern fn LLVMGetNamedFunction(module: *llvm.Module, name: [*:0]const u8) *llvm.Function;
 pub extern fn LLVMGetIntrinsicDeclaration(module: *llvm.Module, intrinsic_id: llvm.Intrinsic.Id, parameter_type_pointer: [*]const *llvm.Type, parameter_type_count: usize) *llvm.Value;
 pub extern fn LLVMIntrinsicGetType(context: *llvm.Context, intrinsic_id: llvm.Intrinsic.Id, parameter_type_pointer: [*]const *llvm.Type, parameter_type_count: usize) *llvm.Type.Function;
 

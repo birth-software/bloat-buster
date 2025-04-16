@@ -808,6 +808,10 @@ pub const Module = opaque {
     pub fn get_intrinsic_declaration(module: *Module, intrinsic_id: Intrinsic.Id, parameter_types: []const *Type) *Value {
         return api.LLVMGetIntrinsicDeclaration(module, intrinsic_id, parameter_types.ptr, parameter_types.len);
     }
+
+    pub fn get_named_function(module: *Module, name: [*:0]const u8) ?*Function {
+        return api.LLVMGetNamedFunction(module, name);
+    }
 };
 
 pub const VerifyResult = struct {
@@ -956,6 +960,10 @@ pub const Builder = opaque {
         return api.LLVMBuildTrunc(builder, value, destination_type, "");
     }
 
+    pub fn create_int_cast(builder: *Builder, value: *Value, destination_type: *Type, is_signed: bool) *Value {
+        return api.LLVMBuildIntCast2(builder, value, destination_type, @intFromBool(is_signed), "");
+    }
+
     pub const create_unreachable = api.LLVMBuildUnreachable;
 
     pub const create_memcpy = api.LLVMBuildMemCpy;
@@ -996,7 +1004,12 @@ pub const GlobalVariable = opaque {
     pub const set_initializer = api.LLVMSetInitializer;
     pub const erase_from_parent = api.LLVMDeleteGlobal;
     pub const delete = api.llvm_global_variable_delete;
+
     pub fn to_value(global_variable: *GlobalVariable) *Value {
+        return @ptrCast(global_variable);
+    }
+
+    pub fn to_constant(global_variable: *GlobalVariable) *Constant {
         return @ptrCast(global_variable);
     }
 
@@ -1036,6 +1049,10 @@ pub const Function = opaque {
         return api.llvm_function_to_string(function).to_slice().?;
     }
 
+    pub fn dump(function: *Function) void {
+        return lib.print_string(function.to_string());
+    }
+
     pub const set_calling_convention = api.LLVMSetFunctionCallConv;
     pub const get_calling_convention = api.LLVMGetFunctionCallConv;
 
@@ -1058,6 +1075,10 @@ pub const Constant = opaque {
 
     pub const Integer = opaque {
         pub fn to_value(constant: *Constant.Integer) *Value {
+            return @ptrCast(constant);
+        }
+
+        pub fn to_constant(constant: *Constant.Integer) *Constant {
             return @ptrCast(constant);
         }
     };

@@ -225,12 +225,24 @@ global_state_initialize = fn () void
     };
 }
 
+CompilerCommand = enum
+{
+    compile,
+    test,
+}
+
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8) s32
 {
+    global_state_initialize();
+
     if (argument_count < 2)
     {
         return 1;
     }
+
+    >command_string = c_string_to_slice(argv[1]);
+
+    > a = #string_to_enum(CompilerCommand, command_string);
 
     >relative_file_path_pointer = argv[2];
     if (!relative_file_path_pointer)
@@ -256,6 +268,5 @@ global_state_initialize = fn () void
         return 1;
     }
 
-    global_state_initialize();
     return 0;
 }

@@ -309,4 +309,6 @@ const names = &[_][]const u8{
     "c_struct_with_array",
     "c_function_pointer",
     "c_abi",
+    "string_to_enum",
+    "abi_enum_bool",
 };

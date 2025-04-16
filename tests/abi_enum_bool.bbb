@@ -1,0 +1,36 @@
+Foo = enum {
+    a,
+    b,
+    c,
+    d,
+    e,
+    f,
+    g,
+}
+
+S = struct
+{
+    enum: Foo,
+    some_boolean: u1,
+}
+
+require = fn (ok: u1) void
+{
+    if (!ok)
+    {
+        #trap();
+    }
+}
+
+[export] main = fn [cc(c)] () s32
+{
+    >s: S = {
+        .enum = .f,
+        .some_boolean = 1,
+    };
+
+    require(s.enum == .f);
+    require(s.some_boolean);
+
+    return 0;
+}
