@@ -243,9 +243,22 @@ BuildMode = enum
     aggressively_optimize_for_size,
 }
 
+CompileFile = struct
+{
+    relative_file_path: []u8,
+    build_mode: BuildMode,
+    has_debug_info: u1,
+    silent: u1,
+}
+
+compile_file = fn (arena: &Arena, compile: CompileFile) void
+{
+}
+
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8) s32
 {
     global_state_initialize();
+    >arena = global_state.arena;
 
     if (argument_count < 2)
     {
@@ -323,6 +336,13 @@ BuildMode = enum
             {
                 return 1;
             }
+
+            compile_file(arena, {
+                .relative_file_path = relative_file_path,
+                .build_mode = build_mode,
+                .has_debug_info = has_debug_info,
+                .silent = 0,
+            });
         },
         .test =>
         {

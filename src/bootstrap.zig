@@ -7204,6 +7204,13 @@ pub const Module = struct {
                     u64_type.resolve(module);
                     _ = module.llvm.builder.create_memset(left_llvm, u8_type.llvm.abi.?.get_zero().to_value(), u64_type.llvm.abi.?.to_integer().get_constant(value_type.get_byte_size(), 0).to_value(), pointer_type.bb.pointer.alignment);
                 },
+                .variable_reference => |variable| switch (right.kind) {
+                    .left => @trap(),
+                    .right => {
+                        const uint64 = module.integer_type(64, false);
+                        _ = module.llvm.builder.create_memcpy(left_llvm, pointer_type.bb.pointer.alignment, variable.storage.?.llvm.?, variable.storage.?.type.?.bb.pointer.alignment, uint64.llvm.abi.?.to_integer().get_constant(value_type.get_byte_size(), @intFromBool(false)).to_value());
+                    },
+                },
                 else => @trap(),
             },
             .complex => @trap(),
