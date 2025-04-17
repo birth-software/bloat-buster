@@ -1,0 +1,12 @@
+[export] main = fn [cc(c)] (argument_count: u32) s32
+{
+    >result: s32 = 0;
+    if (argument_count != 1)
+    {
+        result = 1;
+    }
+    else
+    {
+    }
+    return result;
+}

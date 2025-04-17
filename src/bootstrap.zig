@@ -617,6 +617,7 @@ pub const Statement = struct {
         @"if": If,
         @"while": While,
         @"switch": Switch,
+        block: *LexicalBlock,
     },
     line: u32,
     column: u32,
@@ -643,8 +644,8 @@ pub const Statement = struct {
 
     const If = struct {
         condition: *Value,
-        if_block: *LexicalBlock,
-        else_block: ?*LexicalBlock,
+        if_statement: *Statement,
+        else_statement: ?*Statement,
     };
 
     const While = struct {
@@ -2242,6 +2243,334 @@ pub const Module = struct {
         return result.?;
     }
 
+    fn parse_statement(module: *Module, function: *Global, block: *LexicalBlock) *Statement {
+        const statement_line = module.get_line();
+        const statement_column = module.get_column();
+
+        const statement_start_character = module.content[module.offset];
+        const statement = module.statements.add();
+        var require_semicolon = true;
+        statement.* = .{
+            .bb = switch (statement_start_character) {
+                '>' => blk: {
+                    module.offset += 1;
+                    module.skip_space();
+                    const local_name = module.parse_identifier();
+                    module.skip_space();
+                    const local_type: ?*Type = if (module.consume_character_if_match(':')) b: {
+                        module.skip_space();
+                        const t = module.parse_type(function);
+                        module.skip_space();
+                        break :b t;
+                    } else null;
+                    module.expect_character('=');
+                    const local_value = module.parse_value(function, .{});
+                    const local = module.locals.add();
+                    local.* = .{
+                        .variable = .{
+                            .initial_value = local_value,
+                            .type = local_type,
+                            .name = local_name,
+                            .line = statement_line,
+                            .column = statement_column,
+                            .scope = module.current_scope,
+                        },
+                        .argument_index = null,
+                    };
+                    assert(module.current_scope == &block.scope);
+                    _ = block.locals.append(local);
+                    break :blk .{
+                        .local = local,
+                    };
+                },
+                '#' => .{
+                    .expression = module.parse_value(function, .{}),
+                },
+                'A'...'Z', 'a'...'z' => blk: {
+                    const statement_start_identifier = module.parse_identifier();
+
+                    if (lib.string.to_enum(StatementStartKeyword, statement_start_identifier)) |statement_start_keyword| switch (statement_start_keyword) {
+                        ._ => @trap(),
+                        .@"return" => break :blk .{
+                            .@"return" = module.parse_value(function, .{}),
+                        },
+                        .@"if" => {
+                            module.skip_space();
+
+                            module.expect_character(left_parenthesis);
+                            module.skip_space();
+
+                            const condition = module.parse_value(function, .{});
+
+                            module.skip_space();
+                            module.expect_character(right_parenthesis);
+
+                            module.skip_space();
+
+                            const if_statement = module.parse_statement(function, block);
+
+                            module.skip_space();
+
+                            var is_else = false;
+                            if (is_identifier_start_ch(module.content[module.offset])) {
+                                const identifier = module.parse_identifier();
+                                is_else = lib.string.equal(identifier, "else");
+                                if (!is_else) {
+                                    module.offset -= identifier.len;
+                                } else {
+                                    module.skip_space();
+                                }
+                            }
+
+                            const else_block = switch (is_else) {
+                                true => module.parse_statement(function, block),
+                                false => null,
+                            };
+
+                            require_semicolon = false;
+
+                            break :blk .{
+                                .@"if" = .{
+                                    .condition = condition,
+                                    .if_statement = if_statement,
+                                    .else_statement = else_block,
+                                },
+                            };
+                        },
+                        .@"while" => {
+                            module.skip_space();
+
+                            module.expect_character(left_parenthesis);
+                            module.skip_space();
+
+                            const condition = module.parse_value(function, .{});
+
+                            module.skip_space();
+                            module.expect_character(right_parenthesis);
+
+                            module.skip_space();
+
+                            const while_block = module.parse_block(function);
+
+                            require_semicolon = false;
+
+                            break :blk .{
+                                .@"while" = .{
+                                    .condition = condition,
+                                    .block = while_block,
+                                },
+                            };
+                        },
+                        .@"switch" => {
+                            module.skip_space();
+                            module.expect_character(left_parenthesis);
+                            module.skip_space();
+
+                            const discriminant = module.parse_value(function, .{});
+
+                            module.skip_space();
+                            module.expect_character(right_parenthesis);
+
+                            module.skip_space();
+                            module.expect_character(left_brace);
+
+                            var clause_buffer: [64]Statement.Switch.Clause = undefined;
+                            var clause_count: u64 = 0;
+
+                            while (true) {
+                                module.skip_space();
+
+                                const is_else = is_else_blk: {
+                                    var is_else = false;
+                                    if (is_identifier_start_ch(module.content[module.offset])) {
+                                        const i = module.parse_identifier();
+                                        is_else = lib.string.equal(i, "else");
+                                        if (!is_else) {
+                                            module.offset -= i.len;
+                                        }
+                                    }
+
+                                    break :is_else_blk is_else;
+                                };
+
+                                const clause_values: []const *Value = if (is_else) b: {
+                                    module.skip_space();
+
+                                    module.expect_character('=');
+                                    module.expect_character('>');
+                                    break :b &.{};
+                                } else b: {
+                                    var case_buffer: [64]*Value = undefined;
+                                    var case_count: u64 = 0;
+
+                                    while (true) {
+                                        const case_value = module.parse_value(function, .{});
+                                        case_buffer[case_count] = case_value;
+                                        case_count += 1;
+
+                                        _ = module.consume_character_if_match(',');
+
+                                        module.skip_space();
+
+                                        if (module.consume_character_if_match('=')) {
+                                            module.expect_character('>');
+                                            break;
+                                        }
+                                    }
+
+                                    const clause_values = module.arena.allocate(*Value, case_count);
+                                    @memcpy(clause_values, case_buffer[0..case_count]);
+                                    break :b clause_values;
+                                };
+
+                                module.skip_space();
+
+                                const clause_block = module.parse_block(function);
+
+                                clause_buffer[clause_count] = .{
+                                    .values = clause_values,
+                                    .block = clause_block,
+                                };
+                                clause_count += 1;
+
+                                _ = module.consume_character_if_match(',');
+
+                                module.skip_space();
+
+                                if (module.consume_character_if_match(right_brace)) {
+                                    break;
+                                }
+                            }
+
+                            const clauses = module.arena.allocate(Statement.Switch.Clause, clause_count);
+                            @memcpy(clauses, clause_buffer[0..clause_count]);
+
+                            require_semicolon = false;
+
+                            break :blk .{
+                                .@"switch" = .{
+                                    .discriminant = discriminant,
+                                    .clauses = clauses,
+                                },
+                            };
+                        },
+                    } else {
+                        module.offset -= statement_start_identifier.len;
+
+                        const left = module.parse_value(function, .{
+                            .kind = .left,
+                        });
+
+                        module.skip_space();
+
+                        if (module.consume_character_if_match(';')) {
+                            require_semicolon = false;
+                            break :blk .{
+                                .expression = left,
+                            };
+                        } else {
+                            const operator_start_character = module.content[module.offset];
+                            const operator_next_character = module.content[module.offset + 1];
+                            const operator_next_next_character = module.content[module.offset + 2];
+                            const operator: Statement.Assignment.Operator = switch (operator_start_character) {
+                                '=' => .@"=",
+                                '+' => switch (operator_next_character) {
+                                    '=' => .@"+=",
+                                    else => @trap(),
+                                },
+                                '-' => switch (operator_next_character) {
+                                    '=' => .@"-=",
+                                    else => @trap(),
+                                },
+                                '*' => switch (operator_next_character) {
+                                    '=' => .@"*=",
+                                    else => @trap(),
+                                },
+                                '/' => switch (operator_next_character) {
+                                    '=' => .@"/=",
+                                    else => @trap(),
+                                },
+                                '%' => switch (operator_next_character) {
+                                    '=' => .@"%=",
+                                    else => @trap(),
+                                },
+                                '>' => switch (operator_next_character) {
+                                    '>' => switch (operator_next_next_character) {
+                                        '=' => .@">>=",
+                                        else => @trap(),
+                                    },
+                                    else => @trap(),
+                                },
+                                '<' => switch (operator_next_character) {
+                                    '<' => switch (operator_next_next_character) {
+                                        '=' => .@"<<=",
+                                        else => @trap(),
+                                    },
+                                    else => @trap(),
+                                },
+                                '&' => switch (operator_next_character) {
+                                    '=' => .@"&=",
+                                    else => @trap(),
+                                },
+                                '|' => switch (operator_next_character) {
+                                    '=' => .@"|=",
+                                    else => @trap(),
+                                },
+                                '^' => switch (operator_next_character) {
+                                    '=' => .@"^=",
+                                    else => @trap(),
+                                },
+                                else => @trap(),
+                            };
+                            module.offset += switch (operator) {
+                                .@"=" => 1,
+                                .@"+=",
+                                .@"-=",
+                                .@"*=",
+                                .@"/=",
+                                .@"%=",
+                                .@"&=",
+                                .@"|=",
+                                .@"^=",
+                                => 2,
+                                .@">>=",
+                                .@"<<=",
+                                => 3,
+                            };
+
+                            module.skip_space();
+
+                            const right = module.parse_value(function, .{});
+
+                            break :blk .{
+                                .assignment = .{
+                                    .left = left,
+                                    .right = right,
+                                    .kind = operator,
+                                },
+                            };
+                        }
+                    }
+                },
+                left_brace => blk: {
+                    require_semicolon = false;
+                    break :blk .{
+                        .block = module.parse_block(function),
+                    };
+                },
+                else => @trap(),
+            },
+            .line = statement_line,
+            .column = statement_column,
+        };
+
+        if (require_semicolon) {
+            module.expect_character(';');
+        }
+
+        return statement;
+    }
+
     fn parse_block(module: *Module, function: *Global) *LexicalBlock {
         const parent_scope = module.current_scope;
         const block = module.lexical_blocks.append(.{
@@ -2270,321 +2599,8 @@ pub const Module = struct {
                 break;
             }
 
-            const statement_line = module.get_line();
-            const statement_column = module.get_column();
-
-            const statement_start_character = module.content[module.offset];
-            const statement = module.statements.add();
-            var require_semicolon = true;
-            statement.* = .{
-                .bb = switch (statement_start_character) {
-                    '>' => blk: {
-                        module.offset += 1;
-                        module.skip_space();
-                        const local_name = module.parse_identifier();
-                        module.skip_space();
-                        const local_type: ?*Type = if (module.consume_character_if_match(':')) b: {
-                            module.skip_space();
-                            const t = module.parse_type(function);
-                            module.skip_space();
-                            break :b t;
-                        } else null;
-                        module.expect_character('=');
-                        const local_value = module.parse_value(function, .{});
-                        const local = module.locals.add();
-                        local.* = .{
-                            .variable = .{
-                                .initial_value = local_value,
-                                .type = local_type,
-                                .name = local_name,
-                                .line = statement_line,
-                                .column = statement_column,
-                                .scope = module.current_scope,
-                            },
-                            .argument_index = null,
-                        };
-                        assert(module.current_scope == &block.scope);
-                        _ = block.locals.append(local);
-                        break :blk .{
-                            .local = local,
-                        };
-                    },
-                    '#' => .{
-                        .expression = module.parse_value(function, .{}),
-                    },
-                    'A'...'Z', 'a'...'z' => blk: {
-                        const statement_start_identifier = module.parse_identifier();
-
-                        if (lib.string.to_enum(StatementStartKeyword, statement_start_identifier)) |statement_start_keyword| switch (statement_start_keyword) {
-                            ._ => @trap(),
-                            .@"return" => break :blk .{
-                                .@"return" = module.parse_value(function, .{}),
-                            },
-                            .@"if" => {
-                                module.skip_space();
-
-                                module.expect_character(left_parenthesis);
-                                module.skip_space();
-
-                                const condition = module.parse_value(function, .{});
-
-                                module.skip_space();
-                                module.expect_character(right_parenthesis);
-
-                                module.skip_space();
-
-                                const if_block = module.parse_block(function);
-
-                                module.skip_space();
-
-                                var is_else = false;
-                                if (is_identifier_start_ch(module.content[module.offset])) {
-                                    const identifier = module.parse_identifier();
-                                    is_else = lib.string.equal(identifier, "else");
-                                    if (!is_else) {
-                                        module.offset -= identifier.len;
-                                    } else {
-                                        module.skip_space();
-                                    }
-                                }
-
-                                const else_block = if (is_else) module.parse_block(function) else null;
-
-                                require_semicolon = false;
-
-                                break :blk .{
-                                    .@"if" = .{
-                                        .condition = condition,
-                                        .if_block = if_block,
-                                        .else_block = else_block,
-                                    },
-                                };
-                            },
-                            .@"while" => {
-                                module.skip_space();
-
-                                module.expect_character(left_parenthesis);
-                                module.skip_space();
-
-                                const condition = module.parse_value(function, .{});
-
-                                module.skip_space();
-                                module.expect_character(right_parenthesis);
-
-                                module.skip_space();
-
-                                const while_block = module.parse_block(function);
-
-                                require_semicolon = false;
-
-                                break :blk .{
-                                    .@"while" = .{
-                                        .condition = condition,
-                                        .block = while_block,
-                                    },
-                                };
-                            },
-                            .@"switch" => {
-                                module.skip_space();
-                                module.expect_character(left_parenthesis);
-                                module.skip_space();
-
-                                const discriminant = module.parse_value(function, .{});
-
-                                module.skip_space();
-                                module.expect_character(right_parenthesis);
-
-                                module.skip_space();
-                                module.expect_character(left_brace);
-
-                                var clause_buffer: [64]Statement.Switch.Clause = undefined;
-                                var clause_count: u64 = 0;
-
-                                while (true) {
-                                    module.skip_space();
-
-                                    const is_else = is_else_blk: {
-                                        var is_else = false;
-                                        if (is_identifier_start_ch(module.content[module.offset])) {
-                                            const i = module.parse_identifier();
-                                            is_else = lib.string.equal(i, "else");
-                                            if (!is_else) {
-                                                module.offset -= i.len;
-                                            }
-                                        }
-
-                                        break :is_else_blk is_else;
-                                    };
-
-                                    const clause_values: []const *Value = if (is_else) b: {
-                                        module.skip_space();
-
-                                        module.expect_character('=');
-                                        module.expect_character('>');
-                                        break :b &.{};
-                                    } else b: {
-                                        var case_buffer: [64]*Value = undefined;
-                                        var case_count: u64 = 0;
-
-                                        while (true) {
-                                            const case_value = module.parse_value(function, .{});
-                                            case_buffer[case_count] = case_value;
-                                            case_count += 1;
-
-                                            _ = module.consume_character_if_match(',');
-
-                                            module.skip_space();
-
-                                            if (module.consume_character_if_match('=')) {
-                                                module.expect_character('>');
-                                                break;
-                                            }
-                                        }
-
-                                        const clause_values = module.arena.allocate(*Value, case_count);
-                                        @memcpy(clause_values, case_buffer[0..case_count]);
-                                        break :b clause_values;
-                                    };
-
-                                    module.skip_space();
-
-                                    const clause_block = module.parse_block(function);
-
-                                    clause_buffer[clause_count] = .{
-                                        .values = clause_values,
-                                        .block = clause_block,
-                                    };
-                                    clause_count += 1;
-
-                                    _ = module.consume_character_if_match(',');
-
-                                    module.skip_space();
-
-                                    if (module.consume_character_if_match(right_brace)) {
-                                        break;
-                                    }
-                                }
-
-                                const clauses = module.arena.allocate(Statement.Switch.Clause, clause_count);
-                                @memcpy(clauses, clause_buffer[0..clause_count]);
-
-                                require_semicolon = false;
-
-                                break :blk .{
-                                    .@"switch" = .{
-                                        .discriminant = discriminant,
-                                        .clauses = clauses,
-                                    },
-                                };
-                            },
-                        } else {
-                            module.offset -= statement_start_identifier.len;
-
-                            const left = module.parse_value(function, .{
-                                .kind = .left,
-                            });
-
-                            module.skip_space();
-
-                            if (module.consume_character_if_match(';')) {
-                                require_semicolon = false;
-                                break :blk .{
-                                    .expression = left,
-                                };
-                            } else {
-                                const operator_start_character = module.content[module.offset];
-                                const operator_next_character = module.content[module.offset + 1];
-                                const operator_next_next_character = module.content[module.offset + 2];
-                                const operator: Statement.Assignment.Operator = switch (operator_start_character) {
-                                    '=' => .@"=",
-                                    '+' => switch (operator_next_character) {
-                                        '=' => .@"+=",
-                                        else => @trap(),
-                                    },
-                                    '-' => switch (operator_next_character) {
-                                        '=' => .@"-=",
-                                        else => @trap(),
-                                    },
-                                    '*' => switch (operator_next_character) {
-                                        '=' => .@"*=",
-                                        else => @trap(),
-                                    },
-                                    '/' => switch (operator_next_character) {
-                                        '=' => .@"/=",
-                                        else => @trap(),
-                                    },
-                                    '%' => switch (operator_next_character) {
-                                        '=' => .@"%=",
-                                        else => @trap(),
-                                    },
-                                    '>' => switch (operator_next_character) {
-                                        '>' => switch (operator_next_next_character) {
-                                            '=' => .@">>=",
-                                            else => @trap(),
-                                        },
-                                        else => @trap(),
-                                    },
-                                    '<' => switch (operator_next_character) {
-                                        '<' => switch (operator_next_next_character) {
-                                            '=' => .@"<<=",
-                                            else => @trap(),
-                                        },
-                                        else => @trap(),
-                                    },
-                                    '&' => switch (operator_next_character) {
-                                        '=' => .@"&=",
-                                        else => @trap(),
-                                    },
-                                    '|' => switch (operator_next_character) {
-                                        '=' => .@"|=",
-                                        else => @trap(),
-                                    },
-                                    '^' => switch (operator_next_character) {
-                                        '=' => .@"^=",
-                                        else => @trap(),
-                                    },
-                                    else => @trap(),
-                                };
-                                module.offset += switch (operator) {
-                                    .@"=" => 1,
-                                    .@"+=",
-                                    .@"-=",
-                                    .@"*=",
-                                    .@"/=",
-                                    .@"%=",
-                                    .@"&=",
-                                    .@"|=",
-                                    .@"^=",
-                                    => 2,
-                                    .@">>=",
-                                    .@"<<=",
-                                    => 3,
-                                };
-
-                                module.skip_space();
-
-                                const right = module.parse_value(function, .{});
-
-                                break :blk .{
-                                    .assignment = .{
-                                        .left = left,
-                                        .right = right,
-                                        .kind = operator,
-                                    },
-                                };
-                            }
-                        }
-                    },
-                    else => @trap(),
-                },
-                .line = statement_line,
-                .column = statement_column,
-            };
+            const statement = module.parse_statement(function, block);
             _ = block.statements.append(statement);
-
-            if (require_semicolon) {
-                module.expect_character(';');
-            }
         }
 
         return block;
@@ -4445,6 +4461,7 @@ pub const Module = struct {
                         };
                         _ = &destination_pointer;
 
+                        var destination_type = return_type_abi.semantic_type;
                         if (return_type_abi.semantic_type.bb.structure.fields.len > 0) {
                             // CreateCoercedStore(
                             // CI, StorePtr,
@@ -4454,7 +4471,6 @@ pub const Module = struct {
                             const source_value = llvm_call;
                             const source_type = function_type.abi_return_type;
                             // const source_size = source_type.get_byte_size();
-                            var destination_type = return_type_abi.semantic_type;
                             const destination_size = destination_type.get_byte_size();
                             // const destination_alignment = destination_type.get_byte_alignment();
                             const left_destination_size = destination_size - return_type_abi.attributes.direct.offset;
@@ -4465,7 +4481,13 @@ pub const Module = struct {
                             @trap();
                         }
 
-                        return destination_pointer;
+                        if (left_llvm) |l| {
+                            assert(destination_pointer == l);
+                            return destination_pointer;
+                        } else return switch (value.kind) {
+                            .left => @trap(),
+                            .right => module.create_load(.{ .type = destination_type, .value = destination_pointer }),
+                        };
                     },
                     .indirect => {
                         return llvm_indirect_return_value;
@@ -5700,7 +5722,7 @@ pub const Module = struct {
                         const array_element_pointer = module.llvm.builder.create_gep(.{
                             .type = name_array_variable_type.to_type(),
                             .aggregate = name_array_variable.to_value(),
-                            .indices = &.{uint64_zero, body_index_load},
+                            .indices = &.{ uint64_zero, body_index_load },
                         });
 
                         const element_length_pointer = module.llvm.builder.create_struct_gep(slice_struct_type.llvm.abi.?.to_struct(), array_element_pointer, 1);
@@ -5716,10 +5738,7 @@ pub const Module = struct {
                         module.llvm.builder.position_at_end(length_match_block);
                         const s32 = module.integer_type(32, true);
                         s32.resolve(module);
-                        const memcmp = if (module.llvm.memcmp) |memcmp| {
-                            _ = memcmp;
-                            @trap();
-                        } else b: {
+                        const memcmp = if (module.llvm.memcmp) |memcmp| memcmp else b: {
                             if (module.llvm.module.get_named_function("memcmp")) |memcmp| {
                                 module.llvm.memcmp = memcmp;
                                 break :b memcmp;
@@ -5738,7 +5757,7 @@ pub const Module = struct {
                         const length_array_element_pointer = module.llvm.builder.create_gep(.{
                             .type = name_array_variable_type.to_type(),
                             .aggregate = name_array_variable.to_value(),
-                            .indices = &.{uint64_zero, length_index_load},
+                            .indices = &.{ uint64_zero, length_index_load },
                         });
                         const element_pointer_pointer = module.llvm.builder.create_struct_gep(slice_struct_type.llvm.abi.?.to_struct(), length_array_element_pointer, 0);
                         const element_pointer = module.llvm.builder.create_load(module.llvm.pointer_type, element_pointer_pointer);
@@ -5754,7 +5773,7 @@ pub const Module = struct {
                         const value_array_element_pointer = module.llvm.builder.create_gep(.{
                             .type = value_array_variable_type.to_type(),
                             .aggregate = value_array_variable.to_value(),
-                            .indices = &.{uint64_zero, content_index_load},
+                            .indices = &.{ uint64_zero, content_index_load },
                         });
                         const enum_value_load = module.llvm.builder.create_load(string_to_enum.enum_type.llvm.memory.?, value_array_element_pointer);
                         enum_value_load.set_alignment(string_to_enum.enum_type.get_byte_alignment());
@@ -6581,76 +6600,52 @@ pub const Module = struct {
         value.llvm = llvm_value;
     }
 
-    pub fn analyze_block(module: *Module, function: *Global, block: *LexicalBlock) void {
+    pub fn analyze_statement(module: *Module, function: *Global, block: *LexicalBlock, statement: *Statement, last_line: *u32, last_column: *u32, last_statement_debug_location: **llvm.DI.Location) void {
         const llvm_function = function.variable.storage.?.llvm.?.to_function();
+        const current_function = &function.variable.storage.?.bb.function;
         if (module.has_debug_info) {
-            const lexical_block = module.llvm.di_builder.create_lexical_block(block.scope.parent.?.llvm.?, module.llvm.file, block.scope.line, block.scope.column);
-            block.scope.llvm = lexical_block.to_scope();
+            if (statement.line != last_line.* or statement.column != last_column.*) {
+                const inlined_at: ?*llvm.DI.Metadata = null; // TODO
+                last_statement_debug_location.* = llvm.DI.create_debug_location(module.llvm.context, statement.line, statement.column, block.scope.llvm.?, inlined_at);
+                module.llvm.builder.set_current_debug_location(last_statement_debug_location.*);
+                last_line.* = statement.line;
+                last_column.* = statement.column;
+            }
         }
 
-        const current_function = &function.variable.storage.?.bb.function;
+        switch (statement.bb) {
+            .@"return" => |rv| {
+                const function_type = &function.variable.storage.?.type.?.bb.pointer.type.bb.function;
+                const return_abi = function_type.return_abi;
 
-        var last_line: u32 = 0;
-        var last_column: u32 = 0;
-        var last_statement_debug_location: *llvm.DI.Location = undefined;
+                switch (return_abi.semantic_type.bb) {
+                    .void => {
+                        if (rv != null) {
+                            module.report_error();
+                        }
+                    },
+                    .noreturn => module.report_error(),
+                    else => {
+                        const return_value = rv orelse module.report_error();
+                        module.analyze(function, return_value, .{
+                            .type = return_abi.semantic_type,
+                        }, .memory);
 
-        for (block.statements.get_slice()) |statement| {
-            if (module.has_debug_info) {
-                if (statement.line != last_line or statement.column != last_column) {
-                    const inlined_at: ?*llvm.DI.Metadata = null; // TODO
-                    last_statement_debug_location = llvm.DI.create_debug_location(module.llvm.context, statement.line, statement.column, block.scope.llvm.?, inlined_at);
-                    module.llvm.builder.set_current_debug_location(last_statement_debug_location);
-                    last_line = statement.line;
-                    last_column = statement.column;
-                }
-            }
+                        if (module.has_debug_info) {
+                            module.llvm.builder.set_current_debug_location(last_statement_debug_location.*);
+                        }
 
-            switch (statement.bb) {
-                .@"return" => |rv| {
-                    const function_type = &function.variable.storage.?.type.?.bb.pointer.type.bb.function;
-                    const return_abi = function_type.return_abi;
+                        // Clang equivalent: CodeGenFunction::EmitReturnStmt
+                        const return_alloca = function.variable.storage.?.bb.function.return_alloca orelse module.report_error();
 
-                    switch (return_abi.semantic_type.bb) {
-                        .void => {
-                            if (rv != null) {
-                                module.report_error();
-                            }
-                        },
-                        .noreturn => module.report_error(),
-                        else => {
-                            const return_value = rv orelse module.report_error();
-                            module.analyze(function, return_value, .{
-                                .type = return_abi.semantic_type,
-                            }, .memory);
-
-                            if (module.has_debug_info) {
-                                module.llvm.builder.set_current_debug_location(last_statement_debug_location);
-                            }
-
-                            // Clang equivalent: CodeGenFunction::EmitReturnStmt
-                            const return_alloca = function.variable.storage.?.bb.function.return_alloca orelse module.report_error();
-
-                            switch (return_abi.semantic_type.get_evaluation_kind()) {
-                                .scalar => {
-                                    switch (return_abi.flags.kind) {
-                                        .indirect => {
-                                            @trap();
-                                        },
-                                        else => {
-                                            // assert(!return_value.?.lvalue);
-                                            assert(return_value.type.?.is_abi_equal(return_abi.semantic_type, module));
-                                            _ = module.create_store(.{
-                                                .source_value = return_value.llvm.?,
-                                                .destination_value = return_alloca,
-                                                .type = return_abi.semantic_type,
-                                            });
-                                        },
-                                    }
-                                },
-                                // TODO: handcoded code, might be wrong
-                                .aggregate => switch (return_value.kind) {
-                                    .left => @trap(),
-                                    .right => {
+                        switch (return_abi.semantic_type.get_evaluation_kind()) {
+                            .scalar => {
+                                switch (return_abi.flags.kind) {
+                                    .indirect => {
+                                        @trap();
+                                    },
+                                    else => {
+                                        // assert(!return_value.?.lvalue);
                                         assert(return_value.type.?.is_abi_equal(return_abi.semantic_type, module));
                                         _ = module.create_store(.{
                                             .source_value = return_value.llvm.?,
@@ -6658,331 +6653,331 @@ pub const Module = struct {
                                             .type = return_abi.semantic_type,
                                         });
                                     },
-                                    // switch (return_value.lvalue) {
-                                    //     true => {
-                                    //         const abi_alignment = return_abi.semantic_type.get_byte_alignment();
-                                    //         const abi_size = return_abi.semantic_type.get_byte_size();
-                                    //         switch (return_abi.flags.kind) {
-                                    //             .indirect => {
-                                    //                 _ = module.llvm.builder.create_memcpy(
-                                    //                     unreachable, //return_alloca,
-                                    //                     abi_alignment, return_value.llvm, abi_alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(abi_size, @intFromBool(false)).to_value());
-                                    //             },
-                                    //             else => {
-                                    //                 switch (return_abi.semantic_type.get_evaluation_kind()) {
-                                    //                     .aggregate => {
-                                    //                         // TODO: this is 100% wrong, fix
-                                    //                         assert(abi_alignment == return_abi.semantic_type.get_byte_alignment());
-                                    //                         assert(abi_size == return_abi.semantic_type.get_byte_size());
-                                    //                         _ = module.llvm.builder.create_memcpy(
-                                    //                             unreachable, //return_alloca,
-                                    //                             abi_alignment, return_value.llvm, abi_alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(abi_size, @intFromBool(false)).to_value());
-                                    //                     },
-                                    //                     .scalar => {
-                                    //                         const destination_type = return_abi.semantic_type;
-                                    //                         const source_type = return_abi.semantic_type;
-                                    //                         assert(return_value.type == source_type);
-                                    //                         const ret_val = switch (return_value.type.bb) {
-                                    //                             .pointer => return_value.llvm,
-                                    //                             // TODO: this feels hacky
-                                    //                             else => switch (return_value.lvalue) {
-                                    //                                 true => module.create_load(.{ .type = return_value.type, .value = return_value.llvm }),
-                                    //                                 false => return_value.llvm,
-                                    //                             },
-                                    //                         };
-                                    //                         _ = module.create_store(.{ .source_value = ret_val, .source_type = source_type,
-                                    //                             .destination_value = unreachable, //return_alloca,
-                                    //                             .destination_type = destination_type });
-                                    //                     },
-                                    //                     .complex => @trap(),
-                                    //                 }
-                                    //             },
-                                    //         }
-                                    //     },
-                                    //     false => {
-                                    //     },
-                                    // }
+                                }
+                            },
+                            // TODO: handcoded code, might be wrong
+                            .aggregate => switch (return_value.kind) {
+                                .left => @trap(),
+                                .right => {
+                                    assert(return_value.type.?.is_abi_equal(return_abi.semantic_type, module));
+                                    _ = module.create_store(.{
+                                        .source_value = return_value.llvm.?,
+                                        .destination_value = return_alloca,
+                                        .type = return_abi.semantic_type,
+                                    });
                                 },
-                                .complex => @trap(),
-                            }
-                        },
-                    }
-
-                    const return_block = function.variable.storage.?.bb.function.return_block orelse module.report_error();
-
-                    _ = module.llvm.builder.create_branch(return_block);
-                    _ = module.llvm.builder.clear_insertion_position();
-                },
-                .local => |local| {
-                    const expected_type = local.variable.type;
-                    assert(local.variable.storage == null);
-                    module.analyze_value_type(function, local.variable.initial_value, .{ .type = local.variable.type });
-                    local.variable.resolve_type(local.variable.initial_value.type.?);
-                    if (expected_type) |lvt| assert(lvt == local.variable.type);
-                    module.emit_local_storage(local, last_statement_debug_location);
-
-                    module.emit_assignment(function, local.variable.storage.?.llvm.?, local.variable.storage.?.type.?, local.variable.initial_value);
-                },
-                .assignment => |assignment| {
-                    module.analyze(function, assignment.left, .{}, .memory);
-                    switch (assignment.kind) {
-                        .@"=" => {
-                            module.analyze_value_type(function, assignment.right, .{ .type = assignment.left.type.?.bb.pointer.type });
-                            module.emit_assignment(function, assignment.left.llvm.?, assignment.left.type.?, assignment.right);
-                        },
-                        else => |kind| {
-                            const pointer_type = assignment.left.type.?.bb.pointer;
-                            const element_type = pointer_type.type;
-                            assert(element_type.get_evaluation_kind() == .scalar);
-                            const load = module.create_load(.{ .type = element_type, .value = assignment.left.llvm.?, .alignment = pointer_type.alignment });
-                            module.analyze(function, assignment.right, .{ .type = element_type }, .memory);
-                            const a = load;
-                            const b = assignment.right.llvm.?;
-                            const right = switch (kind) {
-                                .@"+=" => switch (element_type.bb) {
-                                    .integer => module.llvm.builder.create_add(a, b),
-                                    .pointer => |pointer| module.llvm.builder.create_gep(.{
-                                        .type = pointer.type.llvm.abi.?,
-                                        .aggregate = a,
-                                        .indices = &.{b},
-                                    }),
-                                    else => module.report_error(),
-                                },
-                                .@"-=" => switch (element_type.bb) {
-                                    .integer => module.llvm.builder.create_sub(a, b),
-                                    .pointer => |pointer| module.llvm.builder.create_gep(.{
-                                        .type = pointer.type.llvm.abi.?,
-                                        .aggregate = a,
-                                        .indices = &.{module.negate_llvm_value(b, assignment.right.is_constant())},
-                                    }),
-                                    else => module.report_error(),
-                                },
-                                .@"*=" => switch (element_type.bb) {
-                                    .integer => module.llvm.builder.create_mul(a, b),
-                                    else => module.report_error(),
-                                },
-                                .@"/=" => switch (element_type.bb) {
-                                    .integer => |integer| switch (integer.signed) {
-                                        true => module.llvm.builder.create_sdiv(a, b),
-                                        false => module.llvm.builder.create_udiv(a, b),
-                                    },
-                                    else => module.report_error(),
-                                },
-                                .@"%=" => switch (element_type.bb) {
-                                    .integer => |integer| switch (integer.signed) {
-                                        true => module.llvm.builder.create_srem(a, b),
-                                        false => module.llvm.builder.create_urem(a, b),
-                                    },
-                                    else => module.report_error(),
-                                },
-                                .@"&=" => switch (element_type.bb) {
-                                    .integer => module.llvm.builder.create_and(a, b),
-                                    else => module.report_error(),
-                                },
-                                .@"|=" => switch (element_type.bb) {
-                                    .integer => module.llvm.builder.create_or(a, b),
-                                    else => module.report_error(),
-                                },
-                                .@"^=" => switch (element_type.bb) {
-                                    .integer => module.llvm.builder.create_xor(a, b),
-                                    else => module.report_error(),
-                                },
-                                .@">>=" => switch (element_type.bb) {
-                                    .integer => |integer| switch (integer.signed) {
-                                        true => module.llvm.builder.create_ashr(a, b),
-                                        false => module.llvm.builder.create_lshr(a, b),
-                                    },
-                                    else => module.report_error(),
-                                },
-                                .@"<<=" => switch (element_type.bb) {
-                                    .integer => module.llvm.builder.create_shl(a, b),
-                                    else => module.report_error(),
-                                },
-                                else => @trap(),
-                            };
-
-                            _ = module.create_store(.{
-                                .source_value = right,
-                                .destination_value = assignment.left.llvm.?,
-                                .type = element_type,
-                                .alignment = pointer_type.alignment,
-                            });
-                        },
-                    }
-                },
-                .expression => |expression_value| {
-                    module.analyze(function, expression_value, .{}, .memory);
-                },
-                .@"if" => |if_statement| {
-                    const taken_block = module.llvm.context.create_basic_block("if.true", llvm_function);
-                    const not_taken_block = module.llvm.context.create_basic_block("if.false", llvm_function);
-                    const exit_block = module.llvm.context.create_basic_block("if.end", null);
-
-                    module.analyze(function, if_statement.condition, .{}, .memory);
-                    const llvm_condition = switch (if_statement.condition.type.?.bb) {
-                        .integer => |integer| if (integer.bit_count != 1) module.llvm.builder.create_integer_compare(.ne, if_statement.condition.llvm.?, if_statement.condition.type.?.llvm.abi.?.get_zero().to_value()) else if_statement.condition.llvm.?,
-                        .pointer => module.llvm.builder.create_integer_compare(.ne, if_statement.condition.llvm.?, if_statement.condition.type.?.llvm.abi.?.get_zero().to_value()),
-                        else => @trap(),
-                    };
-
-                    _ = module.llvm.builder.create_conditional_branch(llvm_condition, taken_block, not_taken_block);
-                    module.llvm.builder.position_at_end(taken_block);
-
-                    const previous_exit_block = current_function.exit_block;
-                    defer current_function.exit_block = previous_exit_block;
-
-                    current_function.exit_block = exit_block;
-
-                    module.analyze_block(function, if_statement.if_block);
-
-                    const if_final_block = module.llvm.builder.get_insert_block();
-
-                    module.llvm.builder.position_at_end(not_taken_block);
-                    var is_second_block_terminated = false;
-                    if (if_statement.else_block) |else_block| {
-                        current_function.exit_block = exit_block;
-                        module.analyze_block(function, else_block);
-                        is_second_block_terminated = module.llvm.builder.get_insert_block() == null;
-                    } else {
-                        if (if_final_block) |final_block| {
-                            const current_insert_block = module.llvm.builder.get_insert_block();
-                            defer if (current_insert_block) |b| {
-                                module.llvm.builder.position_at_end(b);
-                            };
-                            module.llvm.builder.position_at_end(final_block);
-                            _ = module.llvm.builder.create_branch(not_taken_block);
-                            module.llvm.builder.clear_insertion_position();
+                                // switch (return_value.lvalue) {
+                                //     true => {
+                                //         const abi_alignment = return_abi.semantic_type.get_byte_alignment();
+                                //         const abi_size = return_abi.semantic_type.get_byte_size();
+                                //         switch (return_abi.flags.kind) {
+                                //             .indirect => {
+                                //                 _ = module.llvm.builder.create_memcpy(
+                                //                     unreachable, //return_alloca,
+                                //                     abi_alignment, return_value.llvm, abi_alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(abi_size, @intFromBool(false)).to_value());
+                                //             },
+                                //             else => {
+                                //                 switch (return_abi.semantic_type.get_evaluation_kind()) {
+                                //                     .aggregate => {
+                                //                         // TODO: this is 100% wrong, fix
+                                //                         assert(abi_alignment == return_abi.semantic_type.get_byte_alignment());
+                                //                         assert(abi_size == return_abi.semantic_type.get_byte_size());
+                                //                         _ = module.llvm.builder.create_memcpy(
+                                //                             unreachable, //return_alloca,
+                                //                             abi_alignment, return_value.llvm, abi_alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(abi_size, @intFromBool(false)).to_value());
+                                //                     },
+                                //                     .scalar => {
+                                //                         const destination_type = return_abi.semantic_type;
+                                //                         const source_type = return_abi.semantic_type;
+                                //                         assert(return_value.type == source_type);
+                                //                         const ret_val = switch (return_value.type.bb) {
+                                //                             .pointer => return_value.llvm,
+                                //                             // TODO: this feels hacky
+                                //                             else => switch (return_value.lvalue) {
+                                //                                 true => module.create_load(.{ .type = return_value.type, .value = return_value.llvm }),
+                                //                                 false => return_value.llvm,
+                                //                             },
+                                //                         };
+                                //                         _ = module.create_store(.{ .source_value = ret_val, .source_type = source_type,
+                                //                             .destination_value = unreachable, //return_alloca,
+                                //                             .destination_type = destination_type });
+                                //                     },
+                                //                     .complex => @trap(),
+                                //                 }
+                                //             },
+                                //         }
+                                //     },
+                                //     false => {
+                                //     },
+                                // }
+                            },
+                            .complex => @trap(),
                         }
+                    },
+                }
 
-                        assert(exit_block.to_value().use_empty());
-                        not_taken_block.to_value().set_name("if.end");
-                        assert(exit_block.get_parent() == null);
-                        exit_block.delete();
-                    }
+                const return_block = function.variable.storage.?.bb.function.return_block orelse module.report_error();
 
-                    if (!(if_final_block == null and is_second_block_terminated)) {
-                        if (if_final_block != null) {
-                            // @trap();
-                        }
+                _ = module.llvm.builder.create_branch(return_block);
+                _ = module.llvm.builder.clear_insertion_position();
+            },
+            .local => |local| {
+                const expected_type = local.variable.type;
+                assert(local.variable.storage == null);
+                module.analyze_value_type(function, local.variable.initial_value, .{ .type = local.variable.type });
+                local.variable.resolve_type(local.variable.initial_value.type.?);
+                if (expected_type) |lvt| assert(lvt == local.variable.type);
+                module.emit_local_storage(local, last_statement_debug_location.*);
 
-                        if (!is_second_block_terminated) {
-                            // if (is_else) {
-                            //     @trap();
-                            // } else {}
-                        }
-                    } else {
-                        assert(exit_block.get_parent() == null);
-                        // TODO:
-                        // if call `exit_block.erase_from_paren()`, it crashes, investigate
-                        exit_block.delete();
-                    }
-                },
-                .@"while" => |while_loop| {
-                    const loop_entry_block = module.llvm.context.create_basic_block("while.entry", llvm_function);
-                    _ = module.llvm.builder.create_branch(loop_entry_block);
-                    module.llvm.builder.position_at_end(loop_entry_block);
-
-                    module.analyze(function, while_loop.condition, .{}, .abi);
-
-                    const boolean_type = module.integer_type(1, false);
-                    const condition_value = switch (while_loop.condition.type == boolean_type) {
-                        true => while_loop.condition.llvm.?,
-                        false => switch (while_loop.condition.type.?.bb) {
-                            .integer => module.llvm.builder.create_integer_compare(.ne, while_loop.condition.llvm.?, while_loop.condition.type.?.llvm.abi.?.to_integer().get_constant(0, @intFromBool(false)).to_value()),
+                module.emit_assignment(function, local.variable.storage.?.llvm.?, local.variable.storage.?.type.?, local.variable.initial_value);
+            },
+            .assignment => |assignment| {
+                module.analyze(function, assignment.left, .{}, .memory);
+                switch (assignment.kind) {
+                    .@"=" => {
+                        module.analyze_value_type(function, assignment.right, .{ .type = assignment.left.type.?.bb.pointer.type });
+                        module.emit_assignment(function, assignment.left.llvm.?, assignment.left.type.?, assignment.right);
+                    },
+                    else => |kind| {
+                        const pointer_type = assignment.left.type.?.bb.pointer;
+                        const element_type = pointer_type.type;
+                        assert(element_type.get_evaluation_kind() == .scalar);
+                        const load = module.create_load(.{ .type = element_type, .value = assignment.left.llvm.?, .alignment = pointer_type.alignment });
+                        module.analyze(function, assignment.right, .{ .type = element_type }, .memory);
+                        const a = load;
+                        const b = assignment.right.llvm.?;
+                        const right = switch (kind) {
+                            .@"+=" => switch (element_type.bb) {
+                                .integer => module.llvm.builder.create_add(a, b),
+                                .pointer => |pointer| module.llvm.builder.create_gep(.{
+                                    .type = pointer.type.llvm.abi.?,
+                                    .aggregate = a,
+                                    .indices = &.{b},
+                                }),
+                                else => module.report_error(),
+                            },
+                            .@"-=" => switch (element_type.bb) {
+                                .integer => module.llvm.builder.create_sub(a, b),
+                                .pointer => |pointer| module.llvm.builder.create_gep(.{
+                                    .type = pointer.type.llvm.abi.?,
+                                    .aggregate = a,
+                                    .indices = &.{module.negate_llvm_value(b, assignment.right.is_constant())},
+                                }),
+                                else => module.report_error(),
+                            },
+                            .@"*=" => switch (element_type.bb) {
+                                .integer => module.llvm.builder.create_mul(a, b),
+                                else => module.report_error(),
+                            },
+                            .@"/=" => switch (element_type.bb) {
+                                .integer => |integer| switch (integer.signed) {
+                                    true => module.llvm.builder.create_sdiv(a, b),
+                                    false => module.llvm.builder.create_udiv(a, b),
+                                },
+                                else => module.report_error(),
+                            },
+                            .@"%=" => switch (element_type.bb) {
+                                .integer => |integer| switch (integer.signed) {
+                                    true => module.llvm.builder.create_srem(a, b),
+                                    false => module.llvm.builder.create_urem(a, b),
+                                },
+                                else => module.report_error(),
+                            },
+                            .@"&=" => switch (element_type.bb) {
+                                .integer => module.llvm.builder.create_and(a, b),
+                                else => module.report_error(),
+                            },
+                            .@"|=" => switch (element_type.bb) {
+                                .integer => module.llvm.builder.create_or(a, b),
+                                else => module.report_error(),
+                            },
+                            .@"^=" => switch (element_type.bb) {
+                                .integer => module.llvm.builder.create_xor(a, b),
+                                else => module.report_error(),
+                            },
+                            .@">>=" => switch (element_type.bb) {
+                                .integer => |integer| switch (integer.signed) {
+                                    true => module.llvm.builder.create_ashr(a, b),
+                                    false => module.llvm.builder.create_lshr(a, b),
+                                },
+                                else => module.report_error(),
+                            },
+                            .@"<<=" => switch (element_type.bb) {
+                                .integer => module.llvm.builder.create_shl(a, b),
+                                else => module.report_error(),
+                            },
                             else => @trap(),
-                        },
-                    };
+                        };
 
-                    const loop_body_block = module.llvm.context.create_basic_block("while.body", llvm_function);
-                    const loop_end_block = module.llvm.context.create_basic_block("while.end", llvm_function);
-                    _ = module.llvm.builder.create_conditional_branch(condition_value, loop_body_block, loop_end_block);
-                    module.llvm.builder.position_at_end(loop_body_block);
+                        _ = module.create_store(.{
+                            .source_value = right,
+                            .destination_value = assignment.left.llvm.?,
+                            .type = element_type,
+                            .alignment = pointer_type.alignment,
+                        });
+                    },
+                }
+            },
+            .expression => |expression_value| {
+                module.analyze(function, expression_value, .{}, .memory);
+            },
+            .@"if" => |if_statement| {
+                const taken_block = module.llvm.context.create_basic_block("if.true", llvm_function);
+                const not_taken_block = module.llvm.context.create_basic_block("if.false", llvm_function);
+                const exit_block = module.llvm.context.create_basic_block("if.end", llvm_function);
 
-                    module.analyze_block(function, while_loop.block);
+                module.analyze(function, if_statement.condition, .{}, .memory);
+                const llvm_condition = switch (if_statement.condition.type.?.bb) {
+                    .integer => |integer| if (integer.bit_count != 1) module.llvm.builder.create_integer_compare(.ne, if_statement.condition.llvm.?, if_statement.condition.type.?.llvm.abi.?.get_zero().to_value()) else if_statement.condition.llvm.?,
+                    .pointer => module.llvm.builder.create_integer_compare(.ne, if_statement.condition.llvm.?, if_statement.condition.type.?.llvm.abi.?.get_zero().to_value()),
+                    else => @trap(),
+                };
 
-                    if (module.llvm.builder.get_insert_block() != null) {
-                        _ = module.llvm.builder.create_branch(loop_entry_block);
-                    }
+                _ = module.llvm.builder.create_conditional_branch(llvm_condition, taken_block, not_taken_block);
+                module.llvm.builder.position_at_end(taken_block);
 
-                    if (loop_body_block.to_value().use_empty()) {
-                        @trap();
-                    }
+                const previous_exit_block = current_function.exit_block;
+                defer current_function.exit_block = previous_exit_block;
 
-                    if (loop_end_block.to_value().use_empty()) {
-                        @trap();
-                    }
+                current_function.exit_block = exit_block;
 
-                    module.llvm.builder.position_at_end(loop_end_block);
-                },
-                .@"switch" => |switch_statement| {
-                    const previous_exit_block = current_function.exit_block;
-                    defer current_function.exit_block = previous_exit_block;
+                module.analyze_statement(function, block, if_statement.if_statement, last_line, last_line, last_statement_debug_location);
+                if (module.llvm.builder.get_insert_block() != null) {
+                    _ = module.llvm.builder.create_branch(exit_block);
+                }
 
-                    const exit_block = module.llvm.context.create_basic_block("exit_block", llvm_function);
-                    current_function.exit_block = exit_block;
+                module.llvm.builder.position_at_end(not_taken_block);
+                if (if_statement.else_statement) |else_statement| {
+                    module.analyze_statement(function, block, else_statement, last_line, last_line, last_statement_debug_location);
+                }
 
-                    module.analyze(function, switch_statement.discriminant, .{}, .abi);
-                    const switch_discriminant_type = switch_statement.discriminant.type.?;
+                if (module.llvm.builder.get_insert_block() != null) {
+                    _ = module.llvm.builder.create_branch(exit_block);
+                }
 
-                    switch (switch_discriminant_type.bb) {
-                        .enumerator => |enumerator| {
-                            _ = enumerator;
-                            var else_clause_index: ?usize = null;
-                            var total_discriminant_cases: u32 = 0;
-                            for (switch_statement.clauses, 0..) |*clause, clause_index| {
-                                clause.basic_block = module.llvm.context.create_basic_block(if (clause.values.len == 0) "switch.else_case_block" else "switch.case_block", llvm_function);
-                                total_discriminant_cases += @intCast(clause.values.len);
-                                if (clause.values.len == 0) {
-                                    if (else_clause_index != null) {
+                module.llvm.builder.position_at_end(exit_block);
+            },
+            .@"while" => |while_loop| {
+                const loop_entry_block = module.llvm.context.create_basic_block("while.entry", llvm_function);
+                _ = module.llvm.builder.create_branch(loop_entry_block);
+                module.llvm.builder.position_at_end(loop_entry_block);
+
+                module.analyze(function, while_loop.condition, .{}, .abi);
+
+                const boolean_type = module.integer_type(1, false);
+                const condition_value = switch (while_loop.condition.type == boolean_type) {
+                    true => while_loop.condition.llvm.?,
+                    false => switch (while_loop.condition.type.?.bb) {
+                        .integer => module.llvm.builder.create_integer_compare(.ne, while_loop.condition.llvm.?, while_loop.condition.type.?.llvm.abi.?.to_integer().get_constant(0, @intFromBool(false)).to_value()),
+                        else => @trap(),
+                    },
+                };
+
+                const loop_body_block = module.llvm.context.create_basic_block("while.body", llvm_function);
+                const loop_end_block = module.llvm.context.create_basic_block("while.end", llvm_function);
+                _ = module.llvm.builder.create_conditional_branch(condition_value, loop_body_block, loop_end_block);
+                module.llvm.builder.position_at_end(loop_body_block);
+
+                module.analyze_block(function, while_loop.block);
+
+                if (module.llvm.builder.get_insert_block() != null) {
+                    _ = module.llvm.builder.create_branch(loop_entry_block);
+                }
+
+                if (loop_body_block.to_value().use_empty()) {
+                    @trap();
+                }
+
+                if (loop_end_block.to_value().use_empty()) {
+                    @trap();
+                }
+
+                module.llvm.builder.position_at_end(loop_end_block);
+            },
+            .@"switch" => |switch_statement| {
+                const previous_exit_block = current_function.exit_block;
+                defer current_function.exit_block = previous_exit_block;
+
+                const exit_block = module.llvm.context.create_basic_block("exit_block", llvm_function);
+                current_function.exit_block = exit_block;
+
+                module.analyze(function, switch_statement.discriminant, .{}, .abi);
+                const switch_discriminant_type = switch_statement.discriminant.type.?;
+
+                switch (switch_discriminant_type.bb) {
+                    .enumerator => |enumerator| {
+                        _ = enumerator;
+                        var else_clause_index: ?usize = null;
+                        var total_discriminant_cases: u32 = 0;
+                        for (switch_statement.clauses, 0..) |*clause, clause_index| {
+                            clause.basic_block = module.llvm.context.create_basic_block(if (clause.values.len == 0) "switch.else_case_block" else "switch.case_block", llvm_function);
+                            total_discriminant_cases += @intCast(clause.values.len);
+                            if (clause.values.len == 0) {
+                                if (else_clause_index != null) {
+                                    module.report_error();
+                                }
+                                else_clause_index = clause_index;
+                            } else {
+                                for (clause.values) |v| {
+                                    module.analyze(function, v, .{ .type = switch_discriminant_type }, .abi);
+                                    if (!v.is_constant()) {
                                         module.report_error();
                                     }
-                                    else_clause_index = clause_index;
-                                } else {
-                                    for (clause.values) |v| {
-                                        module.analyze(function, v, .{ .type = switch_discriminant_type }, .abi);
-                                        if (!v.is_constant()) {
-                                            module.report_error();
-                                        }
-                                    }
                                 }
                             }
+                        }
 
-                            const else_block = if (else_clause_index) |i| switch_statement.clauses[i].basic_block else module.llvm.context.create_basic_block("switch.else_case_block", llvm_function);
-                            const switch_instruction = module.llvm.builder.create_switch(switch_statement.discriminant.llvm.?, else_block, total_discriminant_cases);
+                        const else_block = if (else_clause_index) |i| switch_statement.clauses[i].basic_block else module.llvm.context.create_basic_block("switch.else_case_block", llvm_function);
+                        const switch_instruction = module.llvm.builder.create_switch(switch_statement.discriminant.llvm.?, else_block, total_discriminant_cases);
 
-                            var all_blocks_terminated = true;
+                        var all_blocks_terminated = true;
 
-                            for (switch_statement.clauses) |clause| {
-                                for (clause.values) |v| {
-                                    switch_instruction.add_case(v.llvm.?, clause.basic_block);
-                                }
-
-                                current_function.exit_block = exit_block;
-                                module.llvm.builder.position_at_end(clause.basic_block);
-                                module.analyze_block(function, clause.block);
-                                if (module.llvm.builder.get_insert_block() != null) {
-                                    all_blocks_terminated = false;
-                                    _ = module.llvm.builder.create_branch(exit_block);
-                                    module.llvm.builder.clear_insertion_position();
-                                }
+                        for (switch_statement.clauses) |clause| {
+                            for (clause.values) |v| {
+                                switch_instruction.add_case(v.llvm.?, clause.basic_block);
                             }
 
                             current_function.exit_block = exit_block;
-
-                            if (else_clause_index == null) {
-                                module.llvm.builder.position_at_end(else_block);
-                                _ = module.llvm.builder.create_unreachable();
+                            module.llvm.builder.position_at_end(clause.basic_block);
+                            module.analyze_block(function, clause.block);
+                            if (module.llvm.builder.get_insert_block() != null) {
+                                all_blocks_terminated = false;
+                                _ = module.llvm.builder.create_branch(exit_block);
                                 module.llvm.builder.clear_insertion_position();
                             }
+                        }
 
-                            if (!all_blocks_terminated) {
-                                module.llvm.builder.position_at_end(exit_block);
-                            }
-                        },
-                        else => @trap(),
-                    }
-                },
-            }
+                        current_function.exit_block = exit_block;
+
+                        if (else_clause_index == null) {
+                            module.llvm.builder.position_at_end(else_block);
+                            _ = module.llvm.builder.create_unreachable();
+                            module.llvm.builder.clear_insertion_position();
+                        }
+
+                        if (!all_blocks_terminated) {
+                            module.llvm.builder.position_at_end(exit_block);
+                        }
+                    },
+                    else => @trap(),
+                }
+            },
+            .block => |child_block| module.analyze_block(function, child_block),
+        }
+    }
+
+    pub fn analyze_block(module: *Module, function: *Global, block: *LexicalBlock) void {
+        if (module.has_debug_info) {
+            const lexical_block = module.llvm.di_builder.create_lexical_block(block.scope.parent.?.llvm.?, module.llvm.file, block.scope.line, block.scope.column);
+            block.scope.llvm = lexical_block.to_scope();
+        }
+
+        var last_line: u32 = 0;
+        var last_column: u32 = 0;
+        var last_statement_debug_location: *llvm.DI.Location = undefined;
+
+        for (block.statements.get_slice()) |statement| {
+            module.analyze_statement(function, block, statement, &last_line, &last_column, &last_statement_debug_location);
         }
     }
 
