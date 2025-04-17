@@ -242,30 +242,46 @@ CompilerCommand = enum
 
     >command_string = c_string_to_slice(argv[1]);
 
-    > a = #string_to_enum(CompilerCommand, command_string);
-
-    >relative_file_path_pointer = argv[2];
-    if (!relative_file_path_pointer)
+    > command_string_to_enum = #string_to_enum(CompilerCommand, command_string);
+    if (!command_string_to_enum.is_valid)
     {
         return 1;
     }
 
-    >relative_file_path = c_string_to_slice(relative_file_path_pointer);
-
-    if (relative_file_path.length < 5)
+    >command = command_string_to_enum.enum_value;
+    switch (command)
     {
-        return 1;
-    }
+        .compile =>
+        {
+            >relative_file_path_pointer = argv[2];
+            if (!relative_file_path_pointer)
+            {
+                return 1;
+            }
 
-    >extension_start = string_last_character(relative_file_path, '.');
-    if (extension_start == string_no_match)
-    {
-        return 1;
-    }
+            >relative_file_path = c_string_to_slice(relative_file_path_pointer);
 
-    if (!string_equal(relative_file_path[extension_start..], ".bbb"))
-    {
-        return 1;
+            if (relative_file_path.length < 5)
+            {
+                return 1;
+            }
+
+            >extension_start = string_last_character(relative_file_path, '.');
+            if (extension_start == string_no_match)
+            {
+                return 1;
+            }
+
+            if (!string_equal(relative_file_path[extension_start..], ".bbb"))
+            {
+                return 1;
+            }
+        },
+        .test =>
+        {
+            // TODO
+            #trap();
+        },
     }
 
     return 0;
