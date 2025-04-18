@@ -197,34 +197,38 @@ pub fn build(b: *std.Build) !void {
         f.close();
         break :blk full_path;
     };
-    const llvm_components_result = try run_process_and_capture_stdout(b, &.{ llvm_config_path, "--components" });
-    var it = std.mem.splitScalar(u8, llvm_components_result, ' ');
-    {
-        var args = std.ArrayList([]const u8).init(b.allocator);
-        try args.append(llvm_config_path);
-        try args.append("--libs");
-        while (it.next()) |component| {
-            try args.append(std.mem.trimRight(u8, component, "\n"));
-        }
-        const llvm_libs_result = try run_process_and_capture_stdout(b, args.items);
-        it = std.mem.splitScalar(u8, llvm_libs_result, ' ');
-    }
 
-    while (it.next()) |lib| {
-        const llvm_lib = std.mem.trimLeft(u8, std.mem.trimRight(u8, lib, "\n"), "-l");
-        try llvm_libs.append(llvm_lib);
-    }
+    const llvm_config_invocation = try run_process_and_capture_stdout(b, &.{
+        llvm_config_path,
+        "--cxxflags",
+        "--libdir",
+        "--build-mode",
+        "--libs",
+    });
+    var it = std.mem.splitScalar(u8, llvm_config_invocation, '\n');
 
-    const llvm_cxx_flags_result = try run_process_and_capture_stdout(b, &.{ llvm_config_path, "--cxxflags" });
-    it = std.mem.splitScalar(u8, llvm_cxx_flags_result, ' ');
-    while (it.next()) |flag| {
-        const llvm_cxx_flag = std.mem.trimRight(u8, flag, "\n");
+    const llvm_cxx_flags_chunk = it.next() orelse unreachable;
+    var llvm_cxx_flags_it = std.mem.splitScalar(u8, llvm_cxx_flags_chunk, ' ');
+    while (llvm_cxx_flags_it.next()) |llvm_cxx_flag| {
         try flags.append(llvm_cxx_flag);
     }
 
-    const llvm_lib_dir = std.mem.trimRight(u8, try run_process_and_capture_stdout(b, &.{ llvm_config_path, "--libdir" }), "\n");
+    const llvm_lib_dir = it.next() orelse unreachable;
+    const llvm_build_mode_string = it.next() orelse unreachable;
+    const llvm_build_mode = inline for (@typeInfo(CmakeBuildType).@"enum".fields) |field| {
+        if (std.mem.eql(u8, llvm_build_mode_string, field.name)) {
+            break @field(CmakeBuildType, field.name);
+        }
+    } else unreachable;
 
-    if (optimize != .ReleaseSmall) {
+    const llvm_lib_chunk = it.next() orelse unreachable;
+    var llvm_lib_it = std.mem.splitScalar(u8, llvm_lib_chunk, ' ');
+    while (llvm_lib_it.next()) |llvm_lib| {
+        const llvm_lib_arg = std.mem.trimLeft(u8, llvm_lib, "-l");
+        try llvm_libs.append(llvm_lib_arg);
+    }
+
+    if (llvm_build_mode == .Debug) {
         try flags.append("-g");
     }
 
