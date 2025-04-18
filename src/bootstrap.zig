@@ -674,10 +674,11 @@ const Unary = struct {
         @"+",
         @"&",
         @"!",
+        @"~",
 
         pub fn is_boolean(id: Id) bool {
             return switch (id) {
-                .@"+", .@"-", .@"&" => false,
+                .@"+", .@"-", .@"&", .@"~" => false,
                 .@"!" => true,
             };
         }
@@ -1800,6 +1801,13 @@ pub const Module = struct {
         };
         count += 1;
 
+        r[@intFromEnum(Token.Id.@"~")] = .{
+            .before = rule_before_unary,
+            .after = null,
+            .precedence = .none,
+        };
+        count += 1;
+
         const bitwise_operators = [_]Token.Id{
             .@"|",
             .@"^",
@@ -2207,6 +2215,11 @@ pub const Module = struct {
                         .kind = .decimal,
                     },
                 };
+            },
+            '~' => blk: {
+                module.offset += 1;
+
+                break :blk .@"~";
             },
             else => @trap(),
         };
@@ -2665,6 +2678,7 @@ pub const Module = struct {
                     .field = identifier,
                 },
             },
+            .kind = value_builder.kind,
         };
         return value;
     }
@@ -3040,6 +3054,7 @@ pub const Module = struct {
             .@"+" => .@"+",
             .@"&" => .@"&",
             .@"!" => .@"!",
+            .@"~" => .@"~",
             else => @trap(),
         };
 
@@ -5144,6 +5159,62 @@ pub const Module = struct {
         module.emit_value(function, value, type_kind);
     }
 
+    pub fn analyze_field_access_type(module: *Module, function: ?*Global, value: *Value) *Type {
+        switch (value.bb) {
+            .field_access => |field_access| {
+                module.analyze_value_type(function, field_access.aggregate, .{});
+                const field_name = field_access.field;
+
+                switch (field_access.aggregate.kind) {
+                    .left => {
+                        if (field_access.aggregate.type.?.bb != .pointer) {
+                            module.report_error();
+                        }
+                        const pty = field_access.aggregate.type.?.bb.pointer.type;
+                        const ty = switch (pty.bb) {
+                            .pointer => |pointer| pointer.type,
+                            else => pty,
+                        };
+
+                        switch (ty.bb) {
+                            .structure => |structure| {
+                                const field_type = for (structure.fields) |*field| {
+                                    if (lib.string.equal(field_name, field.name)) {
+                                        break field.type;
+                                    }
+                                } else {
+                                    module.report_error();
+                                };
+
+                                return switch (value.kind) {
+                                    .left => module.get_pointer_type(.{ .type = field_type }),
+                                    .right => field_type,
+                                };
+                            },
+                            .bits => |bits| {
+                                const field_type = for (bits.fields) |*field| {
+                                    if (lib.string.equal(field_name, field.name)) {
+                                        break field.type;
+                                    }
+                                } else {
+                                    module.report_error();
+                                };
+                                return switch (value.kind) {
+                                    .left => module.report_error(),
+                                    .right => field_type,
+                                };
+                            },
+                            .pointer => module.report_error(),
+                            else => @trap(),
+                        }
+                    },
+                    .right => module.report_error(),
+                }
+            },
+            else => unreachable,
+        }
+    }
+
     pub fn analyze_value_type(module: *Module, function: ?*Global, value: *Value, analysis: ValueAnalysis) void {
         assert(value.type == null);
         assert(value.llvm == null);
@@ -5175,8 +5246,7 @@ pub const Module = struct {
                 },
                 else => @trap(),
             },
-            .unary => |unary| {
-                switch (unary.id) {
+            .unary => |unary| switch (unary.id) {
                     .@"+" => @trap(),
                     .@"-" => {
                         module.analyze_value_type(function, unary.value, analysis);
@@ -5184,11 +5254,15 @@ pub const Module = struct {
                             module.report_error();
                         }
 
-                        assert(expected_type == unary.value.type);
+                        if (expected_type != unary.value.type) {
+                            module.report_error();
+                        }
                     },
                     .@"&" => {
                         module.analyze_value_type(function, unary.value, analysis);
-                        assert(expected_type == unary.value.type);
+                        if (expected_type != unary.value.type) {
+                            module.report_error();
+                        }
                     },
                     .@"!" => {
                         @trap();
@@ -5201,7 +5275,12 @@ pub const Module = struct {
                         //     else => @trap(),
                         // }
                     },
-                }
+                    .@"~" => {
+                        module.analyze_value_type(function, unary.value, analysis);
+                        if (expected_type != unary.value.type) {
+                            module.report_error();
+                        }
+                    },
             },
             .binary => |binary| {
                 const is_boolean = binary.id.is_boolean();
@@ -5268,6 +5347,19 @@ pub const Module = struct {
                         module.report_error();
                     } else if (source_type.get_bit_size() == destination_type.get_bit_size() and source_type.is_signed() == destination_type.is_signed()) {
                         module.report_error();
+                    }
+                },
+                .integer_max => |int_type| {
+                    if (int_type.bb != .integer) {
+                        module.report_error();
+                    }
+
+                    if (expected_type.bb != .integer) {
+                        module.report_error();
+                    }
+
+                    if (int_type != expected_type) {
+                        @trap();
                     }
                 },
                 .int_from_pointer => |pointer_value| {
@@ -5417,8 +5509,7 @@ pub const Module = struct {
                 //     module.report_error();
                 // };
             },
-            .aggregate_initialization => |*aggregate_initialization| {
-                switch (expected_type.bb) {
+            .aggregate_initialization => |*aggregate_initialization| switch (expected_type.bb) {
                     .bits => |bits| {
                         var is_ordered = true;
                         var is_constant = true;
@@ -5456,50 +5547,11 @@ pub const Module = struct {
                         aggregate_initialization.is_constant = is_constant and is_ordered;
                     },
                     else => @trap(),
-                }
             },
-            .field_access => |field_access| {
-                module.analyze_value_type(function, field_access.aggregate, .{});
-                const field_name = field_access.field;
-                switch (field_access.aggregate.kind) {
-                    .left => switch (field_access.aggregate.type.?.bb) {
-                        .pointer => |pointer| switch (pointer.type.bb) {
-                            .structure => |structure| {
-                                const field_type = for (structure.fields) |*field| {
-                                    if (lib.string.equal(field_name, field.name)) {
-                                        break field.type;
-                                    }
-                                } else {
-                                    module.report_error();
-                                };
-
-                                switch (value.kind) {
-                                    .left => @trap(),
-                                    .right => if (field_type != expected_type) {
-                                        module.report_error();
-                                    },
-                                }
-                            },
-                            .bits => |bits| {
-                                const field_type = for (bits.fields) |*field| {
-                                    if (lib.string.equal(field_name, field.name)) {
-                                        break field.type;
-                                    }
-                                } else {
-                                    module.report_error();
-                                };
-                                switch (value.kind) {
-                                    .left => module.report_error(),
-                                    .right => if (field_type != expected_type) {
-                                        module.report_error();
-                                    },
-                                }
-                            },
-                            else => @trap(),
-                        },
-                        else => module.report_error(),
-                    },
-                    .right => module.report_error(),
+            .field_access => {
+                const field_type = module.analyze_field_access_type(function, value);
+                if (field_type != expected_type) {
+                    module.report_error();
                 }
             },
             .zero => {},
@@ -5569,7 +5621,7 @@ pub const Module = struct {
                     });
                 } else {
                     module.analyze_value_type(function, binary.left, .{});
-                    module.analyze_value_type(function, binary.right, .{});
+                    module.analyze_value_type(function, binary.right, .{ .type = if (binary.left.type.?.bb != .pointer) binary.left.type.? else null });
                 }
 
                 const is_boolean = binary.id.is_boolean();
@@ -5949,46 +6001,7 @@ pub const Module = struct {
                     },
                 }
             },
-            .field_access => |field_access| blk: {
-                module.analyze_value_type(function, field_access.aggregate, .{});
-                const field_name = field_access.field;
-                switch (field_access.aggregate.kind) {
-                    .left => switch (field_access.aggregate.type.?.bb) {
-                        .pointer => |pointer| switch (pointer.type.bb) {
-                            .structure => |structure| {
-                                const field_type = for (structure.fields) |*field| {
-                                    if (lib.string.equal(field_name, field.name)) {
-                                        break field.type;
-                                    }
-                                } else {
-                                    module.report_error();
-                                };
-
-                                break :blk switch (value.kind) {
-                                    .left => @trap(),
-                                    .right => field_type,
-                                };
-                            },
-                            .bits => |bits| {
-                                const field_type = for (bits.fields) |*field| {
-                                    if (lib.string.equal(field_name, field.name)) {
-                                        break field.type;
-                                    }
-                                } else {
-                                    module.report_error();
-                                };
-                                break :blk switch (value.kind) {
-                                    .left => module.report_error(),
-                                    .right => field_type,
-                                };
-                            },
-                            else => @trap(),
-                        },
-                        else => module.report_error(),
-                    },
-                    .right => module.report_error(),
-                }
-            },
+            .field_access => module.analyze_field_access_type(function, value),
             .string_literal => module.get_slice_type(.{ .type = module.integer_type(8, false) }),
             .slice_expression => |slice_expression| blk: {
                 module.analyze_value_type(function, slice_expression.array_like, .{});
@@ -6050,29 +6063,43 @@ pub const Module = struct {
                         .left => @trap(),
                         .right => {
                             assert(structure.is_slice);
+
                             const slice_pointer_type = value_type.bb.structure.fields[0].type;
                             const slice_element_type = slice_pointer_type.bb.pointer.type;
+
                             const is_start_zero = slice_expression.start.bb == .constant_integer and slice_expression.start.bb.constant_integer.value == 0;
-                            if (slice_expression.end) |end| {
-                                _ = end;
-                                @trap();
-                            } else {
-                                if (is_start_zero) {
-                                    // TODO: consider if we should emit an error here or it be a NOP
-                                    module.report_error();
-                                } else {
+
+                            const old_slice_pointer = module.llvm.builder.create_extract_value(slice_expression.array_like.llvm.?, 0);
+                            const old_slice_length = module.llvm.builder.create_extract_value(slice_expression.array_like.llvm.?, 1);
+
+                            const slice_pointer = switch (is_start_zero) {
+                                true => old_slice_pointer,
+                                false => b: {
                                     module.emit_value(function, slice_expression.start, .memory);
-                                    const old_slice_pointer = module.llvm.builder.create_extract_value(slice_expression.array_like.llvm.?, 0);
-                                    const old_slice_length = module.llvm.builder.create_extract_value(slice_expression.array_like.llvm.?, 1);
-                                    const slice_pointer = module.llvm.builder.create_gep(.{
+                                    break :b module.llvm.builder.create_gep(.{
                                         .type = slice_element_type.llvm.memory.?,
                                         .aggregate = old_slice_pointer,
                                         .indices = &.{slice_expression.start.llvm.?},
                                     });
-                                    const slice_length = module.llvm.builder.create_sub(old_slice_length, slice_expression.start.llvm.?);
-                                    return .{ slice_pointer, slice_length };
+                                },
+                            };
+
+                            const slice_length = if (slice_expression.end) |end| b: {
+                                module.emit_value(function, end, .memory);
+                                const slice_length = switch (is_start_zero) {
+                                    true => end.llvm.?,
+                                    false => module.llvm.builder.create_sub(end.llvm.?, slice_expression.start.llvm.?),
+                                };
+                                break :b slice_length;
+                            } else b: {
+                                if (is_start_zero) {
+                                    module.report_error();
                                 }
-                            }
+                                const slice_length = module.llvm.builder.create_sub(old_slice_length, slice_expression.start.llvm.?);
+                                break :b slice_length;
+                            };
+
+                            return .{ slice_pointer, slice_length };
                         },
                     },
                     else => @trap(),
@@ -6114,6 +6141,10 @@ pub const Module = struct {
                         },
                         else => @trap(),
                     },
+                },
+                .@"~" => b: {
+                    module.emit_value(function, unary.value, type_kind);
+                    break :b module.llvm.builder.create_not(unary.value.llvm.?);
                 },
                 else => @trap(),
             },
@@ -6201,8 +6232,8 @@ pub const Module = struct {
                                 true => module.llvm.builder.create_srem(left, right),
                                 false => module.llvm.builder.create_urem(left, right),
                             },
-                            .@"&" => module.llvm.builder.create_and(left, right),
-                            .@"|" => module.llvm.builder.create_or(left, right),
+                            .@"&", .@"and" => module.llvm.builder.create_and(left, right),
+                            .@"|", .@"or" => module.llvm.builder.create_or(left, right),
                             .@"^" => module.llvm.builder.create_xor(left, right),
                             .@"<<" => module.llvm.builder.create_shl(left, right),
                             .@">>" => switch (integer.signed) {
@@ -6533,8 +6564,20 @@ pub const Module = struct {
                 module.emit_value(function, field_access.aggregate, .memory);
                 const field_name = field_access.field;
                 switch (field_access.aggregate.kind) {
-                    .left => switch (field_access.aggregate.type.?.bb) {
-                        .pointer => |pointer| switch (pointer.type.bb) {
+                    .left => {
+                        const base_type = field_access.aggregate.type.?;
+                        assert(base_type.bb == .pointer);
+                        const pointer_type = switch (base_type.bb.pointer.type.bb) {
+                            .pointer => base_type.bb.pointer.type,
+                            else => base_type,
+                        };
+                        const ty = pointer_type.bb.pointer.type;
+                        const v = switch (pointer_type == base_type) {
+                            false => module.create_load(.{ .type = pointer_type, .value = field_access.aggregate.llvm.? }),
+                            true => field_access.aggregate.llvm.?,
+                        };
+
+                        switch (ty.bb) {
                             .structure => |structure| {
                                 const field_index: u32 = for (structure.fields, 0..) |field, field_index| {
                                     if (lib.string.equal(field_name, field.name)) {
@@ -6542,8 +6585,7 @@ pub const Module = struct {
                                     }
                                 } else module.report_error();
 
-                                pointer.type.resolve(module);
-                                const gep = module.llvm.builder.create_struct_gep(pointer.type.llvm.memory.?.to_struct(), field_access.aggregate.llvm.?, field_index);
+                                const gep = module.llvm.builder.create_struct_gep(ty.llvm.memory.?.to_struct(), v, field_index);
                                 break :blk switch (value.kind) {
                                     .left => gep,
                                     .right => module.create_load(.{
@@ -6561,14 +6603,13 @@ pub const Module = struct {
                                 const field = bits.fields[field_index];
                                 field.type.resolve(module);
 
-                                const load = module.create_load(.{ .type = pointer.type, .alignment = pointer.alignment, .value = field_access.aggregate.llvm.? });
+                                const load = module.create_load(.{ .type = ty, .alignment = pointer_type.bb.pointer.alignment, .value = v });
                                 const shift = module.llvm.builder.create_lshr(load, bits.backing_type.llvm.abi.?.to_integer().get_constant(field.bit_offset, 0).to_value());
                                 const trunc = module.llvm.builder.create_truncate(shift, field.type.llvm.abi.?);
                                 break :blk trunc;
                             },
                             else => @trap(),
-                        },
-                        else => @trap(),
+                        }
                     },
                     .right => switch (field_access.aggregate.type.?.bb) {
                         else => @trap(),
@@ -7677,6 +7718,8 @@ const Token = union(Id) {
     @">>",
     // Logical NOT operator
     @"!",
+    // Bitwise NOT operator
+    @"~",
     // Pointer dereference
     @".&",
     // Parenthesis
@@ -7743,6 +7786,8 @@ const Token = union(Id) {
         @">>",
         // Logical NOT operator
         @"!",
+        // Bitwise NOT operator
+        @"~",
         // Pointer dereference
         @".&",
         // Parenthesis

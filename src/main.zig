@@ -315,4 +315,5 @@ const names = &[_][]const u8{
     "else_if",
     "else_if_complicated",
     "shortcircuiting_if",
+    "field_access_left_assign",
 };

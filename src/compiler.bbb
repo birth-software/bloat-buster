@@ -1,6 +1,22 @@
 [extern] memcmp = fn [cc(c)] (a: &u8, b: &u8, byte_count: u64) s32;
 [extern] exit = fn [cc(c)] (exit_code: s32) noreturn;
 
+assert = fn (ok: u1) void
+{
+    if (!ok)
+    {
+        unreachable;
+    }
+}
+
+align_forward = fn (value: u64, alignment: u64) u64
+{
+    assert(alignment != 0);
+    >mask = alignment - 1;
+    >result = (value + mask) & ~mask;
+    return result;
+}
+
 string_no_match = #integer_max(u64);
 
 c_string_length = fn (c_string: &u8) u64
@@ -212,6 +228,24 @@ arena_initialize_default = fn (initial_size: u64) &Arena
     });
 }
 
+arena_allocate_bytes = fn (arena: &Arena, size: u64, alignment: u64) &u8
+{
+    >aligned_offset = align_forward(arena.position, alignment);
+    >aligned_size_after = aligned_offset + size;
+
+    if (aligned_size_after > arena.os_position)
+    {
+        #trap();
+    }
+
+    >arena_byte_pointer: &u8 = #pointer_cast(arena);
+    >result = arena_byte_pointer + aligned_offset;
+    arena.position = aligned_size_after;
+    assert(arena.position <= arena.os_position);
+
+    return result;
+}
+
 GlobalState = struct
 {
     arena: &Arena,
@@ -281,6 +315,11 @@ compile_file = fn (arena: &Arena, compile: CompileFile) void
     {
         separator_index = 0;
     }
+    
+    >base_start = separator_index + #extend(separator_index != 0 or relative_file_path[separator_index] == '/');
+    >base_name = relative_file_path[base_start..extension_start];
+
+    >is_compiler = string_equal(relative_file_path, "src/compiler.bbb");
 }
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8) s32
