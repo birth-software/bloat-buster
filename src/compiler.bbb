@@ -233,17 +233,30 @@ arena_allocate_bytes = fn (arena: &Arena, size: u64, alignment: u64) &u8
     >aligned_offset = align_forward(arena.position, alignment);
     >aligned_size_after = aligned_offset + size;
 
+    >arena_byte_pointer: &u8 = #pointer_cast(arena);
+
     if (aligned_size_after > arena.os_position)
     {
-        #trap();
+        >target_committed_size = align_forward(aligned_size_after, arena.granularity);
+        >size_to_commit = target_committed_size - arena.os_position;
+        >commit_pointer = arena_byte_pointer + arena.os_position;
+        os_commit(#int_from_pointer(commit_pointer), size_to_commit, {
+            .read = 1,
+            .write = 1,
+            zero,
+        });
+        arena.os_position = target_committed_size;
     }
 
-    >arena_byte_pointer: &u8 = #pointer_cast(arena);
     >result = arena_byte_pointer + aligned_offset;
     arena.position = aligned_size_after;
     assert(arena.position <= arena.os_position);
 
     return result;
+}
+
+arena_join_string = fn (arena: &Arena, pieces: [][]u8) []u8
+{
 }
 
 GlobalState = struct
