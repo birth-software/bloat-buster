@@ -1,4 +1,5 @@
 [extern] memcmp = fn [cc(c)] (a: &u8, b: &u8, byte_count: u64) s32;
+[extern] exit = fn [cc(c)] (exit_code: s32) noreturn;
 
 string_no_match = #integer_max(u64);
 
@@ -225,6 +226,11 @@ global_state_initialize = fn () void
     };
 }
 
+fail = fn () noreturn
+{
+    exit(1);
+}
+
 CompilerCommand = enum
 {
     compile,
@@ -253,6 +259,28 @@ CompileFile = struct
 
 compile_file = fn (arena: &Arena, compile: CompileFile) void
 {
+    >relative_file_path = compile.relative_file_path;
+    if (relative_file_path.length < 5)
+    {
+        fail();
+    }
+
+    >extension_start = string_last_character(relative_file_path, '.');
+    if (extension_start == string_no_match)
+    {
+        fail();
+    }
+
+    if (!string_equal(relative_file_path[extension_start..], ".bbb"))
+    {
+        fail();
+    }
+
+    >separator_index = string_last_character(relative_file_path, '/');
+    if (separator_index == string_no_match)
+    {
+        separator_index = 0;
+    }
 }
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8) s32
@@ -320,22 +348,6 @@ compile_file = fn (arena: &Arena, compile: CompileFile) void
             }
 
             >relative_file_path = c_string_to_slice(relative_file_path_pointer);
-
-            if (relative_file_path.length < 5)
-            {
-                return 1;
-            }
-
-            >extension_start = string_last_character(relative_file_path, '.');
-            if (extension_start == string_no_match)
-            {
-                return 1;
-            }
-
-            if (!string_equal(relative_file_path[extension_start..], ".bbb"))
-            {
-                return 1;
-            }
 
             compile_file(arena, {
                 .relative_file_path = relative_file_path,

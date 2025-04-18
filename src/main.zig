@@ -314,4 +314,5 @@ const names = &[_][]const u8{
     "empty_if",
     "else_if",
     "else_if_complicated",
+    "shortcircuiting_if",
 };
