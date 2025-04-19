@@ -616,11 +616,20 @@ pub const Statement = struct {
         expression: *Value,
         @"if": If,
         @"while": While,
+        for_each: ForEach,
         @"switch": Switch,
         block: *LexicalBlock,
     },
     line: u32,
     column: u32,
+
+    const ForEach = struct {
+        locals: []const *Local,
+        left_values: []const Value.Kind,
+        right_values: []const *Value,
+        predicate: *Statement,
+        scope: Scope,
+    };
 
     const Assignment = struct {
         left: *Value,
@@ -980,6 +989,7 @@ pub const Scope = struct {
         global,
         function,
         local,
+        for_each,
     };
 };
 
@@ -1044,7 +1054,6 @@ pub const Module = struct {
     lexical_blocks: lib.VirtualBuffer(LexicalBlock),
     statements: lib.VirtualBuffer(Statement),
     current_function: ?*Global = null,
-    current_scope: *Scope,
     name: []const u8,
     path: []const u8,
     executable: [:0]const u8,
@@ -1639,6 +1648,7 @@ pub const Module = struct {
         @"return",
         @"if",
         // TODO: make `unreachable` a statement start keyword?
+        @"for",
         @"while",
         @"switch",
     };
@@ -2234,30 +2244,30 @@ pub const Module = struct {
         after: ?*const Rule.Function,
         precedence: Precedence,
 
-        const Function = fn (noalias module: *Module, function: ?*Global, value_builder: Value.Builder) *Value;
+        const Function = fn (noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value;
     };
 
-    fn parse_value(module: *Module, function: ?*Global, value_builder: Value.Builder) *Value {
+    fn parse_value(module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
         assert(value_builder.precedence == .none);
         assert(value_builder.left == null);
-        const value = module.parse_precedence(function, value_builder.with_precedence(.assignment));
+        const value = module.parse_precedence(function, scope, value_builder.with_precedence(.assignment));
         return value;
     }
 
-    fn parse_precedence(module: *Module, function: ?*Global, value_builder: Value.Builder) *Value {
+    fn parse_precedence(module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
         assert(value_builder.token == .none);
         const token = module.tokenize();
         const rule = &rules[@intFromEnum(token)];
         if (rule.before) |before| {
-            const left = before(module, function, value_builder.with_precedence(.none).with_token(token));
-            const result = module.parse_precedence_left(function, value_builder.with_left(left));
+            const left = before(module, function, scope, value_builder.with_precedence(.none).with_token(token));
+            const result = module.parse_precedence_left(function, scope, value_builder.with_left(left));
             return result;
         } else {
             module.report_error();
         }
     }
 
-    fn parse_precedence_left(module: *Module, function: ?*Global, value_builder: Value.Builder) *Value {
+    fn parse_precedence_left(module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
         var result = value_builder.left;
         _ = &result;
         const precedence = value_builder.precedence;
@@ -2279,14 +2289,14 @@ pub const Module = struct {
 
             const after_rule = token_rule.after orelse module.report_error();
             const old = result;
-            const new = after_rule(module, function, value_builder.with_token(token).with_precedence(.none).with_left(old));
+            const new = after_rule(module, function, scope, value_builder.with_token(token).with_precedence(.none).with_left(old));
             result = new;
         }
 
         return result.?;
     }
 
-    fn parse_statement(module: *Module, function: *Global, block: *LexicalBlock) *Statement {
+    fn parse_statement(module: *Module, function: *Global, scope: *Scope) *Statement {
         const statement_line = module.get_line();
         const statement_column = module.get_column();
 
@@ -2307,7 +2317,7 @@ pub const Module = struct {
                         break :b t;
                     } else null;
                     module.expect_character('=');
-                    const local_value = module.parse_value(function, .{});
+                    const local_value = module.parse_value(function, scope, .{});
                     const local = module.locals.add();
                     local.* = .{
                         .variable = .{
@@ -2316,18 +2326,23 @@ pub const Module = struct {
                             .name = local_name,
                             .line = statement_line,
                             .column = statement_column,
-                            .scope = module.current_scope,
+                            .scope = scope,
                         },
                         .argument_index = null,
                     };
-                    assert(module.current_scope == &block.scope);
-                    _ = block.locals.append(local);
+                    switch (scope.kind) {
+                        .local => {
+                            const block: *LexicalBlock = @fieldParentPtr("scope", scope);
+                            _ = block.locals.append(local);
+                        },
+                        else => @trap(),
+                    }
                     break :blk .{
                         .local = local,
                     };
                 },
                 '#' => .{
-                    .expression = module.parse_value(function, .{}),
+                    .expression = module.parse_value(function, scope, .{}),
                 },
                 'A'...'Z', 'a'...'z' => blk: {
                     const statement_start_identifier = module.parse_identifier();
@@ -2335,7 +2350,7 @@ pub const Module = struct {
                     if (lib.string.to_enum(StatementStartKeyword, statement_start_identifier)) |statement_start_keyword| switch (statement_start_keyword) {
                         ._ => @trap(),
                         .@"return" => break :blk .{
-                            .@"return" = module.parse_value(function, .{}),
+                            .@"return" = module.parse_value(function, scope, .{}),
                         },
                         .@"if" => {
                             module.skip_space();
@@ -2343,14 +2358,14 @@ pub const Module = struct {
                             module.expect_character(left_parenthesis);
                             module.skip_space();
 
-                            const condition = module.parse_value(function, .{});
+                            const condition = module.parse_value(function, scope, .{});
 
                             module.skip_space();
                             module.expect_character(right_parenthesis);
 
                             module.skip_space();
 
-                            const if_statement = module.parse_statement(function, block);
+                            const if_statement = module.parse_statement(function, scope);
 
                             module.skip_space();
 
@@ -2366,7 +2381,7 @@ pub const Module = struct {
                             }
 
                             const else_block = switch (is_else) {
-                                true => module.parse_statement(function, block),
+                                true => module.parse_statement(function, scope),
                                 false => null,
                             };
 
@@ -2386,14 +2401,14 @@ pub const Module = struct {
                             module.expect_character(left_parenthesis);
                             module.skip_space();
 
-                            const condition = module.parse_value(function, .{});
+                            const condition = module.parse_value(function, scope, .{});
 
                             module.skip_space();
                             module.expect_character(right_parenthesis);
 
                             module.skip_space();
 
-                            const while_block = module.parse_block(function);
+                            const while_block = module.parse_block(function, scope);
 
                             require_semicolon = false;
 
@@ -2404,12 +2419,132 @@ pub const Module = struct {
                                 },
                             };
                         },
+                        .@"for" => {
+                            module.skip_space();
+
+                            module.expect_character(left_parenthesis);
+                            module.skip_space();
+
+                            statement.* = .{
+                                .line = statement_line,
+                                .column = statement_column,
+                                .bb = .{
+                                    .for_each = .{
+                                        .locals = &.{},
+                                        .left_values = &.{},
+                                        .right_values = &.{},
+                                        .predicate = undefined,
+                                        .scope = .{
+                                            .line = statement_line,
+                                            .column = statement_column,
+                                            .kind = .for_each,
+                                            .parent = scope,
+                                        },
+                                    },
+                                },
+                            };
+
+                            var local_buffer: [64]*Local = undefined;
+                            var left_value_buffer: [64]Value.Kind = undefined;
+                            var left_value_count: u64 = 0;
+
+                            while (true) {
+                                module.skip_space();
+
+                                const is_left = switch (module.content[module.offset]) {
+                                    '&' => true,
+                                    else => false,
+                                };
+                                module.offset += @intFromBool(is_left);
+
+                                const for_local_line = module.get_line();
+                                const for_local_column = module.get_column();
+
+                                if (is_identifier_start_ch(module.content[module.offset])) {
+                                    const identifier = module.parse_identifier();
+                                    const local = module.locals.add();
+                                    local.* = .{
+                                        .variable = .{
+                                            .type = null,
+                                            .initial_value = undefined,
+                                            .scope = &statement.bb.for_each.scope,
+                                            .name = identifier,
+                                            .line = for_local_line,
+                                            .column = for_local_column,
+                                        },
+                                        .argument_index = null,
+                                    };
+                                    local_buffer[left_value_count] = local;
+                                    left_value_buffer[left_value_count] = switch (is_left) {
+                                            true => .left,
+                                            false => .right,
+                                    };
+                                    left_value_count += 1;
+                                } else {
+                                    @trap();
+                                }
+
+                                module.skip_space();
+
+                                if (!module.consume_character_if_match(',')) {
+                                    module.expect_character(':');
+                                    break;
+                                }
+                            }
+
+                            module.skip_space();
+
+                            var right_value_buffer: [64]*Value = undefined;
+                            var right_value_count: u64 = 0;
+                            while (true) {
+                                module.skip_space();
+
+                                const identifier = module.parse_value(function, scope, .{
+                                    .kind = .left,
+                                });
+                                right_value_buffer[right_value_count] = identifier;
+                                right_value_count += 1;
+
+                                module.skip_space();
+
+                                if (!module.consume_character_if_match(',')) {
+                                    module.expect_character(right_parenthesis);
+                                    break;
+                                }
+                            }
+
+                            module.skip_space();
+
+                            if (left_value_count != right_value_count) {
+                                module.report_error();
+                            }
+
+                            const locals = module.arena.allocate(*Local, left_value_count);
+                            @memcpy(locals, local_buffer[0..left_value_count]);
+                            const left_values = module.arena.allocate(Value.Kind, left_value_count);
+                            @memcpy(left_values, left_value_buffer[0..left_value_count]);
+                            const right_values = module.arena.allocate(*Value, right_value_count);
+                            @memcpy(right_values, right_value_buffer[0..right_value_count]);
+
+                            statement.bb.for_each.locals = locals;
+                            statement.bb.for_each.left_values = left_values;
+                            statement.bb.for_each.right_values = right_values;
+
+                            const predicate = module.parse_statement(function, &statement.bb.for_each.scope);
+                            statement.bb.for_each.predicate = predicate;
+
+                            module.skip_space();
+
+                            require_semicolon = false;
+
+                            break :blk statement.bb;
+                        },
                         .@"switch" => {
                             module.skip_space();
                             module.expect_character(left_parenthesis);
                             module.skip_space();
 
-                            const discriminant = module.parse_value(function, .{});
+                            const discriminant = module.parse_value(function, scope, .{});
 
                             module.skip_space();
                             module.expect_character(right_parenthesis);
@@ -2447,7 +2582,7 @@ pub const Module = struct {
                                     var case_count: u64 = 0;
 
                                     while (true) {
-                                        const case_value = module.parse_value(function, .{});
+                                        const case_value = module.parse_value(function, scope, .{});
                                         case_buffer[case_count] = case_value;
                                         case_count += 1;
 
@@ -2468,7 +2603,7 @@ pub const Module = struct {
 
                                 module.skip_space();
 
-                                const clause_block = module.parse_block(function);
+                                const clause_block = module.parse_block(function, scope);
 
                                 clause_buffer[clause_count] = .{
                                     .values = clause_values,
@@ -2500,7 +2635,7 @@ pub const Module = struct {
                     } else {
                         module.offset -= statement_start_identifier.len;
 
-                        const left = module.parse_value(function, .{
+                        const left = module.parse_value(function, scope, .{
                             .kind = .left,
                         });
 
@@ -2583,7 +2718,7 @@ pub const Module = struct {
 
                             module.skip_space();
 
-                            const right = module.parse_value(function, .{});
+                            const right = module.parse_value(function, scope, .{});
 
                             break :blk .{
                                 .assignment = .{
@@ -2598,7 +2733,7 @@ pub const Module = struct {
                 left_brace => blk: {
                     require_semicolon = false;
                     break :blk .{
-                        .block = module.parse_block(function),
+                        .block = module.parse_block(function, scope),
                     };
                 },
                 else => @trap(),
@@ -2614,8 +2749,7 @@ pub const Module = struct {
         return statement;
     }
 
-    fn parse_block(module: *Module, function: *Global) *LexicalBlock {
-        const parent_scope = module.current_scope;
+    fn parse_block(module: *Module, function: *Global, parent_scope: *Scope) *LexicalBlock {
         const block = module.lexical_blocks.append(.{
             .statements = .initialize(),
             .locals = .initialize(),
@@ -2626,8 +2760,7 @@ pub const Module = struct {
                 .column = module.get_column(),
             },
         });
-        module.current_scope = &block.scope;
-        defer module.current_scope = parent_scope;
+        const scope = &block.scope;
 
         module.expect_character(left_brace);
 
@@ -2642,14 +2775,15 @@ pub const Module = struct {
                 break;
             }
 
-            const statement = module.parse_statement(function, block);
+            const statement = module.parse_statement(function, scope);
             _ = block.statements.append(statement);
         }
 
         return block;
     }
 
-    fn rule_before_dot(noalias module: *Module, function: ?*Global, value_builder: Value.Builder) *Value {
+    fn rule_before_dot(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
+        _ = scope;
         _ = function;
         _ = value_builder;
         module.skip_space();
@@ -2664,7 +2798,8 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_after_dot(noalias module: *Module, function: ?*Global, value_builder: Value.Builder) *Value {
+    fn rule_after_dot(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
+        _ = scope;
         _ = function;
         module.skip_space();
         const left = value_builder.left orelse module.report_error();
@@ -2683,7 +2818,8 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_before_string_literal(noalias module: *Module, function: ?*Global, value_builder: Value.Builder) *Value {
+    fn rule_before_string_literal(noalias module: *Module, function: ?*Global, parent_scope: *Scope, value_builder: Value.Builder) *Value {
+        _ = parent_scope;
         _ = function;
         const value = module.values.add();
         value.* = .{
@@ -2694,16 +2830,17 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_before_identifier(noalias module: *Module, function: ?*Global, value_builder: Value.Builder) *Value {
+    fn rule_before_identifier(noalias module: *Module, function: ?*Global, current_scope: *Scope, value_builder: Value.Builder) *Value {
         _ = function;
         const identifier = value_builder.token.identifier;
         assert(!lib.string.equal(identifier, ""));
         assert(!lib.string.equal(identifier, "_"));
 
-        var scope_it: ?*Scope = module.current_scope;
+        var scope_it: ?*Scope = current_scope;
         const variable = blk: while (scope_it) |scope| : (scope_it = scope.parent) {
             switch (scope.kind) {
                 .global => {
+                    assert(scope.parent == null);
                     const m: *Module = @fieldParentPtr("scope", scope);
                     assert(m == module);
                     for (module.globals.get_slice()) |*global| {
@@ -2712,25 +2849,33 @@ pub const Module = struct {
                         }
                     }
 
-                    assert(scope.parent == null);
                 },
                 .function => {
+                    assert(scope.parent != null);
                     const f: *Function = @fieldParentPtr("scope", scope);
                     for (f.arguments) |argument| {
                         if (lib.string.equal(argument.variable.name, identifier)) {
                             break :blk &argument.variable;
                         }
                     }
-                    assert(scope.parent != null);
                 },
                 .local => {
+                    assert(scope.parent != null);
                     const block: *LexicalBlock = @fieldParentPtr("scope", scope);
                     for (block.locals.get_slice()) |local| {
                         if (lib.string.equal(local.variable.name, identifier)) {
                             break :blk &local.variable;
                         }
                     }
+                },
+                .for_each => {
                     assert(scope.parent != null);
+                    const for_each: *Statement.ForEach = @fieldParentPtr("scope", scope);
+                    for (for_each.locals) |local| {
+                        if (lib.string.equal(local.variable.name, identifier)) {
+                            break :blk &local.variable;
+                        }
+                    }
                 },
             }
         } else {
@@ -2752,7 +2897,8 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_before_value_keyword(noalias module: *Module, function: ?*Global, value_builder: Value.Builder) *Value {
+    fn rule_before_value_keyword(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
+        _ = scope;
         _ = function;
         const value = module.values.add();
         const new_value: Value = switch (value_builder.token.value_keyword) {
@@ -2770,7 +2916,7 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_before_value_intrinsic(noalias module: *Module, function: ?*Global, value_builder: Value.Builder) *Value {
+    fn rule_before_value_intrinsic(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
         const intrinsic = value_builder.token.value_intrinsic;
         const value = module.values.add();
 
@@ -2793,7 +2939,7 @@ pub const Module = struct {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
-                const arg_value = module.parse_value(function, .{});
+                const arg_value = module.parse_value(function, scope, .{});
                 module.expect_character(right_parenthesis);
                 break :blk .{
                     .bb = .{
@@ -2821,7 +2967,7 @@ pub const Module = struct {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
-                const arg_value = module.parse_value(function, .{});
+                const arg_value = module.parse_value(function, scope, .{});
                 module.expect_character(right_parenthesis);
                 break :blk .{
                     .bb = .{
@@ -2835,7 +2981,7 @@ pub const Module = struct {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
-                const arg_value = module.parse_value(function, .{});
+                const arg_value = module.parse_value(function, scope, .{});
                 module.expect_character(right_parenthesis);
                 break :blk .{
                     .bb = .{
@@ -2849,7 +2995,7 @@ pub const Module = struct {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
-                const v = module.parse_value(function, .{});
+                const v = module.parse_value(function, scope, .{});
                 module.expect_character(right_parenthesis);
                 break :blk .{
                     .bb = .{
@@ -2863,13 +3009,13 @@ pub const Module = struct {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
-                const condition = module.parse_value(function, .{});
+                const condition = module.parse_value(function, scope, .{});
                 module.expect_character(',');
                 module.skip_space();
-                const true_value = module.parse_value(function, .{});
+                const true_value = module.parse_value(function, scope, .{});
                 module.expect_character(',');
                 module.skip_space();
-                const false_value = module.parse_value(function, .{});
+                const false_value = module.parse_value(function, scope, .{});
                 module.skip_space();
                 module.expect_character(right_parenthesis);
                 break :blk .{
@@ -2891,7 +3037,7 @@ pub const Module = struct {
                 const enum_type = module.parse_type(function);
                 module.expect_character(',');
                 module.skip_space();
-                const string_value = module.parse_value(function, .{});
+                const string_value = module.parse_value(function, scope, .{});
                 module.skip_space();
                 module.expect_character(right_parenthesis);
 
@@ -2921,7 +3067,7 @@ pub const Module = struct {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
-                const v = module.parse_value(function, .{});
+                const v = module.parse_value(function, scope, .{});
                 module.expect_character(right_parenthesis);
                 break :blk .{
                     .bb = .{
@@ -2946,7 +3092,7 @@ pub const Module = struct {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
-                const va_list = module.parse_value(function, .{});
+                const va_list = module.parse_value(function, scope, .{});
                 module.expect_character(right_parenthesis);
                 break :blk .{
                     .bb = .{
@@ -2960,7 +3106,7 @@ pub const Module = struct {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
-                const va_list = module.parse_value(function, .{});
+                const va_list = module.parse_value(function, scope, .{});
                 module.skip_space();
                 module.expect_character(',');
                 module.skip_space();
@@ -2983,7 +3129,8 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_before_integer(noalias module: *Module, function: ?*Global, value_builder: Value.Builder) *Value {
+    fn rule_before_integer(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
+        _ = scope;
         _ = function;
         const v = value_builder.token.integer.value;
         const value = module.values.add();
@@ -2998,13 +3145,13 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_after_binary(noalias module: *Module, function: ?*Global, value_builder: Value.Builder) *Value {
+    fn rule_after_binary(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
         const binary_operator_token = value_builder.token;
         const binary_operator_token_precedence = rules[@intFromEnum(binary_operator_token)].precedence;
         const left = value_builder.left orelse module.report_error();
         assert(binary_operator_token_precedence != .assignment); // TODO: this may be wrong. Assignment operator is not allowed in expressions
         const right_precedence = if (binary_operator_token_precedence == .assignment) .assignment else binary_operator_token_precedence.increment();
-        const right = module.parse_precedence(function, value_builder.with_precedence(right_precedence).with_token(.none).with_left(null));
+        const right = module.parse_precedence(function, scope, value_builder.with_precedence(right_precedence).with_token(.none).with_left(null));
 
         const binary_operation_kind: Binary.Id = switch (binary_operator_token) {
             .none => unreachable,
@@ -3045,7 +3192,7 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_before_unary(noalias module: *Module, function: ?*Global, value_builder: Value.Builder) *Value {
+    fn rule_before_unary(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
         assert(value_builder.left == null);
         const unary_token = value_builder.token;
         const unary_id: Unary.Id = switch (unary_token) {
@@ -3058,7 +3205,7 @@ pub const Module = struct {
             else => @trap(),
         };
 
-        const right = module.parse_precedence(function, value_builder.with_precedence(.prefix).with_token(.none).with_kind(if (unary_id == .@"&") .left else value_builder.kind));
+        const right = module.parse_precedence(function, scope, value_builder.with_precedence(.prefix).with_token(.none).with_kind(if (unary_id == .@"&") .left else value_builder.kind));
 
         const value = module.values.add();
         value.* = .{
@@ -3072,7 +3219,8 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_after_dereference(noalias module: *Module, function: ?*Global, value_builder: Value.Builder) *Value {
+    fn rule_after_dereference(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
+        _ = scope;
         _ = function;
         const value = module.values.add();
         value.* = .{
@@ -3083,7 +3231,7 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_before_brace(noalias module: *Module, function: ?*Global, value_builder: Value.Builder) *Value {
+    fn rule_before_brace(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
         assert(value_builder.left == null);
 
         var name_buffer: [64][]const u8 = undefined;
@@ -3108,7 +3256,7 @@ pub const Module = struct {
 
                 module.skip_space();
 
-                const value = module.parse_value(function, .{});
+                const value = module.parse_value(function, scope, .{});
                 value_buffer[field_count] = value;
                 module.skip_space();
 
@@ -3162,7 +3310,7 @@ pub const Module = struct {
     }
 
     // Array initialization
-    fn rule_before_bracket(noalias module: *Module, function: ?*Global, value_builder: Value.Builder) *Value {
+    fn rule_before_bracket(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
         assert(value_builder.left == null);
 
         var value_buffer: [64]*Value = undefined;
@@ -3175,7 +3323,7 @@ pub const Module = struct {
             if (module.consume_character_if_match(right_bracket)) {
                 break;
             }
-            const v = module.parse_value(function, .{});
+            const v = module.parse_value(function, scope, .{});
             value_buffer[element_count] = v;
 
             _ = module.consume_character_if_match(',');
@@ -3198,9 +3346,9 @@ pub const Module = struct {
     }
 
     // Array-like subscript
-    fn rule_after_bracket(noalias module: *Module, function: ?*Global, value_builder: Value.Builder) *Value {
+    fn rule_after_bracket(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
         const left = value_builder.left orelse module.report_error();
-        const index = module.parse_value(function, .{});
+        const index = module.parse_value(function, scope, .{});
         const value = module.values.add();
         if (module.consume_character_if_match(right_bracket)) {
             value.* = .{
@@ -3218,7 +3366,7 @@ pub const Module = struct {
             const end = switch (module.consume_character_if_match(right_bracket)) {
                 true => null,
                 false => b: {
-                    const end = module.parse_value(function, .{});
+                    const end = module.parse_value(function, scope, .{});
                     module.expect_character(right_bracket);
                     break :b end;
                 },
@@ -3236,15 +3384,15 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_before_parenthesis(noalias module: *Module, function: ?*Global, value_builder: Value.Builder) *Value {
+    fn rule_before_parenthesis(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
         _ = value_builder;
         module.skip_space();
-        const v = module.parse_value(function, .{});
+        const v = module.parse_value(function, scope, .{});
         module.expect_character(right_parenthesis);
         return v;
     }
 
-    fn rule_after_call(noalias module: *Module, function: ?*Global, value_builder: Value.Builder) *Value {
+    fn rule_after_call(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
         const may_be_callable = value_builder.left orelse module.report_error();
         assert(value_builder.token == .@"(");
         var semantic_argument_count: u32 = 0;
@@ -3259,7 +3407,7 @@ pub const Module = struct {
                 break;
             }
 
-            const argument = module.parse_value(function, .{});
+            const argument = module.parse_value(function, scope, .{});
             const argument_index = semantic_argument_count;
             semantic_argument_buffer[argument_index] = argument;
 
@@ -3570,11 +3718,7 @@ pub const Module = struct {
                                     }
                                 }
 
-                                const global_scope = module.current_scope;
-                                module.current_scope = &storage.bb.function.scope;
-                                defer module.current_scope = global_scope;
-
-                                storage.bb.function.main_block = module.parse_block(global);
+                                storage.bb.function.main_block = module.parse_block(global, &storage.bb.function.scope);
                             } else {
                                 storage.bb = .external_function;
                             }
@@ -3834,7 +3978,7 @@ pub const Module = struct {
             }
 
             if (!global_keyword) {
-                const v = module.parse_value(null, .{});
+                const v = module.parse_value(null, &module.scope, .{});
                 module.skip_space();
                 module.expect_character(';');
 
@@ -5159,7 +5303,7 @@ pub const Module = struct {
         module.emit_value(function, value, type_kind);
     }
 
-    pub fn analyze_field_access_type(module: *Module, function: ?*Global, value: *Value) *Type {
+    pub fn analyze_field_access_type(module: *Module, function: ?*Global, value: *Value, expected_type: ?*Type) *Type {
         switch (value.bb) {
             .field_access => |field_access| {
                 module.analyze_value_type(function, field_access.aggregate, .{});
@@ -5203,6 +5347,17 @@ pub const Module = struct {
                                     .left => module.report_error(),
                                     .right => field_type,
                                 };
+                            },
+                            .array => {
+                                if (expected_type) |t| {
+                                    if (t.bb != .integer) {
+                                        module.report_error();
+                                    }
+                                    // TODO: see if the count fits into the integer type
+                                    return t;
+                                } else {
+                                    @trap();
+                                }
                             },
                             .pointer => module.report_error(),
                             else => @trap(),
@@ -5549,7 +5704,7 @@ pub const Module = struct {
                     else => @trap(),
             },
             .field_access => {
-                const field_type = module.analyze_field_access_type(function, value);
+                const field_type = module.analyze_field_access_type(function, value, expected_type);
                 if (field_type != expected_type) {
                     module.report_error();
                 }
@@ -6001,7 +6156,7 @@ pub const Module = struct {
                     },
                 }
             },
-            .field_access => module.analyze_field_access_type(function, value),
+            .field_access => module.analyze_field_access_type(function, value, null),
             .string_literal => module.get_slice_type(.{ .type = module.integer_type(8, false) }),
             .slice_expression => |slice_expression| blk: {
                 module.analyze_value_type(function, slice_expression.array_like, .{});
@@ -6608,6 +6763,7 @@ pub const Module = struct {
                                 const trunc = module.llvm.builder.create_truncate(shift, field.type.llvm.abi.?);
                                 break :blk trunc;
                             },
+                            .array => |array| break :blk value_type.get_llvm(type_kind).to_integer().get_constant(array.element_count, 0).to_value(),
                             else => @trap(),
                         }
                     },
@@ -6739,13 +6895,13 @@ pub const Module = struct {
         value.llvm = llvm_value;
     }
 
-    pub fn analyze_statement(module: *Module, function: *Global, block: *LexicalBlock, statement: *Statement, last_line: *u32, last_column: *u32, last_statement_debug_location: **llvm.DI.Location) void {
+    pub fn analyze_statement(module: *Module, function: *Global, scope: *Scope, statement: *Statement, last_line: *u32, last_column: *u32, last_statement_debug_location: **llvm.DI.Location) void {
         const llvm_function = function.variable.storage.?.llvm.?.to_function();
         const current_function = &function.variable.storage.?.bb.function;
         if (module.has_debug_info) {
             if (statement.line != last_line.* or statement.column != last_column.*) {
                 const inlined_at: ?*llvm.DI.Metadata = null; // TODO
-                last_statement_debug_location.* = llvm.DI.create_debug_location(module.llvm.context, statement.line, statement.column, block.scope.llvm.?, inlined_at);
+                last_statement_debug_location.* = llvm.DI.create_debug_location(module.llvm.context, statement.line, statement.column, scope.llvm.?, inlined_at);
                 module.llvm.builder.set_current_debug_location(last_statement_debug_location.*);
                 last_line.* = statement.line;
                 last_column.* = statement.column;
@@ -6980,14 +7136,14 @@ pub const Module = struct {
 
                 current_function.exit_block = exit_block;
 
-                module.analyze_statement(function, block, if_statement.if_statement, last_line, last_line, last_statement_debug_location);
+                module.analyze_statement(function, scope, if_statement.if_statement, last_line, last_line, last_statement_debug_location);
                 if (module.llvm.builder.get_insert_block() != null) {
                     _ = module.llvm.builder.create_branch(exit_block);
                 }
 
                 module.llvm.builder.position_at_end(not_taken_block);
                 if (if_statement.else_statement) |else_statement| {
-                    module.analyze_statement(function, block, else_statement, last_line, last_line, last_statement_debug_location);
+                    module.analyze_statement(function, scope, else_statement, last_line, last_line, last_statement_debug_location);
                 }
 
                 if (module.llvm.builder.get_insert_block() != null) {
@@ -7102,6 +7258,119 @@ pub const Module = struct {
                 }
             },
             .block => |child_block| module.analyze_block(function, child_block),
+            .for_each => |*for_loop| {
+                if (module.has_debug_info) {
+                    const lexical_block = module.llvm.di_builder.create_lexical_block(for_loop.scope.parent.?.llvm.?, module.llvm.file, for_loop.scope.line, for_loop.scope.column);
+                    for_loop.scope.llvm = lexical_block.to_scope();
+                }
+
+                for (for_loop.locals, for_loop.left_values, for_loop.right_values) |local, kind, right| {
+                    assert(right.kind == .left);
+                    module.analyze_value_type(function, right, .{});
+                    const pointer_type = right.type.?;
+                    if (pointer_type.bb != .pointer) {
+                        module.report_error();
+                    }
+                    const aggregate_type = pointer_type.bb.pointer.type;
+                    const child_type = switch (aggregate_type.bb) {
+                        .array => |array| array.element_type,
+                        else => @trap(),
+                    };
+                    assert(local.variable.type == null);
+                    const local_type = switch (kind) {
+                        .left => module.get_pointer_type(.{ .type = child_type }),
+                        .right => child_type,
+                    };
+                    local.variable.type = local_type;
+                    module.emit_local_storage(local, last_statement_debug_location.*);
+                    module.emit_value(function, right, .memory);
+                }
+
+                const length = for (for_loop.right_values) |right| {
+                    const pointer_type = right.type.?;
+                    if (pointer_type.bb != .pointer) {
+                        module.report_error();
+                    }
+                    const aggregate_type = pointer_type.bb.pointer.type;
+                    const length = switch (aggregate_type.bb) {
+                        .array => |array| array.element_count,
+                        else => @trap(),
+                    };
+                    break length;
+                } else unreachable;
+
+                const index_type = module.integer_type(64, false);
+                index_type.resolve(module);
+                const index_zero = index_type.llvm.abi.?.get_zero().to_value();
+                const index_alloca = module.create_alloca(.{ .type = index_type, .name = "foreach.index" });
+                _ = module.create_store(.{ .type = index_type, .source_value = index_zero, .destination_value = index_alloca });
+
+                const loop_entry_block = module.llvm.context.create_basic_block("foreach.entry", llvm_function);
+                const loop_body_block = module.llvm.context.create_basic_block("foreach.body", llvm_function);
+                const loop_continue_block = module.llvm.context.create_basic_block("foreach.continue", llvm_function);
+                const loop_exit_block = module.llvm.context.create_basic_block("foreach.exit", llvm_function);
+                _ = module.llvm.builder.create_branch(loop_entry_block);
+                module.llvm.builder.position_at_end(loop_entry_block);
+
+                const header_index_load = module.create_load(.{ .type = index_type, .value = index_alloca });
+                const index_compare = module.llvm.builder.create_integer_compare(.ult, header_index_load, index_type.llvm.abi.?.to_integer().get_constant(length, 0).to_value());
+                _ = module.llvm.builder.create_conditional_branch(index_compare, loop_body_block, loop_exit_block);
+
+                module.llvm.builder.position_at_end(loop_body_block);
+                const body_index_load = module.create_load(.{ .type = index_type, .value = index_alloca });
+
+                for (for_loop.locals, for_loop.left_values, for_loop.right_values) |local, kind, right| {
+                    const element_pointer_value = switch (right.type.?.bb.pointer.type.bb) {
+                        .array => module.llvm.builder.create_gep(.{
+                            .type = right.type.?.bb.pointer.type.llvm.memory.?,
+                            .aggregate = right.llvm.?,
+                            .indices = &.{index_zero, body_index_load},
+                        }),
+                        else => @trap(),
+                    };
+
+                    switch (kind) {
+                        .left => {
+                            _ = module.create_store(.{
+                                .type = local.variable.type.?,
+                                .source_value = element_pointer_value,
+                                .destination_value = local.variable.storage.?.llvm.?,
+                            });
+                        },
+                        .right => switch (local.variable.type.?.get_evaluation_kind()) {
+                            .scalar => {
+                                const load = module.create_load(.{
+                                    .type = local.variable.type.?,
+                                    .value = element_pointer_value,
+                                });
+                                _ = module.create_store(.{
+                                    .type = local.variable.type.?,
+                                    .source_value = load,
+                                    .destination_value = local.variable.storage.?.llvm.?,
+                                });
+                            },
+                            .aggregate => {
+                                @trap();
+                            },
+                            .complex => @trap(),
+                        },
+                    }
+                }
+
+                module.analyze_statement(function, &for_loop.scope, for_loop.predicate, last_line, last_column, last_statement_debug_location);
+
+                if (module.llvm.builder.get_insert_block() != null) {
+                    _ = module.llvm.builder.create_branch(loop_continue_block);
+                }
+
+                module.llvm.builder.position_at_end(loop_continue_block);
+                const continue_index_load = module.create_load(.{ .type = index_type, .value = index_alloca });
+                const add = module.llvm.builder.create_add(continue_index_load, index_type.llvm.abi.?.to_integer().get_constant(1, 0).to_value());
+                _ = module.create_store(.{ .type = index_type, .source_value = add, .destination_value = index_alloca });
+                _ = module.llvm.builder.create_branch(loop_entry_block);
+
+                module.llvm.builder.position_at_end(loop_exit_block);
+            },
         }
     }
 
@@ -7116,7 +7385,7 @@ pub const Module = struct {
         var last_statement_debug_location: *llvm.DI.Location = undefined;
 
         for (block.statements.get_slice()) |statement| {
-            module.analyze_statement(function, block, statement, &last_line, &last_column, &last_statement_debug_location);
+            module.analyze_statement(function, &block.scope, statement, &last_line, &last_column, &last_statement_debug_location);
         }
     }
 
@@ -8789,7 +9058,6 @@ pub fn compile(arena: *Arena, options: Options) void {
         .void_type = void_type,
         .noreturn_type = noreturn_type,
         .void_value = void_value,
-        .current_scope = undefined,
         .scope = .{
             .kind = .global,
             .column = 0,
@@ -8804,8 +9072,6 @@ pub fn compile(arena: *Arena, options: Options) void {
         .build_mode = options.build_mode,
         .silent = options.silent,
     };
-
-    module.current_scope = &module.scope;
 
     module.parse();
     module.emit();

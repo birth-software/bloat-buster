@@ -316,4 +316,5 @@ const names = &[_][]const u8{
     "else_if_complicated",
     "shortcircuiting_if",
     "field_access_left_assign",
+    "for_each",
 };
