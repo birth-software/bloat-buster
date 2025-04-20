@@ -318,4 +318,6 @@ const names = &[_][]const u8{
     "field_access_left_assign",
     "for_each",
     "pointer_decay",
+    "enum_name",
+    "slice_of_slices",
 };

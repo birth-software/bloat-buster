@@ -1,0 +1,24 @@
+E = enum
+{
+    my_expected_result,
+    a,
+    b,
+}
+
+[extern] memcmp = fn [cc(c)] (a: &u8, b: &u8, byte_count: u64) s32;
+string_equal = fn (slice_a: []u8, slice_b: []u8) u1
+{
+    >result = slice_a.length == slice_b.length;
+    if (result)
+    {
+        result = memcmp(slice_a.pointer, slice_b.pointer, slice_a.length) == 0;
+    }
+
+    return result;
+}
+
+[export] main = fn [cc(c)] () s32
+{
+    >some_enum: E = .my_expected_result;
+    return #extend(!string_equal(#enum_name(some_enum), "my_expected_result"));
+}

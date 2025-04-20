@@ -207,6 +207,8 @@ pub const ResolvedType = struct {
 pub const Enumerator = struct {
     fields: []const Enumerator.Field,
     string_to_enum: ?StringToEnum = null,
+    enum_to_string: ?*llvm.Function = null,
+    name_array_global: ?*Global = null,
     backing_type: *Type,
     line: u32,
     implicit_backing_type: bool,
@@ -813,6 +815,7 @@ pub const Value = struct {
 
     const Intrinsic = union(Id) {
         byte_size: *Type,
+        enum_name: *Value,
         extend: *Value,
         integer_max: *Type,
         int_from_enum: *Value,
@@ -829,6 +832,7 @@ pub const Value = struct {
 
         const Id = enum {
             byte_size,
+            enum_name,
             extend,
             integer_max,
             int_from_enum,
@@ -887,6 +891,7 @@ pub const Value = struct {
             .enum_literal => true,
             .unary => false,
             .array_expression => false,
+            .string_literal => true,
             else => @trap(),
         };
     }
@@ -1469,26 +1474,7 @@ pub const Module = struct {
                                 });
                                 break :blk array_type;
                             },
-                            else => b: {
-                                const all_types = module.types.get_slice();
-                                const array_type = for (module.array_types.get_slice()) |array_type_index| {
-                                    const array_type = &all_types[array_type_index];
-                                    assert(array_type.bb == .array);
-                                    if (array_type.bb.array.element_count == element_count and array_type.bb.array.element_type == element_type) {
-                                        break array_type;
-                                    }
-                                } else module.types.append(.{
-                                    .name = array_type_name(module.arena, element_type, element_count),
-                                    .bb = .{
-                                        .array = .{
-                                            .element_type = element_type,
-                                            .element_count = element_count,
-                                        },
-                                    },
-                                });
-
-                                break :b array_type;
-                            },
+                            else => module.get_array_type(element_type, element_count),
                         };
 
                         return array_type;
@@ -1510,6 +1496,27 @@ pub const Module = struct {
             },
             else => @trap(),
         }
+    }
+
+    pub fn get_array_type(module: *Module, element_type: *Type, element_count: u64) *Type {
+        const all_types = module.types.get_slice();
+        const array_type = for (module.array_types.get_slice()) |array_type_index| {
+            const array_type = &all_types[array_type_index];
+            assert(array_type.bb == .array);
+            if (array_type.bb.array.element_count == element_count and array_type.bb.array.element_type == element_type) {
+                break array_type;
+            }
+        } else module.types.append(.{
+            .name = array_type_name(module.arena, element_type, element_count),
+            .bb = .{
+                .array = .{
+                    .element_type = element_type,
+                    .element_count = element_count,
+                },
+            },
+        });
+
+        return array_type;
     }
 
     const Slice = struct {
@@ -2940,6 +2947,20 @@ pub const Module = struct {
                     .bb = .{
                         .intrinsic = .{
                             .byte_size = ty,
+                        },
+                    },
+                };
+            },
+            .enum_name => blk: {
+                module.skip_space();
+                module.expect_character(left_parenthesis);
+                module.skip_space();
+                const arg_value = module.parse_value(function, scope, .{});
+                module.expect_character(right_parenthesis);
+                break :blk .{
+                    .bb = .{
+                        .intrinsic = .{
+                            .enum_name = arg_value,
                         },
                     },
                 };
@@ -5483,6 +5504,87 @@ pub const Module = struct {
 
                     break :blk expected_type;
                 },
+                .enum_name => |enum_value| blk: {
+                    const string_type = module.get_slice_type(.{ .type = module.integer_type(8, false) });
+                    module.typecheck(analysis, string_type);
+                    module.analyze_value_type(function, enum_value, .{});
+                    const enum_type = enum_value.type.?;
+                    switch (enum_type.bb) {
+                        .enumerator => |*enumerator| {
+                            const enum_array_name_global = module.get_enum_name_array_global(enum_value.type.?);
+                            if (enumerator.enum_to_string == null) {
+                                const current_block = module.llvm.builder.get_insert_block();
+                                const llvm_function_type = llvm.Type.Function.get(string_type.llvm.memory.?, &.{enum_type.llvm.abi.?}, false);
+                                const llvm_function_value = module.llvm.module.create_function(.{
+                                    .name = module.arena.join_string(&.{ "enum_to_string.", enum_type.name }),
+                                    .linkage = .InternalLinkage,
+                                    .type = llvm_function_type,
+                                });
+                                llvm_function_value.set_calling_convention(.fast);
+                                var llvm_function_arguments: [1]*llvm.Argument = undefined;
+                                llvm_function_value.get_arguments(&llvm_function_arguments);
+                                const llvm_arg = llvm_function_arguments[0];
+
+                                const function_entry_block = module.llvm.context.create_basic_block("entry", llvm_function_value);
+                                module.llvm.builder.position_at_end(function_entry_block);
+
+                                const alloca = module.create_alloca(.{
+                                    .type = string_type,
+                                    .name = "retval",
+                                });
+
+                                const return_block = module.llvm.context.create_basic_block("return_block", llvm_function_value);
+                                const else_block = module.llvm.context.create_basic_block("else_block", llvm_function_value);
+
+                                const switch_i = module.llvm.builder.create_switch(llvm_arg.to_value(), else_block, @intCast(enumerator.fields.len));
+                                const backing_type = enumerator.backing_type.llvm.abi.?.to_integer();
+                                const uint64 = module.integer_type(64, false).llvm.abi.?.to_integer();
+
+                                for (enumerator.fields, 0..) |field, field_index| {
+                                    const case_block = module.llvm.context.create_basic_block(module.arena.join_string(&.{ "case_block.", field.name }), llvm_function_value);
+                                    const case_value = backing_type.get_constant(field.value, 0).to_value();
+                                    switch_i.add_case(case_value, case_block);
+                                    module.llvm.builder.position_at_end(case_block);
+                                    const case_value_result_pointer = module.llvm.builder.create_gep(.{
+                                        .type = enum_array_name_global.variable.type.?.llvm.memory.?,
+                                        .aggregate = enum_array_name_global.variable.storage.?.llvm.?,
+                                        .indices = &.{ uint64.get_constant(0, 0).to_value(), uint64.get_constant(field_index, 0).to_value() },
+                                    });
+                                    const case_value_result = module.create_load(.{
+                                        .type = string_type,
+                                        .value = case_value_result_pointer,
+                                    });
+                                    _ = module.create_store(.{
+                                        .type = string_type,
+                                        .destination_value = alloca,
+                                        .source_value = case_value_result,
+                                    });
+                                    _ = module.llvm.builder.create_branch(return_block);
+                                }
+
+                                module.llvm.builder.position_at_end(else_block);
+                                _ = module.llvm.builder.create_unreachable();
+
+                                module.llvm.builder.position_at_end(return_block);
+                                const function_result = module.create_load(.{
+                                    .type = string_type,
+                                    .value = alloca,
+                                });
+
+                                module.llvm.builder.create_ret(function_result);
+
+                                if (current_block) |bb| {
+                                    module.llvm.builder.position_at_end(bb);
+                                }
+
+                                enumerator.enum_to_string = llvm_function_value;
+                            }
+
+                            break :blk string_type;
+                        },
+                        else => module.report_error(),
+                    }
+                },
                 .extend => |extended_value| blk: {
                     const expected_type = analysis.type orelse module.report_error();
                     module.analyze_value_type(function, extended_value, .{});
@@ -5630,30 +5732,13 @@ pub const Module = struct {
                         });
                         llvm_function_value.set_calling_convention(.fast);
 
-                        var name_before: ?*llvm.GlobalVariable = null;
+                        const name_array_global = module.get_enum_name_array_global(string_to_enum.enum_type);
+
                         var value_constant_buffer: [64]*llvm.Constant = undefined;
-                        var name_constant_buffer: [64]*llvm.Constant = undefined;
 
                         for (string_to_enum.enum_type.bb.enumerator.fields, 0..) |field, field_index| {
                             const value_global = string_to_enum.enum_type.llvm.memory.?.to_integer().get_constant(field.value, 0);
                             value_constant_buffer[field_index] = value_global.to_constant();
-
-                            const null_terminate = true;
-                            const name_global = module.llvm.module.create_global_variable(.{
-                                .type = uint8.llvm.abi.?.get_array_type(field.name.len + @intFromBool(null_terminate)).to_type(),
-                                .linkage = .InternalLinkage,
-                                .name = module.arena.join_string(&.{ "string.", string_to_enum.enum_type.name, ".", field.name }),
-                                .initial_value = module.llvm.context.get_constant_string(field.name, null_terminate),
-                                .is_constant = true,
-                                .before = name_before,
-                            });
-                            name_before = name_global;
-
-                            const slice_constant = module.llvm.context.get_anonymous_constant_struct(&.{
-                                name_global.to_constant(),
-                                uint64.llvm.abi.?.to_integer().get_constant(field.name.len, 0).to_constant(),
-                            }, false);
-                            name_constant_buffer[field_index] = slice_constant;
                         }
 
                         const value_array = string_to_enum.enum_type.llvm.memory.?.get_constant_array(value_constant_buffer[0..array_element_count]);
@@ -5666,16 +5751,6 @@ pub const Module = struct {
                         });
                         value_array_variable.to_value().set_alignment(string_to_enum.enum_type.get_byte_alignment());
 
-                        const name_array = slice_struct_type.llvm.abi.?.get_constant_array(name_constant_buffer[0..array_element_count]);
-                        const name_array_variable_type = slice_struct_type.llvm.abi.?.get_array_type(array_element_count);
-                        const name_array_variable = module.llvm.module.create_global_variable(.{
-                            .type = name_array_variable_type.to_type(),
-                            .linkage = .InternalLinkage,
-                            .initial_value = name_array,
-                            .name = "name.array.enum",
-                        });
-                        name_array_variable.to_value().set_alignment(slice_struct_type.get_byte_alignment());
-
                         const function_entry_block = module.llvm.context.create_basic_block("entry", llvm_function_value);
                         const return_block = module.llvm.context.create_basic_block("return_block", llvm_function_value);
                         const loop_entry_block = module.llvm.context.create_basic_block("loop.entry", llvm_function_value);
@@ -5686,38 +5761,54 @@ pub const Module = struct {
                         var arguments: [2]*llvm.Argument = undefined;
                         llvm_function_value.get_arguments(&arguments);
 
-                        const return_value_alloca = module.llvm.builder.create_alloca(string_to_enum.enum_type.llvm.memory.?, "retval");
-                        return_value_alloca.set_alignment(string_to_enum.enum_type.get_byte_alignment());
-                        const return_boolean_alloca = module.llvm.builder.create_alloca(uint8.llvm.abi.?, "retbool");
-                        return_boolean_alloca.set_alignment(1);
-                        const index_alloca = module.llvm.builder.create_alloca(uint64.llvm.abi.?, "idx");
-                        index_alloca.set_alignment(8);
-                        const s = module.llvm.builder.create_store(uint64.llvm.abi.?.get_zero().to_value(), index_alloca);
-                        s.set_alignment(8);
+                        const return_value_alloca = module.create_alloca(.{
+                            .type = string_to_enum.enum_type,
+                            .name = "retval",
+                        });
+                        const return_boolean_alloca = module.create_alloca(.{
+                            .type = uint8,
+                            .name = "retbool",
+                        });
+                        const index_alloca = module.create_alloca(.{
+                            .type = uint64,
+                            .name = "idx",
+                        });
+                        _ = module.create_store(.{
+                            .type = uint64,
+                            .source_value = uint64.llvm.abi.?.get_zero().to_value(),
+                            .destination_value = index_alloca,
+                        });
                         const slice_pointer = arguments[0].to_value();
                         const slice_length = arguments[1].to_value();
                         _ = module.llvm.builder.create_branch(loop_entry_block);
 
                         module.llvm.builder.position_at_end(loop_entry_block);
-                        const index_load = module.llvm.builder.create_load(uint64.llvm.abi.?, index_alloca);
-                        index_load.set_alignment(8);
+                        const index_load = module.create_load(.{
+                            .type = uint64,
+                            .value = index_alloca,
+                        });
                         const loop_cmp = module.llvm.builder.create_integer_compare(.ult, index_load, uint64.llvm.abi.?.to_integer().get_constant(array_element_count, 0).to_value());
                         _ = module.llvm.builder.create_conditional_branch(loop_cmp, loop_body_block, loop_exit_block);
 
                         module.llvm.builder.position_at_end(loop_body_block);
 
-                        const body_index_load = module.llvm.builder.create_load(uint64.llvm.abi.?, index_alloca);
-                        body_index_load.set_alignment(8);
+                        const body_index_load = module.create_load(.{
+                            .type = uint64,
+                            .value = index_alloca,
+                        });
                         const uint64_zero = uint64.llvm.abi.?.get_zero().to_value();
+
                         const array_element_pointer = module.llvm.builder.create_gep(.{
-                            .type = name_array_variable_type.to_type(),
-                            .aggregate = name_array_variable.to_value(),
+                            .type = name_array_global.variable.type.?.llvm.memory.?,
+                            .aggregate = name_array_global.variable.storage.?.llvm.?,
                             .indices = &.{ uint64_zero, body_index_load },
                         });
 
                         const element_length_pointer = module.llvm.builder.create_struct_gep(slice_struct_type.llvm.abi.?.to_struct(), array_element_pointer, 1);
-                        const element_length = module.llvm.builder.create_load(uint64.llvm.abi.?, element_length_pointer);
-                        element_length.set_alignment(8);
+                        const element_length = module.create_load(.{
+                            .type = uint64,
+                            .value = element_length_pointer,
+                        });
 
                         const length_comparison = module.llvm.builder.create_integer_compare(.eq, slice_length, element_length);
 
@@ -5743,58 +5834,89 @@ pub const Module = struct {
                             }
                         };
 
-                        const length_index_load = module.llvm.builder.create_load(uint64.llvm.abi.?, index_alloca);
+                        const length_index_load = module.create_load(.{
+                            .type = uint64,
+                            .value = index_alloca,
+                        });
                         const length_array_element_pointer = module.llvm.builder.create_gep(.{
-                            .type = name_array_variable_type.to_type(),
-                            .aggregate = name_array_variable.to_value(),
+                            .type = name_array_global.variable.type.?.llvm.memory.?,
+                            .aggregate = name_array_global.variable.storage.?.llvm.?,
                             .indices = &.{ uint64_zero, length_index_load },
                         });
                         const element_pointer_pointer = module.llvm.builder.create_struct_gep(slice_struct_type.llvm.abi.?.to_struct(), length_array_element_pointer, 0);
-                        const element_pointer = module.llvm.builder.create_load(module.llvm.pointer_type, element_pointer_pointer);
-                        element_pointer.set_alignment(8);
+                        const element_pointer = module.create_load(.{
+                            .type = module.get_pointer_type(.{ .type = uint8 }),
+                            .value = element_pointer_pointer,
+                        });
                         const memcmp_return_result = module.llvm.builder.create_call(memcmp.get_type(), memcmp.to_value(), &.{ slice_pointer, element_pointer, slice_length });
                         const content_comparison = module.llvm.builder.create_integer_compare(.eq, memcmp_return_result, s32.llvm.abi.?.get_zero().to_value());
                         const content_match_block = module.llvm.context.create_basic_block("content.match", llvm_function_value);
                         _ = module.llvm.builder.create_conditional_branch(content_comparison, content_match_block, length_mismatch_block);
 
                         module.llvm.builder.position_at_end(content_match_block);
-                        const content_index_load = module.llvm.builder.create_load(uint64.llvm.abi.?, index_alloca);
-                        content_index_load.set_alignment(8);
+                        const content_index_load = module.create_load(.{
+                            .type = uint64,
+                            .value = index_alloca,
+                        });
                         const value_array_element_pointer = module.llvm.builder.create_gep(.{
                             .type = value_array_variable_type.to_type(),
                             .aggregate = value_array_variable.to_value(),
                             .indices = &.{ uint64_zero, content_index_load },
                         });
-                        const enum_value_load = module.llvm.builder.create_load(string_to_enum.enum_type.llvm.memory.?, value_array_element_pointer);
-                        enum_value_load.set_alignment(string_to_enum.enum_type.get_byte_alignment());
-                        const s1 = module.llvm.builder.create_store(enum_value_load, return_value_alloca);
-                        s1.set_alignment(string_to_enum.enum_type.get_byte_alignment());
-                        const s2 = module.llvm.builder.create_store(uint8.llvm.abi.?.to_integer().get_constant(1, 0).to_value(), return_boolean_alloca);
-                        s2.set_alignment(uint8.get_byte_alignment());
+                        const enum_value_load = module.create_load(.{
+                            .type = string_to_enum.enum_type,
+                            .value = value_array_element_pointer,
+                        });
+                        _ = module.create_store(.{
+                            .type = string_to_enum.enum_type,
+                            .source_value = enum_value_load,
+                            .destination_value = return_value_alloca,
+                        });
+                        _ = module.create_store(.{
+                            .type = uint8,
+                            .source_value = uint8.llvm.abi.?.to_integer().get_constant(1, 0).to_value(),
+                            .destination_value = return_boolean_alloca,
+                        });
                         _ = module.llvm.builder.create_branch(return_block);
 
                         module.llvm.builder.position_at_end(length_mismatch_block);
-                        const inc_index_load = module.llvm.builder.create_load(uint64.llvm.abi.?, index_alloca);
-                        inc_index_load.set_alignment(8);
+                        const inc_index_load = module.create_load(.{
+                            .type = uint64,
+                            .value = index_alloca,
+                        });
                         const inc = module.llvm.builder.create_add(inc_index_load, uint64.llvm.abi.?.to_integer().get_constant(1, 0).to_value());
-                        const s3 = module.llvm.builder.create_store(inc, index_alloca);
-                        s3.set_alignment(8);
+                        _ = module.create_store(.{
+                            .type = uint64,
+                            .source_value = inc,
+                            .destination_value = index_alloca,
+                        });
                         _ = module.llvm.builder.create_branch(loop_entry_block);
 
                         module.llvm.builder.position_at_end(loop_exit_block);
-                        const s4 = module.llvm.builder.create_store(string_to_enum.enum_type.llvm.memory.?.get_zero().to_value(), return_value_alloca);
-                        s4.set_alignment(struct_type.get_byte_alignment());
-                        const s5 = module.llvm.builder.create_store(uint8.llvm.memory.?.get_zero().to_value(), return_boolean_alloca);
-                        s5.set_alignment(uint8.get_byte_alignment());
+                        _ = module.create_store(.{
+                            .type = string_to_enum.enum_type,
+                            .source_value = string_to_enum.enum_type.llvm.memory.?.get_zero().to_value(),
+                            .destination_value = return_value_alloca,
+                        });
+                        _ = module.create_store(.{
+                            .type = uint8,
+                            .source_value = uint8.llvm.memory.?.get_zero().to_value(),
+                            .destination_value = return_boolean_alloca,
+                        });
                         _ = module.llvm.builder.create_branch(return_block);
 
                         module.llvm.builder.position_at_end(return_block);
 
-                        const value_load = module.llvm.builder.create_load(string_to_enum.enum_type.llvm.memory.?, return_value_alloca);
-                        value_load.set_alignment(string_to_enum.enum_type.get_byte_alignment());
+                        const value_load = module.create_load(.{
+                            .type = string_to_enum.enum_type,
+                            .value = return_value_alloca,
+                            .type_kind = .memory,
+                        });
                         var return_value = module.llvm.builder.create_insert_value(struct_type.llvm.memory.?.get_poison(), value_load, 0);
-                        const bool_load = module.llvm.builder.create_load(uint8.llvm.abi.?, return_boolean_alloca);
-                        bool_load.set_alignment(1);
+                        const bool_load = module.create_load(.{
+                            .type = uint8,
+                            .value = return_boolean_alloca,
+                        });
                         return_value = module.llvm.builder.create_insert_value(return_value, bool_load, 1);
 
                         module.llvm.builder.create_ret(return_value);
@@ -6063,9 +6185,7 @@ pub const Module = struct {
                 break :blk expected_type;
             },
             .array_initialization => |*array_initialization| blk: {
-                const expected_type = analysis.type orelse module.report_error();
-
-                switch (expected_type.bb) {
+                if (analysis.type) |expected_type| switch (expected_type.bb) {
                     .array => |*array| {
                         if (array.element_count == 0) {
                             array.element_count = array_initialization.values.len;
@@ -6086,11 +6206,47 @@ pub const Module = struct {
                         }
 
                         array_initialization.is_constant = is_constant;
+
+                        break :blk switch (value.kind) {
+                            .left => module.report_error(), // TODO: possible?
+                            .right => expected_type,
+                        };
                     },
                     else => module.report_error(),
-                }
+                } else {
+                    if (array_initialization.values.len == 0) {
+                        module.report_error();
+                    }
 
-                break :blk expected_type;
+                    var expected_type: ?*Type = null;
+                    var is_constant = true;
+
+                    for (array_initialization.values) |v| {
+                        module.analyze_value_type(function, v, .{
+                            .type = expected_type,
+                        });
+
+                        is_constant = is_constant and v.is_constant();
+
+                        if (expected_type) |ty| {
+                            if (ty != v.type.?) {
+                                module.report_error();
+                            }
+                        } else {
+                            expected_type = v.type.?;
+                        }
+                    }
+
+                    const element_type = expected_type orelse module.report_error();
+                    const element_count = array_initialization.values.len;
+
+                    const array_type = module.get_array_type(element_type, element_count);
+
+                    break :blk switch (value.kind) {
+                        .left => module.get_pointer_type(.{ .type = array_type }),
+                        .right => array_type,
+                    };
+                }
             },
             // TODO: further typechecking
             .undefined => analysis.type orelse module.report_error(),
@@ -6105,6 +6261,91 @@ pub const Module = struct {
         };
 
         value.type = value_type;
+    }
+
+    pub fn get_enum_name_array_global(module: *Module, enum_type: *Type) *Global {
+        switch (enum_type.bb) {
+            .enumerator => |*enumerator| {
+                if (enumerator.name_array_global) |name_array| {
+                    return name_array;
+                } else {
+                    const fields = enumerator.fields;
+                    var name_before: ?*llvm.GlobalVariable = null;
+                    var name_constant_buffer: [64]*llvm.Constant = undefined;
+                    const uint8 = module.integer_type(8, false);
+                    const uint64 = module.integer_type(64, false);
+                    uint8.resolve(module);
+                    uint64.resolve(module);
+
+                    for (fields, 0..) |field, field_index| {
+                        const null_terminate = true;
+                        const name_global = module.llvm.module.create_global_variable(.{
+                            .type = uint8.llvm.abi.?.get_array_type(field.name.len + @intFromBool(null_terminate)).to_type(),
+                            .linkage = .InternalLinkage,
+                            .name = module.arena.join_string(&.{ "string.", enum_type.name, ".", field.name }),
+                            .initial_value = module.llvm.context.get_constant_string(field.name, null_terminate),
+                            .is_constant = true,
+                            .before = name_before,
+                        });
+                        name_before = name_global;
+
+                        const slice_constant = module.llvm.context.get_anonymous_constant_struct(&.{
+                            name_global.to_constant(),
+                            uint64.llvm.abi.?.to_integer().get_constant(field.name.len, 0).to_constant(),
+                        }, false);
+                        name_constant_buffer[field_index] = slice_constant;
+                    }
+
+                    const slice_struct_type = module.get_slice_type(.{ .type = uint8 });
+                    const array_element_count = fields.len;
+
+                    const name_array = slice_struct_type.llvm.abi.?.get_constant_array(name_constant_buffer[0..array_element_count]);
+
+                    const name_array_variable_type = slice_struct_type.llvm.abi.?.get_array_type(array_element_count);
+
+                    const name_array_variable = module.llvm.module.create_global_variable(.{
+                        .type = name_array_variable_type.to_type(),
+                        .linkage = .InternalLinkage,
+                        .initial_value = name_array,
+                        .name = "name.array.enum",
+                    });
+                    name_array_variable.to_value().set_alignment(slice_struct_type.get_byte_alignment());
+
+                    const global_type = module.get_array_type(slice_struct_type, array_element_count);
+                    global_type.resolve(module);
+
+                    const storage_type = module.get_pointer_type(.{ .type = global_type });
+                    storage_type.resolve(module);
+
+                    const global_storage = module.values.add();
+                    global_storage.* = .{
+                        .bb = .global,
+                        .type = storage_type,
+                        .llvm = name_array_variable.to_value(),
+                        .kind = .left,
+                    };
+
+                    const global = module.globals.add();
+                    global.* = .{
+                        .variable = .{
+                            .storage = global_storage,
+                            .initial_value = undefined,
+                            .type = global_type,
+                            .scope = &module.scope,
+                            .name = module.arena.join_string(&.{ "name.array.enum.", enum_type.name }),
+                            .line = 0,
+                            .column = 0,
+                        },
+                        .linkage = .internal,
+                    };
+
+                    enumerator.name_array_global = global;
+
+                    return global;
+                }
+            },
+            else => unreachable,
+        }
     }
 
     pub fn emit_slice_expression(module: *Module, function: ?*Global, value: *Value) struct { *llvm.Value, *llvm.Value } {
@@ -6150,7 +6391,7 @@ pub const Module = struct {
                             true => module.llvm.builder.create_gep(.{
                                 .type = pointer.type.llvm.memory.?,
                                 .aggregate = pointer_load,
-                                .indices = &.{ slice_expression.start.?.llvm.? },
+                                .indices = &.{slice_expression.start.?.llvm.?},
                             }),
                             false => pointer_load,
                         };
@@ -6299,11 +6540,13 @@ pub const Module = struct {
                     _ = module.llvm.builder.create_branch(end_block);
                     module.llvm.builder.position_at_end(end_block);
                     const boolean_type = module.integer_type(1, false).llvm.abi.?;
+
                     const phi = module.llvm.builder.create_phi(boolean_type);
                     phi.add_incoming(&.{ switch (op) {
                         .@"and" => boolean_type.get_zero().to_value(),
                         .@"or" => boolean_type.to_integer().get_constant(1, 0).to_value(),
                     }, right_condition }, &.{ current_bb, right_block });
+
                     break :blk switch (type_kind) {
                         .abi => phi.to_value(),
                         .memory => @trap(),
@@ -6426,6 +6669,14 @@ pub const Module = struct {
                     const constant_integer = value_type.llvm.abi.?.to_integer().get_constant(byte_size, @intFromBool(false));
                     break :blk constant_integer.to_value();
                 },
+                .enum_name => |enum_value| blk: {
+                    const enum_type = enum_value.type.?;
+                    const enum_to_string = enum_type.bb.enumerator.enum_to_string.?;
+                    module.emit_value(function, enum_value, .abi);
+                    const call = module.llvm.builder.create_call(enum_to_string.get_type(), enum_to_string.to_value(), &.{enum_value.llvm.?});
+                    call.to_instruction().to_call_base().set_calling_convention(.fast);
+                    break :blk call;
+                },
                 .extend => |extended_value| blk: {
                     if (extended_value.llvm == null) {
                         module.emit_value(function, extended_value, type_kind);
@@ -6531,18 +6782,45 @@ pub const Module = struct {
             .call => module.emit_call(function.?, value, null, null),
             .array_initialization => |array_initialization| switch (array_initialization.is_constant) {
                 true => blk: {
+                    assert(value.kind == .right);
                     var llvm_value_buffer: [64]*llvm.Constant = undefined;
                     const element_count = array_initialization.values.len;
                     const llvm_values = llvm_value_buffer[0..element_count];
+
                     for (array_initialization.values, llvm_values) |v, *llvm_value| {
                         module.emit_value(function, v, .memory);
                         llvm_value.* = v.llvm.?.to_constant();
                     }
+
                     value_type.bb.array.element_type.resolve(module);
+
                     const array_value = value_type.bb.array.element_type.llvm.abi.?.get_constant_array(llvm_values);
                     break :blk array_value.to_value();
                 },
-                false => @trap(),
+                false => switch (value.kind) {
+                    .left => blk: {
+                        const array_type = value_type.bb.pointer.type;
+                        const alloca = module.create_alloca(.{
+                            .type = array_type,
+                        });
+
+                        const pointer_to_element_type = module.get_pointer_type(.{ .type = array_type.bb.array.element_type });
+                        const uint64 = module.integer_type(64, false).llvm.abi.?.to_integer();
+                        const u64_zero = uint64.get_constant(0, 0).to_value();
+
+                        for (array_initialization.values, 0..) |v, i| {
+                            const alloca_gep = module.llvm.builder.create_gep(.{
+                                .type = array_type.llvm.memory.?,
+                                .aggregate = alloca,
+                                .indices = &.{ u64_zero, uint64.get_constant(i, 0).to_value() },
+                            });
+                            module.emit_assignment(function.?, alloca_gep, pointer_to_element_type, v);
+                        }
+
+                        break :blk alloca;
+                    },
+                    .right => @trap(),
+                },
             },
             .array_expression => |array_expression| switch (array_expression.array_like.kind) {
                 .left => switch (array_expression.array_like.type.?.bb) {
@@ -6572,6 +6850,7 @@ pub const Module = struct {
                             module.emit_value(function, array_expression.index, .memory);
                             const pointer_type = structure.fields[0].type;
                             const element_type = pointer_type.bb.pointer.type;
+                            element_type.resolve(module);
                             const pointer_load = module.create_load(.{ .type = structure.fields[0].type, .value = array_expression.array_like.llvm.? });
                             const gep = module.llvm.builder.create_gep(.{
                                 .type = element_type.llvm.memory.?,
@@ -7248,8 +7527,10 @@ pub const Module = struct {
                         .structure => |structure| b: {
                             assert(structure.is_slice);
                             const gep = module.llvm.builder.create_struct_gep(aggregate_type.llvm.abi.?.to_struct(), right.llvm.?, 1);
-                            const load = module.llvm.builder.create_load(index_type.llvm.abi.?, gep);
-                            load.set_alignment(8);
+                            const load = module.create_load(.{
+                                .type = index_type,
+                                .value = gep,
+                            });
                             break :b load;
                         },
                         else => @trap(),
@@ -7505,6 +7786,26 @@ pub const Module = struct {
                     }
                 },
                 .intrinsic => |intrinsic| switch (intrinsic) {
+                    .enum_name => {
+                        module.emit_value(function, right, .memory);
+                        _ = module.create_store(.{
+                            .type = right.type.?,
+                            .source_value = right.llvm.?,
+                            .destination_value = left_llvm,
+                        });
+                    },
+                    .select => {
+                        if (right.type.?.get_evaluation_kind() == .scalar or right.type.?.is_slice()) {
+                            module.emit_value(function, right, .memory);
+                            _ = module.create_store(.{
+                                .type = right.type.?,
+                                .source_value = right.llvm.?,
+                                .destination_value = left_llvm,
+                            });
+                        } else {
+                            @trap();
+                        }
+                    },
                     .string_to_enum => |string_to_enum| {
                         module.emit_value(function, string_to_enum.string_value, .memory);
                         const s2e = string_to_enum.enum_type.bb.enumerator.string_to_enum orelse unreachable;
@@ -7602,6 +7903,7 @@ pub const Module = struct {
                     const uint64 = module.integer_type(64, false);
                     _ = module.llvm.builder.create_memcpy(left_llvm, pointer_type.bb.pointer.alignment, gep, value_type.get_byte_alignment(), uint64.llvm.abi.?.to_integer().get_constant(value_type.get_byte_size(), @intFromBool(false)).to_value());
                 },
+                .undefined => {},
                 else => @trap(),
             },
             .complex => @trap(),
@@ -7655,6 +7957,7 @@ pub const Module = struct {
         type: *Type,
         value: *llvm.Value,
         alignment: ?c_uint = null,
+        type_kind: Type.Kind = .abi,
     };
 
     pub fn create_load(module: *Module, options: LoadOptions) *llvm.Value {
@@ -7662,9 +7965,13 @@ pub const Module = struct {
         const alignment: c_uint = if (options.alignment) |a| a else @intCast(options.type.get_byte_alignment());
         const v = module.llvm.builder.create_load(options.type.llvm.memory.?, options.value);
         v.set_alignment(alignment);
-        return switch (options.type.llvm.memory == options.type.llvm.abi) {
-            true => v,
-            false => module.llvm.builder.create_int_cast(v, options.type.llvm.abi.?, options.type.is_signed()),
+
+        return switch (options.type_kind) {
+            .abi => switch (options.type.llvm.memory == options.type.llvm.abi) {
+                true => v,
+                false => module.llvm.builder.create_int_cast(v, options.type.llvm.abi.?, options.type.is_signed()),
+            },
+            .memory => v,
         };
     }
 

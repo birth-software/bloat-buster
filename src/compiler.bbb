@@ -260,24 +260,24 @@ arena_join_string = fn (arena: &Arena, pieces: [][]u8) []u8
 {
     >size: u64 = 0;
 
-    for (piece: pieces)
+    for (p: pieces)
     {
-        size += pieces.length;
+        size += p.length;
     }
 
     >pointer = arena_allocate_bytes(arena, size + 1, 1);
     >i: u64 = 0;
 
-    for (piece: pieces)
+    for (p: pieces)
     {
-        memcpy(pointer + i, piece.pointer, piece.length);
-        i += piece.length;
+        memcpy(pointer + i, p.pointer, p.length);
+        i += p.length;
     }
 
     assert(i == size);
     pointer[i] = 0;
 
-    return pointer[0..size];
+    return pointer[..size];
 }
 
 GlobalState = struct
@@ -325,6 +325,8 @@ CompileFile = struct
     silent: u1,
 }
 
+base_cache_dir = "bb-cache";
+
 compile_file = fn (arena: &Arena, compile: CompileFile) void
 {
     >relative_file_path = compile.relative_file_path;
@@ -354,6 +356,13 @@ compile_file = fn (arena: &Arena, compile: CompileFile) void
     >base_name = relative_file_path[base_start..extension_start];
 
     >is_compiler = string_equal(relative_file_path, "src/compiler.bbb");
+    >outputh_path_dir = arena_join_string(arena, [
+        base_cache_dir,
+        #select(is_compiler, "/compiler/", "/"),
+        #enum_name(compile.build_mode),
+        "_",
+        #select(compile.has_debug_info, "di", "nodi"),
+    ][..]);
 }
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8) s32
