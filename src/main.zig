@@ -317,4 +317,5 @@ const names = &[_][]const u8{
     "shortcircuiting_if",
     "field_access_left_assign",
     "for_each",
+    "pointer_decay",
 };

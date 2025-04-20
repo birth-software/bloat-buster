@@ -17,6 +17,6 @@ slice_receiver = fn (slice: []u8) void
 [export] main = fn [cc(c)] () s32
 {
     >a: [_]u8 = [0, 1, 2];
-    slice_receiver(&a);
+    slice_receiver(a[..]);
     return 0;
 }

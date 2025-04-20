@@ -1,4 +1,5 @@
 [extern] memcmp = fn [cc(c)] (a: &u8, b: &u8, byte_count: u64) s32;
+[extern] memcpy = fn [cc(c)] (destination: &u8, source: &u8, byte_count: u64) &u8;
 [extern] exit = fn [cc(c)] (exit_code: s32) noreturn;
 
 assert = fn (ok: u1) void
@@ -257,6 +258,26 @@ arena_allocate_bytes = fn (arena: &Arena, size: u64, alignment: u64) &u8
 
 arena_join_string = fn (arena: &Arena, pieces: [][]u8) []u8
 {
+    >size: u64 = 0;
+
+    for (piece: pieces)
+    {
+        size += pieces.length;
+    }
+
+    >pointer = arena_allocate_bytes(arena, size + 1, 1);
+    >i: u64 = 0;
+
+    for (piece: pieces)
+    {
+        memcpy(pointer + i, piece.pointer, piece.length);
+        i += piece.length;
+    }
+
+    assert(i == size);
+    pointer[i] = 0;
+
+    return pointer[0..size];
 }
 
 GlobalState = struct
