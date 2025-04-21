@@ -1,9 +1,85 @@
 mode_t = typealias u64;
+int = typealias s32;
+usize = typealias u64;
+ssize = typealias s64;
+File = typealias s32;
 
-[extern] memcmp = fn [cc(c)] (a: &u8, b: &u8, byte_count: u64) s32;
+uid_t = typealias u32;
+gid_t = typealias u32;
+off_t = typealias s64;
+ino_t = typealias u64;
+dev_t = typealias u64;
+
+timespec = struct
+{
+    seconds: ssize,
+    nanoseconds: ssize,
+};
+
+Stat = struct
+{
+    dev: dev_t,
+    ino: ino_t,
+    nlink: usize,
+
+    mode: u32,
+    uid: uid_t,
+    gid: gid_t,
+    _: u32,
+    rdev: dev_t,
+    size: off_t,
+    blksize: ssize,
+    blocks: s64,
+
+    atim: timespec,
+    mtime: timespec,
+    ctim: timespec,
+    _: [3]ssize,
+}
+
+OAccessMode = enum u2
+{
+    read_only = 0,
+    write_only = 1,
+    read_write = 2,
+}
+
+O = bits u32
+{
+    access_mode: OAccessMode,
+    _: u4,
+    creat: u1,
+    excl: u1,
+    noctty: u1,
+    trunc: u1,
+    append: u1,
+    nonblock: u1,
+    dsync: u1,
+    async: u1,
+    direct: u1,
+    _: u1,
+    directory: u1,
+    nofollow: u1,
+    noatime: u1,
+    cloexec: u1,
+    sync: u1,
+    path: u1,
+    tmpfile: u1,
+    _: u9,
+}
+
+[extern] memcmp = fn [cc(c)] (a: &u8, b: &u8, byte_count: usize) int;
 [extern] memcpy = fn [cc(c)] (destination: &u8, source: &u8, byte_count: u64) &u8;
-[extern] exit = fn [cc(c)] (exit_code: s32) noreturn;
-[extern] mkdir = fn [cc(c)] (path: &u8, mode: mode_t) s32;
+[extern] exit = fn [cc(c)] (exit_code: int) noreturn;
+
+[extern] realpath = fn [cc(c)] (source_path: &u8, resolved_path: &u8) &u8;
+[extern] mkdir = fn [cc(c)] (path: &u8, mode: mode_t) int;
+
+[extern] open = fn [cc(c)] (path: &u8, o: O, ...) int;
+[extern] close = fn [cc(c)] (fd: File) int;
+[extern] fstat = fn [cc(c)] (fd: File, s: &Stat) int;
+[extern] write = fn [cc(c)] (fd: File, pointer: &u8, byte_count: u64) ssize;
+[extern] read = fn [cc(c)] (fd: File, pointer: &u8, byte_count: u64) ssize;
 
 assert = fn (ok: u1) void
 {
@@ -177,6 +253,109 @@ os_make_directory = fn (path: &u8) void
     >result = mkdir(path, 0o755);
 }
 
+OpenFlags = bits
+{
+    truncate: u1,
+    execute: u1,
+    write: u1,
+    read: u1,
+    create: u1,
+    directory: u1,
+}
+
+OpenPermissions = bits
+{
+    read: u1,
+    write: u1,
+    execute: u1,
+}
+
+os_file_open = fn (path: &u8, flags: OpenFlags, permissions: OpenPermissions) File
+{
+    >access_mode: OAccessMode = undefined;
+    if (flags.read and flags.write)
+    {
+        access_mode = .read_write;
+    }
+    else if (flags.read)
+    {
+        access_mode = .read_only;
+    }
+    else if (flags.write)
+    {
+        access_mode = .write_only;
+    }
+    else
+    {
+        unreachable;
+    }
+
+    >o: O = {
+        .access_mode = access_mode,
+        .trunc = flags.truncate,
+        .creat = flags.create,
+        .directory = flags.directory,
+    };
+
+    >mode: mode_t = #select(permissions.execute, 0o755, 0o644);
+    >fd = open(path, o, mode);
+    return fd;
+}
+
+os_file_close = fn (fd: File) void
+{
+    >result = close(fd);
+    assert(result == 0);
+}
+
+os_file_is_valid = fn (fd: File) u1
+{
+    return fd >= 0;
+}
+
+os_file_get_size = fn (fd: File) u64
+{
+    >stat: Stat = undefined;
+    >result = fstat(fd, &stat);
+    assert(result == 0);
+    return #extend(stat.size);
+}
+
+os_file_read_partially = fn (fd: File, pointer: &u8, length: u64) u64
+{
+    >result = read(fd, pointer, length);
+    assert(result > 0);
+    return #extend(result);
+}
+
+os_file_read = fn (fd: File, buffer: []u8, byte_count: u64) void
+{
+    assert(byte_count <= buffer.length);
+
+    >total_read_byte_count: u64 = 0;
+
+    while (total_read_byte_count < byte_count)
+    {
+        >read_byte_count = os_file_read_partially(fd, buffer.pointer + total_read_byte_count, byte_count - total_read_byte_count);
+        total_read_byte_count += read_byte_count;
+    }
+}
+
+os_path_absolute_stack = fn (buffer: []u8, relative_file_path: &u8) []u8
+{
+    >syscall_result = realpath(relative_file_path, buffer.pointer);
+
+    >result: []u8 = zero;
+
+    if (syscall_result)
+    {
+        result = c_string_to_slice(syscall_result);
+        assert(result.length < buffer.length);
+    }
+
+    return result;
+}
+
 Arena = struct
 {
     reserved_size: u64,
@@ -264,6 +443,13 @@ arena_allocate_bytes = fn (arena: &Arena, size: u64, alignment: u64) &u8
     return result;
 }
 
+arena_duplicate_string = fn (arena: &Arena, string: []u8) []u8
+{
+    >result = arena_allocate_bytes(arena, string.length + 1, 1);
+    memcpy(result, string.pointer, string.length);
+    return result[..string.length];
+}
+
 arena_join_string = fn (arena: &Arena, pieces: [][]u8) []u8
 {
     >size: u64 = 0;
@@ -286,6 +472,32 @@ arena_join_string = fn (arena: &Arena, pieces: [][]u8) []u8
     pointer[i] = 0;
 
     return pointer[..size];
+}
+
+file_read = fn (arena: &Arena, path: []u8) []u8
+{
+    >fd = os_file_open(path.pointer, { .read = 1 }, { .read = 1 });
+
+    >result: []u8 = zero;
+
+    if (os_file_is_valid(fd))
+    {
+        >file_size = os_file_get_size(fd);
+        >file_buffer = arena_allocate_bytes(arena, file_size, 1);
+        result = file_buffer[..file_size];
+        os_file_read(fd, result, file_size);
+        os_file_close(fd);
+    }
+
+    return result;
+}
+
+path_absolute = fn (arena: &Arena, relative_file_path: &u8) []u8
+{
+    >buffer: [4096]u8 = undefined;
+    >stack_slice = os_path_absolute_stack(buffer[..], relative_file_path);
+    >result = arena_duplicate_string(arena, stack_slice);
+    return result;
 }
 
 GlobalState = struct
@@ -335,9 +547,47 @@ CompileFile = struct
 
 base_cache_dir = "bb-cache";
 
-compile_file = fn (arena: &Arena, compile: CompileFile) void
+CPUArchitecture = enum
 {
-    >relative_file_path = compile.relative_file_path;
+    x86_64,
+}
+
+OperatingSystem = enum
+{
+    linux,
+}
+
+Target = struct
+{
+    cpu: CPUArchitecture,
+    os: OperatingSystem,
+}
+
+target_get_native = fn () Target
+{
+    return { .cpu = .x86_64, .os = .linux };
+}
+
+CompileOptions = struct
+{
+    content: []u8,
+    path: []u8,
+    executable: []u8,
+    name: []u8,
+    objects: [][]u8,
+    target: Target,
+    build_mode: BuildMode,
+    has_debug_info: u1,
+    silent: u1,
+}
+
+compile = fn (arena: &Arena, options: CompileOptions) void
+{
+}
+
+compile_file = fn (arena: &Arena, compile_options: CompileFile) void
+{
+    >relative_file_path = compile_options.relative_file_path;
     if (relative_file_path.length < 5)
     {
         fail();
@@ -367,10 +617,51 @@ compile_file = fn (arena: &Arena, compile: CompileFile) void
     >outputh_path_dir = arena_join_string(arena, [
         base_cache_dir,
         #select(is_compiler, "/compiler/", "/"),
-        #enum_name(compile.build_mode),
+        #enum_name(compile_options.build_mode),
         "_",
-        #select(compile.has_debug_info, "di", "nodi"),
+        #select(compile_options.has_debug_info, "di", "nodi"),
     ][..]);
+
+    os_make_directory(base_cache_dir.pointer);
+    if (is_compiler)
+    {
+        >compiler_dir = arena_join_string(arena, [ base_cache_dir, "/compiler" ][..]);
+        os_make_directory(compiler_dir.pointer);
+    }
+    os_make_directory(outputh_path_dir.pointer);
+
+    >outputh_path_base = arena_join_string(arena, [ outputh_path_dir, "/", base_name ][..]);
+
+    >output_object_path = arena_join_string(arena, [ outputh_path_base, ".o" ][..]);
+    >output_executable_path = outputh_path_base;
+
+    >file_content = file_read(arena, relative_file_path);
+    >file_path = path_absolute(arena, relative_file_path.pointer);
+    >c_abi_object_path = ""; // TODO
+
+    >objects: [][]u8 = undefined;
+    if (string_equal(base_name, "c_abi"))
+    {
+        objects = [ output_object_path, c_abi_object_path ][..];
+    }
+    else
+    {
+        objects = [ output_object_path ][..];
+    }
+
+    >options: CompileOptions = {
+        .executable = output_executable_path,
+        .objects = objects,
+        .name = base_name,
+        .build_mode = compile_options.build_mode,
+        .content = file_content,
+        .path = file_path,
+        .has_debug_info = compile_options.has_debug_info,
+        .target = target_get_native(),
+        .silent = compile_options.silent,
+    };
+
+    compile(arena, options);
 }
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8) s32

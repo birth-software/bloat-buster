@@ -516,6 +516,7 @@ pub const Type = struct {
             .integer => |integer| integer.signed,
             .bits => |bits| bits.backing_type.is_signed(),
             .enumerator => |enumerator| enumerator.backing_type.is_signed(),
+            .alias => |alias| alias.type.is_signed(),
             else => @trap(),
         };
     }
@@ -602,6 +603,7 @@ pub const Type = struct {
             .array => |array| array.element_type.get_bit_size() * array.element_count,
             .structure => |structure| structure.bit_size,
             .enumerator => |enumerator| enumerator.backing_type.get_bit_size(),
+            .alias => |alias| alias.type.get_bit_size(),
             else => @trap(),
         };
         return bit_size;
@@ -3880,7 +3882,7 @@ pub const Module = struct {
 
                             const backing_type = maybe_backing_type orelse blk: {
                                 const bits_needed = 64 - @clz(highest_value);
-                                const int_type = module.integer_type(bits_needed, false);
+                                const int_type = module.integer_type(if (bits_needed == 0) 1 else bits_needed, false);
                                 break :blk int_type;
                             };
 
@@ -5472,7 +5474,10 @@ pub const Module = struct {
     pub fn check_types(module: *Module, expected_type: *Type, source_type: *Type) void {
         if (expected_type != source_type) {
             const dst_p_src_i = expected_type.bb == .pointer and source_type.bb == .integer;
-            const result = dst_p_src_i;
+            const dst_alias_src_not = expected_type.bb == .alias and expected_type.bb.alias.type == source_type;
+            const src_alias_dst_not = source_type.bb == .alias and source_type.bb.alias.type == expected_type;
+            const both_alias_to_same_type = expected_type.bb == .alias and source_type.bb == .alias and expected_type.bb.alias.type == source_type.bb.alias.type;
+            const result = dst_p_src_i or dst_alias_src_not or src_alias_dst_not or both_alias_to_same_type;
             if (!result) {
                 module.report_error();
             }
@@ -6782,7 +6787,11 @@ pub const Module = struct {
                     }
                     const llvm_value = extended_value.llvm orelse unreachable;
                     const destination_type = value_type.llvm.abi.?;
-                    const extension_instruction = switch (extended_value.type.?.bb.integer.signed) {
+                    const extension_type = switch (extended_value.type.?.bb) {
+                        .alias => |alias| alias.type,
+                        else => extended_value.type.?,
+                    };
+                    const extension_instruction = switch (extension_type.bb.integer.signed) {
                         true => module.llvm.builder.create_sign_extend(llvm_value, destination_type),
                         false => module.llvm.builder.create_zero_extend(llvm_value, destination_type),
                     };
@@ -8794,7 +8803,8 @@ pub const Abi = struct {
 
             switch (ty.bb) {
                 .void, .noreturn => result[current_index] = .none,
-                .bits => result[current_index] = .integer,
+                .bits => |bits| return classify(bits.backing_type, options),
+                .enumerator => |enumerator| return classify(enumerator.backing_type, options),
                 .pointer => result[current_index] = .integer,
                 .integer => |integer| {
                     if (integer.bit_count <= 64) {
@@ -8930,6 +8940,9 @@ pub const Abi = struct {
 
         fn get_int_type_at_offset(module: *Module, ty: *Type, offset: u32, source_type: *Type, source_offset: u32) *Type {
             switch (ty.bb) {
+                .enumerator => |enumerator| {
+                    return get_int_type_at_offset(module, enumerator.backing_type, offset, if (source_type == ty) enumerator.backing_type else source_type, source_offset);
+                },
                 .bits => |bits| {
                     return get_int_type_at_offset(module, bits.backing_type, offset, if (source_type == ty) bits.backing_type else source_type, source_offset);
                 },
@@ -8945,7 +8958,9 @@ pub const Abi = struct {
                             }
                         },
                         else => {
-                            const byte_count = @min(ty.get_byte_size() - source_offset, 8);
+                            const original_byte_count = ty.get_byte_size();
+                            assert(original_byte_count != source_offset);
+                            const byte_count = @min(original_byte_count - source_offset, 8);
                             const bit_count = byte_count * 8;
                             return module.integer_type(@intCast(bit_count), integer_type.signed);
                         },
@@ -8954,7 +8969,12 @@ pub const Abi = struct {
                 .pointer => return if (offset == 0) ty else @trap(),
                 .structure => {
                     if (get_member_at_offset(ty, offset)) |field| {
-                        return get_int_type_at_offset(module, field.type, @intCast(offset - field.byte_offset), source_type, source_offset);
+                        // TODO: this is a addition of mine, since we don't allow arbitrary-bit fields inside structs
+                        const field_type = switch (field.type.bb) {
+                            .integer, .enumerator => module.align_integer_type(field.type),
+                            else => field.type,
+                        };
+                        return get_int_type_at_offset(module, field_type, @intCast(offset - field.byte_offset), source_type, source_offset);
                     }
                     unreachable;
                 },
@@ -8964,7 +8984,7 @@ pub const Abi = struct {
                     const element_offset = (offset / element_size) * element_size;
                     return get_int_type_at_offset(module, element_type, @intCast(offset - element_offset), source_type, source_offset);
                 },
-                .alias => |alias| return get_int_type_at_offset(module, alias.type, offset, source_type, source_offset),
+                .alias => |alias| return get_int_type_at_offset(module, alias.type, offset, if (ty == source_type) alias.type else source_type, source_offset),
                 else => |t| @panic(@tagName(t)),
             }
 

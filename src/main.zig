@@ -322,4 +322,5 @@ const names = &[_][]const u8{
     "slice_of_slices",
     "type_alias",
     "integer_formats",
+    "return_small_struct",
 };
