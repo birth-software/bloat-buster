@@ -174,6 +174,7 @@ os_commit = fn (address: u64, size: u64, protection: OS_ProtectionFlags) void
 
 os_make_directory = fn (path: &u8) void
 {
+    >result = mkdir(path, 0o755);
 }
 
 Arena = struct

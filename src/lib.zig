@@ -2865,6 +2865,14 @@ pub const parse = struct {
     pub fn accumulate_decimal(accumulator: u64, ch: u8) u64 {
         return (accumulator * 10) + (ch - '0');
     }
+
+    pub fn accumulate_octal(accumulator: u64, ch: u8) u64 {
+        return (accumulator * 8) + (ch - '0');
+    }
+
+    pub fn accumulate_binary(accumulator: u64, ch: u8) u64 {
+        return (accumulator * 2) + (ch - '0');
+    }
 };
 
 test "parse integer decimal" {

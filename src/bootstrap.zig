@@ -107,6 +107,14 @@ fn is_decimal_ch(ch: u8) bool {
     return ch >= '0' and ch <= '9';
 }
 
+fn is_octal_ch(ch: u8) bool {
+    return ch >= '0' and ch <= '7';
+}
+
+fn is_binary_ch(ch: u8) bool {
+    return ch == '0' or ch == '1';
+}
+
 fn is_identifier_ch(ch: u8) bool {
     return is_identifier_start_ch(ch) or is_decimal_ch(ch);
 }
@@ -1173,6 +1181,36 @@ pub const Module = struct {
         return value;
     }
 
+    fn parse_octal(noalias module: *Module) u64 {
+        var value: u64 = 0;
+        while (true) {
+            const ch = module.content[module.offset];
+            if (!is_octal_ch(ch)) {
+                break;
+            }
+
+            module.offset += 1;
+            value = lib.parse.accumulate_octal(value, ch);
+        }
+
+        return value;
+    }
+
+    fn parse_binary(noalias module: *Module) u64 {
+        var value: u64 = 0;
+        while (true) {
+            const ch = module.content[module.offset];
+            if (!is_binary_ch(ch)) {
+                break;
+            }
+
+            module.offset += 1;
+            value = lib.parse.accumulate_binary(value, ch);
+        }
+
+        return value;
+    }
+
     const AttributeBuildOptions = struct {
         return_type_abi: Abi.Information,
         abi_argument_types: []const *Type,
@@ -2023,16 +2061,32 @@ pub const Module = struct {
                     'x' => .hexadecimal,
                     'o' => .octal,
                     'b' => .binary,
+                    'd' => .decimal,
                     else => .decimal,
                 };
                 const value: u64 = switch (token_integer_kind) {
-                    .binary => @trap(),
-                    .octal => @trap(),
+                    .binary => b: {
+                        module.offset += 2;
+                        const v = module.parse_binary();
+                        break :b v;
+                    },
+                    .octal => b: {
+                        module.offset += 2;
+                        const v = module.parse_octal();
+                        break :b v;
+                    },
                     .decimal => switch (next_ch) {
                         0...9 => module.report_error(),
-                        else => b: {
-                            module.offset += 1;
-                            break :b 0;
+                        else => switch (next_ch) {
+                            'd' => b: {
+                                module.offset += 2;
+                                const v = module.parse_decimal();
+                                break :b v;
+                            },
+                            else => b: {
+                                module.offset += 1;
+                                break :b 0;
+                            },
                         },
                     },
                     .hexadecimal => b: {
@@ -4087,13 +4141,17 @@ pub const Module = struct {
                             module.offset += 1;
                             break :b module.parse_hexadecimal();
                         },
-                        'o' => {
-                            // TODO: parse octal
-                            module.report_error();
+                        'd' => b: {
+                            module.offset += 1;
+                            break :b module.parse_decimal();
                         },
-                        'b' => {
-                            // TODO: parse binary
-                            module.report_error();
+                        'o' => b: {
+                            module.offset += 1;
+                            break :b module.parse_octal();
+                        },
+                        'b' => b: {
+                            module.offset += 1;
+                            break :b module.parse_binary();
                         },
                         '0'...'9' => {
                             module.report_error();

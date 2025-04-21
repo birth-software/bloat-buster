@@ -320,4 +320,6 @@ const names = &[_][]const u8{
     "pointer_decay",
     "enum_name",
     "slice_of_slices",
+    "type_alias",
+    "integer_formats",
 };
