@@ -1,0 +1,6 @@
+int = typealias s32;
+
+[export] main = fn [cc(c)] () int
+{
+    return 0;
+}

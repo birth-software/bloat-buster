@@ -238,6 +238,7 @@ pub const Type = struct {
         structure: Type.Struct,
         vector,
         forward_declaration,
+        alias: Type.Alias,
     },
     name: []const u8,
     llvm: LLVM = .{},
@@ -256,6 +257,11 @@ pub const Type = struct {
             handle: ?*llvm.Type = null,
             debug: ?*llvm.DI.Type = null,
         };
+    };
+
+    pub const Alias = struct {
+        type: *Type,
+        line: u32,
     };
 
     pub const Float = struct {
@@ -327,6 +333,10 @@ pub const Type = struct {
                     const t = bits.backing_type.llvm.abi.?;
                     break :blk t;
                 },
+                .alias => |alias| blk: {
+                    alias.type.resolve(module);
+                    break :blk alias.type.llvm.abi.?;
+                },
                 else => @trap(),
             };
             ty.llvm.abi = abi_type;
@@ -341,6 +351,7 @@ pub const Type = struct {
                 .integer => module.llvm.context.get_integer_type(@intCast(ty.get_byte_size() * 8)).to_type(),
                 .enumerator => |enumerator| enumerator.backing_type.llvm.memory.?,
                 .bits => |bits| bits.backing_type.llvm.memory.?, // TODO: see assert below
+                .alias => |alias| alias.type.llvm.memory.?,
                 else => @trap(),
             };
             ty.llvm.memory = memory_type;
@@ -399,6 +410,10 @@ pub const Type = struct {
 
                         const struct_type = module.llvm.di_builder.create_struct_type(module.scope.llvm.?, ty.name, module.llvm.file, bits.line, ty.get_bit_size(), @intCast(ty.get_bit_alignment()), .{}, llvm_debug_member_types);
                         break :blk struct_type.to_type();
+                    },
+                    .alias => |alias| blk: {
+                        const typedef = module.llvm.di_builder.create_typedef(alias.type.llvm.debug.?, ty.name, module.llvm.file, alias.line, module.scope.llvm.?, 0);
+                        break :blk typedef.to_type();
                     },
                     else => @trap(),
                 };
@@ -497,11 +512,12 @@ pub const Type = struct {
         };
     }
 
-    pub fn is_integral_or_enumeration_type(ty: *Type) bool {
+    pub fn is_integral_or_enumeration_type(ty: *const Type) bool {
         return switch (ty.bb) {
             .integer => true,
             .bits => true,
             .structure => false,
+            .alias => |alias| alias.type.is_integral_or_enumeration_type(),
             else => @trap(),
         };
     }
@@ -522,6 +538,7 @@ pub const Type = struct {
         return switch (ty.bb) {
             .integer => |integer| integer.bit_count < 32,
             .bits => |bits| bits.backing_type.is_promotable_integer_type_for_abi(),
+            .alias => |alias| alias.type.is_promotable_integer_type_for_abi(),
             else => @trap(),
         };
     }
@@ -536,6 +553,7 @@ pub const Type = struct {
             .enumerator => |enumerator| enumerator.backing_type.get_byte_alignment(),
             .structure => |structure| structure.byte_alignment,
             .bits => |bits| bits.backing_type.get_byte_alignment(),
+            .alias => |alias| alias.type.get_byte_alignment(),
             else => @trap(),
         };
         return result;
@@ -562,6 +580,7 @@ pub const Type = struct {
             .array => |array| array.element_type.get_byte_size() * array.element_count,
             .bits => |bits| bits.backing_type.get_byte_size(),
             .enumerator => |enumerator| enumerator.backing_type.get_byte_size(),
+            .alias => |alias| alias.type.get_byte_size(),
             else => @trap(),
         };
         return byte_size;
@@ -600,6 +619,7 @@ pub const Type = struct {
         return switch (ty.bb) {
             .structure, .array => .aggregate,
             .integer, .bits, .pointer, .enumerator => .scalar,
+            .alias => |alias| alias.type.get_evaluation_kind(),
             else => @trap(),
         };
     }
@@ -973,10 +993,11 @@ const Precedence = enum {
 };
 
 const GlobalKind = enum {
-    @"fn",
-    @"struct",
     bits,
     @"enum",
+    @"fn",
+    @"struct",
+    typealias,
 };
 
 const CallingConvention = enum {
@@ -4001,6 +4022,22 @@ pub const Module = struct {
                                 },
                             };
                         },
+                        .typealias => {
+                            const aliased_type = module.parse_type(null);
+                            if (!module.consume_character_if_match(';')) {
+                                module.report_error();
+                            }
+                            const alias_type = module.types.append(.{
+                                .bb = .{
+                                    .alias = .{
+                                        .type = aliased_type,
+                                        .line = global_line,
+                                    },
+                                },
+                                .name = global_name,
+                            });
+                            _ = alias_type;
+                        },
                     }
                 } else {
                     module.offset -= global_string.len;
@@ -5415,7 +5452,11 @@ pub const Module = struct {
             },
             .constant_integer => |constant_integer| blk: {
                 const expected_type = analysis.type orelse module.report_error();
-                const ty = switch (expected_type.bb) {
+                const et = switch (expected_type.bb) {
+                    .alias => |alias| alias.type,
+                    else => expected_type,
+                };
+                const ty = switch (et.bb) {
                     .integer => |integer| switch (constant_integer.signed) {
                         true => {
                             if (!integer.signed) {
@@ -8780,6 +8821,7 @@ pub const Abi = struct {
                         }
                     }
                 },
+                .alias => |alias| return classify(alias.type, options),
                 else => @trap(),
             }
 
@@ -8864,6 +8906,7 @@ pub const Abi = struct {
                     const element_offset = (offset / element_size) * element_size;
                     return get_int_type_at_offset(module, element_type, @intCast(offset - element_offset), source_type, source_offset);
                 },
+                .alias => |alias| return get_int_type_at_offset(module, alias.type, offset, source_type, source_offset),
                 else => |t| @panic(@tagName(t)),
             }
 

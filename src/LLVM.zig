@@ -1313,6 +1313,10 @@ pub const DI = struct {
         pub fn create_enumeration_type(builder: *DI.Builder, scope: *DI.Scope, name: []const u8, file: *DI.File, line: c_uint, bit_size: u64, align_in_bits: u32, enumeration_types: []const *DI.Enumerator, backing_type: *DI.Type) *DI.Type.Composite {
             return api.LLVMDIBuilderCreateEnumerationType(builder, scope, name.ptr, name.len, file, line, bit_size, align_in_bits, enumeration_types.ptr, @intCast(enumeration_types.len), backing_type);
         }
+
+        pub fn create_typedef(builder: *DI.Builder, ty: *DI.Type, name: []const u8, file: *DI.File, line: c_uint, scope: *DI.Scope, align_in_bits: u32) *DI.Type.Derived {
+            return api.LLVMDIBuilderCreateTypedef(builder, ty, name.ptr, name.len, file, line, scope, align_in_bits);
+        }
     };
 
     pub const create_debug_location = api.LLVMDIBuilderCreateDebugLocation;

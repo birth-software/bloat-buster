@@ -1,6 +1,9 @@
+mode_t = typealias u64;
+
 [extern] memcmp = fn [cc(c)] (a: &u8, b: &u8, byte_count: u64) s32;
 [extern] memcpy = fn [cc(c)] (destination: &u8, source: &u8, byte_count: u64) &u8;
 [extern] exit = fn [cc(c)] (exit_code: s32) noreturn;
+[extern] mkdir = fn [cc(c)] (path: &u8, mode: mode_t) s32;
 
 assert = fn (ok: u1) void
 {
@@ -167,6 +170,10 @@ os_commit = fn (address: u64, size: u64, protection: OS_ProtectionFlags) void
     {
         unreachable;
     }
+}
+
+os_make_directory = fn (path: &u8) void
+{
 }
 
 Arena = struct
