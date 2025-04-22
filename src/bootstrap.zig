@@ -207,6 +207,53 @@ pub const Global = struct {
     };
 };
 
+pub const GenericArgument = struct {
+    foo: u32,
+};
+
+pub const Macro = struct {
+    arguments: []const *Local,
+    argument_types: []const *Type,
+    generic_arguments: []const GenericArgument,
+    return_type: *Type,
+    block: *LexicalBlock,
+    name: []const u8,
+    scope: Scope,
+
+    pub const Buffer = struct {
+        buffer: lib.VirtualBuffer(Macro),
+
+        pub fn get_slice(buffer: Buffer) []Macro {
+            return buffer.buffer.get_slice();
+        }
+
+        pub fn initialize() Buffer {
+            return .{
+                .buffer = .initialize(),
+            };
+        }
+
+        pub fn find_by_name(globals: *Buffer, name: []const u8) ?*Macro {
+            const slice = globals.buffer.get_slice();
+            for (slice) |*global| {
+                if (lib.string.equal(global.variable.name, name)) {
+                    return global;
+                }
+            } else {
+                return null;
+            }
+        }
+
+        pub fn add(globals: *Buffer) *Macro {
+            return globals.buffer.add();
+        }
+    };
+
+    pub fn is_generic(macro: *const Macro) bool {
+        return macro.generic_arguments.len != 0;
+    }
+};
+
 pub const ResolvedType = struct {
     handle: *llvm.Type,
     debug: *llvm.DI.Type,
@@ -790,6 +837,15 @@ pub const FieldAccess = struct {
     field: []const u8,
 };
 
+pub const MacroInstantiation = struct {
+    arguments: []const *Value,
+    macro: *Macro,
+    function: *Global,
+    parent_scope: *Scope,
+    return_alloca: *llvm.Value,
+    return_block: *llvm.BasicBlock,
+};
+
 pub const Value = struct {
     bb: union(enum) {
         external_function,
@@ -815,6 +871,8 @@ pub const Value = struct {
         slice_expression: SliceExpression,
         @"unreachable",
         undefined,
+        macro_reference: *Macro,
+        macro_instantiation: MacroInstantiation,
     },
     type: ?*Type = null,
     llvm: ?*llvm.Value = null,
@@ -1006,6 +1064,7 @@ const GlobalKind = enum {
     bits,
     @"enum",
     @"fn",
+    macro,
     @"struct",
     typealias,
 };
@@ -1042,6 +1101,7 @@ pub const Scope = struct {
         function,
         local,
         for_each,
+        macro,
     };
 };
 
@@ -1052,7 +1112,7 @@ pub const LexicalBlock = struct {
 };
 
 pub const Function = struct {
-    arguments: []*Local,
+    arguments: []const *Local,
     attributes: Attributes,
     main_block: *LexicalBlock,
     scope: Scope,
@@ -1095,6 +1155,7 @@ pub const Module = struct {
     locals: Local.Buffer,
     globals: Global.Buffer,
     values: Value.Buffer,
+    macros: Macro.Buffer,
     pointer_types: IndexBuffer,
     slice_types: IndexBuffer,
     pair_struct_types: IndexBuffer,
@@ -1106,6 +1167,9 @@ pub const Module = struct {
     lexical_blocks: lib.VirtualBuffer(LexicalBlock),
     statements: lib.VirtualBuffer(Statement),
     current_function: ?*Global = null,
+    current_macro_declaration: ?*Macro = null,
+    current_macro_instantiation: ?*Value = null,
+    inline_at_debug_location: ?*llvm.DI.Location = null,
     name: []const u8,
     path: []const u8,
     executable: [:0]const u8,
@@ -1441,7 +1505,7 @@ pub const Module = struct {
         return pointer_type;
     }
 
-    fn parse_type(module: *Module, function: ?*Global) *Type {
+    fn parse_type(module: *Module) *Type {
         const start_character = module.content[module.offset];
         switch (start_character) {
             'a'...'z', 'A'...'Z', '_' => {
@@ -1472,7 +1536,7 @@ pub const Module = struct {
             '&' => {
                 module.offset += 1;
                 module.skip_space();
-                const element_type = module.parse_type(function);
+                const element_type = module.parse_type();
                 const pointer_type = module.get_pointer_type(.{
                     .type = element_type,
                 });
@@ -1486,7 +1550,7 @@ pub const Module = struct {
                 switch (is_slice) {
                     true => {
                         module.skip_space();
-                        const element_type = module.parse_type(function);
+                        const element_type = module.parse_type();
                         const slice_type = module.get_slice_type(.{ .type = element_type });
                         return slice_type;
                     },
@@ -1520,7 +1584,7 @@ pub const Module = struct {
 
                         module.skip_space();
 
-                        const element_type = module.parse_type(function);
+                        const element_type = module.parse_type();
 
                         const array_type = switch (element_count) {
                             0 => blk: {
@@ -1548,7 +1612,7 @@ pub const Module = struct {
                 const identifier = module.parse_identifier();
                 if (lib.string.to_enum(Type.Intrinsic.Id, identifier)) |intrinsic| switch (intrinsic) {
                     .ReturnType => {
-                        const return_type = function.?.variable.type.?.bb.function.semantic_return_type;
+                        const return_type = module.current_function.?.variable.type.?.bb.function.semantic_return_type;
                         return return_type;
                     },
                     else => @trap(),
@@ -2344,32 +2408,31 @@ pub const Module = struct {
         after: ?*const Rule.Function,
         precedence: Precedence,
 
-        const Function = fn (noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value;
+        const Function = fn (noalias module: *Module, scope: *Scope, value_builder: Value.Builder) *Value;
     };
 
-    fn parse_value(module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
+    fn parse_value(module: *Module, scope: *Scope, value_builder: Value.Builder) *Value {
         assert(value_builder.precedence == .none);
         assert(value_builder.left == null);
-        const value = module.parse_precedence(function, scope, value_builder.with_precedence(.assignment));
+        const value = module.parse_precedence(scope, value_builder.with_precedence(.assignment));
         return value;
     }
 
-    fn parse_precedence(module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
+    fn parse_precedence(module: *Module, scope: *Scope, value_builder: Value.Builder) *Value {
         assert(value_builder.token == .none);
         const token = module.tokenize();
         const rule = &rules[@intFromEnum(token)];
         if (rule.before) |before| {
-            const left = before(module, function, scope, value_builder.with_precedence(.none).with_token(token));
-            const result = module.parse_precedence_left(function, scope, value_builder.with_left(left));
+            const left = before(module, scope, value_builder.with_precedence(.none).with_token(token));
+            const result = module.parse_precedence_left(scope, value_builder.with_left(left));
             return result;
         } else {
             module.report_error();
         }
     }
 
-    fn parse_precedence_left(module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
+    fn parse_precedence_left(module: *Module, scope: *Scope, value_builder: Value.Builder) *Value {
         var result = value_builder.left;
-        _ = &result;
         const precedence = value_builder.precedence;
         while (true) {
             const checkpoint = module.offset;
@@ -2389,14 +2452,14 @@ pub const Module = struct {
 
             const after_rule = token_rule.after orelse module.report_error();
             const old = result;
-            const new = after_rule(module, function, scope, value_builder.with_token(token).with_precedence(.none).with_left(old));
+            const new = after_rule(module, scope, value_builder.with_token(token).with_precedence(.none).with_left(old));
             result = new;
         }
 
         return result.?;
     }
 
-    fn parse_statement(module: *Module, function: *Global, scope: *Scope) *Statement {
+    fn parse_statement(module: *Module, scope: *Scope) *Statement {
         const statement_line = module.get_line();
         const statement_column = module.get_column();
 
@@ -2412,12 +2475,12 @@ pub const Module = struct {
                     module.skip_space();
                     const local_type: ?*Type = if (module.consume_character_if_match(':')) b: {
                         module.skip_space();
-                        const t = module.parse_type(function);
+                        const t = module.parse_type();
                         module.skip_space();
                         break :b t;
                     } else null;
                     module.expect_character('=');
-                    const local_value = module.parse_value(function, scope, .{});
+                    const local_value = module.parse_value(scope, .{});
                     const local = module.locals.add();
                     local.* = .{
                         .variable = .{
@@ -2442,7 +2505,7 @@ pub const Module = struct {
                     };
                 },
                 '#' => .{
-                    .expression = module.parse_value(function, scope, .{}),
+                    .expression = module.parse_value(scope, .{}),
                 },
                 'A'...'Z', 'a'...'z' => blk: {
                     const statement_start_identifier = module.parse_identifier();
@@ -2450,7 +2513,7 @@ pub const Module = struct {
                     if (lib.string.to_enum(StatementStartKeyword, statement_start_identifier)) |statement_start_keyword| switch (statement_start_keyword) {
                         ._ => @trap(),
                         .@"return" => break :blk .{
-                            .@"return" = module.parse_value(function, scope, .{}),
+                            .@"return" = module.parse_value(scope, .{}),
                         },
                         .@"if" => {
                             module.skip_space();
@@ -2458,14 +2521,14 @@ pub const Module = struct {
                             module.expect_character(left_parenthesis);
                             module.skip_space();
 
-                            const condition = module.parse_value(function, scope, .{});
+                            const condition = module.parse_value(scope, .{});
 
                             module.skip_space();
                             module.expect_character(right_parenthesis);
 
                             module.skip_space();
 
-                            const if_statement = module.parse_statement(function, scope);
+                            const if_statement = module.parse_statement(scope);
 
                             module.skip_space();
 
@@ -2481,7 +2544,7 @@ pub const Module = struct {
                             }
 
                             const else_block = switch (is_else) {
-                                true => module.parse_statement(function, scope),
+                                true => module.parse_statement(scope),
                                 false => null,
                             };
 
@@ -2501,14 +2564,14 @@ pub const Module = struct {
                             module.expect_character(left_parenthesis);
                             module.skip_space();
 
-                            const condition = module.parse_value(function, scope, .{});
+                            const condition = module.parse_value(scope, .{});
 
                             module.skip_space();
                             module.expect_character(right_parenthesis);
 
                             module.skip_space();
 
-                            const while_block = module.parse_block(function, scope);
+                            const while_block = module.parse_block(scope);
 
                             require_semicolon = false;
 
@@ -2599,7 +2662,7 @@ pub const Module = struct {
                             while (true) {
                                 module.skip_space();
 
-                                const identifier = module.parse_value(function, scope, .{
+                                const identifier = module.parse_value(scope, .{
                                     .kind = .left,
                                 });
                                 right_value_buffer[right_value_count] = identifier;
@@ -2630,7 +2693,7 @@ pub const Module = struct {
                             statement.bb.for_each.left_values = left_values;
                             statement.bb.for_each.right_values = right_values;
 
-                            const predicate = module.parse_statement(function, &statement.bb.for_each.scope);
+                            const predicate = module.parse_statement(&statement.bb.for_each.scope);
                             statement.bb.for_each.predicate = predicate;
 
                             module.skip_space();
@@ -2644,7 +2707,7 @@ pub const Module = struct {
                             module.expect_character(left_parenthesis);
                             module.skip_space();
 
-                            const discriminant = module.parse_value(function, scope, .{});
+                            const discriminant = module.parse_value(scope, .{});
 
                             module.skip_space();
                             module.expect_character(right_parenthesis);
@@ -2682,7 +2745,7 @@ pub const Module = struct {
                                     var case_count: u64 = 0;
 
                                     while (true) {
-                                        const case_value = module.parse_value(function, scope, .{});
+                                        const case_value = module.parse_value(scope, .{});
                                         case_buffer[case_count] = case_value;
                                         case_count += 1;
 
@@ -2703,7 +2766,7 @@ pub const Module = struct {
 
                                 module.skip_space();
 
-                                const clause_block = module.parse_block(function, scope);
+                                const clause_block = module.parse_block(scope);
 
                                 clause_buffer[clause_count] = .{
                                     .values = clause_values,
@@ -2735,7 +2798,7 @@ pub const Module = struct {
                     } else {
                         module.offset -= statement_start_identifier.len;
 
-                        const left = module.parse_value(function, scope, .{
+                        const left = module.parse_value(scope, .{
                             .kind = .left,
                         });
 
@@ -2818,7 +2881,7 @@ pub const Module = struct {
 
                             module.skip_space();
 
-                            const right = module.parse_value(function, scope, .{});
+                            const right = module.parse_value(scope, .{});
 
                             break :blk .{
                                 .assignment = .{
@@ -2833,7 +2896,7 @@ pub const Module = struct {
                 left_brace => blk: {
                     require_semicolon = false;
                     break :blk .{
-                        .block = module.parse_block(function, scope),
+                        .block = module.parse_block(scope),
                     };
                 },
                 else => @trap(),
@@ -2849,7 +2912,7 @@ pub const Module = struct {
         return statement;
     }
 
-    fn parse_block(module: *Module, function: *Global, parent_scope: *Scope) *LexicalBlock {
+    fn parse_block(module: *Module, parent_scope: *Scope) *LexicalBlock {
         const block = module.lexical_blocks.append(.{
             .statements = .initialize(),
             .locals = .initialize(),
@@ -2875,16 +2938,15 @@ pub const Module = struct {
                 break;
             }
 
-            const statement = module.parse_statement(function, scope);
+            const statement = module.parse_statement(scope);
             _ = block.statements.append(statement);
         }
 
         return block;
     }
 
-    fn rule_before_dot(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
+    fn rule_before_dot(noalias module: *Module, scope: *Scope, value_builder: Value.Builder) *Value {
         _ = scope;
-        _ = function;
         _ = value_builder;
         module.skip_space();
         const identifier = module.parse_identifier();
@@ -2898,9 +2960,8 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_after_dot(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
+    fn rule_after_dot(noalias module: *Module, scope: *Scope, value_builder: Value.Builder) *Value {
         _ = scope;
-        _ = function;
         module.skip_space();
         const left = value_builder.left orelse module.report_error();
         left.kind = .left;
@@ -2918,9 +2979,8 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_before_string_literal(noalias module: *Module, function: ?*Global, parent_scope: *Scope, value_builder: Value.Builder) *Value {
+    fn rule_before_string_literal(noalias module: *Module, parent_scope: *Scope, value_builder: Value.Builder) *Value {
         _ = parent_scope;
-        _ = function;
         const value = module.values.add();
         value.* = .{
             .bb = .{
@@ -2930,9 +2990,7 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_before_identifier(noalias module: *Module, function: ?*Global, current_scope: *Scope, value_builder: Value.Builder) *Value {
-        _ = function;
-        const identifier = value_builder.token.identifier;
+    fn reference_identifier(noalias module: *Module, current_scope: *Scope, identifier: []const u8, kind: Value.Kind) *Value {
         assert(!lib.string.equal(identifier, ""));
         assert(!lib.string.equal(identifier, "_"));
 
@@ -2946,6 +3004,18 @@ pub const Module = struct {
                     for (module.globals.get_slice()) |*global| {
                         if (lib.string.equal(global.variable.name, identifier)) {
                             break :blk &global.variable;
+                        }
+                    }
+
+                    for (module.macros.get_slice()) |*macro| {
+                        if (lib.string.equal(macro.name, identifier)) {
+                            const value = module.values.add();
+                            value.* = .{
+                                .bb = .{
+                                    .macro_reference = macro,
+                                },
+                            };
+                            return value;
                         }
                     }
                 },
@@ -2976,23 +3046,39 @@ pub const Module = struct {
                         }
                     }
                 },
+                .macro => {
+                    assert(scope.parent != null);
+                    const macro: *Macro = @fieldParentPtr("scope", scope);
+                    for (macro.arguments) |argument| {
+                        if (lib.string.equal(argument.variable.name, identifier)) {
+                            break :blk &argument.variable;
+                        }
+                    }
+                },
             }
         } else {
             module.report_error();
         };
+
         const value = module.values.add();
         value.* = .{
             .bb = .{
                 .variable_reference = variable,
             },
-            .kind = value_builder.kind,
+            .kind = kind,
         };
+
         return value;
     }
 
-    fn rule_before_value_keyword(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
+    fn rule_before_identifier(noalias module: *Module, current_scope: *Scope, value_builder: Value.Builder) *Value {
+        const identifier = value_builder.token.identifier;
+        const result = module.reference_identifier(current_scope, identifier, value_builder.kind);
+        return result;
+    }
+
+    fn rule_before_value_keyword(noalias module: *Module, scope: *Scope, value_builder: Value.Builder) *Value {
         _ = scope;
-        _ = function;
         const value = module.values.add();
         const new_value: Value = switch (value_builder.token.value_keyword) {
             .zero => .{
@@ -3009,7 +3095,7 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_before_value_intrinsic(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
+    fn rule_before_value_intrinsic(noalias module: *Module, scope: *Scope, value_builder: Value.Builder) *Value {
         const intrinsic = value_builder.token.value_intrinsic;
         const value = module.values.add();
 
@@ -3018,7 +3104,7 @@ pub const Module = struct {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
-                const ty = module.parse_type(function);
+                const ty = module.parse_type();
                 module.expect_character(right_parenthesis);
                 break :blk .{
                     .bb = .{
@@ -3032,7 +3118,7 @@ pub const Module = struct {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
-                const arg_value = module.parse_value(function, scope, .{});
+                const arg_value = module.parse_value(scope, .{});
                 module.expect_character(right_parenthesis);
                 break :blk .{
                     .bb = .{
@@ -3046,7 +3132,7 @@ pub const Module = struct {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
-                const arg_value = module.parse_value(function, scope, .{});
+                const arg_value = module.parse_value(scope, .{});
                 module.expect_character(right_parenthesis);
                 break :blk .{
                     .bb = .{
@@ -3060,7 +3146,7 @@ pub const Module = struct {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
-                const ty = module.parse_type(function);
+                const ty = module.parse_type();
                 module.expect_character(right_parenthesis);
                 break :blk .{
                     .bb = .{
@@ -3074,7 +3160,7 @@ pub const Module = struct {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
-                const arg_value = module.parse_value(function, scope, .{});
+                const arg_value = module.parse_value(scope, .{});
                 module.expect_character(right_parenthesis);
                 break :blk .{
                     .bb = .{
@@ -3088,7 +3174,7 @@ pub const Module = struct {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
-                const arg_value = module.parse_value(function, scope, .{});
+                const arg_value = module.parse_value(scope, .{});
                 module.expect_character(right_parenthesis);
                 break :blk .{
                     .bb = .{
@@ -3102,7 +3188,7 @@ pub const Module = struct {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
-                const v = module.parse_value(function, scope, .{});
+                const v = module.parse_value(scope, .{});
                 module.expect_character(right_parenthesis);
                 break :blk .{
                     .bb = .{
@@ -3116,13 +3202,13 @@ pub const Module = struct {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
-                const condition = module.parse_value(function, scope, .{});
+                const condition = module.parse_value(scope, .{});
                 module.expect_character(',');
                 module.skip_space();
-                const true_value = module.parse_value(function, scope, .{});
+                const true_value = module.parse_value(scope, .{});
                 module.expect_character(',');
                 module.skip_space();
-                const false_value = module.parse_value(function, scope, .{});
+                const false_value = module.parse_value(scope, .{});
                 module.skip_space();
                 module.expect_character(right_parenthesis);
                 break :blk .{
@@ -3141,10 +3227,10 @@ pub const Module = struct {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
-                const enum_type = module.parse_type(function);
+                const enum_type = module.parse_type();
                 module.expect_character(',');
                 module.skip_space();
-                const string_value = module.parse_value(function, scope, .{});
+                const string_value = module.parse_value(scope, .{});
                 module.skip_space();
                 module.expect_character(right_parenthesis);
 
@@ -3174,7 +3260,7 @@ pub const Module = struct {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
-                const v = module.parse_value(function, scope, .{});
+                const v = module.parse_value(scope, .{});
                 module.expect_character(right_parenthesis);
                 break :blk .{
                     .bb = .{
@@ -3199,7 +3285,7 @@ pub const Module = struct {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
-                const va_list = module.parse_value(function, scope, .{});
+                const va_list = module.parse_value(scope, .{});
                 module.expect_character(right_parenthesis);
                 break :blk .{
                     .bb = .{
@@ -3213,11 +3299,11 @@ pub const Module = struct {
                 module.skip_space();
                 module.expect_character(left_parenthesis);
                 module.skip_space();
-                const va_list = module.parse_value(function, scope, .{});
+                const va_list = module.parse_value(scope, .{});
                 module.skip_space();
                 module.expect_character(',');
                 module.skip_space();
-                const ty = module.parse_type(function);
+                const ty = module.parse_type();
                 module.expect_character(right_parenthesis);
                 break :blk .{
                     .bb = .{
@@ -3236,9 +3322,8 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_before_integer(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
+    fn rule_before_integer(noalias module: *Module, scope: *Scope, value_builder: Value.Builder) *Value {
         _ = scope;
-        _ = function;
         const v = value_builder.token.integer.value;
         const value = module.values.add();
         value.* = .{
@@ -3252,13 +3337,13 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_after_binary(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
+    fn rule_after_binary(noalias module: *Module, scope: *Scope, value_builder: Value.Builder) *Value {
         const binary_operator_token = value_builder.token;
         const binary_operator_token_precedence = rules[@intFromEnum(binary_operator_token)].precedence;
         const left = value_builder.left orelse module.report_error();
         assert(binary_operator_token_precedence != .assignment); // TODO: this may be wrong. Assignment operator is not allowed in expressions
         const right_precedence = if (binary_operator_token_precedence == .assignment) .assignment else binary_operator_token_precedence.increment();
-        const right = module.parse_precedence(function, scope, value_builder.with_precedence(right_precedence).with_token(.none).with_left(null));
+        const right = module.parse_precedence(scope, value_builder.with_precedence(right_precedence).with_token(.none).with_left(null));
 
         const binary_operation_kind: Binary.Id = switch (binary_operator_token) {
             .none => unreachable,
@@ -3299,7 +3384,7 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_before_unary(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
+    fn rule_before_unary(noalias module: *Module, scope: *Scope, value_builder: Value.Builder) *Value {
         assert(value_builder.left == null);
         const unary_token = value_builder.token;
         const unary_id: Unary.Id = switch (unary_token) {
@@ -3312,7 +3397,7 @@ pub const Module = struct {
             else => @trap(),
         };
 
-        const right = module.parse_precedence(function, scope, value_builder.with_precedence(.prefix).with_token(.none).with_kind(if (unary_id == .@"&") .left else value_builder.kind));
+        const right = module.parse_precedence(scope, value_builder.with_precedence(.prefix).with_token(.none).with_kind(if (unary_id == .@"&") .left else value_builder.kind));
 
         const value = module.values.add();
         value.* = .{
@@ -3326,9 +3411,8 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_after_dereference(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
+    fn rule_after_dereference(noalias module: *Module, scope: *Scope, value_builder: Value.Builder) *Value {
         _ = scope;
-        _ = function;
         const value = module.values.add();
         value.* = .{
             .bb = .{
@@ -3338,7 +3422,7 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_before_brace(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
+    fn rule_before_brace(noalias module: *Module, scope: *Scope, value_builder: Value.Builder) *Value {
         assert(value_builder.left == null);
 
         var name_buffer: [64][]const u8 = undefined;
@@ -3363,7 +3447,7 @@ pub const Module = struct {
 
                 module.skip_space();
 
-                const value = module.parse_value(function, scope, .{});
+                const value = module.parse_value(scope, .{});
                 value_buffer[field_count] = value;
                 module.skip_space();
 
@@ -3417,11 +3501,10 @@ pub const Module = struct {
     }
 
     // Array initialization
-    fn rule_before_bracket(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
+    fn rule_before_bracket(noalias module: *Module, scope: *Scope, value_builder: Value.Builder) *Value {
         assert(value_builder.left == null);
 
         var value_buffer: [64]*Value = undefined;
-        _ = &value_buffer;
         var element_count: u64 = 0;
 
         while (true) : (element_count += 1) {
@@ -3430,7 +3513,7 @@ pub const Module = struct {
             if (module.consume_character_if_match(right_bracket)) {
                 break;
             }
-            const v = module.parse_value(function, scope, .{});
+            const v = module.parse_value(scope, .{});
             value_buffer[element_count] = v;
 
             _ = module.consume_character_if_match(',');
@@ -3453,12 +3536,12 @@ pub const Module = struct {
     }
 
     // Array-like subscript
-    fn rule_after_bracket(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
+    fn rule_after_bracket(noalias module: *Module, scope: *Scope, value_builder: Value.Builder) *Value {
         const left = value_builder.left orelse module.report_error();
         left.kind = .left;
         module.skip_space();
         const is_start = !(module.content[module.offset] == '.' and module.content[module.offset + 1] == '.');
-        const start = if (is_start) module.parse_value(function, scope, .{}) else null;
+        const start = if (is_start) module.parse_value(scope, .{}) else null;
         const value = module.values.add();
         value.* = .{
             .bb = if (module.consume_character_if_match(right_bracket)) .{
@@ -3473,7 +3556,7 @@ pub const Module = struct {
                 const end = switch (module.consume_character_if_match(right_bracket)) {
                     true => null,
                     false => b: {
-                        const end = module.parse_value(function, scope, .{});
+                        const end = module.parse_value(scope, .{});
                         module.expect_character(right_bracket);
                         break :b end;
                     },
@@ -3491,21 +3574,17 @@ pub const Module = struct {
         return value;
     }
 
-    fn rule_before_parenthesis(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
+    fn rule_before_parenthesis(noalias module: *Module, scope: *Scope, value_builder: Value.Builder) *Value {
         _ = value_builder;
         module.skip_space();
-        const v = module.parse_value(function, scope, .{});
+        const v = module.parse_value(scope, .{});
         module.expect_character(right_parenthesis);
         return v;
     }
 
-    fn rule_after_call(noalias module: *Module, function: ?*Global, scope: *Scope, value_builder: Value.Builder) *Value {
-        const may_be_callable = value_builder.left orelse module.report_error();
-        assert(value_builder.token == .@"(");
+    fn parse_call_arguments(noalias module: *Module, scope: *Scope) []const *Value {
         var semantic_argument_count: u32 = 0;
-        _ = &semantic_argument_count;
         var semantic_argument_buffer: [64]*Value = undefined;
-        _ = &semantic_argument_buffer;
 
         while (true) : (semantic_argument_count += 1) {
             module.skip_space();
@@ -3514,7 +3593,7 @@ pub const Module = struct {
                 break;
             }
 
-            const argument = module.parse_value(function, scope, .{});
+            const argument = module.parse_value(scope, .{});
             const argument_index = semantic_argument_count;
             semantic_argument_buffer[argument_index] = argument;
 
@@ -3528,17 +3607,49 @@ pub const Module = struct {
             @memcpy(arguments, semantic_argument_buffer[0..semantic_argument_count]);
             break :blk arguments;
         } else &.{};
+        return arguments;
+    }
 
-        const call = module.values.add();
-        call.* = .{
-            .bb = .{
-                .call = .{
-                    .arguments = arguments,
-                    .callable = may_be_callable,
-                },
+    fn rule_after_call(noalias module: *Module, scope: *Scope, value_builder: Value.Builder) *Value {
+        const may_be_callable = value_builder.left orelse module.report_error();
+        assert(value_builder.token == .@"(");
+
+        switch (may_be_callable.bb) {
+            .macro_reference => |macro| {
+                if (macro.is_generic()) {
+                    @trap();
+                }
+                const arguments = module.parse_call_arguments(scope);
+                const macro_invocation = module.values.add();
+                macro_invocation.* = .{
+                    .bb = .{
+                        .macro_instantiation = .{
+                            .macro = macro,
+                            .arguments = arguments,
+                            .function = module.current_function.?,
+                            .return_alloca = undefined,
+                            .return_block = undefined,
+                            .parent_scope = scope,
+                        },
+                    },
+                };
+                return macro_invocation;
             },
-        };
-        return call;
+            else => {
+                const arguments = module.parse_call_arguments(scope);
+
+                const call = module.values.add();
+                call.* = .{
+                    .bb = .{
+                        .call = .{
+                            .arguments = arguments,
+                            .callable = may_be_callable,
+                        },
+                    },
+                };
+                return call;
+            },
+        }
     }
 
     pub fn get_anonymous_struct_pair(module: *Module, pair: [2]*Type) *Type {
@@ -3641,7 +3752,7 @@ pub const Module = struct {
             if (module.consume_character_if_match(':')) {
                 module.skip_space();
 
-                global_type = module.parse_type(null);
+                global_type = module.parse_type();
 
                 module.skip_space();
             }
@@ -3732,7 +3843,7 @@ pub const Module = struct {
 
                                 module.skip_space();
 
-                                const argument_type = module.parse_type(null);
+                                const argument_type = module.parse_type();
                                 semantic_argument_type_buffer[semantic_argument_count] = argument_type;
 
                                 module.skip_space();
@@ -3744,7 +3855,7 @@ pub const Module = struct {
 
                             module.skip_space();
 
-                            const return_type = module.parse_type(null);
+                            const return_type = module.parse_type();
                             const argument_types: []const *Type = if (semantic_argument_count == 0) &.{} else blk: {
                                 const argument_types = module.arena.allocate(*Type, semantic_argument_count);
                                 @memcpy(argument_types, semantic_argument_type_buffer[0..argument_types.len]);
@@ -3825,7 +3936,7 @@ pub const Module = struct {
                                     }
                                 }
 
-                                storage.bb.function.main_block = module.parse_block(global, &storage.bb.function.scope);
+                                storage.bb.function.main_block = module.parse_block(&storage.bb.function.scope);
                             } else {
                                 storage.bb = .external_function;
                             }
@@ -3834,7 +3945,7 @@ pub const Module = struct {
                             const is_implicit_type = module.content[module.offset] == left_brace;
                             const maybe_backing_type: ?*Type = switch (is_implicit_type) {
                                 true => null,
-                                false => module.parse_type(null),
+                                false => module.parse_type(),
                             };
 
                             module.skip_space();
@@ -3912,7 +4023,7 @@ pub const Module = struct {
                             const is_implicit_type = module.content[module.offset] == left_brace;
                             const maybe_backing_type: ?*Type = switch (is_implicit_type) {
                                 true => null,
-                                false => module.parse_type(null),
+                                false => module.parse_type(),
                             };
 
                             module.skip_space();
@@ -3943,7 +4054,7 @@ pub const Module = struct {
 
                                 module.skip_space();
 
-                                const field_type = module.parse_type(null);
+                                const field_type = module.parse_type();
 
                                 field_buffer[field_count] = .{
                                     .name = field_name,
@@ -4026,7 +4137,7 @@ pub const Module = struct {
 
                                 module.skip_space();
 
-                                const field_type = module.parse_type(null);
+                                const field_type = module.parse_type();
 
                                 const field_byte_alignment = field_type.get_byte_alignment();
                                 const field_bit_alignment = field_byte_alignment * 8;
@@ -4079,7 +4190,7 @@ pub const Module = struct {
                             };
                         },
                         .typealias => {
-                            const aliased_type = module.parse_type(null);
+                            const aliased_type = module.parse_type();
                             if (!module.consume_character_if_match(';')) {
                                 module.report_error();
                             }
@@ -4094,6 +4205,88 @@ pub const Module = struct {
                             });
                             _ = alias_type;
                         },
+                        .macro => {
+                            module.expect_character(left_parenthesis);
+
+                            const macro = module.macros.add();
+                            macro.* = .{
+                                .arguments = &.{},
+                                .argument_types = &.{},
+                                .generic_arguments = &.{},
+                                .return_type = undefined,
+                                .block = undefined,
+                                .name = global_name,
+                                .scope = .{
+                                    .parent = &module.scope,
+                                    .kind = .macro,
+                                    .line = global_line,
+                                    .column = global_column,
+                                },
+                            };
+
+                            module.current_macro_declaration = macro;
+                            defer module.current_macro_declaration = null;
+
+                            var argument_buffer: [64]*Local = undefined;
+                            var argument_count: u32 = 0;
+
+                            while (true) {
+                                module.skip_space();
+
+                                if (module.consume_character_if_match(right_parenthesis)) {
+                                    break;
+                                }
+
+                                const argument_line = module.get_line();
+                                const argument_column = module.get_column();
+
+                                const argument_name = module.parse_identifier();
+
+                                module.skip_space();
+                                module.expect_character(':');
+                                module.skip_space();
+
+                                const argument_type = module.parse_type();
+
+                                const argument = module.locals.add();
+                                argument.* = .{
+                                    .variable = .{
+                                        .initial_value = undefined,
+                                        .scope = &macro.scope,
+                                        .type = argument_type,
+                                        .name = argument_name,
+                                        .line = argument_line,
+                                        .column = argument_column,
+                                    },
+                                    .argument_index = argument_count,
+                                };
+                                argument_buffer[argument_count] = argument;
+                                argument_count += 1;
+
+                                module.skip_space();
+                                _ = module.consume_character_if_match(',');
+                            }
+
+                            module.skip_space();
+
+                            const arguments = module.arena.allocate(*Local, argument_count);
+                            @memcpy(arguments, argument_buffer[0..argument_count]);
+                            macro.arguments = arguments;
+
+                            const argument_types = module.arena.allocate(*Type, argument_count);
+                            for (arguments, argument_types) |argument, *argument_type| {
+                                argument_type.* = argument.variable.type.?;
+                            }
+                            macro.argument_types = argument_types;
+
+                            const return_type = module.parse_type();
+                            macro.return_type = return_type;
+
+                            module.skip_space();
+
+                            const block = module.parse_block(&macro.scope);
+                            macro.block = block;
+                        },
                     }
                 } else {
                     module.offset -= global_string.len;
@@ -4101,7 +4294,7 @@ pub const Module = struct {
             }
 
             if (!global_keyword) {
-                const v = module.parse_value(null, &module.scope, .{});
+                const v = module.parse_value(&module.scope, .{});
                 module.skip_space();
                 module.expect_character(';');
 
@@ -4212,7 +4405,7 @@ pub const Module = struct {
         };
     }
 
-    pub fn emit_block(module: *Module, function: *Global, block: *llvm.BasicBlock) void {
+    pub fn emit_block(module: *Module, block: *llvm.BasicBlock) void {
         const maybe_current_block = module.llvm.builder.get_insert_block();
 
         var emit_branch = false;
@@ -4227,18 +4420,18 @@ pub const Module = struct {
         if (maybe_current_block != null and maybe_current_block.?.get_parent() != null) {
             module.llvm.builder.insert_basic_block_after_insert_block(block);
         } else {
-            function.variable.storage.?.llvm.?.to_function().append_basic_block(block);
+            module.current_function.?.variable.storage.?.llvm.?.to_function().append_basic_block(block);
         }
 
         module.llvm.builder.position_at_end(block);
     }
 
-    pub fn emit_va_arg(module: *Module, function: *Global, value: *Value, left_llvm: ?*llvm.Value, left_type: ?*Type) *llvm.Value {
+    pub fn emit_va_arg(module: *Module, value: *Value, left_llvm: ?*llvm.Value, left_type: ?*Type) *llvm.Value {
         switch (value.bb) {
             .intrinsic => |intrinsic| switch (intrinsic) {
                 .va_arg => |va_arg| {
                     const raw_va_list_type = module.get_va_list_type();
-                    module.emit_value(function, va_arg.list, .memory);
+                    module.emit_value(va_arg.list, .memory);
                     const uint64 = module.integer_type(64, false);
                     uint64.resolve(module);
                     const va_list = module.llvm.builder.create_gep(.{
@@ -4280,7 +4473,7 @@ pub const Module = struct {
                             const in_mem_block = module.llvm.context.create_basic_block("va_arg.in_mem", null);
                             const end_block = module.llvm.context.create_basic_block("va_arg.end", null);
                             _ = module.llvm.builder.create_conditional_branch(in_regs, in_reg_block, in_mem_block);
-                            module.emit_block(function, in_reg_block);
+                            module.emit_block(in_reg_block);
 
                             const reg_save_area = module.create_load(.{ .type = va_list_struct.bb.structure.fields[3].type, .value = module.llvm.builder.create_struct_gep(va_list_struct_llvm, va_list, 3), .alignment = 16 });
 
@@ -4318,10 +4511,10 @@ pub const Module = struct {
 
                             _ = module.llvm.builder.create_branch(end_block);
 
-                            module.emit_block(function, in_mem_block);
+                            module.emit_block(in_mem_block);
 
                             const memory_address = Abi.SystemV.emit_va_arg_from_memory(module, va_list, va_list_struct, va_arg.type);
-                            module.emit_block(function, end_block);
+                            module.emit_block(end_block);
 
                             const values = &.{ register_address, memory_address };
                             const blocks = &.{ in_reg_block, in_mem_block };
@@ -4347,7 +4540,7 @@ pub const Module = struct {
         }
     }
 
-    pub fn emit_call(module: *Module, function: *Global, value: *Value, left_llvm: ?*llvm.Value, left_type: ?*Type) *llvm.Value {
+    pub fn emit_call(module: *Module, value: *Value, left_llvm: ?*llvm.Value, left_type: ?*Type) *llvm.Value {
         switch (value.bb) {
             .call => |call| {
                 const raw_function_type = call.function_type;
@@ -4447,12 +4640,11 @@ pub const Module = struct {
                             const coerce_to_type = argument_abi.get_coerce_to_type();
                             coerce_to_type.resolve(module);
                             if (coerce_to_type.bb != .structure and semantic_argument_type.is_abi_equal(coerce_to_type, module) and argument_abi.attributes.direct.offset == 0) {
-                                module.emit_value(function, semantic_argument_value, .memory);
-                                var v = switch (argument_abi.semantic_type.get_evaluation_kind()) {
+                                module.emit_value(semantic_argument_value, .memory);
+                                const v = switch (argument_abi.semantic_type.get_evaluation_kind()) {
                                     .aggregate => @trap(),
                                     else => semantic_argument_value,
                                 };
-                                _ = &v;
 
                                 if (!coerce_to_type.is_abi_equal(v.type.?, module)) {
                                     switch (v.type.?) {
@@ -4494,10 +4686,10 @@ pub const Module = struct {
                                             if (src.bb == .variable_reference) {
                                                 src.type = null;
                                                 src.kind = .left;
-                                                module.analyze_value_type(function, src, .{});
+                                                module.analyze_value_type(src, .{});
                                             }
                                         }
-                                        module.emit_value(function, semantic_argument_value, .memory);
+                                        module.emit_value(semantic_argument_value, .memory);
                                         const destination_size = coerce_to_type.get_byte_size();
                                         const source_size = argument_abi.semantic_type.get_byte_size();
 
@@ -4579,9 +4771,9 @@ pub const Module = struct {
                                         assert(src.type.?.bb == .structure);
                                         src.type = null;
                                         src.kind = .left;
-                                        module.analyze_value_type(function, src, .{});
+                                        module.analyze_value_type(src, .{});
                                     }
-                                    module.emit_value(function, src, .memory);
+                                    module.emit_value(src, .memory);
 
                                     assert(src.type.?.bb == .pointer);
                                     const source_type = src.type.?.bb.pointer.type;
@@ -4616,7 +4808,7 @@ pub const Module = struct {
                                     @trap();
                                 } else if (abi_argument_type.bb == .pointer and abi_argument_type.bb.pointer.type == semantic_argument_value.type) switch (semantic_argument_value.is_constant()) {
                                     true => {
-                                        module.emit_value(function, semantic_argument_value, .memory);
+                                        module.emit_value(semantic_argument_value, .memory);
                                         const global_variable = module.llvm.module.create_global_variable(.{
                                             .linkage = .InternalLinkage,
                                             .name = "conststruct", // TODO: format properly
@@ -4635,7 +4827,7 @@ pub const Module = struct {
                                             const pointer_type = module.get_pointer_type(.{ .type = semantic_argument_value.type.? });
                                             semantic_argument_value.type = null;
                                             semantic_argument_value.kind = .left;
-                                            module.analyze(function, semantic_argument_value, .{ .type = pointer_type }, .memory);
+                                            module.analyze(semantic_argument_value, .{ .type = pointer_type }, .memory);
                                             llvm_abi_argument_value_buffer[abi_argument_count] = semantic_argument_value.llvm.?;
                                             abi_argument_count += 1;
                                             break :indirect;
@@ -4646,7 +4838,7 @@ pub const Module = struct {
                                                 .type = semantic_argument_value.type.?,
                                             });
                                             const pointer_type = module.get_pointer_type(.{ .type = semantic_argument_value.type.? });
-                                            module.emit_assignment(function, alloca, pointer_type, semantic_argument_value);
+                                            module.emit_assignment(alloca, pointer_type, semantic_argument_value);
                                             llvm_abi_argument_value_buffer[abi_argument_count] = alloca;
                                             abi_argument_count += 1;
                                             break :indirect;
@@ -4768,11 +4960,10 @@ pub const Module = struct {
                             assert(left_type.?.bb.pointer.type == return_type_abi.semantic_type);
                             break :b l;
                         } else module.create_alloca(.{ .type = return_type_abi.semantic_type, .name = "coerce" });
-                        var destination_pointer = switch (return_type_abi.attributes.direct.offset == 0) {
+                        const destination_pointer = switch (return_type_abi.attributes.direct.offset == 0) {
                             true => coerce_alloca,
                             false => @trap(),
                         };
-                        _ = &destination_pointer;
 
                         var destination_type = return_type_abi.semantic_type;
                         if (return_type_abi.semantic_type.bb.structure.fields.len > 0) {
@@ -4964,6 +5155,9 @@ pub const Module = struct {
                     } else undefined;
 
                     if (global.variable.storage.?.bb == .function) {
+                        module.current_function = global;
+                        defer module.current_function = null;
+
                         global.variable.storage.?.bb.function.scope.llvm = function_scope;
 
                         const entry_block = module.llvm.context.create_basic_block("entry", llvm_function_value);
@@ -5000,11 +5194,7 @@ pub const Module = struct {
                         }
 
                         const argument_variables = global.variable.storage.?.bb.function.arguments;
-                        for (
-                            //semantic_arguments,
-                            function_type.argument_abis, argument_variables, 0..) |
-                        //semantic_argument,
-                        argument_abi, argument_variable, argument_index| {
+                        for (function_type.argument_abis, argument_variables, 0..) |argument_abi, argument_variable, argument_index| {
                             const abi_arguments = llvm_abi_arguments[argument_abi.abi_start..][0..argument_abi.abi_count];
                             assert(argument_abi.flags.kind == .ignore or argument_abi.abi_count != 0);
                             const argument_abi_kind = argument_abi.flags.kind;
@@ -5154,13 +5344,13 @@ pub const Module = struct {
                                 const always_preserve = true;
                                 const flags = llvm.DI.Flags{};
                                 const parameter_variable = module.llvm.di_builder.create_parameter_variable(function_scope, argument_variable.variable.name, @intCast(argument_index + 1), module.llvm.file, argument_variable.variable.line, argument_type.llvm.debug.?, always_preserve, flags);
-                                const inlined_at: ?*llvm.DI.Metadata = null; // TODO
+                                const inlined_at: ?*llvm.DI.Metadata = @ptrCast(module.inline_at_debug_location);
                                 const debug_location = llvm.DI.create_debug_location(module.llvm.context, argument_variable.variable.line, argument_variable.variable.column, function_scope, inlined_at);
                                 _ = module.llvm.di_builder.insert_declare_record_at_end(semantic_argument_storage, parameter_variable, module.llvm.di_builder.null_expression(), debug_location, entry_block);
                             }
                         }
 
-                        module.analyze_block(global, global.variable.storage.?.bb.function.main_block);
+                        module.analyze_block(global.variable.storage.?.bb.function.main_block);
 
                         // Handle jump to the return block
                         const return_block = global.variable.storage.?.bb.function.return_block orelse module.report_error();
@@ -5172,7 +5362,7 @@ pub const Module = struct {
                                 return_block.to_value().replace_all_uses_with(current_basic_block.to_value());
                                 return_block.delete();
                             } else {
-                                module.emit_block(global, return_block);
+                                module.emit_block(return_block);
                             }
                         } else {
                             var is_reachable = false;
@@ -5190,7 +5380,7 @@ pub const Module = struct {
                             }
 
                             if (!is_reachable) {
-                                module.emit_block(global, return_block);
+                                module.emit_block(return_block);
                             }
                         }
 
@@ -5266,7 +5456,7 @@ pub const Module = struct {
                     }
                 },
                 .global => {
-                    module.analyze(null, global.variable.initial_value, .{ .type = global.variable.type }, .memory);
+                    module.analyze(global.variable.initial_value, .{ .type = global.variable.type }, .memory);
 
                     if (global.variable.type == null) {
                         global.variable.type = global.variable.initial_value.type;
@@ -5418,12 +5608,12 @@ pub const Module = struct {
         type: ?*Type = null,
     };
 
-    pub fn analyze(module: *Module, function: ?*Global, value: *Value, analysis: ValueAnalysis, type_kind: Type.Kind) void {
-        module.analyze_value_type(function, value, analysis);
-        module.emit_value(function, value, type_kind);
+    pub fn analyze(module: *Module, value: *Value, analysis: ValueAnalysis, type_kind: Type.Kind) void {
+        module.analyze_value_type(value, analysis);
+        module.emit_value(value, type_kind);
     }
 
-    pub fn analyze_binary(module: *Module, function: ?*Global, left: *Value, right: *Value, is_boolean: bool, analysis: ValueAnalysis) void {
+    pub fn analyze_binary(module: *Module, left: *Value, right: *Value, is_boolean: bool, analysis: ValueAnalysis) void {
         const is_left_constant = left.is_constant();
         const is_right_constant = right.is_constant();
         if (analysis.type == null) {
@@ -5436,25 +5626,25 @@ pub const Module = struct {
 
         if (is_boolean or analysis.type == null) {
             if (is_left_constant) {
-                module.analyze_value_type(function, right, .{});
-                module.analyze_value_type(function, left, .{
+                module.analyze_value_type(right, .{});
+                module.analyze_value_type(left, .{
                     .type = right.type,
                 });
             } else if (is_right_constant) {
-                module.analyze_value_type(function, left, .{});
-                module.analyze_value_type(function, right, .{
+                module.analyze_value_type(left, .{});
+                module.analyze_value_type(right, .{
                     .type = left.type,
                 });
             } else {
-                module.analyze_value_type(function, left, .{});
-                module.analyze_value_type(function, right, .{ .type = left.type });
+                module.analyze_value_type(left, .{});
+                module.analyze_value_type(right, .{ .type = left.type });
             }
         } else if (!is_boolean and analysis.type != null) {
             const expected_type = analysis.type.?;
-            module.analyze_value_type(function, left, .{
+            module.analyze_value_type(left, .{
                 .type = expected_type,
             });
-            module.analyze_value_type(function, right, .{
+            module.analyze_value_type(right, .{
                 .type = expected_type,
             });
         } else {
@@ -5484,19 +5674,82 @@ pub const Module = struct {
         }
     }
 
-    pub fn analyze_value_type(module: *Module, function: ?*Global, value: *Value, analysis: ValueAnalysis) void {
+    const BlockCopy = struct {
+        source: *LexicalBlock,
+        destination: *LexicalBlock,
+    };
+
+    pub fn copy_block(module: *Module, parent_scope: *Scope, block_copy: BlockCopy) void {
+        const source = block_copy.source;
+        const destination = block_copy.destination;
+        destination.* = .{
+            .locals = .initialize(),
+            .statements = .initialize(),
+            .scope = .{
+                .line = source.scope.line,
+                .column = source.scope.column,
+                .kind = source.scope.kind,
+                .parent = parent_scope,
+            },
+        };
+        const scope = &destination.scope;
+
+        for (source.statements.get_slice()) |old_statement| {
+            const new_statement = module.statements.add();
+            _ = destination.statements.append(new_statement);
+            new_statement.line = old_statement.line;
+            new_statement.column = old_statement.column;
+
+            new_statement.bb = switch (old_statement.bb) {
+                .@"return" => |rv| if (rv) |v| .{
+                    .@"return" = module.clone_value(scope, v),
+                } else old_statement.bb,
+                else => @trap(),
+            };
+        }
+    }
+
+    pub fn clone_value(module: *Module, scope: *Scope, source: *Value) *Value {
+        const result = switch (source.bb) {
+            .variable_reference => |variable| module.reference_identifier(scope, variable.name, source.kind),
+            else => blk: {
+                const result = module.values.add();
+
+                result.* = .{
+                    .bb = switch (source.bb) {
+                        .binary => |binary| .{
+                            .binary = .{
+                                .left = module.clone_value(scope, binary.left),
+                                .right = module.clone_value(scope, binary.right),
+                                .id = binary.id,
+                            },
+                        },
+                        .variable_reference => unreachable,
+                        else => @trap(),
+                    },
+                    .kind = source.kind,
+                };
+
+                break :blk result;
+            },
+        };
+
+        return result;
+    }
+
+    pub fn analyze_value_type(module: *Module, value: *Value, analysis: ValueAnalysis) void {
         assert(value.type == null);
         assert(value.llvm == null);
 
         const value_type = switch (value.bb) {
             .unary => |unary| b: {
                 if (unary.id.is_boolean()) {
-                    module.analyze_value_type(function, unary.value, .{});
+                    module.analyze_value_type(unary.value, .{});
                     const boolean_type = module.integer_type(1, false);
                     module.typecheck(analysis, boolean_type);
                     break :b boolean_type;
                 } else {
-                    module.analyze_value_type(function, unary.value, analysis);
+                    module.analyze_value_type(unary.value, analysis);
                     const result_type = unary.value.type.?;
                     module.typecheck(analysis, result_type);
 
@@ -5506,7 +5759,7 @@ pub const Module = struct {
             .binary => |binary| blk: {
                 const is_boolean = binary.id.is_boolean();
 
-                module.analyze_binary(function, binary.left, binary.right, is_boolean, analysis);
+                module.analyze_binary(binary.left, binary.right, is_boolean, analysis);
                 module.check_types(binary.left.type.?, binary.right.type.?);
 
                 const result_type = if (is_boolean) module.integer_type(1, false) else binary.left.type.?;
@@ -5555,7 +5808,7 @@ pub const Module = struct {
             },
             .@"unreachable" => module.noreturn_type,
             .call => |*call| blk: {
-                module.analyze_value_type(function, call.callable, .{});
+                module.analyze_value_type(call.callable, .{});
                 call.function_type = switch (call.callable.bb) {
                     .variable_reference => |variable| switch (variable.type.?.bb) {
                         .function => variable.type.?,
@@ -5580,12 +5833,12 @@ pub const Module = struct {
                 }
 
                 for (declaration_argument_types, call.arguments[0..declaration_argument_types.len]) |argument_type, call_argument| {
-                    module.analyze_value_type(function, call_argument, .{ .type = argument_type });
+                    module.analyze_value_type(call_argument, .{ .type = argument_type });
                     module.check_types(argument_type, call_argument.type.?);
                 }
 
                 for (call.arguments[declaration_argument_types.len..]) |call_argument| {
-                    module.analyze_value_type(function, call_argument, .{});
+                    module.analyze_value_type(call_argument, .{});
                 }
 
                 const semantic_return_type = call.function_type.bb.function.semantic_return_type;
@@ -5611,7 +5864,7 @@ pub const Module = struct {
                 .enum_name => |enum_value| blk: {
                     const string_type = module.get_slice_type(.{ .type = module.integer_type(8, false) });
                     module.typecheck(analysis, string_type);
-                    module.analyze_value_type(function, enum_value, .{});
+                    module.analyze_value_type(enum_value, .{});
                     const enum_type = enum_value.type.?;
                     switch (enum_type.bb) {
                         .enumerator => |*enumerator| {
@@ -5691,7 +5944,7 @@ pub const Module = struct {
                 },
                 .extend => |extended_value| blk: {
                     const expected_type = analysis.type orelse module.report_error();
-                    module.analyze_value_type(function, extended_value, .{});
+                    module.analyze_value_type(extended_value, .{});
                     assert(extended_value.type != null);
                     const destination_type = expected_type;
                     const source_type = extended_value.type.?;
@@ -5719,7 +5972,7 @@ pub const Module = struct {
                     break :blk integer_max_type;
                 },
                 .int_from_enum => |enum_value| blk: {
-                    module.analyze_value_type(function, enum_value, .{});
+                    module.analyze_value_type(enum_value, .{});
                     if (enum_value.type.?.bb != .enumerator) {
                         module.report_error();
                     }
@@ -5729,7 +5982,7 @@ pub const Module = struct {
                     break :blk enum_backing_type;
                 },
                 .int_from_pointer => |pointer_value| blk: {
-                    module.analyze_value_type(function, pointer_value, .{});
+                    module.analyze_value_type(pointer_value, .{});
                     assert(pointer_value.type != null);
                     if (pointer_value.type.?.bb != .pointer) {
                         module.report_error();
@@ -5745,7 +5998,7 @@ pub const Module = struct {
                     if (expected_type.bb != .pointer) {
                         module.report_error();
                     }
-                    module.analyze_value_type(function, pointer_value, .{});
+                    module.analyze_value_type(pointer_value, .{});
                     const pointer_type = pointer_value.type orelse module.report_error();
 
                     if (pointer_type == expected_type) {
@@ -5759,9 +6012,9 @@ pub const Module = struct {
                     break :blk expected_type;
                 },
                 .select => |select| blk: {
-                    module.analyze_value_type(function, select.condition, .{});
+                    module.analyze_value_type(select.condition, .{});
                     const is_boolean = false; // This indicates that the result type must not be a boolean type
-                    module.analyze_binary(function, select.true_value, select.false_value, is_boolean, analysis);
+                    module.analyze_binary(select.true_value, select.false_value, is_boolean, analysis);
 
                     const left_type = select.true_value.type.?;
                     const right_type = select.false_value.type.?;
@@ -6038,14 +6291,14 @@ pub const Module = struct {
 
                     const string_type = module.get_slice_type(.{ .type = module.integer_type(8, false) });
 
-                    module.analyze_value_type(function, string_to_enum.string_value, .{ .type = string_type });
+                    module.analyze_value_type(string_to_enum.string_value, .{ .type = string_type });
 
                     break :blk result_type;
                 },
                 .truncate => |value_to_truncate| blk: {
                     // TODO: better typechecking
                     const expected_type = analysis.type orelse module.report_error();
-                    module.analyze_value_type(function, value_to_truncate, .{});
+                    module.analyze_value_type(value_to_truncate, .{});
                     if (expected_type.get_bit_size() >= value_to_truncate.type.?.get_bit_size()) {
                         module.report_error();
                     }
@@ -6053,7 +6306,7 @@ pub const Module = struct {
                 },
                 .trap => module.noreturn_type,
                 .va_arg => |va_arg| blk: {
-                    module.analyze_value_type(function, va_arg.list, .{
+                    module.analyze_value_type(va_arg.list, .{
                         .type = module.get_pointer_type(.{ .type = module.get_va_list_type() }),
                     });
                     const result_type = va_arg.type;
@@ -6061,7 +6314,7 @@ pub const Module = struct {
                     break :blk result_type;
                 },
                 .va_end => |va_list| blk: {
-                    module.analyze_value_type(function, va_list, .{
+                    module.analyze_value_type(va_list, .{
                         .type = module.get_pointer_type(.{ .type = module.get_va_list_type() }),
                     });
                     const result_type = module.void_type;
@@ -6076,7 +6329,7 @@ pub const Module = struct {
                 else => @trap(),
             },
             .dereference => |dereferenced_value| blk: {
-                module.analyze_value_type(function, dereferenced_value, .{});
+                module.analyze_value_type(dereferenced_value, .{});
 
                 const dereference_type = switch (value.kind) {
                     .left => @trap(),
@@ -6091,7 +6344,7 @@ pub const Module = struct {
                 if (slice_expression.array_like.kind != .left) {
                     module.report_error();
                 }
-                module.analyze_value_type(function, slice_expression.array_like, .{});
+                module.analyze_value_type(slice_expression.array_like, .{});
 
                 const pointer_type = slice_expression.array_like.type.?;
                 if (pointer_type.bb != .pointer) {
@@ -6119,7 +6372,7 @@ pub const Module = struct {
                 const index_type = module.integer_type(64, false);
 
                 if (slice_expression.start) |start| {
-                    module.analyze_value_type(function, start, .{ .type = index_type });
+                    module.analyze_value_type(start, .{ .type = index_type });
 
                     if (start.type.?.bb != .integer) {
                         module.report_error();
@@ -6127,7 +6380,7 @@ pub const Module = struct {
                 }
 
                 if (slice_expression.end) |end| {
-                    module.analyze_value_type(function, end, .{ .type = index_type });
+                    module.analyze_value_type(end, .{ .type = index_type });
 
                     if (end.type.?.bb != .integer) {
                         module.report_error();
@@ -6137,7 +6390,7 @@ pub const Module = struct {
                 break :blk slice_type;
             },
             .field_access => |field_access| blk: {
-                module.analyze_value_type(function, field_access.aggregate, .{});
+                module.analyze_value_type(field_access.aggregate, .{});
                 const field_name = field_access.field;
 
                 const field_type = switch (field_access.aggregate.kind) {
@@ -6203,13 +6456,13 @@ pub const Module = struct {
                 break :blk field_type;
             },
             .array_expression => |array_expression| blk: {
-                module.analyze_value_type(function, array_expression.index, .{
+                module.analyze_value_type(array_expression.index, .{
                     .type = module.integer_type(64, false),
                 });
 
                 // Overwrite side of the expression
                 array_expression.array_like.kind = .left;
-                module.analyze_value_type(function, array_expression.array_like, .{});
+                module.analyze_value_type(array_expression.array_like, .{});
                 const element_type = switch (array_expression.array_like.kind) {
                     .left => switch (array_expression.array_like.type.?.bb) {
                         .pointer => |pointer| switch (pointer.type.bb) {
@@ -6250,7 +6503,7 @@ pub const Module = struct {
                         is_ordered = is_ordered and declaration_index == initialization_index;
                         const field = &bits.fields[declaration_index];
                         const declaration_type = field.type;
-                        module.analyze_value_type(function, field_value, .{ .type = declaration_type });
+                        module.analyze_value_type(field_value, .{ .type = declaration_type });
                         is_constant = is_constant and field_value.is_constant();
                     }
 
@@ -6270,7 +6523,7 @@ pub const Module = struct {
                         is_ordered = is_ordered and declaration_index == initialization_index;
                         const field = &structure.fields[declaration_index];
                         const declaration_type = field.type;
-                        module.analyze_value_type(function, field_value, .{ .type = declaration_type });
+                        module.analyze_value_type(field_value, .{ .type = declaration_type });
                         is_constant = is_constant and field_value.is_constant();
                     }
 
@@ -6303,7 +6556,7 @@ pub const Module = struct {
 
                         var is_constant = true;
                         for (array_initialization.values) |v| {
-                            module.analyze_value_type(function, v, .{
+                            module.analyze_value_type(v, .{
                                 .type = array.element_type,
                             });
                             is_constant = is_constant and v.is_constant();
@@ -6326,7 +6579,7 @@ pub const Module = struct {
                     var is_constant = true;
 
                     for (array_initialization.values) |v| {
-                        module.analyze_value_type(function, v, .{
+                        module.analyze_value_type(v, .{
                             .type = expected_type,
                         });
 
@@ -6361,6 +6614,68 @@ pub const Module = struct {
             },
             // TODO: further typecheck: avoid void, noreturn, etc
             .zero => analysis.type orelse module.report_error(),
+            .macro_instantiation => |*macro_instantiation| blk: {
+                const current_function = module.current_function orelse module.report_error();
+                module.current_function = null;
+                defer module.current_function = current_function;
+
+                const current_macro_instantiation = module.current_macro_instantiation;
+                assert(current_macro_instantiation == null);
+                module.current_macro_instantiation = value;
+                defer module.current_macro_instantiation = current_macro_instantiation;
+
+                const macro = module.macros.add();
+                const old_macro = macro_instantiation.macro;
+                macro_instantiation.macro = macro;
+
+                const arguments = module.arena.allocate(*Local, old_macro.arguments.len);
+                macro.* = .{
+                    .arguments = arguments,
+                    .argument_types = old_macro.argument_types,
+                    .generic_arguments = &.{}, // TODO
+                    .return_type = old_macro.return_type,
+                    .block = undefined,
+                    .name = old_macro.name,
+                    .scope = old_macro.scope,
+                };
+
+                for (old_macro.arguments, arguments) |old_argument, *new_argument| {
+                    const argument = module.locals.add();
+                    argument.* = .{
+                        .variable = .{
+                            .initial_value = undefined,
+                            .type = old_argument.variable.type,
+                            .scope = &macro.scope,
+                            .name = old_argument.variable.name,
+                            .line = old_argument.variable.line,
+                            .column = old_argument.variable.column,
+                        },
+                        .argument_index = old_argument.argument_index,
+                    };
+                    new_argument.* = argument;
+                }
+
+                macro.block = module.lexical_blocks.add();
+
+                const old_block = old_macro.block;
+                module.copy_block(&macro.scope, .{
+                    .source = old_block,
+                    .destination = macro.block,
+                });
+
+                const result_type = macro.return_type;
+                module.typecheck(analysis, result_type);
+
+                if (macro.argument_types.len != macro.arguments.len) {
+                    module.report_error();
+                }
+
+                for (macro_instantiation.arguments, macro.argument_types) |argument, argument_type| {
+                    module.analyze_value_type(argument, .{ .type = argument_type });
+                }
+
+                break :blk result_type;
+            },
             else => @trap(),
         };
 
@@ -6452,7 +6767,7 @@ pub const Module = struct {
         }
     }
 
-    pub fn emit_slice_expression(module: *Module, function: ?*Global, value: *Value) struct { *llvm.Value, *llvm.Value } {
+    pub fn emit_slice_expression(module: *Module, value: *Value) struct { *llvm.Value, *llvm.Value } {
         const value_type = value.type.?;
         assert(value_type.is_slice());
 
@@ -6467,7 +6782,7 @@ pub const Module = struct {
         switch (value.bb) {
             .slice_expression => |slice_expression| {
                 assert(slice_expression.array_like.kind == .left);
-                module.emit_value(function, slice_expression.array_like, .memory);
+                module.emit_value(slice_expression.array_like, .memory);
 
                 const pointer_type = slice_expression.array_like.type.?;
                 assert(pointer_type.bb == .pointer);
@@ -6478,11 +6793,11 @@ pub const Module = struct {
                 } else false;
 
                 if (slice_expression.start) |start| {
-                    module.emit_value(function, start, .memory);
+                    module.emit_value(start, .memory);
                 }
 
                 if (slice_expression.end) |end| {
-                    module.emit_value(function, end, .memory);
+                    module.emit_value(end, .memory);
                 }
 
                 switch (sliceable_type.bb) {
@@ -6552,7 +6867,7 @@ pub const Module = struct {
         }
     }
 
-    pub fn emit_value(module: *Module, function: ?*Global, value: *Value, type_kind: Type.Kind) void {
+    pub fn emit_value(module: *Module, value: *Value, type_kind: Type.Kind) void {
         const value_type = value.type orelse unreachable;
         assert(value.llvm == null);
         value_type.resolve(module);
@@ -6562,31 +6877,31 @@ pub const Module = struct {
             .unary => |unary| switch (unary.id) {
                 .@"-" => blk: {
                     const unary_value = unary.value.llvm orelse b: {
-                        module.emit_value(function, unary.value, type_kind);
+                        module.emit_value(unary.value, type_kind);
                         break :b unary.value.llvm orelse unreachable;
                     };
                     break :blk module.negate_llvm_value(unary_value, unary.value.is_constant());
                 },
                 .@"&" => blk: {
                     assert(value_type == unary.value.type);
-                    module.emit_value(function, unary.value, type_kind);
+                    module.emit_value(unary.value, type_kind);
                     break :blk unary.value.llvm orelse unreachable;
                 },
                 .@"!" => switch (unary.value.type == value_type) {
                     true => b: {
-                        module.emit_value(function, unary.value, type_kind);
+                        module.emit_value(unary.value, type_kind);
                         break :b module.llvm.builder.create_not(unary.value.llvm.?);
                     },
                     false => switch (unary.value.type.?.bb) {
                         .pointer => b: {
-                            module.emit_value(function, unary.value, type_kind);
+                            module.emit_value(unary.value, type_kind);
                             break :b module.llvm.builder.create_integer_compare(.eq, unary.value.llvm.?, unary.value.type.?.llvm.abi.?.get_zero().to_value());
                         },
                         else => @trap(),
                     },
                 },
                 .@"~" => b: {
-                    module.emit_value(function, unary.value, type_kind);
+                    module.emit_value(unary.value, type_kind);
                     break :b module.llvm.builder.create_not(unary.value.llvm.?);
                 },
                 else => @trap(),
@@ -6603,7 +6918,7 @@ pub const Module = struct {
                         else => unreachable,
                     };
                     const left = if (binary.left.llvm) |left_llvm| left_llvm else b: {
-                        module.emit_value(function, binary.left, .abi);
+                        module.emit_value(binary.left, .abi);
                         break :b binary.left.llvm orelse unreachable;
                     };
                     const left_condition = switch (binary.left.type.?.bb) {
@@ -6613,7 +6928,7 @@ pub const Module = struct {
                         },
                         else => @trap(),
                     };
-                    const llvm_function = function.?.variable.storage.?.llvm.?.to_function();
+                    const llvm_function = module.current_function.?.variable.storage.?.llvm.?.to_function();
                     const current_bb = module.llvm.builder.get_insert_block().?;
                     const right_block = module.llvm.context.create_basic_block(switch (op) {
                         inline else => |o| @tagName(o) ++ ".right",
@@ -6631,7 +6946,7 @@ pub const Module = struct {
 
                     module.llvm.builder.position_at_end(right_block);
                     const right = if (binary.right.llvm) |right_llvm| right_llvm else b: {
-                        module.emit_value(function, binary.right, .abi);
+                        module.emit_value(binary.right, .abi);
                         break :b binary.right.llvm orelse unreachable;
                     };
                     const right_condition = switch (binary.left.type.?.bb) {
@@ -6657,11 +6972,11 @@ pub const Module = struct {
                     };
                 } else {
                     const left = if (binary.left.llvm) |left_llvm| left_llvm else b: {
-                        module.emit_value(function, binary.left, .abi);
+                        module.emit_value(binary.left, .abi);
                         break :b binary.left.llvm orelse unreachable;
                     };
                     const right = if (binary.right.llvm) |right_llvm| right_llvm else b: {
-                        module.emit_value(function, binary.right, .abi);
+                        module.emit_value(binary.right, .abi);
                         break :b binary.right.llvm orelse unreachable;
                     };
                     const result = switch (value_type.bb) {
@@ -6776,14 +7091,14 @@ pub const Module = struct {
                 .enum_name => |enum_value| blk: {
                     const enum_type = enum_value.type.?;
                     const enum_to_string = enum_type.bb.enumerator.enum_to_string.?;
-                    module.emit_value(function, enum_value, .abi);
+                    module.emit_value(enum_value, .abi);
                     const call = module.llvm.builder.create_call(enum_to_string.get_type(), enum_to_string.to_value(), &.{enum_value.llvm.?});
                     call.to_instruction().to_call_base().set_calling_convention(.fast);
                     break :blk call;
                 },
                 .extend => |extended_value| blk: {
                     if (extended_value.llvm == null) {
-                        module.emit_value(function, extended_value, type_kind);
+                        module.emit_value(extended_value, type_kind);
                     }
                     const llvm_value = extended_value.llvm orelse unreachable;
                     const destination_type = value_type.llvm.abi.?;
@@ -6805,20 +7120,20 @@ pub const Module = struct {
                     break :blk constant_integer.to_value();
                 },
                 .int_from_enum => |enum_value| blk: {
-                    module.emit_value(function, enum_value, type_kind);
+                    module.emit_value(enum_value, type_kind);
                     break :blk enum_value.llvm.?;
                 },
                 .int_from_pointer => |pointer_value| blk: {
-                    module.emit_value(function, pointer_value, type_kind);
+                    module.emit_value(pointer_value, type_kind);
                     const int = module.llvm.builder.create_ptr_to_int(pointer_value.llvm.?, value_type.llvm.abi.?);
                     break :blk int;
                 },
                 .pointer_cast => |pointer_value| blk: {
-                    module.emit_value(function, pointer_value, type_kind);
+                    module.emit_value(pointer_value, type_kind);
                     break :blk pointer_value.llvm.?;
                 },
                 .select => |select| blk: {
-                    module.emit_value(function, select.condition, type_kind);
+                    module.emit_value(select.condition, type_kind);
                     const condition = switch (select.condition.type.?.bb) {
                         .integer => |integer| switch (integer.bit_count) {
                             1 => select.condition.llvm.?,
@@ -6826,13 +7141,13 @@ pub const Module = struct {
                         },
                         else => @trap(),
                     };
-                    module.emit_value(function, select.true_value, type_kind);
-                    module.emit_value(function, select.false_value, type_kind);
+                    module.emit_value(select.true_value, type_kind);
+                    module.emit_value(select.false_value, type_kind);
                     const result = module.llvm.builder.create_select(condition, select.true_value.llvm.?, select.false_value.llvm.?);
                     break :blk result;
                 },
                 .string_to_enum => |string_to_enum| blk: {
-                    module.emit_value(function, string_to_enum.string_value, type_kind);
+                    module.emit_value(string_to_enum.string_value, type_kind);
                     const s2e = string_to_enum.enum_type.bb.enumerator.string_to_enum orelse unreachable;
                     const first_field = module.llvm.builder.create_extract_value(string_to_enum.string_value.llvm.?, 0);
                     const second_field = module.llvm.builder.create_extract_value(string_to_enum.string_value.llvm.?, 1);
@@ -6855,15 +7170,15 @@ pub const Module = struct {
                 },
                 .truncate => |value_to_truncate| blk: {
                     if (value_to_truncate.llvm == null) {
-                        module.emit_value(function, value_to_truncate, type_kind);
+                        module.emit_value(value_to_truncate, type_kind);
                     }
                     const llvm_value = value_to_truncate.llvm orelse unreachable;
                     const truncate = module.llvm.builder.create_truncate(llvm_value, value_type.llvm.abi.?);
                     break :blk truncate;
                 },
-                .va_arg => module.emit_va_arg(function.?, value, null, null),
+                .va_arg => module.emit_va_arg(value, null, null),
                 .va_end => |va_list| blk: {
-                    module.emit_value(function, va_list, .memory);
+                    module.emit_value(va_list, .memory);
 
                     const intrinsic_id = module.llvm.intrinsic_table.va_end;
                     const argument_types: []const *llvm.Type = &.{module.llvm.pointer_type};
@@ -6876,7 +7191,7 @@ pub const Module = struct {
                 else => @trap(),
             },
             .dereference => |dereferenceable_value| blk: {
-                module.emit_value(function, dereferenceable_value, .memory);
+                module.emit_value(dereferenceable_value, .memory);
                 const result = switch (value.kind) {
                     .left => @trap(),
                     .right => module.create_load(.{
@@ -6887,7 +7202,7 @@ pub const Module = struct {
                 };
                 break :blk result;
             },
-            .call => module.emit_call(function.?, value, null, null),
+            .call => module.emit_call(value, null, null),
             .array_initialization => |array_initialization| switch (array_initialization.is_constant) {
                 true => blk: {
                     assert(value.kind == .right);
@@ -6896,7 +7211,7 @@ pub const Module = struct {
                     const llvm_values = llvm_value_buffer[0..element_count];
 
                     for (array_initialization.values, llvm_values) |v, *llvm_value| {
-                        module.emit_value(function, v, .memory);
+                        module.emit_value(v, .memory);
                         llvm_value.* = v.llvm.?.to_constant();
                     }
 
@@ -6922,7 +7237,7 @@ pub const Module = struct {
                                 .aggregate = alloca,
                                 .indices = &.{ u64_zero, uint64.get_constant(i, 0).to_value() },
                             });
-                            module.emit_assignment(function.?, alloca_gep, pointer_to_element_type, v);
+                            module.emit_assignment(alloca_gep, pointer_to_element_type, v);
                         }
 
                         break :blk alloca;
@@ -6934,8 +7249,8 @@ pub const Module = struct {
                 .left => switch (array_expression.array_like.type.?.bb) {
                     .pointer => |pointer| switch (pointer.type.bb) {
                         .array => |array| blk: {
-                            module.emit_value(function, array_expression.array_like, .memory);
-                            module.emit_value(function, array_expression.index, .memory);
+                            module.emit_value(array_expression.array_like, .memory);
+                            module.emit_value(array_expression.index, .memory);
                             const uint64 = module.integer_type(64, false);
                             uint64.resolve(module);
                             const zero_index = uint64.llvm.abi.?.to_integer().get_constant(0, @intFromBool(false)).to_value();
@@ -6954,8 +7269,8 @@ pub const Module = struct {
                         },
                         .structure => |structure| blk: {
                             assert(structure.is_slice);
-                            module.emit_value(function, array_expression.array_like, .memory);
-                            module.emit_value(function, array_expression.index, .memory);
+                            module.emit_value(array_expression.array_like, .memory);
+                            module.emit_value(array_expression.index, .memory);
                             const pointer_type = structure.fields[0].type;
                             const element_type = pointer_type.bb.pointer.type;
                             element_type.resolve(module);
@@ -6975,8 +7290,8 @@ pub const Module = struct {
                             };
                         },
                         .pointer => |real_pointer| blk: {
-                            module.emit_value(function, array_expression.array_like, .memory);
-                            module.emit_value(function, array_expression.index, .memory);
+                            module.emit_value(array_expression.array_like, .memory);
+                            module.emit_value(array_expression.index, .memory);
                             // TODO: consider not emitting the and doing straight GEP?
                             const pointer_load = module.create_load(.{ .type = pointer.type, .value = array_expression.array_like.llvm.? });
                             const element_type = real_pointer.type;
@@ -6999,8 +7314,8 @@ pub const Module = struct {
                 },
                 .right => switch (array_expression.array_like.type.?.bb) {
                     .pointer => |pointer| blk: {
-                        module.emit_value(function, array_expression.array_like, .memory);
-                        module.emit_value(function, array_expression.index, .memory);
+                        module.emit_value(array_expression.array_like, .memory);
+                        module.emit_value(array_expression.index, .memory);
                         const gep = module.llvm.builder.create_gep(.{
                             .type = pointer.type.llvm.memory.?,
                             .aggregate = array_expression.array_like.llvm.?,
@@ -7015,8 +7330,8 @@ pub const Module = struct {
                     },
                     .structure => |structure| switch (structure.is_slice) {
                         true => blk: {
-                            module.emit_value(function, array_expression.array_like, .memory);
-                            module.emit_value(function, array_expression.index, .memory);
+                            module.emit_value(array_expression.array_like, .memory);
+                            module.emit_value(array_expression.index, .memory);
                             const pointer_extract = module.llvm.builder.create_extract_value(array_expression.array_like.llvm.?, 0);
                             const element_type = structure.fields[0].type.bb.pointer.type;
                             const gep = module.llvm.builder.create_gep(.{
@@ -7046,7 +7361,7 @@ pub const Module = struct {
                 break :blk llvm_value.to_value();
             },
             .field_access => |field_access| blk: {
-                module.emit_value(function, field_access.aggregate, .memory);
+                module.emit_value(field_access.aggregate, .memory);
                 const field_name = field_access.field;
                 switch (field_access.aggregate.kind) {
                     .left => {
@@ -7137,7 +7452,7 @@ pub const Module = struct {
                                 }
                             } else unreachable;
                             const field = &bits.fields[declaration_index];
-                            module.emit_value(function, field_value, .memory);
+                            module.emit_value(field_value, .memory);
                             const extended = module.llvm.builder.create_zero_extend(field_value.llvm.?, llvm_type);
                             const shl = module.llvm.builder.create_shl(extended, llvm_type.to_integer().get_constant(field.bit_offset, 0).to_value());
                             const or_value = module.llvm.builder.create_or(result, shl);
@@ -7152,7 +7467,7 @@ pub const Module = struct {
                         const constants = constant_buffer[0..structure.fields.len];
 
                         for (aggregate_initialization.values, constants[0..aggregate_initialization.values.len]) |field_value, *constant| {
-                            module.emit_value(function, field_value, .memory);
+                            module.emit_value(field_value, .memory);
                             constant.* = field_value.llvm.?.to_constant();
                         }
 
@@ -7184,7 +7499,7 @@ pub const Module = struct {
             },
             .slice_expression => blk: {
                 assert(value.kind == .right);
-                const slice_values = module.emit_slice_expression(function, value);
+                const slice_values = module.emit_slice_expression(value);
                 const slice_poison = value_type.llvm.memory.?.get_poison();
                 const slice_pointer = module.llvm.builder.create_insert_value(slice_poison, slice_values[0], 0);
                 const slice_length = module.llvm.builder.create_insert_value(slice_pointer, slice_values[1], 1);
@@ -7219,18 +7534,110 @@ pub const Module = struct {
                 const slice_value = slice_length;
                 break :blk slice_value;
             },
+            .macro_instantiation => |*macro_instantiation| blk: {
+                const current_function = module.current_function orelse module.report_error();
+                module.current_function = null;
+                defer module.current_function = current_function;
+
+                const current_macro_instantiation = module.current_macro_instantiation;
+                assert(current_macro_instantiation == null);
+                module.current_macro_instantiation = value;
+                defer module.current_macro_instantiation = current_macro_instantiation;
+
+                const macro = macro_instantiation.macro;
+
+                switch (macro.is_generic()) {
+                    true => {
+                        @trap();
+                    },
+                    false => {
+                        for (macro_instantiation.arguments) |call_argument| {
+                            module.emit_value(call_argument, .abi);
+                        }
+
+                        var debug_argument_type_buffer: [64 + 1]*llvm.DI.Type = undefined;
+                        const semantic_debug_argument_types = debug_argument_type_buffer[0 .. macro.argument_types.len + 1];
+                        semantic_debug_argument_types[0] = macro.return_type.llvm.debug.?;
+
+                        for (macro.argument_types, semantic_debug_argument_types[1..][0..macro.argument_types.len]) |argument_type, *debug_argument_type| {
+                            debug_argument_type.* = argument_type.llvm.debug.?;
+                        }
+
+                        module.llvm.builder.set_current_debug_location(null);
+
+                        const caller_debug_location = llvm.DI.create_debug_location(module.llvm.context, macro.scope.line, macro.scope.column, macro_instantiation.parent_scope.llvm.?, null);
+                        module.inline_at_debug_location = caller_debug_location;
+                        defer module.inline_at_debug_location = null;
+
+                        const subroutine_type_flags = llvm.DI.Flags{};
+                        const subroutine_type = module.llvm.di_builder.create_subroutine_type(module.llvm.file, semantic_debug_argument_types, subroutine_type_flags);
+                        const local_to_unit = true;
+                        const is_definition = true;
+
+                        const flags: llvm.DI.Flags = .{};
+                        const subprogram = module.llvm.di_builder.create_function(module.scope.llvm.?, macro.name, macro.name, module.llvm.file, macro.scope.line, subroutine_type, local_to_unit, is_definition, macro.scope.line, flags, module.build_mode.is_optimized());
+                        macro.scope.llvm = @ptrCast(subprogram);
+                        module.llvm.builder.set_current_debug_location(llvm.DI.create_debug_location(module.llvm.context, macro.scope.line, macro.scope.column, macro.scope.llvm.?, @ptrCast(caller_debug_location)));
+
+                        const llvm_function = current_function.variable.storage.?.llvm.?.to_function();
+                        const macro_entry_block = module.llvm.context.create_basic_block("macro.entry", llvm_function);
+                        _ = module.llvm.builder.create_branch(macro_entry_block);
+                        module.llvm.builder.position_at_end(macro_entry_block);
+
+                        const macro_return_alloca = module.create_alloca(.{
+                            .type = macro.return_type,
+                            .name = "macro.return",
+                        });
+                        macro_instantiation.return_alloca = macro_return_alloca;
+
+                        const macro_return_block = module.llvm.context.create_basic_block("macro.return_block", llvm_function);
+                        macro_instantiation.return_block = macro_return_block;
+
+                        for (macro_instantiation.arguments, macro.arguments) |call_argument, declaration_argument| {
+                            const inlined_at = caller_debug_location;
+                            const debug_location = llvm.DI.create_debug_location(module.llvm.context, declaration_argument.variable.line, declaration_argument.variable.column, macro.scope.llvm.?, @ptrCast(inlined_at));
+                            module.llvm.builder.set_current_debug_location(debug_location);
+                            module.emit_local_storage(declaration_argument, debug_location);
+                            const storage = declaration_argument.variable.storage.?.llvm.?;
+
+                            switch (declaration_argument.variable.type.?.get_evaluation_kind()) {
+                                .scalar => {
+                                    _ = module.create_store(.{
+                                        .source_value = call_argument.llvm.?,
+                                        .destination_value = storage,
+                                        .type = declaration_argument.variable.type.?,
+                                    });
+                                },
+                                .aggregate => @trap(),
+                                .complex => @trap(),
+                            }
+                        }
+
+                        module.analyze_block(macro.block);
+                        module.llvm.builder.position_at_end(macro_return_block);
+
+                        const load = module.create_load(.{
+                            .type = macro.return_type,
+                            .value = macro_return_alloca,
+                            .type_kind = type_kind,
+                        });
+
+                        break :blk load;
+                    },
+                }
+            },
             else => @trap(),
         };
 
         value.llvm = llvm_value;
     }
 
-    pub fn analyze_statement(module: *Module, function: *Global, scope: *Scope, statement: *Statement, last_line: *u32, last_column: *u32, last_statement_debug_location: **llvm.DI.Location) void {
-        const llvm_function = function.variable.storage.?.llvm.?.to_function();
-        const current_function = &function.variable.storage.?.bb.function;
+    pub fn analyze_statement(module: *Module, scope: *Scope, statement: *Statement, last_line: *u32, last_column: *u32, last_statement_debug_location: **llvm.DI.Location) void {
+        const parent_function_global = if (module.current_function) |cf| cf else if (module.current_macro_instantiation) |mi| mi.bb.macro_instantiation.function else module.report_error();
+        const llvm_function = parent_function_global.variable.storage.?.llvm.?.to_function();
         if (module.has_debug_info) {
             if (statement.line != last_line.* or statement.column != last_column.*) {
-                const inlined_at: ?*llvm.DI.Metadata = null; // TODO
+                const inlined_at: ?*llvm.DI.Metadata = @ptrCast(module.inline_at_debug_location);
                 last_statement_debug_location.* = llvm.DI.create_debug_location(module.llvm.context, statement.line, statement.column, scope.llvm.?, inlined_at);
                 module.llvm.builder.set_current_debug_location(last_statement_debug_location.*);
                 last_line.* = statement.line;
@@ -7240,37 +7647,51 @@ pub const Module = struct {
 
         switch (statement.bb) {
             .@"return" => |rv| {
-                const function_type = &function.variable.storage.?.type.?.bb.pointer.type.bb.function;
-                const return_abi = function_type.return_abi;
+                if (module.current_function != null) {
+                    const function_type = parent_function_global.variable.storage.?.type.?.bb.pointer.type.bb.function;
+                    const return_abi = function_type.return_abi;
 
-                switch (return_abi.semantic_type.bb) {
-                    .void => {
-                        if (rv != null) {
-                            module.report_error();
-                        }
-                    },
-                    .noreturn => module.report_error(),
-                    else => {
-                        const return_value = rv orelse module.report_error();
-                        module.analyze(function, return_value, .{
-                            .type = return_abi.semantic_type,
-                        }, .memory);
+                    switch (return_abi.semantic_type.bb) {
+                        .void => {
+                            if (rv != null) {
+                                module.report_error();
+                            }
+                        },
+                        .noreturn => module.report_error(),
+                        else => {
+                            const return_value = rv orelse module.report_error();
+                            module.analyze(return_value, .{
+                                .type = return_abi.semantic_type,
+                            }, .memory);
 
-                        if (module.has_debug_info) {
-                            module.llvm.builder.set_current_debug_location(last_statement_debug_location.*);
-                        }
+                            if (module.has_debug_info) {
+                                module.llvm.builder.set_current_debug_location(last_statement_debug_location.*);
+                            }
 
-                        // Clang equivalent: CodeGenFunction::EmitReturnStmt
-                        const return_alloca = function.variable.storage.?.bb.function.return_alloca orelse module.report_error();
+                            // Clang equivalent: CodeGenFunction::EmitReturnStmt
+                            const return_alloca = module.current_function.?.variable.storage.?.bb.function.return_alloca orelse module.report_error();
 
-                        switch (return_abi.semantic_type.get_evaluation_kind()) {
-                            .scalar => {
-                                switch (return_abi.flags.kind) {
-                                    .indirect => {
-                                        @trap();
-                                    },
-                                    else => {
-                                        // assert(!return_value.?.lvalue);
+                            switch (return_abi.semantic_type.get_evaluation_kind()) {
+                                .scalar => {
+                                    switch (return_abi.flags.kind) {
+                                        .indirect => {
+                                            @trap();
+                                        },
+                                        else => {
+                                            // assert(!return_value.?.lvalue);
+                                            assert(return_value.type.?.is_abi_equal(return_abi.semantic_type, module));
+                                            _ = module.create_store(.{
+                                                .source_value = return_value.llvm.?,
+                                                .destination_value = return_alloca,
+                                                .type = return_abi.semantic_type,
+                                            });
+                                        },
+                                    }
+                                },
+                                // TODO: handcoded code, might be wrong
+                                .aggregate => switch (return_value.kind) {
+                                    .left => @trap(),
+                                    .right => {
                                         assert(return_value.type.?.is_abi_equal(return_abi.semantic_type, module));
                                         _ = module.create_store(.{
                                             .source_value = return_value.llvm.?,
@@ -7278,97 +7699,94 @@ pub const Module = struct {
                                             .type = return_abi.semantic_type,
                                         });
                                     },
-                                }
-                            },
-                            // TODO: handcoded code, might be wrong
-                            .aggregate => switch (return_value.kind) {
-                                .left => @trap(),
-                                .right => {
-                                    assert(return_value.type.?.is_abi_equal(return_abi.semantic_type, module));
-                                    _ = module.create_store(.{
-                                        .source_value = return_value.llvm.?,
-                                        .destination_value = return_alloca,
-                                        .type = return_abi.semantic_type,
-                                    });
+                                    // switch (return_value.lvalue) {
+                                    //     true => {
+                                    //         const abi_alignment = return_abi.semantic_type.get_byte_alignment();
+                                    //         const abi_size = return_abi.semantic_type.get_byte_size();
+                                    //         switch (return_abi.flags.kind) {
+                                    //             .indirect => {
+                                    //                 _ = module.llvm.builder.create_memcpy(
+                                    //                     unreachable, //return_alloca,
+                                    //                     abi_alignment, return_value.llvm, abi_alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(abi_size, @intFromBool(false)).to_value());
+                                    //             },
+                                    //             else => {
+                                    //                 switch (return_abi.semantic_type.get_evaluation_kind()) {
+                                    //                     .aggregate => {
+                                    //                         // TODO: this is 100% wrong, fix
+                                    //                         assert(abi_alignment == return_abi.semantic_type.get_byte_alignment());
+                                    //                         assert(abi_size == return_abi.semantic_type.get_byte_size());
+                                    //                         _ = module.llvm.builder.create_memcpy(
+                                    //                             unreachable, //return_alloca,
+                                    //                             abi_alignment, return_value.llvm, abi_alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(abi_size, @intFromBool(false)).to_value());
+                                    //                     },
+                                    //                     .scalar => {
+                                    //                         const destination_type = return_abi.semantic_type;
+                                    //                         const source_type = return_abi.semantic_type;
+                                    //                         assert(return_value.type == source_type);
+                                    //                         const ret_val = switch (return_value.type.bb) {
+                                    //                             .pointer => return_value.llvm,
+                                    //                             // TODO: this feels hacky
+                                    //                             else => switch (return_value.lvalue) {
+                                    //                                 true => module.create_load(.{ .type = return_value.type, .value = return_value.llvm }),
+                                    //                                 false => return_value.llvm,
+                                    //                             },
+                                    //                         };
+                                    //                         _ = module.create_store(.{ .source_value = ret_val, .source_type = source_type,
+                                    //                             .destination_value = unreachable, //return_alloca,
+                                    //                             .destination_type = destination_type });
+                                    //                     },
+                                    //                     .complex => @trap(),
+                                    //                 }
+                                    //             },
+                                    //         }
+                                    //     },
+                                    //     false => {
+                                    //     },
+                                    // }
                                 },
-                                // switch (return_value.lvalue) {
-                                //     true => {
-                                //         const abi_alignment = return_abi.semantic_type.get_byte_alignment();
-                                //         const abi_size = return_abi.semantic_type.get_byte_size();
-                                //         switch (return_abi.flags.kind) {
-                                //             .indirect => {
-                                //                 _ = module.llvm.builder.create_memcpy(
-                                //                     unreachable, //return_alloca,
-                                //                     abi_alignment, return_value.llvm, abi_alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(abi_size, @intFromBool(false)).to_value());
-                                //             },
-                                //             else => {
-                                //                 switch (return_abi.semantic_type.get_evaluation_kind()) {
-                                //                     .aggregate => {
-                                //                         // TODO: this is 100% wrong, fix
-                                //                         assert(abi_alignment == return_abi.semantic_type.get_byte_alignment());
-                                //                         assert(abi_size == return_abi.semantic_type.get_byte_size());
-                                //                         _ = module.llvm.builder.create_memcpy(
-                                //                             unreachable, //return_alloca,
-                                //                             abi_alignment, return_value.llvm, abi_alignment, module.integer_type(64, false).llvm.handle.to_integer().get_constant(abi_size, @intFromBool(false)).to_value());
-                                //                     },
-                                //                     .scalar => {
-                                //                         const destination_type = return_abi.semantic_type;
-                                //                         const source_type = return_abi.semantic_type;
-                                //                         assert(return_value.type == source_type);
-                                //                         const ret_val = switch (return_value.type.bb) {
-                                //                             .pointer => return_value.llvm,
-                                //                             // TODO: this feels hacky
-                                //                             else => switch (return_value.lvalue) {
-                                //                                 true => module.create_load(.{ .type = return_value.type, .value = return_value.llvm }),
-                                //                                 false => return_value.llvm,
-                                //                             },
-                                //                         };
-                                //                         _ = module.create_store(.{ .source_value = ret_val, .source_type = source_type,
-                                //                             .destination_value = unreachable, //return_alloca,
-                                //                             .destination_type = destination_type });
-                                //                     },
-                                //                     .complex => @trap(),
-                                //                 }
-                                //             },
-                                //         }
-                                //     },
-                                //     false => {
-                                //     },
-                                // }
-                            },
-                            .complex => @trap(),
-                        }
-                    },
+                                .complex => @trap(),
+                            }
+                        },
+                    }
+
+                    const return_block = module.current_function.?.variable.storage.?.bb.function.return_block orelse module.report_error();
+
+                    _ = module.llvm.builder.create_branch(return_block);
+                    _ = module.llvm.builder.clear_insertion_position();
+                } else if (module.current_macro_instantiation) |m| {
+                    const macro_instantiation = &m.bb.macro_instantiation;
+                    const macro = macro_instantiation.macro;
+                    module.analyze_value_type(rv.?, .{ .type = macro.return_type });
+                    module.emit_assignment(macro_instantiation.return_alloca, module.get_pointer_type(.{ .type = macro.return_type }), rv.?);
+                    _ = module.llvm.builder.create_branch(macro_instantiation.return_block);
+                    module.llvm.builder.clear_insertion_position();
+                } else {
+                    module.report_error();
                 }
-
-                const return_block = function.variable.storage.?.bb.function.return_block orelse module.report_error();
-
-                _ = module.llvm.builder.create_branch(return_block);
-                _ = module.llvm.builder.clear_insertion_position();
             },
             .local => |local| {
                 const expected_type = local.variable.type;
                 assert(local.variable.storage == null);
-                module.analyze_value_type(function, local.variable.initial_value, .{ .type = local.variable.type });
+                module.analyze_value_type(local.variable.initial_value, .{ .type = local.variable.type });
                 local.variable.resolve_type(local.variable.initial_value.type.?);
                 if (expected_type) |lvt| assert(lvt == local.variable.type);
                 module.emit_local_storage(local, last_statement_debug_location.*);
 
-                module.emit_assignment(function, local.variable.storage.?.llvm.?, local.variable.storage.?.type.?, local.variable.initial_value);
+                module.emit_assignment(local.variable.storage.?.llvm.?, local.variable.storage.?.type.?, local.variable.initial_value);
             },
             .assignment => |assignment| {
-                module.analyze(function, assignment.left, .{}, .memory);
+                module.analyze(assignment.left, .{}, .memory);
                 switch (assignment.kind) {
                     .@"=" => {
-                        module.analyze_value_type(function, assignment.right, .{ .type = assignment.left.type.?.bb.pointer.type });
-                        module.emit_assignment(function, assignment.left.llvm.?, assignment.left.type.?, assignment.right);
+                        module.analyze_value_type(assignment.right, .{ .type = assignment.left.type.?.bb.pointer.type });
+                        module.emit_assignment(assignment.left.llvm.?, assignment.left.type.?, assignment.right);
                     },
                     else => |kind| {
                         const pointer_type = assignment.left.type.?.bb.pointer;
                         const element_type = pointer_type.type;
                         assert(element_type.get_evaluation_kind() == .scalar);
                         const load = module.create_load(.{ .type = element_type, .value = assignment.left.llvm.?, .alignment = pointer_type.alignment });
-                        module.analyze(function, assignment.right, .{ .type = element_type }, .memory);
+                        module.analyze(assignment.right, .{ .type = element_type }, .memory);
                         const a = load;
                         const b = assignment.right.llvm.?;
                         const right = switch (kind) {
@@ -7444,14 +7862,14 @@ pub const Module = struct {
                 }
             },
             .expression => |expression_value| {
-                module.analyze(function, expression_value, .{}, .memory);
+                module.analyze(expression_value, .{}, .memory);
             },
             .@"if" => |if_statement| {
                 const taken_block = module.llvm.context.create_basic_block("if.true", llvm_function);
                 const not_taken_block = module.llvm.context.create_basic_block("if.false", llvm_function);
                 const exit_block = module.llvm.context.create_basic_block("if.end", llvm_function);
 
-                module.analyze(function, if_statement.condition, .{}, .abi);
+                module.analyze(if_statement.condition, .{}, .abi);
                 const llvm_condition = switch (if_statement.condition.type.?.bb) {
                     .integer => |integer| if (integer.bit_count != 1) module.llvm.builder.create_integer_compare(.ne, if_statement.condition.llvm.?, if_statement.condition.type.?.llvm.abi.?.get_zero().to_value()) else if_statement.condition.llvm.?,
                     .pointer => module.llvm.builder.create_integer_compare(.ne, if_statement.condition.llvm.?, if_statement.condition.type.?.llvm.abi.?.get_zero().to_value()),
@@ -7461,19 +7879,14 @@ pub const Module = struct {
                 _ = module.llvm.builder.create_conditional_branch(llvm_condition, taken_block, not_taken_block);
                 module.llvm.builder.position_at_end(taken_block);
 
-                const previous_exit_block = current_function.exit_block;
-                defer current_function.exit_block = previous_exit_block;
-
-                current_function.exit_block = exit_block;
-
-                module.analyze_statement(function, scope, if_statement.if_statement, last_line, last_line, last_statement_debug_location);
+                module.analyze_statement(scope, if_statement.if_statement, last_line, last_line, last_statement_debug_location);
                 if (module.llvm.builder.get_insert_block() != null) {
                     _ = module.llvm.builder.create_branch(exit_block);
                 }
 
                 module.llvm.builder.position_at_end(not_taken_block);
                 if (if_statement.else_statement) |else_statement| {
-                    module.analyze_statement(function, scope, else_statement, last_line, last_line, last_statement_debug_location);
+                    module.analyze_statement(scope, else_statement, last_line, last_line, last_statement_debug_location);
                 }
 
                 if (module.llvm.builder.get_insert_block() != null) {
@@ -7487,7 +7900,7 @@ pub const Module = struct {
                 _ = module.llvm.builder.create_branch(loop_entry_block);
                 module.llvm.builder.position_at_end(loop_entry_block);
 
-                module.analyze(function, while_loop.condition, .{}, .abi);
+                module.analyze(while_loop.condition, .{}, .abi);
 
                 const boolean_type = module.integer_type(1, false);
                 const condition_value = switch (while_loop.condition.type == boolean_type) {
@@ -7503,7 +7916,7 @@ pub const Module = struct {
                 _ = module.llvm.builder.create_conditional_branch(condition_value, loop_body_block, loop_end_block);
                 module.llvm.builder.position_at_end(loop_body_block);
 
-                module.analyze_block(function, while_loop.block);
+                module.analyze_block(while_loop.block);
 
                 if (module.llvm.builder.get_insert_block() != null) {
                     _ = module.llvm.builder.create_branch(loop_entry_block);
@@ -7520,13 +7933,9 @@ pub const Module = struct {
                 module.llvm.builder.position_at_end(loop_end_block);
             },
             .@"switch" => |switch_statement| {
-                const previous_exit_block = current_function.exit_block;
-                defer current_function.exit_block = previous_exit_block;
-
                 const exit_block = module.llvm.context.create_basic_block("exit_block", llvm_function);
-                current_function.exit_block = exit_block;
 
-                module.analyze(function, switch_statement.discriminant, .{}, .abi);
+                module.analyze(switch_statement.discriminant, .{}, .abi);
                 const switch_discriminant_type = switch_statement.discriminant.type.?;
 
                 switch (switch_discriminant_type.bb) {
@@ -7544,7 +7953,7 @@ pub const Module = struct {
                                 else_clause_index = clause_index;
                             } else {
                                 for (clause.values) |v| {
-                                    module.analyze(function, v, .{ .type = switch_discriminant_type }, .abi);
+                                    module.analyze(v, .{ .type = switch_discriminant_type }, .abi);
                                     if (!v.is_constant()) {
                                         module.report_error();
                                     }
@@ -7562,17 +7971,14 @@ pub const Module = struct {
                                 switch_instruction.add_case(v.llvm.?, clause.basic_block);
                             }
 
-                            current_function.exit_block = exit_block;
                             module.llvm.builder.position_at_end(clause.basic_block);
-                            module.analyze_block(function, clause.block);
+                            module.analyze_block(clause.block);
                             if (module.llvm.builder.get_insert_block() != null) {
                                 all_blocks_terminated = false;
                                 _ = module.llvm.builder.create_branch(exit_block);
                                 module.llvm.builder.clear_insertion_position();
                             }
                         }
-
-                        current_function.exit_block = exit_block;
 
                         if (else_clause_index == null) {
                             module.llvm.builder.position_at_end(else_block);
@@ -7587,7 +7993,7 @@ pub const Module = struct {
                     else => @trap(),
                 }
             },
-            .block => |child_block| module.analyze_block(function, child_block),
+            .block => |child_block| module.analyze_block(child_block),
             .for_each => |*for_loop| {
                 if (module.has_debug_info) {
                     const lexical_block = module.llvm.di_builder.create_lexical_block(for_loop.scope.parent.?.llvm.?, module.llvm.file, for_loop.scope.line, for_loop.scope.column);
@@ -7600,7 +8006,7 @@ pub const Module = struct {
 
                 for (for_loop.locals, for_loop.left_values, for_loop.right_values) |local, kind, right| {
                     assert(right.kind == .left);
-                    module.analyze_value_type(function, right, .{});
+                    module.analyze_value_type(right, .{});
                     const pointer_type = right.type.?;
                     if (pointer_type.bb != .pointer) {
                         module.report_error();
@@ -7621,7 +8027,7 @@ pub const Module = struct {
                     };
                     local.variable.type = local_type;
                     module.emit_local_storage(local, last_statement_debug_location.*);
-                    module.emit_value(function, right, .memory);
+                    module.emit_value(right, .memory);
                 }
 
                 const length_value = for (for_loop.right_values) |right| {
@@ -7716,7 +8122,7 @@ pub const Module = struct {
                     }
                 }
 
-                module.analyze_statement(function, &for_loop.scope, for_loop.predicate, last_line, last_column, last_statement_debug_location);
+                module.analyze_statement(&for_loop.scope, for_loop.predicate, last_line, last_column, last_statement_debug_location);
 
                 if (module.llvm.builder.get_insert_block() != null) {
                     _ = module.llvm.builder.create_branch(loop_continue_block);
@@ -7733,7 +8139,7 @@ pub const Module = struct {
         }
     }
 
-    pub fn analyze_block(module: *Module, function: *Global, block: *LexicalBlock) void {
+    pub fn analyze_block(module: *Module, block: *LexicalBlock) void {
         if (module.has_debug_info) {
             const lexical_block = module.llvm.di_builder.create_lexical_block(block.scope.parent.?.llvm.?, module.llvm.file, block.scope.line, block.scope.column);
             block.scope.llvm = lexical_block.to_scope();
@@ -7744,11 +8150,11 @@ pub const Module = struct {
         var last_statement_debug_location: *llvm.DI.Location = undefined;
 
         for (block.statements.get_slice()) |statement| {
-            module.analyze_statement(function, &block.scope, statement, &last_line, &last_column, &last_statement_debug_location);
+            module.analyze_statement(&block.scope, statement, &last_line, &last_column, &last_statement_debug_location);
         }
     }
 
-    fn emit_assignment(module: *Module, function: *Global, left_llvm: *llvm.Value, left_type: *Type, right: *Value) void {
+    fn emit_assignment(module: *Module, left_llvm: *llvm.Value, left_type: *Type, right: *Value) void {
         assert(right.llvm == null);
         const pointer_type = left_type;
         const value_type = right.type.?;
@@ -7759,7 +8165,7 @@ pub const Module = struct {
 
         switch (value_type.get_evaluation_kind()) {
             .scalar => {
-                module.emit_value(function, right, .memory);
+                module.emit_value(right, .memory);
                 _ = module.create_store(.{
                     .source_value = right.llvm.?,
                     .destination_value = left_llvm,
@@ -7770,7 +8176,7 @@ pub const Module = struct {
             .aggregate => switch (right.bb) {
                 .array_initialization => |array_initialization| switch (array_initialization.is_constant) {
                     true => {
-                        module.emit_value(function, right, .memory);
+                        module.emit_value(right, .memory);
                         const global_variable = module.llvm.module.create_global_variable(.{
                             .linkage = .InternalLinkage,
                             .name = "constarray", // TODO: format properly
@@ -7789,7 +8195,7 @@ pub const Module = struct {
                 },
                 .aggregate_initialization => |aggregate_initialization| switch (aggregate_initialization.is_constant) {
                     true => {
-                        module.emit_value(function, right, .memory);
+                        module.emit_value(right, .memory);
                         const global_variable = module.llvm.module.create_global_variable(.{
                             .linkage = .InternalLinkage,
                             .name = "conststruct", // TODO: format properly
@@ -7818,7 +8224,7 @@ pub const Module = struct {
                             max_field_index = @max(field_index, max_field_index);
                             const field = &fields[field_index];
                             const destination_pointer = module.llvm.builder.create_struct_gep(value_type.llvm.abi.?.to_struct(), left_llvm, @intCast(field_index));
-                            module.emit_assignment(function, destination_pointer, module.get_pointer_type(.{ .type = field.type }), initialization_value);
+                            module.emit_assignment(destination_pointer, module.get_pointer_type(.{ .type = field.type }), initialization_value);
                         }
 
                         if (aggregate_initialization.zero) {
@@ -7895,7 +8301,7 @@ pub const Module = struct {
                 },
                 .intrinsic => |intrinsic| switch (intrinsic) {
                     .enum_name => {
-                        module.emit_value(function, right, .memory);
+                        module.emit_value(right, .memory);
                         _ = module.create_store(.{
                             .type = right.type.?,
                             .source_value = right.llvm.?,
@@ -7904,7 +8310,7 @@ pub const Module = struct {
                     },
                     .select => {
                         if (right.type.?.get_evaluation_kind() == .scalar or right.type.?.is_slice()) {
-                            module.emit_value(function, right, .memory);
+                            module.emit_value(right, .memory);
                             _ = module.create_store(.{
                                 .type = right.type.?,
                                 .source_value = right.llvm.?,
@@ -7915,7 +8321,7 @@ pub const Module = struct {
                         }
                     },
                     .string_to_enum => |string_to_enum| {
-                        module.emit_value(function, string_to_enum.string_value, .memory);
+                        module.emit_value(string_to_enum.string_value, .memory);
                         const s2e = string_to_enum.enum_type.bb.enumerator.string_to_enum orelse unreachable;
                         const first_field = module.llvm.builder.create_extract_value(string_to_enum.string_value.llvm.?, 0);
                         const second_field = module.llvm.builder.create_extract_value(string_to_enum.string_value.llvm.?, 1);
@@ -7939,7 +8345,7 @@ pub const Module = struct {
                         _ = module.llvm.builder.create_call(intrinsic_function_type, intrinsic_function, argument_values);
                     },
                     .va_arg => {
-                        const result = module.emit_va_arg(function, right, left_llvm, left_type);
+                        const result = module.emit_va_arg(right, left_llvm, left_type);
                         switch (result == left_llvm) {
                             true => {},
                             false => switch (value_type.get_evaluation_kind()) {
@@ -7954,7 +8360,7 @@ pub const Module = struct {
                     else => @trap(),
                 },
                 .call => {
-                    const result = module.emit_call(function, right, left_llvm, left_type);
+                    const result = module.emit_call(right, left_llvm, left_type);
                     assert(result == left_llvm);
                     // if (result != left.llvm) {
                     //     const call_ret_type_ev_kind = right.type.?.get_evaluation_kind();
@@ -7969,7 +8375,7 @@ pub const Module = struct {
                     // }
                 },
                 .slice_expression => {
-                    const slice_values = module.emit_slice_expression(function, right);
+                    const slice_values = module.emit_slice_expression(right);
                     const slice_pointer_type = value_type.bb.structure.fields[0].type;
                     _ = module.create_store(.{
                         .source_value = slice_values[0],
@@ -8006,7 +8412,7 @@ pub const Module = struct {
                             break @intCast(field_index);
                         }
                     } else module.report_error();
-                    module.emit_value(function, field_access.aggregate, .memory);
+                    module.emit_value(field_access.aggregate, .memory);
                     const gep = module.llvm.builder.create_struct_gep(struct_type.llvm.abi.?.to_struct(), field_access.aggregate.llvm.?, field_index);
                     const uint64 = module.integer_type(64, false);
                     _ = module.llvm.builder.create_memcpy(left_llvm, pointer_type.bb.pointer.alignment, gep, value_type.get_byte_alignment(), uint64.llvm.abi.?.to_integer().get_constant(value_type.get_byte_size(), @intFromBool(false)).to_value());
@@ -8018,10 +8424,11 @@ pub const Module = struct {
         }
     }
 
-    pub fn emit_local_storage(module: *Module, local: *Local, statement_debug_location: *llvm.DI.Location) void {
+    pub fn emit_local_storage(module: *Module, local: *Local, maybe_statement_debug_location: ?*llvm.DI.Location) void {
         assert(local.variable.storage == null);
         const resolved_type = local.variable.type.?;
         resolved_type.resolve(module);
+
         const pointer_type = module.get_pointer_type(.{ .type = resolved_type });
         const storage = module.values.add();
         storage.* = .{
@@ -8033,19 +8440,23 @@ pub const Module = struct {
                 .name = local.variable.name,
             }),
         };
+
         if (module.has_debug_info) {
-            module.llvm.builder.set_current_debug_location(statement_debug_location);
-            const debug_type = resolved_type.llvm.debug.?;
-            const always_preserve = true;
-            // TODO:
-            const alignment = 0;
-            const flags = llvm.DI.Flags{};
-            const local_variable = module.llvm.di_builder.create_auto_variable(local.variable.scope.llvm.?, local.variable.name, module.llvm.file, local.variable.line, debug_type, always_preserve, flags, alignment);
-            const inlined_at: ?*llvm.DI.Metadata = null; // TODO
-            const debug_location = llvm.DI.create_debug_location(module.llvm.context, local.variable.line, local.variable.column, local.variable.scope.llvm.?, inlined_at);
-            _ = module.llvm.di_builder.insert_declare_record_at_end(storage.llvm.?, local_variable, module.llvm.di_builder.null_expression(), debug_location, module.llvm.builder.get_insert_block().?);
-            module.llvm.builder.set_current_debug_location(statement_debug_location);
+            if (maybe_statement_debug_location) |statement_debug_location| {
+                module.llvm.builder.set_current_debug_location(statement_debug_location);
+                const debug_type = resolved_type.llvm.debug.?;
+                const always_preserve = true;
+                const flags = llvm.DI.Flags{};
+                const inlined_at: ?*llvm.DI.Metadata = @ptrCast(module.inline_at_debug_location); // TODO
+
+                const scope = local.variable.scope.llvm.?;
+                const local_variable = if (local.argument_index) |argument_index| module.llvm.di_builder.create_parameter_variable(scope, local.variable.name, @intCast(argument_index + 1), module.llvm.file, local.variable.line, local.variable.type.?.llvm.debug.?, always_preserve, flags) else module.llvm.di_builder.create_auto_variable(scope, local.variable.name, module.llvm.file, local.variable.line, debug_type, always_preserve, flags, 0);
+                const debug_location = llvm.DI.create_debug_location(module.llvm.context, local.variable.line, local.variable.column, scope, inlined_at);
+                _ = module.llvm.di_builder.insert_declare_record_at_end(storage.llvm.?, local_variable, module.llvm.di_builder.null_expression(), debug_location, module.llvm.builder.get_insert_block().?);
+                module.llvm.builder.set_current_debug_location(statement_debug_location);
+            }
         }
+
         local.variable.storage = storage;
     }
 
@@ -9447,6 +9858,7 @@ pub fn compile(arena: *Arena, options: Options) void {
         .globals = globals,
         .locals = .initialize(),
         .values = values,
+        .macros = .initialize(),
         .pointer_types = .initialize(),
         .slice_types = .initialize(),
         .pair_struct_types = .initialize(),
