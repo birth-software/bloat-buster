@@ -897,6 +897,8 @@ pub const Builder = opaque {
         return builder.set_current_debug_location(null);
     }
 
+    pub const get_current_debug_location = api.LLVMGetCurrentDebugLocation2;
+
     pub const set_current_debug_location = api.LLVMSetCurrentDebugLocation2;
 
     pub fn create_integer_compare(builder: *Builder, predicate: IntPredicate, left: *Value, right: *Value) *Value {

@@ -323,4 +323,6 @@ const names = &[_][]const u8{
     "type_alias",
     "integer_formats",
     "return_small_struct",
+    "basic_macro",
+    "generic_macro",
 };

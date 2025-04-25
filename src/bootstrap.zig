@@ -207,18 +207,41 @@ pub const Global = struct {
     };
 };
 
-pub const GenericArgument = struct {
-    foo: u32,
+const ConstantArgument = struct {
+    kind: Kind,
+    index: u8,
+    const Kind = enum {
+        type,
+        value,
+    };
 };
 
 pub const Macro = struct {
     arguments: []const *Local,
     argument_types: []const *Type,
-    generic_arguments: []const GenericArgument,
+    constant_argument_names: []const []const u8,
+    constant_argument_values: []const *Value,
+    type_arguments: []const *Type,
+    constant_arguments: []const ConstantArgument,
     return_type: *Type,
     block: *LexicalBlock,
     name: []const u8,
     scope: Scope,
+    is_generic: bool,
+
+    pub const Instantiation = struct {
+        declaration: *Macro,
+        function: *Global,
+        declaration_arguments: []*Local,
+        instantiation_arguments: []const *Value,
+        constant_argument_values: []const *Value,
+        type_arguments: []*Type,
+        return_type: *Type,
+        block: *LexicalBlock,
+        return_alloca: *llvm.Value,
+        return_block: *llvm.BasicBlock,
+        scope: Scope,
+    };
 
     pub const Buffer = struct {
         buffer: lib.VirtualBuffer(Macro),
@@ -248,10 +271,6 @@ pub const Macro = struct {
             return globals.buffer.add();
         }
     };
-
-    pub fn is_generic(macro: *const Macro) bool {
-        return macro.generic_arguments.len != 0;
-    }
 };
 
 pub const ResolvedType = struct {
@@ -294,6 +313,7 @@ pub const Type = struct {
         vector,
         forward_declaration,
         alias: Type.Alias,
+        unresolved,
     },
     name: []const u8,
     llvm: LLVM = .{},
@@ -351,7 +371,7 @@ pub const Type = struct {
         };
     }
 
-    pub fn get_llvm(ty: *Type, kind: Kind) *llvm.Type {
+    pub fn get_llvm(ty: *Type, kind: Type.Kind) *llvm.Type {
         return switch (kind) {
             .abi => ty.llvm.abi.?,
             .memory => ty.llvm.memory.?,
@@ -837,15 +857,6 @@ pub const FieldAccess = struct {
     field: []const u8,
 };
 
-pub const MacroInstantiation = struct {
-    arguments: []const *Value,
-    macro: *Macro,
-    function: *Global,
-    parent_scope: *Scope,
-    return_alloca: *llvm.Value,
-    return_block: *llvm.BasicBlock,
-};
-
 pub const Value = struct {
     bb: union(enum) {
         external_function,
@@ -872,11 +883,11 @@ pub const Value = struct {
         @"unreachable",
         undefined,
         macro_reference: *Macro,
-        macro_instantiation: MacroInstantiation,
+        macro_instantiation: Macro.Instantiation,
     },
     type: ?*Type = null,
     llvm: ?*llvm.Value = null,
-    kind: Kind = .right,
+    kind: Value.Kind = .right,
 
     pub const SliceExpression = struct {
         array_like: *Value,
@@ -1009,7 +1020,7 @@ pub const Value = struct {
     };
 
     const Builder = struct {
-        kind: Kind = .right,
+        kind: Value.Kind = .right,
         precedence: Precedence = .none,
         left: ?*Value = null,
         token: Token = .none,
@@ -1033,7 +1044,7 @@ pub const Value = struct {
             return v;
         }
 
-        fn with_kind(vb: Builder, kind: Kind) Builder {
+        fn with_kind(vb: Builder, kind: Value.Kind) Builder {
             var v = vb;
             v.kind = kind;
             return v;
@@ -1093,7 +1104,7 @@ pub const Scope = struct {
     line: u32,
     column: u32,
     llvm: ?*llvm.DI.Scope = null,
-    kind: Kind,
+    kind: Scope.Kind,
     parent: ?*Scope,
 
     pub const Kind = enum {
@@ -1101,7 +1112,8 @@ pub const Scope = struct {
         function,
         local,
         for_each,
-        macro,
+        macro_declaration,
+        macro_instantiation,
     };
 };
 
@@ -3030,6 +3042,7 @@ pub const Module = struct {
                 },
                 .local => {
                     assert(scope.parent != null);
+                    assert(scope.parent.?.kind != .global);
                     const block: *LexicalBlock = @fieldParentPtr("scope", scope);
                     for (block.locals.get_slice()) |local| {
                         if (lib.string.equal(local.variable.name, identifier)) {
@@ -3046,10 +3059,19 @@ pub const Module = struct {
                         }
                     }
                 },
-                .macro => {
+                .macro_declaration => {
                     assert(scope.parent != null);
                     const macro: *Macro = @fieldParentPtr("scope", scope);
                     for (macro.arguments) |argument| {
+                        if (lib.string.equal(argument.variable.name, identifier)) {
+                            break :blk &argument.variable;
+                        }
+                    }
+                },
+                .macro_instantiation => {
+                    assert(scope.parent != null);
+                    const macro: *Macro.Instantiation = @fieldParentPtr("scope", scope);
+                    for (macro.declaration_arguments) |argument| {
                         if (lib.string.equal(argument.variable.name, identifier)) {
                             break :blk &argument.variable;
                         }
@@ -3538,39 +3560,123 @@ pub const Module = struct {
     // Array-like subscript
     fn rule_after_bracket(noalias module: *Module, scope: *Scope, value_builder: Value.Builder) *Value {
         const left = value_builder.left orelse module.report_error();
-        left.kind = .left;
         module.skip_space();
-        const is_start = !(module.content[module.offset] == '.' and module.content[module.offset + 1] == '.');
-        const start = if (is_start) module.parse_value(scope, .{}) else null;
-        const value = module.values.add();
-        value.* = .{
-            .bb = if (module.consume_character_if_match(right_bracket)) .{
-                .array_expression = .{
-                    .array_like = left,
-                    .index = start orelse module.report_error(),
-                },
-            } else blk: {
-                module.expect_character('.');
-                module.expect_character('.');
 
-                const end = switch (module.consume_character_if_match(right_bracket)) {
-                    true => null,
-                    false => b: {
-                        const end = module.parse_value(scope, .{});
-                        module.expect_character(right_bracket);
-                        break :b end;
-                    },
-                };
-                break :blk .{
-                    .slice_expression = .{
-                        .array_like = left,
-                        .start = start,
-                        .end = end,
+        const value = module.values.add();
+
+        switch (left.bb) {
+            .macro_reference => |macro| {
+                if (!macro.is_generic) {
+                    module.report_error();
+                }
+
+                const type_arguments = module.arena.allocate(*Type, macro.type_arguments.len);
+                var type_argument_count: u64 = 0;
+                const constant_values = module.arena.allocate(*Value, macro.constant_argument_values.len);
+                var constant_value_count: u64 = 0;
+                var constant_argument_count: u64 = 0;
+
+                while (true) {
+                    module.skip_space();
+
+                    if (module.consume_character_if_match(right_bracket)) {
+                        break;
+                    }
+
+                    const constant_argument = macro.constant_arguments[constant_argument_count];
+                    constant_argument_count += 1;
+
+                    switch (constant_argument.kind) {
+                        .value => {
+                            _ = &constant_value_count;
+                            @trap();
+                        },
+                        .type => {
+                            if (type_argument_count >= macro.type_arguments.len) {
+                                module.report_error();
+                            }
+
+                            if (constant_argument.index != type_argument_count) {
+                                module.report_error();
+                            }
+
+                            const argument_type = module.parse_type();
+                            type_arguments[constant_argument.index] = argument_type;
+
+                            type_argument_count += 1;
+                        },
+                    }
+
+                    module.skip_space();
+
+                    _ = module.consume_character_if_match(',');
+                }
+
+                module.skip_space();
+
+                module.expect_character(left_parenthesis);
+
+                const instantiation_arguments = module.parse_call_arguments(scope);
+
+                value.* = .{
+                    .bb = .{
+                        .macro_instantiation = .{
+                            .declaration = macro,
+                            .function = module.current_function.?,
+                            .declaration_arguments = &.{},
+                            .instantiation_arguments = instantiation_arguments,
+                            .constant_argument_values = constant_values,
+                            .type_arguments = type_arguments,
+                            .return_type = macro.return_type,
+                            .block = undefined,
+                            .return_alloca = undefined,
+                            .return_block = undefined,
+                            .scope = .{
+                                .line = macro.scope.line,
+                                .column = macro.scope.column,
+                                .kind = .macro_instantiation,
+                                .parent = scope,
+                            },
+                        },
                     },
                 };
             },
-            .kind = value_builder.kind,
-        };
+            else => {
+                left.kind = .left;
+
+                const is_start = !(module.content[module.offset] == '.' and module.content[module.offset + 1] == '.');
+                const start = if (is_start) module.parse_value(scope, .{}) else null;
+                value.* = .{
+                    .bb = if (module.consume_character_if_match(right_bracket)) .{
+                        .array_expression = .{
+                            .array_like = left,
+                            .index = start orelse module.report_error(),
+                        },
+                    } else blk: {
+                        module.expect_character('.');
+                        module.expect_character('.');
+
+                        const end = switch (module.consume_character_if_match(right_bracket)) {
+                            true => null,
+                            false => b: {
+                                const end = module.parse_value(scope, .{});
+                                module.expect_character(right_bracket);
+                                break :b end;
+                            },
+                        };
+                        break :blk .{
+                            .slice_expression = .{
+                                .array_like = left,
+                                .start = start,
+                                .end = end,
+                            },
+                        };
+                    },
+                    .kind = value_builder.kind,
+                };
+            },
+        }
+
         return value;
     }
 
@@ -3616,23 +3722,36 @@ pub const Module = struct {
 
         switch (may_be_callable.bb) {
             .macro_reference => |macro| {
-                if (macro.is_generic()) {
-                    @trap();
+                if (macro.is_generic) {
+                    module.report_error();
                 }
+
                 const arguments = module.parse_call_arguments(scope);
                 const macro_invocation = module.values.add();
+
                 macro_invocation.* = .{
                     .bb = .{
                         .macro_instantiation = .{
-                            .macro = macro,
-                            .arguments = arguments,
+                            .declaration = macro,
+                            .instantiation_arguments = arguments,
+                            .type_arguments = &.{},
                             .function = module.current_function.?,
                             .return_alloca = undefined,
                             .return_block = undefined,
-                            .parent_scope = scope,
+                            .block = undefined,
+                            .return_type = macro.return_type,
+                            .constant_argument_values = &.{},
+                            .declaration_arguments = &.{},
+                            .scope = .{
+                                .line = macro.scope.line,
+                                .column = macro.scope.column,
+                                .kind = .macro_instantiation,
+                                .parent = scope,
+                            },
                         },
                     },
                 };
+
                 return macro_invocation;
             },
             else => {
@@ -4206,22 +4325,91 @@ pub const Module = struct {
                             _ = alias_type;
                         },
                         .macro => {
+                            var type_argument_buffer: [64]*Type = undefined;
+                            var type_argument_count: u64 = 0;
+
+                            var constant_argument_value_buffer: [64]*Value = undefined;
+                            var constant_argument_name_buffer: [64][]const u8 = undefined;
+                            var constant_argument_buffer: [64]ConstantArgument = undefined;
+                            var constant_argument_value_count: u64 = 0;
+                            var constant_argument_count: u64 = 0;
+
+                            const is_generic = module.consume_character_if_match(left_bracket);
+                            if (is_generic) {
+                                while (true) {
+                                    module.skip_space();
+
+                                    if (module.consume_character_if_match(right_bracket)) {
+                                        break;
+                                    }
+
+                                    const argument_name = module.parse_identifier();
+
+                                    module.skip_space();
+
+                                    const has_value = module.consume_character_if_match(':');
+                                    const index: u64 = if (has_value) {
+                                        _ = &constant_argument_value_buffer;
+                                        _ = &constant_argument_name_buffer;
+                                        _ = &constant_argument_value_count;
+                                        @trap();
+                                    } else blk: {
+                                        const ty = module.types.append(.{
+                                            .bb = .unresolved,
+                                            .name = argument_name,
+                                        });
+                                        const index = type_argument_count;
+                                        type_argument_buffer[index] = ty;
+                                        type_argument_count = index + 1;
+                                        break :blk index;
+                                    };
+
+                                    constant_argument_buffer[constant_argument_count] = .{
+                                        .kind = switch (has_value) {
+                                            true => .value,
+                                            false => .type,
+                                        },
+                                        .index = @intCast(index),
+                                    };
+
+                                    constant_argument_count += 1;
+                                }
+
+                                module.skip_space();
+                            }
+
                             module.expect_character(left_parenthesis);
+
+                            const type_arguments = module.arena.allocate(*Type, type_argument_count);
+                            @memcpy(type_arguments, type_argument_buffer[0..type_argument_count]);
+
+                            const constant_argument_names = module.arena.allocate([]const u8, constant_argument_value_count);
+                            @memcpy(constant_argument_names, constant_argument_name_buffer[0..constant_argument_value_count]);
+
+                            const constant_argument_values = module.arena.allocate(*Value, constant_argument_value_count);
+                            @memcpy(constant_argument_values, constant_argument_value_buffer[0..constant_argument_value_count]);
+
+                            const constant_arguments = module.arena.allocate(ConstantArgument, constant_argument_count);
+                            @memcpy(constant_arguments, constant_argument_buffer[0..constant_argument_count]);
 
                             const macro = module.macros.add();
                             macro.* = .{
                                 .arguments = &.{},
                                 .argument_types = &.{},
-                                .generic_arguments = &.{},
+                                .constant_argument_names = constant_argument_names,
+                                .constant_argument_values = constant_argument_values,
+                                .constant_arguments = constant_arguments,
+                                .type_arguments = type_arguments,
                                 .return_type = undefined,
                                 .block = undefined,
                                 .name = global_name,
                                 .scope = .{
                                     .parent = &module.scope,
-                                    .kind = .macro,
+                                    .kind = .macro_declaration,
                                     .line = global_line,
                                     .column = global_column,
                                 },
+                                .is_generic = is_generic,
                             };
 
                             module.current_macro_declaration = macro;
@@ -5737,9 +5925,30 @@ pub const Module = struct {
         return result;
     }
 
-    pub fn analyze_value_type(module: *Module, value: *Value, analysis: ValueAnalysis) void {
+    pub fn analyze_value_type(module: *Module, value: *Value, a: ValueAnalysis) void {
         assert(value.type == null);
         assert(value.llvm == null);
+
+        var analysis = a;
+        if (analysis.type) |expected_type| switch (expected_type.bb) {
+            .unresolved => {
+                const macro_instantiation = (module.current_macro_instantiation orelse module.report_error()).bb.macro_instantiation;
+                const macro_declaration = macro_instantiation.declaration;
+
+                const resolved_type = for (macro_declaration.type_arguments, macro_instantiation.type_arguments) |t, result_type| {
+                    if (t == expected_type) {
+                        result_type.resolve(module);
+                        break result_type;
+                    }
+                } else unreachable;
+                analysis.type = resolved_type;
+                @trap();
+            },
+            else => {},
+        };
+        // .unresolved => blk: {
+        //     // TODO: nest macros
+        // },
 
         const value_type = switch (value.bb) {
             .unary => |unary| b: {
@@ -5768,8 +5977,15 @@ pub const Module = struct {
             },
             .constant_integer => |constant_integer| blk: {
                 const expected_type = analysis.type orelse module.report_error();
+                expected_type.resolve(module);
                 const et = switch (expected_type.bb) {
-                    .alias => |alias| alias.type,
+                    .alias => b: {
+                        var it = expected_type;
+                        while (it.bb == .alias) {
+                            it = it.bb.alias.type;
+                        }
+                        break :b it;
+                    },
                     else => expected_type,
                 };
                 const ty = switch (et.bb) {
@@ -6624,28 +6840,17 @@ pub const Module = struct {
                 module.current_macro_instantiation = value;
                 defer module.current_macro_instantiation = current_macro_instantiation;
 
-                const macro = module.macros.add();
-                const old_macro = macro_instantiation.macro;
-                macro_instantiation.macro = macro;
+                const declaration = macro_instantiation.declaration;
 
-                const arguments = module.arena.allocate(*Local, old_macro.arguments.len);
-                macro.* = .{
-                    .arguments = arguments,
-                    .argument_types = old_macro.argument_types,
-                    .generic_arguments = &.{}, // TODO
-                    .return_type = old_macro.return_type,
-                    .block = undefined,
-                    .name = old_macro.name,
-                    .scope = old_macro.scope,
-                };
+                macro_instantiation.declaration_arguments = module.arena.allocate(*Local, declaration.arguments.len);
 
-                for (old_macro.arguments, arguments) |old_argument, *new_argument| {
+                for (declaration.arguments, macro_instantiation.declaration_arguments) |old_argument, *new_argument| {
                     const argument = module.locals.add();
                     argument.* = .{
                         .variable = .{
                             .initial_value = undefined,
                             .type = old_argument.variable.type,
-                            .scope = &macro.scope,
+                            .scope = &macro_instantiation.scope,
                             .name = old_argument.variable.name,
                             .line = old_argument.variable.line,
                             .column = old_argument.variable.column,
@@ -6655,23 +6860,43 @@ pub const Module = struct {
                     new_argument.* = argument;
                 }
 
-                macro.block = module.lexical_blocks.add();
+                for (macro_instantiation.type_arguments, declaration.type_arguments) |*instantiation_type_argument_pointer, declaration_type_argument| {
+                    assert(declaration_type_argument.bb == .unresolved);
+                    const original_instantiation_type_argument = instantiation_type_argument_pointer.*;
+                    const instantiation_type_argument = module.types.append(.{
+                        .name = declaration_type_argument.name,
+                        .bb = .{
+                            .alias = .{
+                                .type = original_instantiation_type_argument,
+                                .line = 0, // TODO
+                            },
+                        },
+                    });
+                    instantiation_type_argument_pointer.* = instantiation_type_argument;
+                }
 
-                const old_block = old_macro.block;
-                module.copy_block(&macro.scope, .{
-                    .source = old_block,
-                    .destination = macro.block,
+                macro_instantiation.return_type = module.resolve_type(declaration.return_type);
+
+                for (macro_instantiation.declaration_arguments) |argument| {
+                    argument.variable.type = module.resolve_type(argument.variable.type.?);
+                }
+
+                value.bb.macro_instantiation.block = module.lexical_blocks.add();
+                module.copy_block(&macro_instantiation.scope, .{
+                    .source = declaration.block,
+                    .destination = value.bb.macro_instantiation.block,
                 });
 
-                const result_type = macro.return_type;
+                const result_type = macro_instantiation.return_type;
+                result_type.resolve(module);
                 module.typecheck(analysis, result_type);
 
-                if (macro.argument_types.len != macro.arguments.len) {
+                if (macro_instantiation.instantiation_arguments.len != declaration.arguments.len) {
                     module.report_error();
                 }
 
-                for (macro_instantiation.arguments, macro.argument_types) |argument, argument_type| {
-                    module.analyze_value_type(argument, .{ .type = argument_type });
+                for (macro_instantiation.declaration_arguments, macro_instantiation.instantiation_arguments) |declaration_argument, instantiation_argument| {
+                    module.analyze_value_type(instantiation_argument, .{ .type = declaration_argument.variable.type });
                 }
 
                 break :blk result_type;
@@ -6979,7 +7204,11 @@ pub const Module = struct {
                         module.emit_value(binary.right, .abi);
                         break :b binary.right.llvm orelse unreachable;
                     };
-                    const result = switch (value_type.bb) {
+                    var it = value_type;
+                    while (it.bb == .alias) {
+                        it = it.bb.alias.type;
+                    }
+                    const result = switch (it.bb) {
                         .integer => |integer| switch (binary.id) {
                             .@"+" => module.llvm.builder.create_add(left, right),
                             .@"-" => module.llvm.builder.create_sub(left, right),
@@ -7544,87 +7773,78 @@ pub const Module = struct {
                 module.current_macro_instantiation = value;
                 defer module.current_macro_instantiation = current_macro_instantiation;
 
-                const macro = macro_instantiation.macro;
-
-                switch (macro.is_generic()) {
-                    true => {
-                        @trap();
-                    },
-                    false => {
-                        for (macro_instantiation.arguments) |call_argument| {
-                            module.emit_value(call_argument, .abi);
-                        }
-
-                        var debug_argument_type_buffer: [64 + 1]*llvm.DI.Type = undefined;
-                        const semantic_debug_argument_types = debug_argument_type_buffer[0 .. macro.argument_types.len + 1];
-                        semantic_debug_argument_types[0] = macro.return_type.llvm.debug.?;
-
-                        for (macro.argument_types, semantic_debug_argument_types[1..][0..macro.argument_types.len]) |argument_type, *debug_argument_type| {
-                            debug_argument_type.* = argument_type.llvm.debug.?;
-                        }
-
-                        module.llvm.builder.set_current_debug_location(null);
-
-                        const caller_debug_location = llvm.DI.create_debug_location(module.llvm.context, macro.scope.line, macro.scope.column, macro_instantiation.parent_scope.llvm.?, null);
-                        module.inline_at_debug_location = caller_debug_location;
-                        defer module.inline_at_debug_location = null;
-
-                        const subroutine_type_flags = llvm.DI.Flags{};
-                        const subroutine_type = module.llvm.di_builder.create_subroutine_type(module.llvm.file, semantic_debug_argument_types, subroutine_type_flags);
-                        const local_to_unit = true;
-                        const is_definition = true;
-
-                        const flags: llvm.DI.Flags = .{};
-                        const subprogram = module.llvm.di_builder.create_function(module.scope.llvm.?, macro.name, macro.name, module.llvm.file, macro.scope.line, subroutine_type, local_to_unit, is_definition, macro.scope.line, flags, module.build_mode.is_optimized());
-                        macro.scope.llvm = @ptrCast(subprogram);
-                        module.llvm.builder.set_current_debug_location(llvm.DI.create_debug_location(module.llvm.context, macro.scope.line, macro.scope.column, macro.scope.llvm.?, @ptrCast(caller_debug_location)));
-
-                        const llvm_function = current_function.variable.storage.?.llvm.?.to_function();
-                        const macro_entry_block = module.llvm.context.create_basic_block("macro.entry", llvm_function);
-                        _ = module.llvm.builder.create_branch(macro_entry_block);
-                        module.llvm.builder.position_at_end(macro_entry_block);
-
-                        const macro_return_alloca = module.create_alloca(.{
-                            .type = macro.return_type,
-                            .name = "macro.return",
-                        });
-                        macro_instantiation.return_alloca = macro_return_alloca;
-
-                        const macro_return_block = module.llvm.context.create_basic_block("macro.return_block", llvm_function);
-                        macro_instantiation.return_block = macro_return_block;
-
-                        for (macro_instantiation.arguments, macro.arguments) |call_argument, declaration_argument| {
-                            const inlined_at = caller_debug_location;
-                            const debug_location = llvm.DI.create_debug_location(module.llvm.context, declaration_argument.variable.line, declaration_argument.variable.column, macro.scope.llvm.?, @ptrCast(inlined_at));
-                            module.llvm.builder.set_current_debug_location(debug_location);
-                            module.emit_local_storage(declaration_argument, debug_location);
-                            const storage = declaration_argument.variable.storage.?.llvm.?;
-
-                            switch (declaration_argument.variable.type.?.get_evaluation_kind()) {
-                                .scalar => {
-                                    _ = module.create_store(.{
-                                        .source_value = call_argument.llvm.?,
-                                        .destination_value = storage,
-                                        .type = declaration_argument.variable.type.?,
-                                    });
-                                },
-                                .aggregate => @trap(),
-                                .complex => @trap(),
-                            }
-                        }
-
-                        module.analyze_block(macro.block);
-                        module.llvm.builder.position_at_end(macro_return_block);
-
-                        const load = module.create_load(.{
-                            .type = macro.return_type,
-                            .value = macro_return_alloca,
-                            .type_kind = type_kind,
-                        });
-
-                        break :blk load;
-                    },
+                for (macro_instantiation.instantiation_arguments) |call_argument| {
+                    module.emit_value(call_argument, .abi);
                 }
+
+                const argument_count = macro_instantiation.declaration_arguments.len;
+                if (module.has_debug_info) {
+                    var debug_argument_type_buffer: [64 + 1]*llvm.DI.Type = undefined;
+                    const semantic_debug_argument_types = debug_argument_type_buffer[0 .. argument_count + 1];
+                    semantic_debug_argument_types[0] = macro_instantiation.return_type.llvm.debug.?;
+
+                    for (macro_instantiation.instantiation_arguments, semantic_debug_argument_types[1..][0..argument_count]) |instantiation_argument, *debug_argument_type| {
+                        debug_argument_type.* = instantiation_argument.type.?.llvm.debug.?;
+                    }
+
+                    module.llvm.builder.set_current_debug_location(null);
+                    const subroutine_type_flags = llvm.DI.Flags{};
+                    const subroutine_type = module.llvm.di_builder.create_subroutine_type(module.llvm.file, semantic_debug_argument_types, subroutine_type_flags);
+                    const local_to_unit = true;
+                    const is_definition = true;
+                    const flags: llvm.DI.Flags = .{};
+                    const subprogram = module.llvm.di_builder.create_function(module.scope.llvm.?, macro_instantiation.declaration.name, macro_instantiation.declaration.name, module.llvm.file, macro_instantiation.scope.line, subroutine_type, local_to_unit, is_definition, macro_instantiation.scope.line, flags, module.build_mode.is_optimized());
+                    macro_instantiation.scope.llvm = @ptrCast(subprogram);
+                }
+
+                const caller_debug_location = if (module.has_debug_info) llvm.DI.create_debug_location(module.llvm.context, macro_instantiation.scope.line, macro_instantiation.scope.column, macro_instantiation.scope.parent.?.llvm.?, null) else undefined;
+                defer if (module.has_debug_info) {
+                    module.llvm.builder.set_current_debug_location(caller_debug_location);
+                };
+                module.inline_at_debug_location = caller_debug_location;
+                defer module.inline_at_debug_location = null;
+
+                const llvm_function = current_function.variable.storage.?.llvm.?.to_function();
+                const macro_entry_block = module.llvm.context.create_basic_block("macro.entry", llvm_function);
+                _ = module.llvm.builder.create_branch(macro_entry_block);
+                module.llvm.builder.position_at_end(macro_entry_block);
+
+                const macro_return_alloca = module.create_alloca(.{
+                    .type = macro_instantiation.return_type,
+                    .name = "macro.return",
+                });
+                macro_instantiation.return_alloca = macro_return_alloca;
+
+                const macro_return_block = module.llvm.context.create_basic_block("macro.return_block", llvm_function);
+                macro_instantiation.return_block = macro_return_block;
+
+                for (macro_instantiation.instantiation_arguments, macro_instantiation.declaration_arguments) |call_argument, declaration_argument| {
+                    module.emit_local_storage(declaration_argument);
+                    const storage = declaration_argument.variable.storage.?.llvm.?;
+
+                    switch (declaration_argument.variable.type.?.get_evaluation_kind()) {
+                        .scalar => {
+                            _ = module.create_store(.{
+                                .source_value = call_argument.llvm.?,
+                                .destination_value = storage,
+                                .type = declaration_argument.variable.type.?,
+                            });
+                        },
+                        .aggregate => @trap(),
+                        .complex => @trap(),
+                    }
+                }
+                
+                module.analyze_block(macro_instantiation.block);
+                module.llvm.builder.position_at_end(macro_return_block);
+
+                const load = module.create_load(.{
+                    .type = macro_instantiation.return_type,
+                    .value = macro_return_alloca,
+                    .type_kind = type_kind,
+                });
+
+                break :blk load;
             },
             else => @trap(),
         };
@@ -7755,9 +7975,8 @@ pub const Module = struct {
                     _ = module.llvm.builder.clear_insertion_position();
                 } else if (module.current_macro_instantiation) |m| {
                     const macro_instantiation = &m.bb.macro_instantiation;
-                    const macro = macro_instantiation.macro;
-                    module.analyze_value_type(rv.?, .{ .type = macro.return_type });
-                    module.emit_assignment(macro_instantiation.return_alloca, module.get_pointer_type(.{ .type = macro.return_type }), rv.?);
+                    module.analyze_value_type(rv.?, .{ .type = macro_instantiation.return_type });
+                    module.emit_assignment(macro_instantiation.return_alloca, module.get_pointer_type(.{ .type = macro_instantiation.return_type }), rv.?);
                     _ = module.llvm.builder.create_branch(macro_instantiation.return_block);
                     module.llvm.builder.clear_insertion_position();
                 } else {
@@ -7770,7 +7989,7 @@ pub const Module = struct {
                 module.analyze_value_type(local.variable.initial_value, .{ .type = local.variable.type });
                 local.variable.resolve_type(local.variable.initial_value.type.?);
                 if (expected_type) |lvt| assert(lvt == local.variable.type);
-                module.emit_local_storage(local, last_statement_debug_location.*);
+                module.emit_local_storage(local);
 
                 module.emit_assignment(local.variable.storage.?.llvm.?, local.variable.storage.?.type.?, local.variable.initial_value);
             },
@@ -8026,7 +8245,7 @@ pub const Module = struct {
                         .right => child_type,
                     };
                     local.variable.type = local_type;
-                    module.emit_local_storage(local, last_statement_debug_location.*);
+                    module.emit_local_storage(local);
                     module.emit_value(right, .memory);
                 }
 
@@ -8424,7 +8643,7 @@ pub const Module = struct {
         }
     }
 
-    pub fn emit_local_storage(module: *Module, local: *Local, maybe_statement_debug_location: ?*llvm.DI.Location) void {
+    pub fn emit_local_storage(module: *Module, local: *Local) void {
         assert(local.variable.storage == null);
         const resolved_type = local.variable.type.?;
         resolved_type.resolve(module);
@@ -8442,8 +8661,6 @@ pub const Module = struct {
         };
 
         if (module.has_debug_info) {
-            if (maybe_statement_debug_location) |statement_debug_location| {
-                module.llvm.builder.set_current_debug_location(statement_debug_location);
                 const debug_type = resolved_type.llvm.debug.?;
                 const always_preserve = true;
                 const flags = llvm.DI.Flags{};
@@ -8452,9 +8669,8 @@ pub const Module = struct {
                 const scope = local.variable.scope.llvm.?;
                 const local_variable = if (local.argument_index) |argument_index| module.llvm.di_builder.create_parameter_variable(scope, local.variable.name, @intCast(argument_index + 1), module.llvm.file, local.variable.line, local.variable.type.?.llvm.debug.?, always_preserve, flags) else module.llvm.di_builder.create_auto_variable(scope, local.variable.name, module.llvm.file, local.variable.line, debug_type, always_preserve, flags, 0);
                 const debug_location = llvm.DI.create_debug_location(module.llvm.context, local.variable.line, local.variable.column, scope, inlined_at);
+                module.llvm.builder.set_current_debug_location(debug_location);
                 _ = module.llvm.di_builder.insert_declare_record_at_end(storage.llvm.?, local_variable, module.llvm.di_builder.null_expression(), debug_location, module.llvm.builder.get_insert_block().?);
-                module.llvm.builder.set_current_debug_location(statement_debug_location);
-            }
         }
 
         local.variable.storage = storage;
@@ -8720,6 +8936,27 @@ pub const Module = struct {
             },
         }
     }
+
+    fn resolve_type(module: *Module, ty: *Type) *Type {
+        const result_type = switch (ty.bb) {
+            .unresolved => blk: {
+                const macro_instantiation_value = module.current_macro_instantiation orelse module.report_error();
+                const macro_instantiation = &macro_instantiation_value.bb.macro_instantiation;
+
+                const result_type = for (macro_instantiation.type_arguments, macro_instantiation.declaration.type_arguments) |instantiation_type_argument, declaration_type_argument| {
+                    if (declaration_type_argument == ty) {
+                        assert(lib.string.equal(declaration_type_argument.name, instantiation_type_argument.name));
+                        break instantiation_type_argument;
+                    }
+                } else module.report_error();
+
+                break :blk result_type;
+            },
+            else => ty,
+        };
+
+        return result_type;
+    }
 };
 
 pub const Options = struct {
@@ -8901,7 +9138,7 @@ pub const Abi = struct {
     };
 
     const Flags = struct {
-        kind: Kind,
+        kind: Abi.Kind,
         padding_in_reg: bool = false,
         in_alloca_sret: bool = false,
         in_alloca_indirect: bool = false,

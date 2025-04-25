@@ -111,6 +111,7 @@ pub extern fn LLVMBuildIntToPtr(builder: *llvm.Builder, value: *llvm.Value, dest
 pub extern fn LLVMBuildPtrToInt(builder: *llvm.Builder, value: *llvm.Value, destination_type: *llvm.Type, name: [*:0]const u8) *llvm.Value;
 pub extern fn LLVMBuildPointerCast(builder: *llvm.Builder, value: *llvm.Value, ty: *llvm.Type, name: [*:0]const u8) *llvm.Value;
 
+pub extern fn LLVMGetCurrentDebugLocation2(builder: *llvm.Builder) ?*llvm.DI.Location;
 pub extern fn LLVMSetCurrentDebugLocation2(builder: *llvm.Builder, location: ?*llvm.DI.Location) void;
 
 pub extern fn LLVMTypeOf(value: *llvm.Value) *llvm.Type;
