@@ -1,0 +1,10 @@
+[export] main = fn [cc(c)] () s32
+{
+    >top: s32 = 64;
+    >accumulator: s32 = 0;
+    for (i: 0..top)
+    {
+        accumulator += 1;
+    }
+    return accumulator - top;
+}

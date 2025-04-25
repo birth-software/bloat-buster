@@ -443,6 +443,11 @@ arena_allocate_bytes = fn (arena: &Arena, size: u64, alignment: u64) &u8
     return result;
 }
 
+arena_allocate = macro [T] (arena: &Arena, count: u64) &T
+{
+    return arena_allocate_bytes(arena, #byte_size(T) * count, #alignof(T));
+}
+
 arena_duplicate_string = fn (arena: &Arena, string: []u8) []u8
 {
     >result = arena_allocate_bytes(arena, string.length + 1, 1);
@@ -583,6 +588,7 @@ CompileOptions = struct
 
 compile = fn (arena: &Arena, options: CompileOptions) void
 {
+    >signs: [2]u1 = [0, 1];
 }
 
 compile_file = fn (arena: &Arena, compile_options: CompileFile) void

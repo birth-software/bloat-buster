@@ -1,0 +1,12 @@
+[export] main = fn [cc(c)] () s32
+{
+    >signs: [2]u1 = [0, 0];
+    >accumulator: s32 = 0;
+
+    for (s: signs)
+    {
+        accumulator += #extend(s);
+    }
+
+    return accumulator;
+}

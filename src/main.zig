@@ -325,4 +325,6 @@ const names = &[_][]const u8{
     "return_small_struct",
     "basic_macro",
     "generic_macro",
+    "for_each_int",
+    "bool_array",
 };
