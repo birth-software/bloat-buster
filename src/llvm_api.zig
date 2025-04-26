@@ -169,6 +169,7 @@ pub extern fn LLVMIsFunctionVarArg(function_type: *llvm.Type.Function) Bool;
 pub extern fn LLVMGetReturnType(function_type: *llvm.Type.Function) *llvm.Type;
 pub extern fn LLVMSetSubprogram(function: *llvm.Function, subprogram: *llvm.DI.Subprogram) void;
 pub extern fn LLVMGetSubprogram(function: *llvm.Function) ?*llvm.DI.Subprogram;
+pub extern fn llvm_subprogram_replace_type(subprogram: *llvm.DI.Subprogram, subroutine_type: *llvm.DI.Type.Subroutine) void;
 pub extern fn LLVMCountParamTypes(function_type: *llvm.Type.Function) c_uint;
 pub extern fn LLVMGetParamTypes(function_type: *llvm.Type.Function, types: [*]*llvm.Type) void;
 
@@ -213,7 +214,7 @@ pub extern fn LLVMDIBuilderFinalize(builder: *llvm.DI.Builder) void;
 pub extern fn LLVMDIBuilderCreateFile(builder: *llvm.DI.Builder, file_name: llvm.String, directory_name: llvm.String) *llvm.DI.File;
 pub extern fn LLVMDIBuilderCreateCompileUnit(builder: *llvm.DI.Builder, language: llvm.Dwarf.SourceLanguage, file: *llvm.DI.File, producer_name: llvm.String, optimized: Bool, flags: llvm.String, runtime_version: c_uint, split_name: llvm.String, dwarf_emission_kind: llvm.Dwarf.EmissionKind, debug_with_offset_id: c_uint, split_debug_inlining: Bool, debug_info_for_profiling: Bool, sysroot: llvm.String, sdk: llvm.String) *llvm.DI.CompileUnit;
 pub extern fn LLVMDIBuilderCreateSubroutineType(builder: *llvm.DI.Builder, file: *llvm.DI.File, parameter_type_pointer: [*]const *llvm.DI.Type, parameter_type_count: c_uint, flags: llvm.DI.Flags) *llvm.DI.Type.Subroutine;
-pub extern fn LLVMDIBuilderCreateFunction(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, name: llvm.String, linkage_name: llvm.String, file: *llvm.DI.File, line_number: c_uint, type: *llvm.DI.Type.Subroutine, local_to_unit: Bool, is_definition: Bool, scope_line: c_uint, flags: llvm.DI.Flags, is_optimized: Bool) *llvm.DI.Subprogram;
+pub extern fn LLVMDIBuilderCreateFunction(builder: *llvm.DI.Builder, scope: *llvm.DI.Scope, name: llvm.String, linkage_name: llvm.String, file: *llvm.DI.File, line_number: c_uint, type: ?*llvm.DI.Type.Subroutine, local_to_unit: Bool, is_definition: Bool, scope_line: c_uint, flags: llvm.DI.Flags, is_optimized: Bool) *llvm.DI.Subprogram;
 pub extern fn LLVMDIBuilderFinalizeSubprogram(builder: *llvm.DI.Builder, subprogram: *llvm.DI.Subprogram) void;
 pub extern fn LLVMDIBuilderCreateExpression(builder: *llvm.DI.Builder, address: ?[*]const u64, length: u64) *llvm.DI.Expression;
 pub extern fn LLVMDIBuilderCreateDebugLocation(context: *llvm.Context, line: c_uint, column: c_uint, scope: *llvm.DI.Scope, inlined_at: ?*llvm.DI.Metadata) *llvm.DI.Location;

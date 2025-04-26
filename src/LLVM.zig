@@ -1244,7 +1244,7 @@ pub const DI = struct {
             return api.LLVMDIBuilderCreateSubroutineType(builder, file, parameter_types.ptr, @intCast(parameter_types.len), flags);
         }
 
-        pub fn create_function(builder: *DI.Builder, scope: *DI.Scope, name: []const u8, linkage_name: []const u8, file: *DI.File, line_number: c_uint, subroutine_type: *DI.Type.Subroutine, local_to_unit: bool, is_definition: bool, scope_line: c_uint, flags: DI.Flags, is_optimized: bool) *DI.Subprogram {
+        pub fn create_function(builder: *DI.Builder, scope: *DI.Scope, name: []const u8, linkage_name: []const u8, file: *DI.File, line_number: c_uint, subroutine_type: ?*DI.Type.Subroutine, local_to_unit: bool, is_definition: bool, scope_line: c_uint, flags: DI.Flags, is_optimized: bool) *DI.Subprogram {
             return api.LLVMDIBuilderCreateFunction(builder, scope, String.from_slice(name), String.from_slice(linkage_name), file, line_number, subroutine_type, @intFromBool(local_to_unit), @intFromBool(is_definition), scope_line, flags, @intFromBool(is_optimized));
         }
 
@@ -1334,7 +1334,9 @@ pub const DI = struct {
         }
     };
     pub const Scope = opaque {};
-    pub const Subprogram = opaque {};
+    pub const Subprogram = opaque {
+        pub const replace_type = api.llvm_subprogram_replace_type;
+    };
     pub const Expression = opaque {};
     pub const GlobalVariableExpression = opaque {};
     pub const LexicalBlock = opaque {

@@ -76,6 +76,11 @@ EXPORT void llvm_global_variable_delete(GlobalVariable* global_variable)
     delete global_variable;
 }
 
+EXPORT void llvm_subprogram_replace_type(DISubprogram& subprogram, DISubroutineType* subroutine_type)
+{
+    subprogram.replaceType(subroutine_type);
+}
+
 EXPORT Function* llvm_module_create_function(Module* module, FunctionType* function_type, GlobalValue::LinkageTypes linkage_type, unsigned address_space, BBLLVMString name)
 {
     auto* function = Function::Create(function_type, linkage_type, address_space, name.string_ref(), module);

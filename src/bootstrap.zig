@@ -240,7 +240,8 @@ pub const Macro = struct {
         block: *LexicalBlock,
         return_alloca: *llvm.Value,
         return_block: *llvm.BasicBlock,
-        scope: Scope,
+        function_scope: Scope,
+        block_scope: Scope,
     };
 
     pub const Buffer = struct {
@@ -337,6 +338,7 @@ pub const Type = struct {
     pub const Alias = struct {
         type: *Type,
         line: u32,
+        scope: *Scope,
     };
 
     pub const Float = struct {
@@ -487,7 +489,7 @@ pub const Type = struct {
                         break :blk struct_type.to_type();
                     },
                     .alias => |alias| blk: {
-                        const typedef = module.llvm.di_builder.create_typedef(alias.type.llvm.debug.?, ty.name, module.llvm.file, alias.line, module.scope.llvm.?, 0);
+                        const typedef = module.llvm.di_builder.create_typedef(alias.type.llvm.debug.?, ty.name, module.llvm.file, alias.line, alias.scope.llvm.?, 0);
                         break :blk typedef.to_type();
                     },
                     else => @trap(),
@@ -1122,7 +1124,8 @@ pub const Scope = struct {
         local,
         for_each,
         macro_declaration,
-        macro_instantiation,
+        macro_instantiation_function,
+        macro_instantiation_block,
     };
 };
 
@@ -3113,15 +3116,16 @@ pub const Module = struct {
                         }
                     }
                 },
-                .macro_instantiation => {
+                .macro_instantiation_function => {
                     assert(scope.parent != null);
-                    const macro: *Macro.Instantiation = @fieldParentPtr("scope", scope);
+                    const macro: *Macro.Instantiation = @fieldParentPtr("function_scope", scope);
                     for (macro.declaration_arguments) |argument| {
                         if (lib.string.equal(argument.variable.name, identifier)) {
                             break :blk &argument.variable;
                         }
                     }
                 },
+                .macro_instantiation_block => unreachable,
             }
         } else {
             module.report_error();
@@ -3635,6 +3639,9 @@ pub const Module = struct {
                 var constant_value_count: u64 = 0;
                 var constant_argument_count: u64 = 0;
 
+                const instantiation_line = module.get_line();
+                const instantiation_column = module.get_column();
+
                 while (true) {
                     module.skip_space();
 
@@ -3690,15 +3697,23 @@ pub const Module = struct {
                             .block = undefined,
                             .return_alloca = undefined,
                             .return_block = undefined,
-                            .scope = .{
+                            .block_scope = .{
+                                .line = instantiation_line,
+                                .column = instantiation_column,
+                                .kind = .macro_instantiation_block,
+                                .parent = scope,
+                            },
+                            .function_scope = .{
                                 .line = macro.scope.line,
                                 .column = macro.scope.column,
-                                .kind = .macro_instantiation,
-                                .parent = scope,
+                                .kind = .macro_instantiation_function,
+                                .parent = undefined, 
                             },
                         },
                     },
                 };
+
+                value.bb.macro_instantiation.function_scope.parent = &value.bb.macro_instantiation.block_scope;
             },
             else => {
                 left.kind = .left;
@@ -3785,10 +3800,13 @@ pub const Module = struct {
                     module.report_error();
                 }
 
-                const arguments = module.parse_call_arguments(scope);
-                const macro_invocation = module.values.add();
+                const instantiation_line = module.get_line();
+                const instantiation_column = module.get_column();
 
-                macro_invocation.* = .{
+                const arguments = module.parse_call_arguments(scope);
+                const value = module.values.add();
+
+                value.* = .{
                     .bb = .{
                         .macro_instantiation = .{
                             .declaration = macro,
@@ -3801,17 +3819,24 @@ pub const Module = struct {
                             .return_type = macro.return_type,
                             .constant_argument_values = &.{},
                             .declaration_arguments = &.{},
-                            .scope = .{
+                            .block_scope = .{
+                                .line = instantiation_line,
+                                .column = instantiation_column,
+                                .kind = .macro_instantiation_block,
+                                .parent = scope,
+                            },
+                            .function_scope = .{
                                 .line = macro.scope.line,
                                 .column = macro.scope.column,
-                                .kind = .macro_instantiation,
-                                .parent = scope,
+                                .kind = .macro_instantiation_function,
+                                .parent = undefined,
                             },
                         },
                     },
                 };
+                value.bb.macro_instantiation.function_scope.parent = &value.bb.macro_instantiation.block_scope;
 
-                return macro_invocation;
+                return value;
             },
             else => {
                 const arguments = module.parse_call_arguments(scope);
@@ -4377,6 +4402,7 @@ pub const Module = struct {
                                     .alias = .{
                                         .type = aliased_type,
                                         .line = global_line,
+                                        .scope = &module.scope,
                                     },
                                 },
                                 .name = global_name,
@@ -6903,13 +6929,19 @@ pub const Module = struct {
 
                 macro_instantiation.declaration_arguments = module.arena.allocate(*Local, declaration.arguments.len);
 
+                const local_to_unit = true;
+                const is_definition = true;
+                const flags: llvm.DI.Flags = .{};
+                const subprogram = if (module.has_debug_info) module.llvm.di_builder.create_function(module.scope.llvm.?, macro_instantiation.declaration.name, macro_instantiation.declaration.name, module.llvm.file, macro_instantiation.function_scope.line, null, local_to_unit, is_definition, macro_instantiation.function_scope.line, flags, module.build_mode.is_optimized()) else undefined;
+                macro_instantiation.function_scope.llvm = @ptrCast(subprogram);
+
                 for (declaration.arguments, macro_instantiation.declaration_arguments) |old_argument, *new_argument| {
                     const argument = module.locals.add();
                     argument.* = .{
                         .variable = .{
                             .initial_value = undefined,
                             .type = old_argument.variable.type,
-                            .scope = &macro_instantiation.scope,
+                            .scope = &macro_instantiation.function_scope,
                             .name = old_argument.variable.name,
                             .line = old_argument.variable.line,
                             .column = old_argument.variable.column,
@@ -6927,7 +6959,8 @@ pub const Module = struct {
                         .bb = .{
                             .alias = .{
                                 .type = original_instantiation_type_argument,
-                                .line = 0, // TODO
+                                .line = macro_instantiation.function_scope.line,
+                                .scope = &macro_instantiation.function_scope,
                             },
                         },
                     });
@@ -6940,8 +6973,38 @@ pub const Module = struct {
                     argument.variable.type = module.resolve_type(argument.variable.type.?);
                 }
 
+                if (macro_instantiation.instantiation_arguments.len != declaration.arguments.len) {
+                    module.report_error();
+                }
+
+                const argument_count = macro_instantiation.declaration_arguments.len;
+                if (module.has_debug_info) {
+                    const lexical_block = module.llvm.di_builder.create_lexical_block(macro_instantiation.block_scope.parent.?.llvm.?, module.llvm.file, macro_instantiation.block_scope.line, macro_instantiation.block_scope.column);
+                    macro_instantiation.block_scope.llvm = lexical_block.to_scope();
+
+                    for (macro_instantiation.instantiation_arguments, macro_instantiation.declaration_arguments) |instantiation_argument, declaration_argument| {
+                        module.analyze_value_type(instantiation_argument, .{ .type = declaration_argument.variable.type.? });
+                    }
+
+                    var debug_argument_type_buffer: [64 + 1]*llvm.DI.Type = undefined;
+                    const semantic_debug_argument_types = debug_argument_type_buffer[0 .. argument_count + 1];
+                    macro_instantiation.return_type.resolve(module);
+                    semantic_debug_argument_types[0] = macro_instantiation.return_type.llvm.debug.?;
+
+                    for (macro_instantiation.declaration_arguments, semantic_debug_argument_types[1..][0..argument_count]) |declaration_argument, *debug_argument_type| {
+                        declaration_argument.variable.type.?.resolve(module);
+                        debug_argument_type.* = declaration_argument.variable.type.?.llvm.debug.?;
+                    }
+
+                    module.llvm.builder.set_current_debug_location(null);
+                    const subroutine_type_flags = llvm.DI.Flags{};
+                    const subroutine_type = module.llvm.di_builder.create_subroutine_type(module.llvm.file, semantic_debug_argument_types, subroutine_type_flags);
+                    assert(macro_instantiation.function_scope.llvm != null);
+                    subprogram.replace_type(subroutine_type);
+                }
+
                 value.bb.macro_instantiation.block = module.lexical_blocks.add();
-                module.copy_block(&macro_instantiation.scope, .{
+                module.copy_block(&macro_instantiation.function_scope, .{
                     .source = declaration.block,
                     .destination = value.bb.macro_instantiation.block,
                 });
@@ -6950,12 +7013,10 @@ pub const Module = struct {
                 result_type.resolve(module);
                 module.typecheck(analysis, result_type);
 
-                if (macro_instantiation.instantiation_arguments.len != declaration.arguments.len) {
-                    module.report_error();
-                }
-
-                for (macro_instantiation.declaration_arguments, macro_instantiation.instantiation_arguments) |declaration_argument, instantiation_argument| {
-                    module.analyze_value_type(instantiation_argument, .{ .type = declaration_argument.variable.type });
+                if (!module.has_debug_info) {
+                    for (macro_instantiation.declaration_arguments, macro_instantiation.instantiation_arguments) |declaration_argument, instantiation_argument| {
+                        module.analyze_value_type(instantiation_argument, .{ .type = declaration_argument.variable.type });
+                    }
                 }
 
                 break :blk result_type;
@@ -7836,27 +7897,7 @@ pub const Module = struct {
                     module.emit_value(call_argument, .abi);
                 }
 
-                const argument_count = macro_instantiation.declaration_arguments.len;
-                if (module.has_debug_info) {
-                    var debug_argument_type_buffer: [64 + 1]*llvm.DI.Type = undefined;
-                    const semantic_debug_argument_types = debug_argument_type_buffer[0 .. argument_count + 1];
-                    semantic_debug_argument_types[0] = macro_instantiation.return_type.llvm.debug.?;
-
-                    for (macro_instantiation.instantiation_arguments, semantic_debug_argument_types[1..][0..argument_count]) |instantiation_argument, *debug_argument_type| {
-                        debug_argument_type.* = instantiation_argument.type.?.llvm.debug.?;
-                    }
-
-                    module.llvm.builder.set_current_debug_location(null);
-                    const subroutine_type_flags = llvm.DI.Flags{};
-                    const subroutine_type = module.llvm.di_builder.create_subroutine_type(module.llvm.file, semantic_debug_argument_types, subroutine_type_flags);
-                    const local_to_unit = true;
-                    const is_definition = true;
-                    const flags: llvm.DI.Flags = .{};
-                    const subprogram = module.llvm.di_builder.create_function(module.scope.llvm.?, macro_instantiation.declaration.name, macro_instantiation.declaration.name, module.llvm.file, macro_instantiation.scope.line, subroutine_type, local_to_unit, is_definition, macro_instantiation.scope.line, flags, module.build_mode.is_optimized());
-                    macro_instantiation.scope.llvm = @ptrCast(subprogram);
-                }
-
-                const caller_debug_location = if (module.has_debug_info) llvm.DI.create_debug_location(module.llvm.context, macro_instantiation.scope.line, macro_instantiation.scope.column, macro_instantiation.scope.parent.?.llvm.?, null) else undefined;
+                const caller_debug_location = if (module.has_debug_info) llvm.DI.create_debug_location(module.llvm.context, macro_instantiation.block_scope.line, macro_instantiation.block_scope.column, macro_instantiation.block_scope.llvm.?, null) else undefined;
                 defer if (module.has_debug_info) {
                     module.llvm.builder.set_current_debug_location(caller_debug_location);
                 };
