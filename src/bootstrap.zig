@@ -241,7 +241,8 @@ pub const Macro = struct {
         return_alloca: *llvm.Value,
         return_block: *llvm.BasicBlock,
         function_scope: Scope,
-        block_scope: Scope,
+        instantiation_line: u32,
+        instantiation_column: u32,
     };
 
     pub const Buffer = struct {
@@ -514,6 +515,14 @@ pub const Type = struct {
     pub const Pointer = struct {
         type: *Type,
         alignment: ?u32,
+
+        pub fn get_alignment(p: *Pointer) u32 {
+            if (p.alignment) |a| return a else {
+                const type_alignment = p.type.get_byte_alignment();
+                p.alignment = type_alignment;
+                return type_alignment;
+            }
+        }
     };
 
     pub const Function = struct {
@@ -3697,23 +3706,17 @@ pub const Module = struct {
                             .block = undefined,
                             .return_alloca = undefined,
                             .return_block = undefined,
-                            .block_scope = .{
-                                .line = instantiation_line,
-                                .column = instantiation_column,
-                                .kind = .macro_instantiation_block,
-                                .parent = scope,
-                            },
                             .function_scope = .{
                                 .line = macro.scope.line,
                                 .column = macro.scope.column,
                                 .kind = .macro_instantiation_function,
-                                .parent = undefined, 
+                                .parent = scope,
                             },
+                            .instantiation_line = instantiation_line,
+                            .instantiation_column = instantiation_column,
                         },
                     },
                 };
-
-                value.bb.macro_instantiation.function_scope.parent = &value.bb.macro_instantiation.block_scope;
             },
             else => {
                 left.kind = .left;
@@ -3819,22 +3822,17 @@ pub const Module = struct {
                             .return_type = macro.return_type,
                             .constant_argument_values = &.{},
                             .declaration_arguments = &.{},
-                            .block_scope = .{
-                                .line = instantiation_line,
-                                .column = instantiation_column,
-                                .kind = .macro_instantiation_block,
-                                .parent = scope,
-                            },
                             .function_scope = .{
                                 .line = macro.scope.line,
                                 .column = macro.scope.column,
                                 .kind = .macro_instantiation_function,
-                                .parent = undefined,
+                                .parent = scope,
                             },
+                            .instantiation_line = instantiation_line,
+                            .instantiation_column = instantiation_column,
                         },
                     },
                 };
-                value.bb.macro_instantiation.function_scope.parent = &value.bb.macro_instantiation.block_scope;
 
                 return value;
             },
@@ -5934,15 +5932,28 @@ pub const Module = struct {
         }
     }
 
+    fn fully_resolve_alias(module: *Module, ty: *Type) *Type {
+        const result_type = switch (ty.bb) {
+            .integer => ty,
+            .alias => |alias| alias.type,
+            .pointer => |pointer| module.get_pointer_type(.{ .type = module.fully_resolve_alias(pointer.type) }),
+            .bits => ty,
+            .structure => ty,
+            else => @trap(),
+        };
+
+        return result_type;
+    }
+
     pub fn check_types(module: *Module, expected_type: *Type, source_type: *Type) void {
         if (expected_type != source_type) {
             const dst_p_src_i = expected_type.bb == .pointer and source_type.bb == .integer;
-            const dst_alias_src_not = expected_type.bb == .alias and expected_type.bb.alias.type == source_type;
-            const src_alias_dst_not = source_type.bb == .alias and source_type.bb.alias.type == expected_type;
-            const both_alias_to_same_type = expected_type.bb == .alias and source_type.bb == .alias and expected_type.bb.alias.type == source_type.bb.alias.type;
-            const result = dst_p_src_i or dst_alias_src_not or src_alias_dst_not or both_alias_to_same_type;
-            if (!result) {
-                module.report_error();
+            if (!dst_p_src_i) {
+                const source = module.fully_resolve_alias(source_type);
+                const expected = module.fully_resolve_alias(expected_type);
+                if (source != expected) {
+                    module.report_error();
+                }
             }
         }
     }
@@ -5998,6 +6009,34 @@ pub const Module = struct {
                             },
                         },
                         .variable_reference => unreachable,
+                        .call => |call| b: {
+                            const callable = module.clone_value(scope, call.callable);
+                            const arguments = module.arena.allocate(*Value, call.arguments.len);
+                            for (arguments, call.arguments) |*new_argument, old_argument| {
+                                new_argument.* = module.clone_value(scope, old_argument);
+                            }
+                            break :b .{
+                                .call = .{
+                                    .callable = callable,
+                                    .arguments = arguments,
+                                    .function_type = call.function_type,
+                                },
+                            };
+                        },
+                        .intrinsic => |intrinsic| .{
+                            .intrinsic = switch (intrinsic) {
+                                .alignof => |ty| .{
+                                    .alignof = module.resolve_type(ty),
+                                },
+                                .byte_size => |ty| .{
+                                    .byte_size = module.resolve_type(ty),
+                                },
+                                .pointer_cast => |value| .{
+                                    .pointer_cast = module.clone_value(scope, value),
+                                },
+                                else => @trap(),
+                            },
+                        },
                         else => @trap(),
                     },
                     .kind = source.kind,
@@ -6147,6 +6186,22 @@ pub const Module = struct {
                 break :blk semantic_return_type;
             },
             .intrinsic => |intrinsic| switch (intrinsic) {
+                .alignof => |ty| blk: {
+                    const expected_type = analysis.type orelse module.report_error();
+                    // TODO
+                    if (expected_type.bb != .integer) {
+                        module.report_error();
+                    }
+
+                    const alignment = ty.get_byte_alignment();
+
+                    const max_value = if (expected_type.bb.integer.bit_count == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(expected_type.bb.integer.bit_count - @intFromBool(expected_type.bb.integer.signed))) - 1;
+                    if (alignment > max_value) {
+                        module.report_error();
+                    }
+
+                    break :blk expected_type;
+                },
                 .byte_size => |ty| blk: {
                     const expected_type = analysis.type orelse module.report_error();
                     // TODO
@@ -6791,7 +6846,7 @@ pub const Module = struct {
 
                 break :blk result_type;
             },
-            .aggregate_initialization => |*aggregate_initialization| switch ((analysis.type orelse module.report_error()).bb) {
+            .aggregate_initialization => |*aggregate_initialization| switch (module.fully_resolve_alias(analysis.type orelse module.report_error()).bb) {
                 .bits => |bits| blk: {
                     var is_ordered = true;
                     var is_constant = true;
@@ -6979,9 +7034,6 @@ pub const Module = struct {
 
                 const argument_count = macro_instantiation.declaration_arguments.len;
                 if (module.has_debug_info) {
-                    const lexical_block = module.llvm.di_builder.create_lexical_block(macro_instantiation.block_scope.parent.?.llvm.?, module.llvm.file, macro_instantiation.block_scope.line, macro_instantiation.block_scope.column);
-                    macro_instantiation.block_scope.llvm = lexical_block.to_scope();
-
                     for (macro_instantiation.instantiation_arguments, macro_instantiation.declaration_arguments) |instantiation_argument, declaration_argument| {
                         module.analyze_value_type(instantiation_argument, .{ .type = declaration_argument.variable.type.? });
                     }
@@ -7198,10 +7250,8 @@ pub const Module = struct {
 
                         const slice_length = if (has_start) {
                             @trap();
-                        } else if (slice_expression.end) |end| {
-                            _ = end;
-                            @trap();
-                        } else llvm_integer_index_type.get_constant(array.element_count, 0).to_value();
+                        } else if (slice_expression.end) |end| end.llvm.?
+                        else llvm_integer_index_type.get_constant(array.element_count, 0).to_value();
 
                         return .{ slice_pointer, slice_length };
                     },
@@ -7432,6 +7482,11 @@ pub const Module = struct {
                 },
             },
             .intrinsic => |intrinsic| switch (intrinsic) {
+                .alignof => |ty| blk: {
+                    const alignment = ty.get_byte_alignment();
+                    const constant_integer = value_type.llvm.abi.?.to_integer().get_constant(alignment, @intFromBool(false));
+                    break :blk constant_integer.to_value();
+                },
                 .byte_size => |ty| blk: {
                     const byte_size = ty.get_byte_size();
                     const constant_integer = value_type.llvm.abi.?.to_integer().get_constant(byte_size, @intFromBool(false));
@@ -7766,7 +7821,7 @@ pub const Module = struct {
                     },
                 }
             },
-            .aggregate_initialization => |aggregate_initialization| switch (value_type.bb) {
+            .aggregate_initialization => |aggregate_initialization| switch (module.fully_resolve_alias(value_type).bb) {
                 .bits => |bits| switch (aggregate_initialization.is_constant) {
                     true => blk: {
                         var bits_value: u64 = 0;
@@ -7897,7 +7952,7 @@ pub const Module = struct {
                     module.emit_value(call_argument, .abi);
                 }
 
-                const caller_debug_location = if (module.has_debug_info) llvm.DI.create_debug_location(module.llvm.context, macro_instantiation.block_scope.line, macro_instantiation.block_scope.column, macro_instantiation.block_scope.llvm.?, null) else undefined;
+                const caller_debug_location = if (module.has_debug_info) llvm.DI.create_debug_location(module.llvm.context, macro_instantiation.instantiation_line, macro_instantiation.instantiation_column, macro_instantiation.function_scope.parent.?.llvm.?, null) else undefined;
                 defer if (module.has_debug_info) {
                     module.llvm.builder.set_current_debug_location(caller_debug_location);
                 };
@@ -8466,10 +8521,8 @@ pub const Module = struct {
                             const start = for_loop.right_values[0];
                             const end = for_loop.right_values[1];
                             const local_type = switch (start.bb) {
-                                .constant_integer => |_| switch (end.bb) {
-                                    .constant_integer => |_| {
-                                        @trap();
-                                    },
+                                .constant_integer => |start_constant_integer| switch (end.bb) {
+                                    .constant_integer => |end_constant_integer| module.integer_type(64, !(!start_constant_integer.signed and !end_constant_integer.signed)),
                                     else => blk: {
                                         module.analyze_value_type(end, .{});
                                         start.type = end.type;
@@ -8579,7 +8632,21 @@ pub const Module = struct {
                         uint64.resolve(module);
                         _ = module.llvm.builder.create_memcpy(left_llvm, pointer_type.bb.pointer.alignment.?, global_variable.to_value(), alignment, uint64.llvm.abi.?.to_integer().get_constant(array_initialization.values.len * pointer_type.bb.pointer.type.bb.array.element_type.get_byte_size(), @intFromBool(false)).to_value());
                     },
-                    false => @trap(),
+                    false => {
+                        assert(value_type.bb == .array);
+                        const uint64 = module.integer_type(64, false);
+                        uint64.resolve(module);
+                        const u64_zero = uint64.llvm.abi.?.to_integer().get_constant(0, 0).to_value();
+                        const pointer_to_element_type = module.get_pointer_type(.{ .type = value_type.bb.array.element_type });
+                        for (array_initialization.values, 0..) |v, i| {
+                            const alloca_gep = module.llvm.builder.create_gep(.{
+                                .type = value_type.llvm.memory.?,
+                                .aggregate = left_llvm,
+                                .indices = &.{ u64_zero, uint64.llvm.abi.?.to_integer().get_constant(i, 0).to_value() },
+                            });
+                            module.emit_assignment(alloca_gep, pointer_to_element_type, v);
+                        }
+                    },
                 },
                 .aggregate_initialization => |aggregate_initialization| switch (aggregate_initialization.is_constant) {
                     true => {
@@ -8595,7 +8662,7 @@ pub const Module = struct {
                         global_variable.to_value().set_alignment(alignment);
                         const uint64 = module.integer_type(64, false);
                         uint64.resolve(module);
-                        _ = module.llvm.builder.create_memcpy(left_llvm, pointer_type.bb.pointer.alignment.?, global_variable.to_value(), alignment, uint64.llvm.abi.?.to_integer().get_constant(value_type.get_byte_size(), @intFromBool(false)).to_value());
+                        _ = module.llvm.builder.create_memcpy(left_llvm, pointer_type.bb.pointer.get_alignment(), global_variable.to_value(), alignment, uint64.llvm.abi.?.to_integer().get_constant(value_type.get_byte_size(), @intFromBool(false)).to_value());
                     },
                     false => {
                         var max_field_index: u64 = 0;
@@ -9121,8 +9188,24 @@ pub const Module = struct {
 
                 break :blk result_type;
             },
-            else => ty,
+            .pointer => |*pointer| blk: {
+                pointer.type = module.resolve_type(pointer.type);
+                break :blk ty;
+            },
+            .structure => |structure| blk: {
+                for (structure.fields) |*field| {
+                    field.type = module.resolve_type(field.type);
+                }
+                break :blk ty;
+            },
+            .integer => ty,
+            .array => |*array| blk: {
+                array.element_type = module.resolve_type(array.element_type);
+                break :blk ty;
+            },
+            else => @trap(),
         };
+        assert(result_type.bb != .unresolved);
 
         return result_type;
     }

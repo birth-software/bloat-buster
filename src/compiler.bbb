@@ -445,7 +445,7 @@ arena_allocate_bytes = fn (arena: &Arena, size: u64, alignment: u64) &u8
 
 arena_allocate = macro [T] (arena: &Arena, count: u64) &T
 {
-    return arena_allocate_bytes(arena, #byte_size(T) * count, #alignof(T));
+    return #pointer_cast(arena_allocate_bytes(arena, #byte_size(T) * count, #alignof(T)));
 }
 
 arena_duplicate_string = fn (arena: &Arena, string: []u8) []u8
@@ -586,9 +586,41 @@ CompileOptions = struct
     silent: u1,
 }
 
+Type = struct
+{
+    foo: u32,
+}
+
 compile = fn (arena: &Arena, options: CompileOptions) void
 {
     >signs: [2]u1 = [0, 1];
+
+    >type_allocation = arena_allocate[Type](arena,
+        64 * 2 // Basic integer types
+        + 2 // u128, s128
+        + 2 // void, noreturn
+    );
+
+    >type_it = type_allocation;
+
+    for (sign: signs)
+    {
+        for (b: 0..64)
+        {
+            >bit_count = b + 1;
+            >first_digit: u8 = #truncate(#select(bit_count < 10, bit_count % 10 + '0', bit_count / 10 + '0'));
+            >second_digit: u8 = #truncate(#select(bit_count > 9, bit_count % 10 + '0', 0));
+            >name_buffer: [3]u8 = [ #select(sign, 's', 'u'), first_digit, second_digit ];
+            >name_length: u64 = 2 + #extend(bit_count > 9);
+
+            >name = arena_duplicate_string(arena, name_buffer[..name_length]);
+
+            type_it.& = {
+                zero,
+            };
+            type_it += 1;
+        }
+    }
 }
 
 compile_file = fn (arena: &Arena, compile_options: CompileFile) void
