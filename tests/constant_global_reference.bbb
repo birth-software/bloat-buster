@@ -1,0 +1,7 @@
+i2315_abc: s32 = 5;
+asjdkj = i2315_abc - i2315_abc;
+
+[export] main = fn [cc(c)] () s32
+{
+    return asjdkj;
+}

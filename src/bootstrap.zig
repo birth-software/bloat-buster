@@ -338,7 +338,7 @@ pub const Type = struct {
     };
 
     pub const Union = struct {
-        fields: []const Union.Field,
+        fields: []Union.Field,
         byte_size: u64,
         byte_alignment: u32,
         line: u32,
@@ -719,6 +719,7 @@ pub const Type = struct {
             .bits => |bits| bits.backing_type.get_byte_size(),
             .enumerator => |enumerator| enumerator.backing_type.get_byte_size(),
             .alias => |alias| alias.type.get_byte_size(),
+            .@"union" => |union_type| union_type.byte_size,
             else => @trap(),
         };
         return byte_size;
@@ -4015,6 +4016,7 @@ pub const Module = struct {
 
             var global_keyword = false;
             if (is_identifier_start_ch(module.content[module.offset])) {
+                const identifier_offset = module.offset;
                 const global_string = module.parse_identifier();
                 module.skip_space();
 
@@ -4692,7 +4694,7 @@ pub const Module = struct {
                         },
                     }
                 } else {
-                    module.offset -= global_string.len;
+                    module.offset = identifier_offset;
                 }
             }
 
@@ -6016,13 +6018,19 @@ pub const Module = struct {
         module.emit_value(value, type_kind);
     }
 
-    pub fn analyze_binary(module: *Module, left: *Value, right: *Value, is_boolean: bool, analysis: ValueAnalysis) void {
+    pub fn analyze_binary(module: *Module, left: *Value, right: *Value, is_boolean: bool, a: ValueAnalysis) void {
+        var analysis = a;
         const is_left_constant = left.is_constant();
         const is_right_constant = right.is_constant();
         if (analysis.type == null) {
             if (is_left_constant and is_right_constant) {
                 if (left.type == null and right.type == null) {
-                    module.report_error();
+                    const are_string_literal = left.bb == .string_literal and right.bb == .string_literal;
+                    if (are_string_literal) {
+                        analysis.type = module.get_slice_type(.{ .type = module.integer_type(8, false) });
+                    } else {
+                        module.report_error();
+                    }
                 }
             }
         }
@@ -6066,12 +6074,18 @@ pub const Module = struct {
 
     fn fully_resolve_alias(module: *Module, ty: *Type) *Type {
         const result_type = switch (ty.bb) {
-            .integer => ty,
+            .bits,
+            .structure,
+            .@"union",
+            .integer,
+            .enumerator,
+            .array,
+            .noreturn,
+            .void,
+            .function,
+            => ty,
             .alias => |alias| alias.type,
             .pointer => |pointer| module.get_pointer_type(.{ .type = module.fully_resolve_alias(pointer.type) }),
-            .bits => ty,
-            .structure => ty,
-            .@"union" => ty,
             else => @trap(),
         };
 
@@ -6888,10 +6902,10 @@ pub const Module = struct {
                             module.report_error();
                         }
                         const pty = field_access.aggregate.type.?.bb.pointer.type;
-                        const ty = switch (pty.bb) {
+                        const ty = module.fully_resolve_alias(switch (pty.bb) {
                             .pointer => |pointer| pointer.type,
                             else => pty,
-                        };
+                        });
 
                         const result_type = switch (ty.bb) {
                             .structure => |structure| s: {
@@ -7429,8 +7443,11 @@ pub const Module = struct {
 
     pub fn emit_value(module: *Module, value: *Value, type_kind: Type.Kind) void {
         const value_type = value.type orelse unreachable;
+        const resolved_type = module.fully_resolve_alias(value_type);
         assert(value.llvm == null);
         value_type.resolve(module);
+
+        const must_be_constant = module.current_function == null and module.current_macro_instantiation == null;
 
         const llvm_value: *llvm.Value = switch (value.bb) {
             .constant_integer => |constant_integer| value_type.get_llvm(type_kind).to_integer().get_constant(constant_integer.value, @intFromBool(constant_integer.signed)).to_value(),
@@ -7539,11 +7556,7 @@ pub const Module = struct {
                         module.emit_value(binary.right, .abi);
                         break :b binary.right.llvm orelse unreachable;
                     };
-                    var it = value_type;
-                    while (it.bb == .alias) {
-                        it = it.bb.alias.type;
-                    }
-                    const result = switch (it.bb) {
+                    const result = switch (resolved_type.bb) {
                         .integer => |integer| switch (binary.id) {
                             .@"+" => module.llvm.builder.create_add(left, right),
                             .@"-" => module.llvm.builder.create_sub(left, right),
@@ -7584,7 +7597,10 @@ pub const Module = struct {
                             },
                             else => module.report_error(),
                         },
-                        .pointer => |pointer| switch (binary.id) {
+                        .pointer => |pointer| switch (b: {
+                            pointer.type.resolve(module);
+                            break :b binary.id;
+                        }) {
                             .@"+" => module.llvm.builder.create_gep(.{
                                 .type = pointer.type.llvm.abi.?,
                                 .aggregate = left,
@@ -7629,19 +7645,27 @@ pub const Module = struct {
                     },
                 },
                 .right => switch (variable.type == value_type) {
-                    true => switch (value_type.get_evaluation_kind()) {
-                        .scalar => module.create_load(.{
-                            .type = value_type,
-                            .value = variable.storage.?.llvm.?,
-                            .alignment = variable.storage.?.type.?.bb.pointer.alignment,
-                        }),
-                        // TODO: this might be wrong
-                        .aggregate => module.create_load(.{
-                            .type = value_type,
-                            .value = variable.storage.?.llvm.?,
-                            .alignment = variable.storage.?.type.?.bb.pointer.alignment,
-                        }),
-                        .complex => @trap(),
+                    true => switch (must_be_constant) {
+                        true => b: {
+                            if (variable.scope.kind != .global) {
+                                module.report_error();
+                            }
+                            break :b variable.initial_value.llvm.?;
+                        },
+                        false => switch (value_type.get_evaluation_kind()) {
+                            .scalar => module.create_load(.{
+                                .type = value_type,
+                                .value = variable.storage.?.llvm.?,
+                                .alignment = variable.storage.?.type.?.bb.pointer.alignment,
+                            }),
+                            // TODO: this might be wrong
+                            .aggregate => module.create_load(.{
+                                .type = value_type,
+                                .value = variable.storage.?.llvm.?,
+                                .alignment = variable.storage.?.type.?.bb.pointer.alignment,
+                            }),
+                            .complex => @trap(),
+                        },
                     },
                     false => module.report_error(),
                 },
@@ -7941,12 +7965,14 @@ pub const Module = struct {
                             else => base_type,
                         };
                         const ty = pointer_type.bb.pointer.type;
+                        ty.resolve(module);
+                        const child_resolved_type = module.fully_resolve_alias(ty);
                         const v = switch (pointer_type == base_type) {
                             false => module.create_load(.{ .type = pointer_type, .value = field_access.aggregate.llvm.? }),
                             true => field_access.aggregate.llvm.?,
                         };
 
-                        switch (ty.bb) {
+                        switch (child_resolved_type.bb) {
                             .structure => |structure| {
                                 const field_index: u32 = for (structure.fields, 0..) |field, field_index| {
                                     if (lib.string.equal(field_name, field.name)) {
@@ -8782,19 +8808,21 @@ pub const Module = struct {
     fn emit_assignment(module: *Module, left_llvm: *llvm.Value, left_type: *Type, right: *Value) void {
         assert(right.llvm == null);
         const pointer_type = left_type;
-        const value_type = right.type.?;
-        value_type.resolve(module);
+        const v_type = right.type.?;
+        v_type.resolve(module);
         pointer_type.resolve(module);
-        assert(pointer_type.bb == .pointer);
-        assert(pointer_type.bb.pointer.type == value_type);
+        const resolved_value_type = module.fully_resolve_alias(v_type);
+        const resolved_pointer_type = module.fully_resolve_alias(pointer_type);
+        assert(resolved_pointer_type.bb == .pointer);
+        assert(resolved_pointer_type.bb.pointer.type == resolved_value_type);
 
-        switch (value_type.get_evaluation_kind()) {
+        switch (resolved_value_type.get_evaluation_kind()) {
             .scalar => {
                 module.emit_value(right, .memory);
                 _ = module.create_store(.{
                     .source_value = right.llvm.?,
                     .destination_value = left_llvm,
-                    .type = value_type,
+                    .type = v_type,
                     .alignment = pointer_type.bb.pointer.alignment,
                 });
             },
@@ -8806,10 +8834,10 @@ pub const Module = struct {
                             .linkage = .InternalLinkage,
                             .name = "constarray", // TODO: format properly
                             .initial_value = right.llvm.?.to_constant(),
-                            .type = value_type.llvm.memory.?,
+                            .type = v_type.llvm.memory.?,
                         });
                         global_variable.set_unnamed_address(.global);
-                        const element_type = value_type.bb.array.element_type;
+                        const element_type = v_type.bb.array.element_type;
                         const alignment = element_type.get_byte_alignment();
                         global_variable.to_value().set_alignment(alignment);
                         const uint64 = module.integer_type(64, false);
@@ -8817,14 +8845,14 @@ pub const Module = struct {
                         _ = module.llvm.builder.create_memcpy(left_llvm, pointer_type.bb.pointer.alignment.?, global_variable.to_value(), alignment, uint64.llvm.abi.?.to_integer().get_constant(array_initialization.values.len * pointer_type.bb.pointer.type.bb.array.element_type.get_byte_size(), @intFromBool(false)).to_value());
                     },
                     false => {
-                        assert(value_type.bb == .array);
+                        assert(v_type.bb == .array);
                         const uint64 = module.integer_type(64, false);
                         uint64.resolve(module);
                         const u64_zero = uint64.llvm.abi.?.to_integer().get_constant(0, 0).to_value();
-                        const pointer_to_element_type = module.get_pointer_type(.{ .type = value_type.bb.array.element_type });
+                        const pointer_to_element_type = module.get_pointer_type(.{ .type = v_type.bb.array.element_type });
                         for (array_initialization.values, 0..) |v, i| {
                             const alloca_gep = module.llvm.builder.create_gep(.{
-                                .type = value_type.llvm.memory.?,
+                                .type = v_type.llvm.memory.?,
                                 .aggregate = left_llvm,
                                 .indices = &.{ u64_zero, uint64.llvm.abi.?.to_integer().get_constant(i, 0).to_value() },
                             });
@@ -8839,20 +8867,20 @@ pub const Module = struct {
                             .linkage = .InternalLinkage,
                             .name = "conststruct", // TODO: format properly
                             .initial_value = right.llvm.?.to_constant(),
-                            .type = value_type.llvm.abi.?,
+                            .type = v_type.llvm.abi.?,
                         });
                         global_variable.set_unnamed_address(.global);
-                        const alignment = value_type.get_byte_alignment();
+                        const alignment = v_type.get_byte_alignment();
                         global_variable.to_value().set_alignment(alignment);
                         const uint64 = module.integer_type(64, false);
                         uint64.resolve(module);
-                        _ = module.llvm.builder.create_memcpy(left_llvm, pointer_type.bb.pointer.get_alignment(), global_variable.to_value(), alignment, uint64.llvm.abi.?.to_integer().get_constant(value_type.get_byte_size(), @intFromBool(false)).to_value());
+                        _ = module.llvm.builder.create_memcpy(left_llvm, pointer_type.bb.pointer.get_alignment(), global_variable.to_value(), alignment, uint64.llvm.abi.?.to_integer().get_constant(v_type.get_byte_size(), @intFromBool(false)).to_value());
                     },
-                    false => switch (value_type.bb) {
+                    false => switch (resolved_value_type.bb) {
                         .structure => {
                             var max_field_index: u64 = 0;
                             var field_mask: u64 = 0;
-                            const fields = value_type.bb.structure.fields;
+                            const fields = resolved_value_type.bb.structure.fields;
                             assert(fields.len <= 64);
 
                             for (aggregate_initialization.values, aggregate_initialization.names) |initialization_value, initialization_name| {
@@ -8864,7 +8892,7 @@ pub const Module = struct {
                                 field_mask |= @as(@TypeOf(field_mask), 1) << @intCast(field_index);
                                 max_field_index = @max(field_index, max_field_index);
                                 const field = &fields[field_index];
-                                const destination_pointer = module.llvm.builder.create_struct_gep(value_type.llvm.abi.?.to_struct(), left_llvm, @intCast(field_index));
+                                const destination_pointer = module.llvm.builder.create_struct_gep(v_type.llvm.abi.?.to_struct(), left_llvm, @intCast(field_index));
                                 module.emit_assignment(destination_pointer, module.get_pointer_type(.{ .type = field.type }), initialization_value);
                             }
 
@@ -8884,9 +8912,9 @@ pub const Module = struct {
                                 }
 
                                 const field_index_offset = fields.len - end_uninitialized_field_count;
-                                const destination_pointer = module.llvm.builder.create_struct_gep(value_type.llvm.abi.?.to_struct(), left_llvm, @intCast(field_index_offset));
+                                const destination_pointer = module.llvm.builder.create_struct_gep(v_type.llvm.abi.?.to_struct(), left_llvm, @intCast(field_index_offset));
                                 const start_field = &fields[field_index_offset];
-                                const memset_size = value_type.get_byte_size() - start_field.byte_offset;
+                                const memset_size = v_type.get_byte_size() - start_field.byte_offset;
                                 const uint8 = module.integer_type(8, false);
                                 uint8.resolve(module);
                                 const uint64 = module.integer_type(64, false);
@@ -8902,7 +8930,7 @@ pub const Module = struct {
                             const field_value_type = value.type.?;
                             const field_type_size = field_value_type.get_byte_size();
 
-                            const struct_type = if (field_value_type.is_abi_equal(biggest_field_type, module)) value_type.llvm.memory.?.to_struct() else module.llvm.context.get_struct_type(&.{field_value_type.llvm.memory.?});
+                            const struct_type = if (field_value_type.is_abi_equal(biggest_field_type, module)) v_type.llvm.memory.?.to_struct() else module.llvm.context.get_struct_type(&.{field_value_type.llvm.memory.?});
 
                             const destination_pointer = module.llvm.builder.create_struct_gep(struct_type, left_llvm, 0);
                             const field_pointer_type = module.get_pointer_type(.{ .type = field_value_type });
@@ -8934,9 +8962,9 @@ pub const Module = struct {
                         .type = u8_type,
                     });
 
-                    switch (value_type.bb) {
+                    switch (resolved_value_type.bb) {
                         .structure => |structure| switch (structure.is_slice) {
-                            true => switch (slice_type == value_type) {
+                            true => switch (slice_type == resolved_value_type) {
                                 true => {
                                     const pointer_to_pointer = module.llvm.builder.create_struct_gep(slice_type.llvm.abi.?.to_struct(), left_llvm, 0);
                                     const slice_pointer_type = slice_type.bb.structure.fields[0].type;
@@ -8997,7 +9025,7 @@ pub const Module = struct {
                         });
                     },
                     .va_start => {
-                        assert(value_type == module.get_va_list_type());
+                        assert(resolved_value_type == module.get_va_list_type());
                         assert(pointer_type.bb.pointer.type == module.get_va_list_type());
                         const intrinsic_id = module.llvm.intrinsic_table.va_start;
                         const argument_types: []const *llvm.Type = &.{module.llvm.pointer_type};
@@ -9010,7 +9038,7 @@ pub const Module = struct {
                         const result = module.emit_va_arg(right, left_llvm, left_type);
                         switch (result == left_llvm) {
                             true => {},
-                            false => switch (value_type.get_evaluation_kind()) {
+                            false => switch (resolved_value_type.get_evaluation_kind()) {
                                 .scalar => {
                                     @trap();
                                 },
@@ -9038,14 +9066,14 @@ pub const Module = struct {
                 },
                 .slice_expression => {
                     const slice_values = module.emit_slice_expression(right);
-                    const slice_pointer_type = value_type.bb.structure.fields[0].type;
+                    const slice_pointer_type = resolved_value_type.bb.structure.fields[0].type;
                     _ = module.create_store(.{
                         .source_value = slice_values[0],
                         .destination_value = left_llvm,
                         .type = slice_pointer_type,
                         .alignment = pointer_type.bb.pointer.alignment,
                     });
-                    const slice_length_destination = module.llvm.builder.create_struct_gep(value_type.llvm.abi.?.to_struct(), left_llvm, 1);
+                    const slice_length_destination = module.llvm.builder.create_struct_gep(resolved_value_type.llvm.abi.?.to_struct(), left_llvm, 1);
                     _ = module.create_store(.{
                         .source_value = slice_values[1],
                         .destination_value = slice_length_destination,
@@ -9057,13 +9085,13 @@ pub const Module = struct {
                     u8_type.resolve(module);
                     const u64_type = module.integer_type(64, false);
                     u64_type.resolve(module);
-                    _ = module.llvm.builder.create_memset(left_llvm, u8_type.llvm.abi.?.get_zero().to_value(), u64_type.llvm.abi.?.to_integer().get_constant(value_type.get_byte_size(), 0).to_value(), pointer_type.bb.pointer.alignment.?);
+                    _ = module.llvm.builder.create_memset(left_llvm, u8_type.llvm.abi.?.get_zero().to_value(), u64_type.llvm.abi.?.to_integer().get_constant(resolved_value_type.get_byte_size(), 0).to_value(), pointer_type.bb.pointer.alignment.?);
                 },
                 .variable_reference => |variable| switch (right.kind) {
                     .left => @trap(),
                     .right => {
                         const uint64 = module.integer_type(64, false);
-                        _ = module.llvm.builder.create_memcpy(left_llvm, pointer_type.bb.pointer.alignment.?, variable.storage.?.llvm.?, variable.storage.?.type.?.bb.pointer.alignment.?, uint64.llvm.abi.?.to_integer().get_constant(value_type.get_byte_size(), @intFromBool(false)).to_value());
+                        _ = module.llvm.builder.create_memcpy(left_llvm, pointer_type.bb.pointer.alignment.?, variable.storage.?.llvm.?, variable.storage.?.type.?.bb.pointer.alignment.?, uint64.llvm.abi.?.to_integer().get_constant(resolved_value_type.get_byte_size(), @intFromBool(false)).to_value());
                     },
                 },
                 .field_access => |field_access| {
@@ -9077,7 +9105,7 @@ pub const Module = struct {
                     module.emit_value(field_access.aggregate, .memory);
                     const gep = module.llvm.builder.create_struct_gep(struct_type.llvm.abi.?.to_struct(), field_access.aggregate.llvm.?, field_index);
                     const uint64 = module.integer_type(64, false);
-                    _ = module.llvm.builder.create_memcpy(left_llvm, pointer_type.bb.pointer.alignment.?, gep, value_type.get_byte_alignment(), uint64.llvm.abi.?.to_integer().get_constant(value_type.get_byte_size(), @intFromBool(false)).to_value());
+                    _ = module.llvm.builder.create_memcpy(left_llvm, pointer_type.bb.pointer.alignment.?, gep, resolved_value_type.get_byte_alignment(), uint64.llvm.abi.?.to_integer().get_constant(resolved_value_type.get_byte_size(), @intFromBool(false)).to_value());
                 },
                 .undefined => {},
                 else => @trap(),
@@ -9277,7 +9305,13 @@ pub const Module = struct {
             }
             // TODO: is this valid for pointers too?
         } else if (source_type.is_integer_backing()) {
-            @trap();
+            const destination_integer_type = module.integer_type(@intCast(destination_size * 8), false);
+            const value = module.coerce_int_or_pointer_to_int_or_pointer(source_value, source_type, destination_integer_type);
+            _ = module.create_store(.{
+                .type = destination_integer_type,
+                .source_value = value,
+                .destination_value = destination_pointer,
+            });
         } else {
             // Coercion through memory
             const original_destination_alignment = destination_type.get_byte_alignment();
@@ -9395,23 +9429,81 @@ pub const Module = struct {
 
                 break :blk result_type;
             },
-            .pointer => |*pointer| blk: {
-                pointer.type = module.resolve_type(pointer.type);
-                break :blk ty;
+            .pointer => |pointer| blk: {
+                const old_child_type = pointer.type;
+                const new_child_type = module.resolve_type(pointer.type);
+                if (old_child_type == new_child_type) {
+                    break :blk ty;
+                } else {
+                    const p = module.get_pointer_type(.{ .type = new_child_type, .alignment = pointer.alignment });
+                    break :blk p;
+                }
             },
             .structure => |structure| blk: {
-                for (structure.fields) |*field| {
-                    field.type = module.resolve_type(field.type);
+                var is_the_same = true;
+                var new_field_type_buffer: [64]*Type = undefined;
+                for (structure.fields, new_field_type_buffer[0..structure.fields.len]) |*field, *new_field_type| {
+                    const old_field_type = field.type;
+                    const new = module.resolve_type(old_field_type);
+                    new_field_type.* = new;
+                    is_the_same = is_the_same and old_field_type == new;
                 }
-                break :blk ty;
+
+                if (is_the_same) {
+                    break :blk ty;
+                } else {
+                    @trap();
+                }
             },
             .integer => ty,
-            .array => |*array| blk: {
-                array.element_type = module.resolve_type(array.element_type);
-                break :blk ty;
+            .array => |array| blk: {
+                const old_element_type = array.element_type;
+                const new_element_type = module.resolve_type(old_element_type);
+                if (old_element_type == new_element_type) {
+                    break :blk ty;
+                } else {
+                    @trap();
+                }
+            },
+            .alias => |alias| blk: {
+                const old_aliased_type = alias.type;
+                const new_aliased_type = module.resolve_type(old_aliased_type);
+                if (old_aliased_type == new_aliased_type) {
+                    break :blk ty;
+                } else {
+                    // TODO: create new type
+                    @trap();
+                }
+            },
+            .@"union" => |union_type| blk: {
+                var is_the_same = true;
+                var new_field_type_buffer: [64]*Type = undefined;
+                for (union_type.fields, new_field_type_buffer[0..union_type.fields.len]) |*field, *new_field_type| {
+                    const old_field_type = field.type;
+                    const new = module.resolve_type(old_field_type);
+                    new_field_type.* = new;
+                    is_the_same = is_the_same and old_field_type == new;
+                }
+
+                if (is_the_same) {
+                    break :blk ty;
+                } else {
+                    @trap();
+                }
+            },
+            .enumerator => |*enumerator| blk: {
+                const old_backing_type = enumerator.backing_type;
+                const new_backing_type = module.resolve_type(old_backing_type);
+
+                if (old_backing_type == new_backing_type) {
+                    break :blk ty;
+                } else {
+                    @trap();
+                }
             },
             else => @trap(),
         };
+
         assert(result_type.bb != .unresolved);
 
         return result_type;

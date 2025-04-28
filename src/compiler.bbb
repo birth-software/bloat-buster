@@ -586,22 +586,81 @@ CompileOptions = struct
     silent: u1,
 }
 
+TypeId = enum
+{
+    void,
+    noreturn,
+    integer,
+}
+
+TypeInteger = struct
+{
+    bit_count: u32,
+    signed: u1,
+}
+
+TypeContent = union
+{
+    integer: TypeInteger,
+}
+
 Type = struct
 {
-    foo: u32,
+    content: TypeContent,
+    id: TypeId,
+    name: []u8,
+}
+
+ValueId = enum
+{
+    infer_or_ignore,
+}
+
+Value = struct
+{
+    type: &Type,
+    id: ValueId,
+}
+
+i128_offset: u64 = 64 * 2;
+void_offset: u64 = i128_offset + 2;
+
+Module = struct
+{
+    arena: &Arena,
+    base_type_allocation: &Type,
+    void_value: &Value,
+}
+
+module_integer_type = fn (module: &Module, integer: TypeInteger) &Type
+{
+    assert(integer.bit_count != 0);
+    assert(integer.bit_count <= 64);
+    >index = #select(integer.bit_count == 128, i128_offset + #extend(integer.signed), #extend(integer.bit_count) - 1 + 64 * #extend(integer.signed));
+    return module.base_type_allocation + index;
+}
+
+module_void_type = fn (module: &Module) &Type
+{
+    return module.base_type_allocation + void_offset;
+}
+
+module_noreturn_type = fn (module: &Module) &Type
+{
+    return module_void_type(module) + 1;
 }
 
 compile = fn (arena: &Arena, options: CompileOptions) void
 {
     >signs: [2]u1 = [0, 1];
 
-    >type_allocation = arena_allocate[Type](arena,
-        64 * 2 // Basic integer types
+    >base_type_allocation = arena_allocate[Type](arena,
+        i128_offset // Basic integer types
         + 2 // u128, s128
         + 2 // void, noreturn
     );
 
-    >type_it = type_allocation;
+    >type_it = base_type_allocation;
 
     for (sign: signs)
     {
@@ -616,11 +675,61 @@ compile = fn (arena: &Arena, options: CompileOptions) void
             >name = arena_duplicate_string(arena, name_buffer[..name_length]);
 
             type_it.& = {
-                zero,
+                .content = {
+                    .integer = {
+                        .bit_count = #truncate(bit_count),
+                        .signed = sign,
+                    },
+                },
+                .id = .integer,
+                .name = name,
             };
             type_it += 1;
         }
     }
+
+    for (sign: signs)
+    {
+        >name = #select(sign, "s128", "u128");
+        type_it.& = {
+            .content = {
+                .integer = {
+                    .bit_count = 128,
+                    .signed = sign,
+                },
+            },
+            .id = .integer,
+            .name = name,
+        };
+        type_it += 1;
+    }
+
+    >void_type = type_it;
+    type_it += 1;
+    >noreturn_type = type_it;
+    type_it += 1;
+
+    void_type.& = {
+        .id = .void,
+        .name = "void",
+    };
+
+    noreturn_type.& = {
+        .id = .noreturn,
+        .name = "noreturn",
+    };
+
+    >void_value = arena_allocate[Value](arena, 1);
+    void_value.& = {
+        .type = void_type,
+        .id = .infer_or_ignore,
+    };
+
+    >module: Module = {
+        .arena = arena,
+        .base_type_allocation = base_type_allocation,
+        .void_value = void_value,
+    };
 }
 
 compile_file = fn (arena: &Arena, compile_options: CompileFile) void

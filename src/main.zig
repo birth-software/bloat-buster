@@ -328,4 +328,6 @@ const names = &[_][]const u8{
     "for_each_int",
     "bool_array",
     "basic_union",
+    "constant_global_reference",
+    "generic_pointer_macro",
 };
