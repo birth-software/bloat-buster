@@ -312,6 +312,7 @@ pub const Type = struct {
         function: Type.Function,
         array: Type.Array,
         structure: Type.Struct,
+        @"union": Type.Union,
         vector,
         forward_declaration,
         alias: Type.Alias,
@@ -333,6 +334,20 @@ pub const Type = struct {
         const Type = struct {
             handle: ?*llvm.Type = null,
             debug: ?*llvm.DI.Type = null,
+        };
+    };
+
+    pub const Union = struct {
+        fields: []const Union.Field,
+        byte_size: u64,
+        byte_alignment: u32,
+        line: u32,
+        biggest_field: u32,
+
+        const Field = struct {
+            type: *Type,
+            name: []const u8,
+            line: u32,
         };
     };
 
@@ -415,6 +430,12 @@ pub const Type = struct {
                     alias.type.resolve(module);
                     break :blk alias.type.llvm.abi.?;
                 },
+                .@"union" => |union_type| blk: {
+                    const biggest_type = union_type.fields[union_type.biggest_field].type;
+                    biggest_type.resolve(module);
+                    const result_type = module.llvm.context.get_struct_type(&.{biggest_type.llvm.memory.?});
+                    break :blk result_type.to_type();
+                },
                 else => @trap(),
             };
             ty.llvm.abi = abi_type;
@@ -425,6 +446,7 @@ pub const Type = struct {
                 .pointer,
                 .array,
                 .structure,
+                .@"union",
                 => abi_type,
                 .integer => module.llvm.context.get_integer_type(@intCast(ty.get_byte_size() * 8)).to_type(),
                 .enumerator => |enumerator| enumerator.backing_type.llvm.memory.?,
@@ -493,6 +515,25 @@ pub const Type = struct {
                         const typedef = module.llvm.di_builder.create_typedef(alias.type.llvm.debug.?, ty.name, module.llvm.file, alias.line, alias.scope.llvm.?, 0);
                         break :blk typedef.to_type();
                     },
+                    .@"union" => |union_type| blk: {
+                        const result_type = module.llvm.di_builder.create_replaceable_composite_type(module.llvm.debug_tag, ty.name, module.scope.llvm.?, module.llvm.file, union_type.line);
+                        ty.llvm.debug = result_type.to_type();
+                        module.llvm.debug_tag += 1;
+
+                        var llvm_debug_member_type_buffer: [64]*llvm.DI.Type.Derived = undefined;
+                        const llvm_debug_member_types = llvm_debug_member_type_buffer[0..union_type.fields.len];
+
+                        for (union_type.fields, llvm_debug_member_types) |field, *llvm_debug_member_type| {
+                            field.type.resolve(module);
+                            const member_type = module.llvm.di_builder.create_member_type(module.scope.llvm.?, field.name, module.llvm.file, field.line, field.type.get_byte_size() * 8, @intCast(field.type.get_byte_alignment() * 8), 0, .{}, field.type.llvm.debug.?);
+                            llvm_debug_member_type.* = member_type;
+                        }
+
+                        const debug_struct_type = module.llvm.di_builder.create_union_type(module.scope.llvm.?, ty.name, module.llvm.file, union_type.line, union_type.byte_size * 8, @intCast(union_type.byte_alignment * 8), .{}, llvm_debug_member_types);
+                        const forward_declared: *llvm.DI.Type.Composite = @ptrCast(ty.llvm.debug);
+                        forward_declared.replace_all_uses_with(debug_struct_type);
+                        break :blk debug_struct_type.to_type();
+                    },
                     else => @trap(),
                 };
                 ty.llvm.debug = debug_type;
@@ -501,7 +542,7 @@ pub const Type = struct {
     }
 
     const Bits = struct {
-        fields: []const Field,
+        fields: []const Struct.Field,
         backing_type: *Type,
         line: u32,
         implicit_backing_type: bool,
@@ -539,13 +580,21 @@ pub const Type = struct {
     };
 
     pub const Struct = struct {
-        fields: []Field,
+        fields: []Struct.Field,
         byte_size: u64,
         bit_size: u64,
         byte_alignment: u32,
         bit_alignment: u32,
         line: u32,
         is_slice: bool,
+
+        const Field = struct {
+            name: []const u8,
+            type: *Type,
+            bit_offset: u64,
+            byte_offset: u64,
+            line: u32,
+        };
     };
 
     pub const Array = struct {
@@ -642,6 +691,7 @@ pub const Type = struct {
             .bits => |bits| bits.backing_type.get_byte_alignment(),
             .alias => |alias| alias.type.get_byte_alignment(),
             .unresolved => unreachable,
+            .@"union" => |union_type| union_type.byte_alignment,
             else => @trap(),
         };
         return result;
@@ -706,7 +756,7 @@ pub const Type = struct {
 
     pub fn get_evaluation_kind(ty: *const Type) EvaluationKind {
         return switch (ty.bb) {
-            .structure, .array => .aggregate,
+            .structure, .array, .@"union" => .aggregate,
             .integer, .bits, .pointer, .enumerator => .scalar,
             .alias => |alias| alias.type.get_evaluation_kind(),
             else => @trap(),
@@ -1098,6 +1148,7 @@ const GlobalKind = enum {
     macro,
     @"struct",
     typealias,
+    @"union",
 };
 
 const CallingConvention = enum {
@@ -1704,7 +1755,7 @@ pub const Module = struct {
 
             const name = module.arena.join_string(&.{ "[]", slice.type.name });
 
-            const fields = module.arena.allocate(Field, 2);
+            const fields = module.arena.allocate(Type.Struct.Field, 2);
             fields[0] = .{
                 .bit_offset = 0,
                 .byte_offset = 0,
@@ -3865,7 +3916,7 @@ pub const Module = struct {
             const byte_alignment = @max(pair[0].get_byte_alignment(), pair[1].get_byte_alignment());
             const byte_size = lib.align_forward_u64(pair[0].get_byte_size() + pair[1].get_byte_size(), byte_alignment);
 
-            const fields = module.arena.allocate(Field, 2);
+            const fields = module.arena.allocate(Type.Struct.Field, 2);
             fields[0] = .{
                 .bit_offset = 0,
                 .byte_offset = 0,
@@ -4231,7 +4282,7 @@ pub const Module = struct {
 
                             module.expect_character(left_brace);
 
-                            var field_buffer: [128]Field = undefined;
+                            var field_buffer: [128]Type.Struct.Field = undefined;
                             var field_line_buffer: [128]u32 = undefined;
                             var field_count: u64 = 0;
 
@@ -4276,7 +4327,7 @@ pub const Module = struct {
 
                             _ = module.consume_character_if_match(';');
 
-                            const fields = module.arena.allocate(Field, field_count);
+                            const fields = module.arena.allocate(Type.Struct.Field, field_count);
                             @memcpy(fields, field_buffer[0..field_count]);
 
                             // const field_lines = field_line_buffer[0..field_count];
@@ -4316,7 +4367,7 @@ pub const Module = struct {
                                 .bb = .forward_declaration,
                             });
 
-                            var field_buffer: [256]Field = undefined;
+                            var field_buffer: [256]Type.Struct.Field = undefined;
                             var field_count: u64 = 0;
                             var byte_offset: u64 = 0;
                             var byte_alignment: u32 = 1;
@@ -4375,7 +4426,7 @@ pub const Module = struct {
 
                             const byte_size = byte_offset;
 
-                            const fields = module.arena.allocate(Field, field_count);
+                            const fields = module.arena.allocate(Type.Struct.Field, field_count);
                             @memcpy(fields, field_buffer[0..field_count]);
 
                             struct_type.bb = .{
@@ -4557,6 +4608,87 @@ pub const Module = struct {
 
                             const block = module.parse_block(&macro.scope);
                             macro.block = block;
+                        },
+                        .@"union" => {
+                            module.skip_space();
+
+                            module.expect_character(left_brace);
+
+                            if (module.types.find_by_name(global_name) != null) {
+                                @trap();
+                            }
+
+                            const union_type = module.types.append(.{
+                                .name = global_name,
+                                .bb = .forward_declaration,
+                            });
+
+                            var field_buffer: [256]Type.Union.Field = undefined;
+                            var field_count: u64 = 0;
+                            var byte_size: u64 = 0;
+                            var byte_alignment: u32 = 1;
+                            var bit_alignment: u32 = 1;
+                            var biggest_field: u32 = 0;
+
+                            while (true) {
+                                module.skip_space();
+
+                                if (module.consume_character_if_match(right_brace)) {
+                                    break;
+                                }
+
+                                const field_line = module.get_line();
+                                const field_name = module.parse_identifier();
+
+                                module.skip_space();
+
+                                module.expect_character(':');
+
+                                module.skip_space();
+
+                                const field_type = module.parse_type();
+
+                                const field_byte_alignment = field_type.get_byte_alignment();
+                                const field_bit_alignment = field_byte_alignment * 8;
+                                const field_byte_size = field_type.get_byte_size();
+
+                                field_buffer[field_count] = .{
+                                    .type = field_type,
+                                    .name = field_name,
+                                    .line = field_line,
+                                };
+
+                                biggest_field = if (byte_size > field_byte_size) @intCast(field_count) else biggest_field;
+                                byte_alignment = @max(byte_alignment, field_byte_alignment);
+                                bit_alignment = @max(bit_alignment, field_bit_alignment);
+                                byte_size = @max(field_byte_size, byte_size);
+
+                                field_count += 1;
+
+                                module.skip_space();
+
+                                switch (module.content[module.offset]) {
+                                    ',' => module.offset += 1,
+                                    else => {},
+                                }
+                            }
+
+                            module.skip_space();
+
+                            _ = module.consume_character_if_match(';');
+
+                            const fields = module.arena.allocate(Type.Union.Field, field_count);
+                            @memcpy(fields, field_buffer[0..field_count]);
+
+                            union_type.bb = .{
+                                .@"union" = .{
+                                    .byte_size = byte_size,
+                                    .byte_alignment = byte_alignment,
+                                    .fields = fields,
+                                    .line = global_line,
+                                    .biggest_field = biggest_field,
+                                },
+                            };
                         },
                     }
                 } else {
@@ -5835,13 +5967,13 @@ pub const Module = struct {
             });
             const va_list_name = "va_list";
 
-            const field_buffer = [_]Field{
+            const field_buffer = [_]Type.Struct.Field{
                 .{ .name = "gp_offset", .type = unsigned_int, .bit_offset = 0, .byte_offset = 0, .line = 0 },
                 .{ .name = "fp_offset", .type = unsigned_int, .bit_offset = 32, .byte_offset = 4, .line = 0 },
                 .{ .name = "overflow_arg_area", .type = void_pointer, .bit_offset = 64, .byte_offset = 8, .line = 0 },
                 .{ .name = "reg_save_area", .type = void_pointer, .bit_offset = 128, .byte_offset = 16, .line = 0 },
             };
-            const fields = module.arena.allocate(Field, 4);
+            const fields = module.arena.allocate(Type.Struct.Field, 4);
             @memcpy(fields, &field_buffer);
 
             const result = module.types.append(.{
@@ -5939,6 +6071,7 @@ pub const Module = struct {
             .pointer => |pointer| module.get_pointer_type(.{ .type = module.fully_resolve_alias(pointer.type) }),
             .bits => ty,
             .structure => ty,
+            .@"union" => ty,
             else => @trap(),
         };
 
@@ -6401,7 +6534,7 @@ pub const Module = struct {
                         const alignment = string_to_enum.enum_type.get_byte_alignment();
                         const byte_size = lib.align_forward_u64(string_to_enum.enum_type.get_byte_size() + 1, alignment);
 
-                        const struct_fields = module.arena.allocate(Field, 2);
+                        const struct_fields = module.arena.allocate(Type.Struct.Field, 2);
                         struct_fields[0] = .{
                             .bit_offset = 0,
                             .line = 0,
@@ -6775,6 +6908,20 @@ pub const Module = struct {
                                     .right => field_type,
                                 };
                             },
+                            .@"union" => |union_type| s: {
+                                const field_type = for (union_type.fields) |*field| {
+                                    if (lib.string.equal(field_name, field.name)) {
+                                        break field.type;
+                                    }
+                                } else {
+                                    module.report_error();
+                                };
+
+                                break :s switch (value.kind) {
+                                    .left => module.get_pointer_type(.{ .type = field_type }),
+                                    .right => field_type,
+                                };
+                            },
                             .bits => |bits| b: {
                                 const field_type = for (bits.fields) |*field| {
                                     if (lib.string.equal(field_name, field.name)) {
@@ -6884,6 +7031,25 @@ pub const Module = struct {
                     }
 
                     aggregate_initialization.is_constant = is_constant and is_ordered;
+
+                    break :blk analysis.type.?;
+                },
+                .@"union" => |union_type| blk: {
+                    if (aggregate_initialization.values.len != 1) {
+                        module.report_error();
+                    }
+
+                    const initialization_value = aggregate_initialization.values[0];
+                    assert(aggregate_initialization.names.len == 1);
+                    const initialization_name = aggregate_initialization.names[0];
+
+                    const field = for (union_type.fields) |*field| {
+                        if (lib.string.equal(field.name, initialization_name)) {
+                            break field;
+                        }
+                    } else module.report_error();
+
+                    module.analyze_value_type(initialization_value, .{ .type = field.type });
 
                     break :blk analysis.type.?;
                 },
@@ -7250,8 +7416,7 @@ pub const Module = struct {
 
                         const slice_length = if (has_start) {
                             @trap();
-                        } else if (slice_expression.end) |end| end.llvm.?
-                        else llvm_integer_index_type.get_constant(array.element_count, 0).to_value();
+                        } else if (slice_expression.end) |end| end.llvm.? else llvm_integer_index_type.get_constant(array.element_count, 0).to_value();
 
                         return .{ slice_pointer, slice_length };
                     },
@@ -7794,6 +7959,25 @@ pub const Module = struct {
                                     .left => gep,
                                     .right => module.create_load(.{
                                         .type = structure.fields[field_index].type,
+                                        .value = gep,
+                                    }),
+                                };
+                            },
+                            .@"union" => |union_type| {
+                                const field_value_type = for (union_type.fields) |field| {
+                                    if (lib.string.equal(field_name, field.name)) {
+                                        break field.type;
+                                    }
+                                } else unreachable;
+
+                                const biggest_field_type = union_type.fields[union_type.biggest_field].type;
+
+                                const struct_type = if (field_value_type.is_abi_equal(biggest_field_type, module)) ty.llvm.memory.?.to_struct() else module.llvm.context.get_struct_type(&.{field_value_type.llvm.memory.?});
+                                const gep = module.llvm.builder.create_struct_gep(struct_type, v, 0);
+                                break :blk switch (value.kind) {
+                                    .left => gep,
+                                    .right => module.create_load(.{
+                                        .type = field_value_type,
                                         .value = gep,
                                     }),
                                 };
@@ -8664,49 +8848,72 @@ pub const Module = struct {
                         uint64.resolve(module);
                         _ = module.llvm.builder.create_memcpy(left_llvm, pointer_type.bb.pointer.get_alignment(), global_variable.to_value(), alignment, uint64.llvm.abi.?.to_integer().get_constant(value_type.get_byte_size(), @intFromBool(false)).to_value());
                     },
-                    false => {
-                        var max_field_index: u64 = 0;
-                        var field_mask: u64 = 0;
-                        const fields = value_type.bb.structure.fields;
-                        assert(fields.len <= 64);
-                        for (aggregate_initialization.values, aggregate_initialization.names) |initialization_value, initialization_name| {
-                            const field_index = for (fields, 0..) |*field, field_index| {
-                                if (lib.string.equal(field.name, initialization_name)) {
-                                    break field_index;
+                    false => switch (value_type.bb) {
+                        .structure => {
+                            var max_field_index: u64 = 0;
+                            var field_mask: u64 = 0;
+                            const fields = value_type.bb.structure.fields;
+                            assert(fields.len <= 64);
+
+                            for (aggregate_initialization.values, aggregate_initialization.names) |initialization_value, initialization_name| {
+                                const field_index = for (fields, 0..) |*field, field_index| {
+                                    if (lib.string.equal(field.name, initialization_name)) {
+                                        break field_index;
+                                    }
+                                } else module.report_error();
+                                field_mask |= @as(@TypeOf(field_mask), 1) << @intCast(field_index);
+                                max_field_index = @max(field_index, max_field_index);
+                                const field = &fields[field_index];
+                                const destination_pointer = module.llvm.builder.create_struct_gep(value_type.llvm.abi.?.to_struct(), left_llvm, @intCast(field_index));
+                                module.emit_assignment(destination_pointer, module.get_pointer_type(.{ .type = field.type }), initialization_value);
+                            }
+
+                            if (aggregate_initialization.zero) {
+                                const buffer_field_count: u64 = @bitSizeOf(@TypeOf(field_mask));
+                                const raw_end_uninitialized_field_count = @clz(field_mask);
+                                const unused_buffer_field_count = buffer_field_count - fields.len;
+                                const end_uninitialized_field_count = raw_end_uninitialized_field_count - unused_buffer_field_count;
+                                const initialized_field_count = @popCount(field_mask);
+                                const uninitialized_field_count = fields.len - initialized_field_count;
+                                if (uninitialized_field_count != end_uninitialized_field_count) {
+                                    @trap();
                                 }
-                            } else module.report_error();
-                            field_mask |= @as(@TypeOf(field_mask), 1) << @intCast(field_index);
-                            max_field_index = @max(field_index, max_field_index);
-                            const field = &fields[field_index];
-                            const destination_pointer = module.llvm.builder.create_struct_gep(value_type.llvm.abi.?.to_struct(), left_llvm, @intCast(field_index));
-                            module.emit_assignment(destination_pointer, module.get_pointer_type(.{ .type = field.type }), initialization_value);
-                        }
 
-                        if (aggregate_initialization.zero) {
-                            const buffer_field_count: u64 = @bitSizeOf(@TypeOf(field_mask));
-                            const raw_end_uninitialized_field_count = @clz(field_mask);
-                            const unused_buffer_field_count = buffer_field_count - fields.len;
-                            const end_uninitialized_field_count = raw_end_uninitialized_field_count - unused_buffer_field_count;
-                            const initialized_field_count = @popCount(field_mask);
-                            const uninitialized_field_count = fields.len - initialized_field_count;
-                            if (uninitialized_field_count != end_uninitialized_field_count) {
+                                if (end_uninitialized_field_count == 0) {
+                                    module.report_error();
+                                }
+
+                                const field_index_offset = fields.len - end_uninitialized_field_count;
+                                const destination_pointer = module.llvm.builder.create_struct_gep(value_type.llvm.abi.?.to_struct(), left_llvm, @intCast(field_index_offset));
+                                const start_field = &fields[field_index_offset];
+                                const memset_size = value_type.get_byte_size() - start_field.byte_offset;
+                                const uint8 = module.integer_type(8, false);
+                                uint8.resolve(module);
+                                const uint64 = module.integer_type(64, false);
+                                uint64.resolve(module);
+                                _ = module.llvm.builder.create_memset(destination_pointer, uint8.llvm.abi.?.get_zero().to_value(), uint64.llvm.abi.?.to_integer().get_constant(memset_size, 0).to_value(), pointer_type.bb.pointer.alignment.?);
+                            }
+                        },
+                        .@"union" => |union_type| {
+                            assert(aggregate_initialization.names.len == 1);
+                            assert(aggregate_initialization.values.len == 1);
+                            const biggest_field_type = union_type.fields[union_type.biggest_field].type;
+                            const value = aggregate_initialization.values[0];
+                            const field_value_type = value.type.?;
+                            const field_type_size = field_value_type.get_byte_size();
+
+                            const struct_type = if (field_value_type.is_abi_equal(biggest_field_type, module)) value_type.llvm.memory.?.to_struct() else module.llvm.context.get_struct_type(&.{field_value_type.llvm.memory.?});
+
+                            const destination_pointer = module.llvm.builder.create_struct_gep(struct_type, left_llvm, 0);
+                            const field_pointer_type = module.get_pointer_type(.{ .type = field_value_type });
+                            module.emit_assignment(destination_pointer, field_pointer_type, value);
+                            if (field_type_size < union_type.byte_size) {
                                 @trap();
+                            } else if (field_type_size > union_type.byte_size) {
+                                unreachable;
                             }
-
-                            if (end_uninitialized_field_count == 0) {
-                                module.report_error();
-                            }
-
-                            const field_index_offset = fields.len - end_uninitialized_field_count;
-                            const destination_pointer = module.llvm.builder.create_struct_gep(value_type.llvm.abi.?.to_struct(), left_llvm, @intCast(field_index_offset));
-                            const start_field = &fields[field_index_offset];
-                            const memset_size = value_type.get_byte_size() - start_field.byte_offset;
-                            const uint8 = module.integer_type(8, false);
-                            uint8.resolve(module);
-                            const uint64 = module.integer_type(64, false);
-                            uint64.resolve(module);
-                            _ = module.llvm.builder.create_memset(destination_pointer, uint8.llvm.abi.?.get_zero().to_value(), uint64.llvm.abi.?.to_integer().get_constant(memset_size, 0).to_value(), pointer_type.bb.pointer.alignment.?);
-                        }
+                        },
+                        else => unreachable,
                     },
                 },
                 .string_literal => |string_literal| {
@@ -9897,13 +10104,13 @@ pub const Abi = struct {
             }
         }
 
-        fn get_member_at_offset(ty: *Type, offset: u32) ?*const Field {
+        fn get_member_at_offset(ty: *Type, offset: u32) ?*const Type.Struct.Field {
             if (ty.get_byte_size() <= offset) {
                 return null;
             }
 
             var offset_it: u32 = 0;
-            var last_match: ?*const Field = null;
+            var last_match: ?*const Type.Struct.Field = null;
 
             const struct_type = &ty.bb.structure;
             for (struct_type.fields) |*field| {
@@ -10272,14 +10479,6 @@ pub const Abi = struct {
             return overflow_arg_area;
         }
     };
-};
-
-const Field = struct {
-    name: []const u8,
-    type: *Type,
-    bit_offset: u64,
-    byte_offset: u64,
-    line: u32,
 };
 
 pub fn compile(arena: *Arena, options: Options) void {

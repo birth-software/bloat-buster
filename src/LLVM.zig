@@ -1296,6 +1296,13 @@ pub const DI = struct {
             return api.LLVMDIBuilderCreateStructType(builder, scope, name.ptr, name.len, file, line, bit_size, align_in_bits, flags, derived_from, members.ptr, @intCast(members.len), runtime_language, vtable_holder, unique_id_pointer, unique_id_length);
         }
 
+        pub fn create_union_type(builder: *DI.Builder, scope: *DI.Scope, name: []const u8, file: *DI.File, line: c_uint, bit_size: u64, align_in_bits: u32, flags: DI.Flags, members: []const *DI.Type.Derived) *DI.Type.Composite {
+            const runtime_language: c_uint = 0;
+            const unique_id_pointer: ?[*]const u8 = null;
+            const unique_id_length: usize = 0;
+            return api.LLVMDIBuilderCreateUnionType(builder, scope, name.ptr, name.len, file, line, bit_size, align_in_bits, flags, members.ptr, @intCast(members.len), runtime_language, unique_id_pointer, unique_id_length);
+        }
+
         pub fn create_member_type(builder: *DI.Builder, scope: *DI.Scope, name: []const u8, file: *DI.File, line: c_uint, bit_size: u64, align_in_bits: u32, bit_offset: u64, flags: DI.Flags, member_type: *DI.Type) *DI.Type.Derived {
             return api.LLVMDIBuilderCreateMemberType(builder, scope, name.ptr, name.len, file, line, bit_size, align_in_bits, bit_offset, flags, member_type);
         }

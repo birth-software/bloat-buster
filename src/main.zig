@@ -327,4 +327,5 @@ const names = &[_][]const u8{
     "generic_macro",
     "for_each_int",
     "bool_array",
+    "basic_union",
 };
