@@ -6124,6 +6124,47 @@ pub const Module = struct {
         }
     }
 
+    pub fn copy_statement(module: *Module, scope: *Scope, old_statement: *Statement) *Statement {
+        const new_statement = module.statements.add();
+        new_statement.line = old_statement.line;
+        new_statement.column = old_statement.column;
+
+        new_statement.bb = switch (old_statement.bb) {
+            .@"return" => |rv| if (rv) |v| .{
+                .@"return" = module.clone_value(scope, v),
+            } else old_statement.bb,
+            .@"if" => |if_stmt| blk: {
+                const condition = module.clone_value(scope, if_stmt.condition);
+                const if_statement = module.copy_statement(scope, if_stmt.if_statement);
+                const else_statement = if (if_stmt.else_statement) |else_statement| module.copy_statement(scope, else_statement) else null;
+                break :blk .{
+                    .@"if" = .{
+                        .condition = condition,
+                        .if_statement = if_statement,
+                        .else_statement = else_statement,
+                    },
+                };
+            },
+            .block => |block| blk: {
+                const lexical_block = module.lexical_blocks.add();
+                module.copy_block(scope, .{
+                    .source = block,
+                    .destination = lexical_block,
+                });
+
+                break :blk .{
+                    .block = lexical_block,
+                };
+            },
+            .expression => |v| .{
+                .expression = module.clone_value(scope, v),
+            },
+            else => @trap(),
+        };
+
+        return new_statement;
+    }
+
     const BlockCopy = struct {
         source: *LexicalBlock,
         destination: *LexicalBlock,
@@ -6142,20 +6183,12 @@ pub const Module = struct {
                 .parent = parent_scope,
             },
         };
+
         const scope = &destination.scope;
 
         for (source.statements.get_slice()) |old_statement| {
-            const new_statement = module.statements.add();
-            _ = destination.statements.append(new_statement);
-            new_statement.line = old_statement.line;
-            new_statement.column = old_statement.column;
-
-            new_statement.bb = switch (old_statement.bb) {
-                .@"return" => |rv| if (rv) |v| .{
-                    .@"return" = module.clone_value(scope, v),
-                } else old_statement.bb,
-                else => @trap(),
-            };
+            const statement = module.copy_statement(scope, old_statement);
+            _ = destination.statements.append(statement);
         }
     }
 
@@ -6167,6 +6200,12 @@ pub const Module = struct {
 
                 result.* = .{
                     .bb = switch (source.bb) {
+                        .unary => |unary| .{
+                            .unary = .{
+                                .value = module.clone_value(scope, unary.value),
+                                .id = unary.id,
+                            },
+                        },
                         .binary => |binary| .{
                             .binary = .{
                                 .left = module.clone_value(scope, binary.left),
@@ -6203,6 +6242,7 @@ pub const Module = struct {
                                 else => @trap(),
                             },
                         },
+                        .@"unreachable" => .@"unreachable",
                         else => @trap(),
                     },
                     .kind = source.kind,
@@ -6489,9 +6529,10 @@ pub const Module = struct {
                         }
                     }
 
-                    module.typecheck(analysis, integer_max_type);
+                    const result_type = if (analysis.type) |et| et else integer_max_type;
+                    module.typecheck(analysis, result_type);
 
-                    break :blk integer_max_type;
+                    break :blk result_type;
                 },
                 .int_from_enum => |enum_value| blk: {
                     module.analyze_value_type(enum_value, .{});
@@ -7728,7 +7769,7 @@ pub const Module = struct {
                     max_type.resolve(module);
                     const bit_count = max_type.bb.integer.bit_count;
                     const max_value = if (bit_count == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(bit_count - @intFromBool(max_type.bb.integer.signed))) - 1;
-                    const constant_integer = max_type.llvm.abi.?.to_integer().get_constant(max_value, @intFromBool(false));
+                    const constant_integer = value_type.llvm.abi.?.to_integer().get_constant(max_value, @intFromBool(false));
                     break :blk constant_integer.to_value();
                 },
                 .int_from_enum => |enum_value| blk: {
@@ -8193,11 +8234,15 @@ pub const Module = struct {
                 _ = module.llvm.builder.create_branch(macro_entry_block);
                 module.llvm.builder.position_at_end(macro_entry_block);
 
-                const macro_return_alloca = module.create_alloca(.{
+                const valid_return_value = switch (macro_instantiation.return_type.bb) {
+                    .void, .noreturn => false,
+                    else => true,
+                };
+
+                macro_instantiation.return_alloca = if (valid_return_value) module.create_alloca(.{
                     .type = macro_instantiation.return_type,
                     .name = "macro.return",
-                });
-                macro_instantiation.return_alloca = macro_return_alloca;
+                }) else undefined;
 
                 const macro_return_block = module.llvm.context.create_basic_block("macro.return_block", llvm_function);
                 macro_instantiation.return_block = macro_return_block;
@@ -8220,14 +8265,21 @@ pub const Module = struct {
                 }
 
                 module.analyze_block(macro_instantiation.block);
+
+                if (module.llvm.builder.get_insert_block() != null) {
+                    _ = module.llvm.builder.create_branch(macro_return_block);
+                }
+
                 module.llvm.builder.position_at_end(macro_return_block);
 
-                const load = module.create_load(.{
-                    .type = macro_instantiation.return_type,
-                    .value = macro_return_alloca,
-                    .type_kind = type_kind,
-                });
-
+                const load = switch (valid_return_value) {
+                    true => module.create_load(.{
+                        .type = macro_instantiation.return_type,
+                        .value = macro_instantiation.return_alloca,
+                        .type_kind = type_kind,
+                    }),
+                    false => return,
+                };
                 break :blk load;
             },
             else => @trap(),
@@ -8546,7 +8598,7 @@ pub const Module = struct {
 
                 if (module.llvm.builder.get_insert_block() != null) {
                     _ = module.llvm.builder.create_branch(loop_continue_block);
-                } 
+                }
 
                 module.llvm.builder.position_at_end(loop_continue_block);
                 _ = module.llvm.builder.create_branch(loop_entry_block);
@@ -8644,7 +8696,6 @@ pub const Module = struct {
                 defer module.exit_block = previous_exit_block;
                 const loop_exit_block = module.llvm.context.create_basic_block("foreach.exit", llvm_function);
                 module.exit_block = loop_exit_block;
-
 
                 switch (for_loop.kind) {
                     .slice => {
@@ -9565,6 +9616,7 @@ pub const Module = struct {
                     @trap();
                 }
             },
+            .void => ty,
             else => @trap(),
         };
 

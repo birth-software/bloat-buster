@@ -81,7 +81,7 @@ O = bits u32
 [extern] write = fn [cc(c)] (fd: File, pointer: &u8, byte_count: u64) ssize;
 [extern] read = fn [cc(c)] (fd: File, pointer: &u8, byte_count: u64) ssize;
 
-assert = fn (ok: u1) void
+assert = macro (ok: u1) void
 {
     if (!ok)
     {
@@ -660,7 +660,71 @@ is_space = fn (ch: u8) u1
     return ch == ' ' or ch == '\n' or ch == '\t' or ch == '\r';
 }
 
-module_skip_space = fn (module: &Module) void
+is_decimal = fn (ch: u8) u1
+{
+    return ch >= '0' and ch <= '9';
+}
+
+is_octal = fn (ch: u8) u1
+{
+    return ch >= '0' and ch <= '7';
+}
+
+is_binary = fn (ch: u8) u1
+{
+    return ch == '0' or ch == '1';
+}
+
+is_hex_alpha_lower = fn (ch: u8) u1
+{
+    return ch >= 'a' and ch <= 'f';
+}
+
+is_hex_alpha_upper = fn (ch: u8) u1
+{
+    return ch >= 'A' and ch <= 'F';
+}
+
+is_hex_alpha = fn (ch: u8) u1
+{
+    return is_hex_alpha_lower(ch) or is_hex_alpha_upper(ch);
+}
+
+is_hex = fn (ch: u8) u1
+{
+    return is_decimal(ch) or is_hex_alpha(ch);
+}
+
+is_identifier_start = fn (ch: u8) u1
+{
+    return (ch >= 'a' and ch >= 'z') or (ch >= 'A' and ch <= 'Z') or ch == '_';
+}
+
+is_identifier = fn (ch: u8) u1
+{
+    return is_identifier_start(ch) or is_decimal(ch);
+}
+
+report_error = fn () noreturn
+{
+    #trap();
+}
+
+get_line = fn (module: &Module) u32
+{
+    >line = module.line_offset + 1;
+    assert(line <= #integer_max(u32));
+    return #truncate(line);
+}
+
+get_column = fn (module: &Module) u32
+{
+    >column = module.offset - module.line_character_offset + 1;
+    assert(column <= #integer_max(u32));
+    return #truncate(column);
+}
+
+skip_space = fn (module: &Module) void
 {
     while (1)
     {
@@ -701,11 +765,63 @@ module_skip_space = fn (module: &Module) void
     }
 }
 
-module_parse = fn (module: &Module) void
+consume_character_if_match = fn (module: &Module, expected_character: u8) u1
+{
+    >is_ch: u1 = 0;
+
+    if (module.offset < module.content.length)
+    {
+        >ch = module.content[module.offset];
+        is_ch = expected_character == ch;
+        module.offset += #extend(is_ch);
+    }
+
+    return is_ch;
+}
+
+expect_character = fn (module: &Module, expected_character: u8) void
+{
+    if (!consume_character_if_match(module, expected_character))
+    {
+        report_error();
+    }
+}
+
+parse_identifier = fn (module: &Module) []u8
+{
+    >start = module.offset;
+
+    if (is_identifier_start(module.content[start]))
+    {
+        module.offset += 1;
+
+        while (module.offset < module.content.length)
+        {
+            if (is_identifier(module.content[module.offset]))
+            {
+                module.offset += 1;
+            }
+            else
+            {
+                break;
+            }
+        }
+    }
+
+    if (module.offset - start == 0)
+    {
+        report_error();
+    }
+
+    >result = module.content[start..module.offset];
+    return result;
+}
+
+parse = fn (module: &Module) void
 {
 }
 
-module_emit = fn (module: &Module) void
+emit = fn (module: &Module) void
 {
 }
 
@@ -794,8 +910,8 @@ compile = fn (arena: &Arena, options: CompileOptions) void
         .line_character_offset = 0,
     };
 
-    module_parse(&module);
-    module_emit(&module);
+    parse(&module);
+    emit(&module);
 }
 
 compile_file = fn (arena: &Arena, compile_options: CompileFile) void

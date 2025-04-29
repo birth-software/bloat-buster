@@ -1,0 +1,27 @@
+assert = macro (ok: u1) void
+{
+    if (!ok)
+    {
+        unreachable;
+    }
+}
+
+align_forward = fn (value: u64, alignment: u64) u64
+{
+    assert(alignment != 0);
+    >mask = alignment - 1;
+    >result = (value + mask) & ~mask;
+    return result;
+}
+
+[export] main = fn [cc(c)] () s32
+{
+    >result = align_forward(1, 64);
+
+    if (result != 64)
+    {
+        #trap();
+    }
+
+    return 0;
+}
