@@ -630,6 +630,11 @@ Module = struct
     arena: &Arena,
     base_type_allocation: &Type,
     void_value: &Value,
+    // Parser data
+    content: []u8,
+    offset: u64,
+    line_offset: u64,
+    line_character_offset: u64,
 }
 
 module_integer_type = fn (module: &Module, integer: TypeInteger) &Type
@@ -648,6 +653,60 @@ module_void_type = fn (module: &Module) &Type
 module_noreturn_type = fn (module: &Module) &Type
 {
     return module_void_type(module) + 1;
+}
+
+is_space = fn (ch: u8) u1
+{
+    return ch == ' ' or ch == '\n' or ch == '\t' or ch == '\r';
+}
+
+module_skip_space = fn (module: &Module) void
+{
+    while (1)
+    {
+        >iteration_offset = module.offset;
+
+        while (module.offset < module.content.length and? is_space(module.content[module.offset]))
+        {
+            module.line_offset += #extend(module.content[module.offset] == '\n');
+            module.line_character_offset = #select(module.content[module.offset] == '\n', module.offset, module.line_character_offset);
+            module.offset += 1;
+        }
+
+        if (module.offset + 1 < module.content.length)
+        {
+            >i = module.offset;
+            >is_comment = module.content[i] == '/' and module.content[i + 1] == '/';
+
+            if (is_comment)
+            {
+                while (module.offset < module.content.length and? module.content[module.offset] != '\n')
+                {
+                    module.offset += 1;
+                }
+
+                if (module.offset < module.content.length)
+                {
+                    module.line_offset += 1;
+                    module.line_character_offset = module.offset;
+                    module.offset += 1;
+                }
+            }
+        }
+
+        if (module.offset - iteration_offset == 0)
+        {
+            break;
+        }
+    }
+}
+
+module_parse = fn (module: &Module) void
+{
+}
+
+module_emit = fn (module: &Module) void
+{
 }
 
 compile = fn (arena: &Arena, options: CompileOptions) void
@@ -729,7 +788,14 @@ compile = fn (arena: &Arena, options: CompileOptions) void
         .arena = arena,
         .base_type_allocation = base_type_allocation,
         .void_value = void_value,
+        .content = options.content,
+        .offset = 0,
+        .line_offset = 0,
+        .line_character_offset = 0,
     };
+
+    module_parse(&module);
+    module_emit(&module);
 }
 
 compile_file = fn (arena: &Arena, compile_options: CompileFile) void

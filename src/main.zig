@@ -330,4 +330,5 @@ const names = &[_][]const u8{
     "basic_union",
     "constant_global_reference",
     "generic_pointer_macro",
+    "break_continue",
 };

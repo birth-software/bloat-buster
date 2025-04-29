@@ -1,0 +1,31 @@
+[export] main = fn [cc(c)] () s32
+{
+    >a: s32 = 0;
+
+    while (a < 10)
+    {
+        if (a == 3)
+        {
+            break;
+        }
+
+        a += 1;
+        continue;
+    }
+
+    >b: s32 = 2;
+    for (i: 0..10)
+    {
+        if (b == 2)
+        {
+            b += 1;
+            continue;
+        }
+        else
+        {
+            break;
+        }
+    }
+
+    return a - b;
+}

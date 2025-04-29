@@ -788,6 +788,8 @@ pub const Statement = struct {
         for_each: ForEach,
         @"switch": Switch,
         block: *LexicalBlock,
+        break_statement,
+        continue_statement,
     },
     line: u32,
     column: u32,
@@ -1062,6 +1064,7 @@ pub const Value = struct {
             .unary => false,
             .array_expression => false,
             .string_literal => true,
+            .dereference => false,
             else => @trap(),
         };
     }
@@ -1254,6 +1257,8 @@ pub const Module = struct {
     current_function: ?*Global = null,
     current_macro_declaration: ?*Macro = null,
     current_macro_instantiation: ?*Value = null,
+    exit_block: ?*llvm.BasicBlock = null,
+    continue_block: ?*llvm.BasicBlock = null,
     inline_at_debug_location: ?*llvm.DI.Location = null,
     name: []const u8,
     path: []const u8,
@@ -1884,6 +1889,8 @@ pub const Module = struct {
         @"for",
         @"while",
         @"switch",
+        @"break",
+        @"continue",
     };
 
     const rules = blk: {
@@ -2464,8 +2471,18 @@ pub const Module = struct {
             },
             '\'' => blk: {
                 module.offset += 1;
-                const ch = module.content[module.offset];
-                module.offset += 1;
+                const ch_after_quote = module.content[module.offset];
+                const ch: u8 = switch (ch_after_quote) {
+                    '\\' => switch (module.content[module.offset + 1]) {
+                        'n' => '\n',
+                        'r' => '\r',
+                        't' => '\t',
+                        else => @trap(),
+                    },
+                    else => ch_after_quote,
+                };
+                module.offset += @as(u64, @intFromBool(ch_after_quote == '\\')) + 1;
+
                 module.expect_character('\'');
 
                 break :blk .{
@@ -2916,6 +2933,8 @@ pub const Module = struct {
                                 },
                             };
                         },
+                        .@"break" => break :blk .break_statement,
+                        .@"continue" => break :blk .continue_statement,
                     } else {
                         module.offset -= statement_start_identifier.len;
 
@@ -8484,27 +8503,53 @@ pub const Module = struct {
                 _ = module.llvm.builder.create_branch(loop_entry_block);
                 module.llvm.builder.position_at_end(loop_entry_block);
 
-                module.analyze(while_loop.condition, .{}, .abi);
-
-                const boolean_type = module.integer_type(1, false);
-                const condition_value = switch (while_loop.condition.type == boolean_type) {
-                    true => while_loop.condition.llvm.?,
-                    false => switch (while_loop.condition.type.?.bb) {
-                        .integer => module.llvm.builder.create_integer_compare(.ne, while_loop.condition.llvm.?, while_loop.condition.type.?.llvm.abi.?.to_integer().get_constant(0, @intFromBool(false)).to_value()),
-                        else => @trap(),
-                    },
-                };
-
                 const loop_body_block = module.llvm.context.create_basic_block("while.body", llvm_function);
+
+                const previous_continue_block = module.continue_block;
+                defer module.continue_block = previous_continue_block;
+                const loop_continue_block = module.llvm.context.create_basic_block("while.continue", llvm_function);
+                module.continue_block = loop_continue_block;
+
+                const previous_exit_block = module.exit_block;
+                defer module.exit_block = previous_exit_block;
                 const loop_end_block = module.llvm.context.create_basic_block("while.end", llvm_function);
-                _ = module.llvm.builder.create_conditional_branch(condition_value, loop_body_block, loop_end_block);
+                module.exit_block = loop_end_block;
+
+                if (while_loop.condition.is_constant()) {
+                    switch (while_loop.condition.bb) {
+                        .constant_integer => |constant_integer| {
+                            if (constant_integer.value == 0) {
+                                module.report_error();
+                            }
+                        },
+                        else => @trap(),
+                    }
+                    _ = module.llvm.builder.create_branch(loop_body_block);
+                } else {
+                    module.analyze(while_loop.condition, .{}, .abi);
+
+                    const boolean_type = module.integer_type(1, false);
+                    const condition_value = switch (while_loop.condition.type == boolean_type) {
+                        true => while_loop.condition.llvm.?,
+                        false => switch (while_loop.condition.type.?.bb) {
+                            .integer => module.llvm.builder.create_integer_compare(.ne, while_loop.condition.llvm.?, while_loop.condition.type.?.llvm.abi.?.to_integer().get_constant(0, @intFromBool(false)).to_value()),
+                            else => @trap(),
+                        },
+                    };
+
+                    _ = module.llvm.builder.create_conditional_branch(condition_value, loop_body_block, loop_end_block);
+                }
+
                 module.llvm.builder.position_at_end(loop_body_block);
 
                 module.analyze_block(while_loop.block);
 
                 if (module.llvm.builder.get_insert_block() != null) {
-                    _ = module.llvm.builder.create_branch(loop_entry_block);
-                }
+                    _ = module.llvm.builder.create_branch(loop_continue_block);
+                } 
+
+                module.llvm.builder.position_at_end(loop_continue_block);
+                _ = module.llvm.builder.create_branch(loop_entry_block);
 
                 if (loop_body_block.to_value().use_empty()) {
                     @trap();
@@ -8589,8 +8634,17 @@ pub const Module = struct {
 
                 const loop_entry_block = module.llvm.context.create_basic_block("foreach.entry", llvm_function);
                 const loop_body_block = module.llvm.context.create_basic_block("foreach.body", llvm_function);
+
+                const previous_continue_block = module.continue_block;
+                defer module.continue_block = previous_continue_block;
                 const loop_continue_block = module.llvm.context.create_basic_block("foreach.continue", llvm_function);
+                module.continue_block = loop_continue_block;
+
+                const previous_exit_block = module.exit_block;
+                defer module.exit_block = previous_exit_block;
                 const loop_exit_block = module.llvm.context.create_basic_block("foreach.exit", llvm_function);
+                module.exit_block = loop_exit_block;
+
 
                 switch (for_loop.kind) {
                     .slice => {
@@ -8786,6 +8840,16 @@ pub const Module = struct {
                         }
                     },
                 }
+            },
+            .break_statement => {
+                const exit_block = module.exit_block orelse module.report_error();
+                _ = module.llvm.builder.create_branch(exit_block);
+                module.llvm.builder.clear_insertion_position();
+            },
+            .continue_statement => {
+                const continue_block = module.continue_block orelse module.report_error();
+                _ = module.llvm.builder.create_branch(continue_block);
+                module.llvm.builder.clear_insertion_position();
             },
         }
     }
