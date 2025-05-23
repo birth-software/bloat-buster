@@ -20,11 +20,18 @@ jobs:
       fail-fast: false
       matrix:
         os: [ ubuntu-latest ]
-        BIRTH_ZIG_BUILD_TYPE: [ Debug, ReleaseSafe, ReleaseFast, ReleaseSmall ]
+        BIRTH_CMAKE_BUILD_TYPE: [ Debug, RelWithDebInfo, Release, MinSizeRel ]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Build and test (Packaged LLVM)
+        shell: bash
+        env:
+          BB_CI: 1
+          CMAKE_BUILD_TYPE: ${{matrix.BIRTH_CMAKE_BUILD_TYPE}}
+          CLANG_PATH: clang-19
+          CLANGXX_PATH: clang++-19
         run: |
-          ~/zig-linux-x86_64-0.14.0/zig build test -Doptimize=${{matrix.BIRTH_ZIG_BUILD_TYPE}} -Dsystem_llvm=false
-          ldd zig-out/bin/bloat-buster
+          ./generate.sh
+          ./build.sh
+          ./build/bb test

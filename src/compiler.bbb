@@ -445,7 +445,7 @@ arena_allocate_bytes = fn (arena: &Arena, size: u64, alignment: u64) &u8
 
 arena_allocate = macro [T] (arena: &Arena, count: u64) &T
 {
-    return #pointer_cast(arena_allocate_bytes(arena, #byte_size(T) * count, #alignof(T)));
+    return #pointer_cast(arena_allocate_bytes(arena, #byte_size(T) * count, #align_of(T)));
 }
 
 arena_duplicate_string = fn (arena: &Arena, string: []u8) []u8

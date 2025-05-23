@@ -1,0 +1,15 @@
+foo = macro[T](addr: &u64, count: u64) []T
+{
+    >pointer: &T = #pointer_cast(addr);
+    return pointer[..count];
+}
+
+[export] main = fn [cc(c)] () s32
+{
+    >address_raw: u64 = 0xaaaaaaaaaaaaaaaa;
+    >some_var: &u64 = #pointer_from_int(address_raw);
+    >result: []&u8 = foo[&u8](some_var, 1);
+    if (#int_from_pointer(result.pointer) != address_raw) #trap();
+    if (result.length != 1) #trap();
+    return 0;
+}

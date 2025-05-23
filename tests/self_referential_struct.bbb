@@ -1,0 +1,11 @@
+S = struct
+{
+    self: &S,
+}
+
+[export] main = fn [cc(c)] () s32
+{
+    >s: S = zero;
+    s.self = &s;
+    return 0;
+}
