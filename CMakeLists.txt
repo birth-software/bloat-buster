@@ -48,5 +48,3 @@ target_link_libraries(bb PUBLIC
 )
 
 target_compile_options(bb PRIVATE -Wall -Wextra -pedantic -Wpedantic -Werror -Wno-c99-extensions -Wno-unused-function -Wno-missing-designated-field-initializers -funsigned-char -fwrapv -fno-strict-aliasing)
-# target_compile_options(bb PRIVATE -fsanitize=address)
-# target_link_options(bb PRIVATE -fsanitize=address)

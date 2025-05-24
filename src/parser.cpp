@@ -450,7 +450,6 @@ fn u64 parse_integer_decimal_assume_valid(String string)
 
 fn Value* parse_value(Module* module, Scope* scope, ValueBuilder builder);
 
-
 fn Type* parse_type(Module* module, Scope* scope)
 {
     auto start_character = module->content[module->offset];
@@ -464,6 +463,20 @@ fn Type* parse_type(Module* module, Scope* scope)
         else if (identifier.equal(string_literal("noreturn")))
         {
             return noreturn_type(module);
+        }
+        else if (identifier.equal(string_literal("enum_array")))
+        {
+            skip_space(module);
+            expect_character(module, left_bracket);
+            auto enum_type = parse_type(module, scope);
+            expect_character(module, right_bracket);
+
+            expect_character(module, left_parenthesis);
+            auto element_type = parse_type(module, scope);
+            expect_character(module, right_parenthesis);
+
+            auto enum_array_type = get_enum_array_type(module, enum_type, element_type);
+            return enum_array_type;
         }
         else
         {
@@ -505,12 +518,19 @@ fn Type* parse_type(Module* module, Scope* scope)
             }
             else
             {
-                for (Type* type = module->first_type; type; type = type->next)
+                assert(scope);
+                auto it_scope = scope;
+                while (it_scope)
                 {
-                    if (identifier.equal(type->name))
+                    for (Type* type = it_scope->types.first; type; type = type->next)
                     {
-                        return type;
+                        if (identifier.equal(type->name))
+                        {
+                            return type;
+                        }
                     }
+
+                    it_scope = it_scope->parent;
                 }
 
                 report_error();
@@ -597,6 +617,7 @@ fn Type* parse_type(Module* module, Scope* scope)
                     },
                     .id = TypeId::array,
                     .name = string_literal(""),
+                    .scope = element_type->scope,
                 });
 
                 return result;
@@ -745,8 +766,38 @@ fn u8 escape_character(u8 ch)
         case 'n': return '\n';
         case 't': return '\t';
         case 'r': return '\r';
+        case '\'': return '\'';
         default: trap();
     }
+}
+
+fn String parse_string_literal(Module* module)
+{
+    expect_character(module, '"');
+
+    auto start = module->offset;
+
+    while (1)
+    {
+        auto ch = module->content[module->offset];
+        if (ch == '"')
+        {
+            break;
+        }
+        else if (ch == '\\')
+        {
+            trap();
+        }
+        else
+        {
+            module->offset += 1;
+        }
+    }
+
+    auto end = module->offset;
+    module->offset += 1;
+    auto string_literal = module->content(start, end);
+    return string_literal;
 }
 
 fn Token tokenize(Module* module)
@@ -953,29 +1004,7 @@ fn Token tokenize(Module* module)
             } break;
         case '"':
             {
-                module->offset += 1;
-                auto start = module->offset;
-
-                while (1)
-                {
-                    auto ch = module->content[module->offset];
-                    if (ch == '"')
-                    {
-                        break;
-                    }
-                    else if (ch == '\\')
-                    {
-                        trap();
-                    }
-                    else
-                    {
-                        module->offset += 1;
-                    }
-                }
-
-                auto end = module->offset;
-                module->offset += 1;
-                auto string_literal = module->content(start, end);
+                auto string_literal = parse_string_literal(module);
 
                 token = {
                     .string_literal = string_literal,
@@ -1190,6 +1219,89 @@ fn Token tokenize(Module* module)
 }
 
 fn Value* parse_value(Module* module, Scope* scope, ValueBuilder builder);
+
+fn Value* parse_aggregate_initialization(Module* module, Scope* scope, ValueBuilder builder, u8 end_ch)
+{
+    skip_space(module);
+
+    u64 field_count = 0;
+
+    AggregateInitializationElement element_buffer[64];
+    bool zero = false;
+
+    while (1)
+    {
+        skip_space(module);
+
+        if (consume_character_if_match(module, end_ch))
+        {
+            break;
+        }
+
+        auto field_index = field_count;
+        if (consume_character_if_match(module, '.'))
+        {
+            auto name = parse_identifier(module);
+            skip_space(module);
+            expect_character(module, '=');
+            skip_space(module);
+
+            auto line = get_line(module);
+            auto column = get_column(module);
+
+            auto value = parse_value(module, scope, {});
+            skip_space(module);
+            consume_character_if_match(module, ',');
+
+            element_buffer[field_index] = {
+                .name = name,
+                .value = value,
+                .line = line,
+                .column = column,
+            };
+        }
+        else
+        {
+            auto token = tokenize(module);
+            zero = token.id == TokenId::value_keyword && token.value_keyword == ValueKeyword::zero;
+            if (zero)
+            {
+                skip_space(module);
+
+                if (consume_character_if_match(module, ','))
+                {
+                    skip_space(module);
+                }
+
+                expect_character(module, right_brace);
+                break;
+            }
+            else
+            {
+                report_error();
+            }
+        }
+
+        field_count += 1;
+    }
+
+    auto elements = arena_allocate<AggregateInitializationElement>(module->arena, field_count);
+    memcpy(elements.pointer, element_buffer, sizeof(element_buffer[0]) * field_count);
+
+    auto result = new_value(module);
+    *result = {
+        .aggregate_initialization = {
+            .elements = elements,
+            .scope = scope,
+            .is_constant = false,
+            .zero = zero,
+        },
+        .id = ValueId::aggregate_initialization,
+        .kind = builder.kind,
+    };
+
+    return result;
+}
 
 fn Value* parse_precedence(Module* module, Scope* scope, ValueBuilder builder);
 fn Value* parse_left(Module* module, Scope* scope, ValueBuilder builder)
@@ -1422,33 +1534,42 @@ fn Value* parse_left(Module* module, Scope* scope, ValueBuilder builder)
                 u64 element_count = 0;
                 Value* value_buffer[64];
 
-                while (1)
-                {
-                    skip_space(module);
+                skip_space(module);
 
-                    if (consume_character_if_match(module, right_bracket))
+                if (module->content[module->offset] == '.')
+                {
+                    result = parse_aggregate_initialization(module, scope, builder, right_bracket);
+                }
+                else
+                {
+                    while (1)
                     {
-                        break;
+                        skip_space(module);
+
+                        if (consume_character_if_match(module, right_bracket))
+                        {
+                            break;
+                        }
+
+                        auto value = parse_value(module, scope, {});
+                        value_buffer[element_count] = value;
+                        element_count += 1;
+
+                        consume_character_if_match(module, ',');
                     }
 
-                    auto value = parse_value(module, scope, {});
-                    value_buffer[element_count] = value;
-                    element_count += 1;
+                    auto values = new_value_array(module, element_count);
+                    memcpy(values.pointer, value_buffer, element_count * sizeof(Value*));
 
-                    consume_character_if_match(module, ',');
+                    result = new_value(module);
+                    *result = {
+                        .array_initialization = {
+                            .values = values,
+                            .is_constant = false, // This is analyzed later
+                        },
+                        .id = ValueId::array_initialization,
+                    };
                 }
-
-                auto values = new_value_array(module, element_count);
-                memcpy(values.pointer, value_buffer, element_count * sizeof(Value*));
-
-                result = new_value(module);
-                *result = {
-                    .array_initialization = {
-                        .values = values,
-                        .is_constant = false, // This is analyzed later
-                    },
-                    .id = ValueId::array_initialization,
-                };
             } break;
         case TokenId::dot:
             {
@@ -1477,76 +1598,7 @@ fn Value* parse_left(Module* module, Scope* scope, ValueBuilder builder)
             } break;
         case TokenId::left_brace:
             {
-                skip_space(module);
-
-                u64 field_count = 0;
-                String name_buffer[64];
-                Value* value_buffer[64];
-                bool zero = false;
-
-                while (1)
-                {
-                    skip_space(module);
-
-                    if (consume_character_if_match(module, right_brace))
-                    {
-                        break;
-                    }
-
-                    auto field_index = field_count;
-                    if (consume_character_if_match(module, '.'))
-                    {
-                        auto name = parse_identifier(module);
-                        name_buffer[field_index] = name;
-                        skip_space(module);
-                        expect_character(module, '=');
-                        skip_space(module);
-
-                        auto value = parse_value(module, scope, {});
-                        value_buffer[field_index] = value;
-                        skip_space(module);
-                        consume_character_if_match(module, ',');
-                    }
-                    else
-                    {
-                        auto token = tokenize(module);
-                        zero = token.id == TokenId::value_keyword && token.value_keyword == ValueKeyword::zero;
-                        if (zero)
-                        {
-                            skip_space(module);
-
-                            if (consume_character_if_match(module, ','))
-                            {
-                                skip_space(module);
-                            }
-
-                            expect_character(module, right_brace);
-                            break;
-                        }
-                        else
-                        {
-                            report_error();
-                        }
-                    }
-
-                    field_count += 1;
-                }
-
-                auto names = arena_allocate<String>(module->arena, field_count);
-                memcpy(names.pointer, name_buffer, sizeof(String) * field_count);
-                auto values = new_value_array(module, field_count);
-                memcpy(values.pointer, value_buffer, sizeof(Value*) * field_count);
-
-                result = new_value(module);
-                *result = {
-                    .aggregate_initialization = {
-                        .names = names,
-                        .values = values,
-                        .is_constant = false,
-                        .zero = zero,
-                    },
-                    .id = ValueId::aggregate_initialization,
-                };
+                result = parse_aggregate_initialization(module, scope, builder, right_brace);
             } break;
         case TokenId::value_keyword:
             {
@@ -1574,6 +1626,7 @@ fn Precedence get_token_precedence(Token token)
         case TokenId::none: unreachable();
         case TokenId::comma:
         case TokenId::double_dot:
+        case TokenId::triple_dot:
         case TokenId::end_of_statement:
         case TokenId::right_brace:
         case TokenId::right_bracket:
@@ -2452,8 +2505,7 @@ fn Statement* parse_statement(Module* module, Scope* scope)
                                         }
                                     }
 
-
-                                    Slice<Value*> clause_values = {};
+                                    Slice<ClauseDiscriminant> clause_values = {};
                                     if (is_else)
                                     {
                                         skip_space(module);
@@ -2463,16 +2515,55 @@ fn Statement* parse_statement(Module* module, Scope* scope)
                                     }
                                     else
                                     {
-                                        Value* case_buffer[64];
+                                        ClauseDiscriminant case_buffer[64];
                                         u64 case_count = 0;
 
                                         while (1)
                                         {
-                                            auto case_value = parse_value(module, scope, {});
-                                            case_buffer[case_count] = case_value;
-                                            case_count += 1;
+                                            auto first_case_value = parse_value(module, scope, {});
 
-                                            consume_character_if_match(module, ',');
+                                            skip_space(module);
+
+                                            auto checkpoint = get_checkpoint(module);
+                                            auto token = tokenize(module);
+
+                                            ClauseDiscriminant clause_discriminant;
+                                            switch (token.id)
+                                            {
+                                                case TokenId::triple_dot:
+                                                    {
+                                                        auto last_case_value = parse_value(module, scope, {});
+                                                        clause_discriminant = {
+                                                            .range = { first_case_value, last_case_value },
+                                                            .id = ClauseDiscriminantId::range,
+                                                        };
+                                                    } break;
+                                                default:
+                                                    {
+                                                        if (token.id != TokenId::comma) set_checkpoint(module, checkpoint);
+
+                                                        clause_discriminant = {
+                                                            .single = first_case_value,
+                                                            .id = ClauseDiscriminantId::single,
+                                                        };
+                                                    } break;
+                                            }
+
+                                            switch (clause_discriminant.id)
+                                            {
+                                                case ClauseDiscriminantId::single:
+                                                    {
+                                                        assert(clause_discriminant.single);
+                                                    } break;
+                                                case ClauseDiscriminantId::range:
+                                                    {
+                                                        assert(clause_discriminant.range[0]);
+                                                        assert(clause_discriminant.range[1]);
+                                                    } break;
+                                            }
+
+                                            case_buffer[case_count] = clause_discriminant;
+                                            case_count += 1;
 
                                             skip_space(module);
 
@@ -2483,14 +2574,13 @@ fn Statement* parse_statement(Module* module, Scope* scope)
                                             }
                                         }
 
-                                        clause_values = new_value_array(module, case_count);
-                                        memcpy(clause_values.pointer, case_buffer, case_count * sizeof(Value*));
+                                        clause_values = arena_allocate<ClauseDiscriminant>(module->arena, case_count);
+                                        memcpy(clause_values.pointer, case_buffer, case_count * sizeof(case_buffer[0]));
                                     }
 
                                     skip_space(module);
 
                                     auto clause_block = parse_block(module, scope);
-
                                     clause_buffer[clause_count] = {
                                         .values = clause_values,
                                         .block = clause_block,
@@ -2638,6 +2728,20 @@ fn Block* parse_block(Module* module, Scope* parent_scope)
     return block;
 }
 
+fn String parse_name(Module* module)
+{
+    String result;
+    if (module->content[module->offset] == '"')
+    {
+        result = parse_string_literal(module);
+    }
+    else
+    {
+        result = parse_identifier(module);
+    }
+    return result;
+}
+
 void parse(Module* module)
 {
     auto scope = &module->scope;
@@ -2731,7 +2835,7 @@ void parse(Module* module)
             last_global = last_global->next;
         }
 
-        Type* type_it = module->first_type;
+        Type* type_it = module->scope.types.first;
         Type* forward_declaration = 0;
         while (type_it)
         {
@@ -2779,6 +2883,7 @@ void parse(Module* module)
             enumerator,
             function,
             macro,
+            opaque,
             structure,
             typealias,
             union_type,
@@ -2798,6 +2903,7 @@ void parse(Module* module)
                 string_literal("enum"),
                 string_literal("fn"),
                 string_literal("macro"),
+                string_literal("opaque"),
                 string_literal("struct"),
                 string_literal("typealias"),
                 string_literal("union"),
@@ -2904,6 +3010,7 @@ void parse(Module* module)
                             },
                             .id = TypeId::bits,
                             .name = global_name,
+                            .scope = &module->scope,
                         });
                         unused(bits_type);
                     } break;
@@ -2938,7 +3045,7 @@ void parse(Module* module)
                             auto field_index = field_count;
                             field_count += 1;
 
-                            auto field_name = parse_identifier(module);
+                            auto field_name = parse_name(module);
                             name_buffer[field_index] = field_name;
 
                             skip_space(module);
@@ -3018,6 +3125,7 @@ void parse(Module* module)
                                 },
                                 .id = TypeId::enumerator,
                                 .name = global_name,
+                                .scope = &module->scope,
                             });
 
                             unused(enum_type);
@@ -3189,6 +3297,7 @@ void parse(Module* module)
                             },
                             .id = TypeId::function,
                             .name = string_literal(""),
+                            .scope = &module->scope,
                         });
 
                         auto storage = new_value(module);
@@ -3255,15 +3364,25 @@ void parse(Module* module)
                     } break;
                 case GlobalKeyword::macro:
                     {
-                        Type* type_argument_buffer[64];
-                        u64 type_argument_count = 0;
-                        unused(type_argument_buffer);
-                        unused(type_argument_count);
-
                         ConstantArgument constant_argument_buffer[64];
                         u64 constant_argument_count = 0;
 
                         auto is_generic = consume_character_if_match(module, left_bracket);
+                        auto macro_declaration = &arena_allocate<MacroDeclaration>(module->arena, 1)[0];
+
+                        *macro_declaration = {
+                            .arguments = {},
+                            .constant_arguments = {},
+                            .return_type = 0,
+                            .block = 0,
+                            .name = global_name,
+                            .scope = {
+                                .parent = scope,
+                                .line = global_line,
+                                .column = global_column,
+                                .kind = ScopeKind::macro_declaration,
+                            },
+                        };
 
                         if (is_generic)
                         {
@@ -3293,6 +3412,7 @@ void parse(Module* module)
                                     auto ty = type_allocate_init(module, {
                                         .id = TypeId::unresolved,
                                         .name = argument_name,
+                                        .scope = &macro_declaration->scope,
                                     });
 
                                     constant_argument_buffer[constant_argument_index] = {
@@ -3322,23 +3442,8 @@ void parse(Module* module)
                             assert(constant_argument_count == 0);
                         }
 
-                        auto constant_arguments = arena_allocate<ConstantArgument>(module->arena, constant_argument_count);
-                        memcpy(constant_arguments.pointer, constant_argument_buffer, sizeof(constant_argument_buffer[0]) * constant_argument_count);
-
-                        auto macro_declaration = &arena_allocate<MacroDeclaration>(module->arena, 1)[0];
-                        *macro_declaration = {
-                            .arguments = {},
-                            .constant_arguments = constant_arguments,
-                            .return_type = 0,
-                            .block = 0,
-                            .name = global_name,
-                            .scope = {
-                                .parent = scope,
-                                .line = global_line,
-                                .column = global_column,
-                                .kind = ScopeKind::macro_declaration,
-                            },
-                        };
+                        macro_declaration->constant_arguments = arena_allocate<ConstantArgument>(module->arena, constant_argument_count);
+                        memcpy(macro_declaration->constant_arguments.pointer, constant_argument_buffer, sizeof(constant_argument_buffer[0]) * constant_argument_count);
 
                         if (module->last_macro_declaration)
                         {
@@ -3432,6 +3537,7 @@ void parse(Module* module)
                             struct_type = type_allocate_init(module, {
                                 .id = TypeId::forward_declaration,
                                 .name = global_name,
+                                .scope = &module->scope,
                             });
                         }
 
@@ -3485,6 +3591,9 @@ void parse(Module* module)
                                 field_count += 1;
                             }
 
+                            byte_size = align_forward(byte_size, byte_alignment);
+                            assert(byte_size % byte_alignment == 0);
+
                             skip_space(module);
                             consume_character_if_match(module, ';');
 
@@ -3523,6 +3632,7 @@ void parse(Module* module)
                             },
                             .id = TypeId::alias,
                             .name = global_name,
+                            .scope = scope,
                         });
                         unused(alias_type);
                     } break;
@@ -3541,6 +3651,7 @@ void parse(Module* module)
                             union_type = type_allocate_init(module, {
                                 .id = TypeId::forward_declaration,
                                 .name = global_name,
+                                .scope = &module->scope,
                             });
                         }
 
@@ -3581,7 +3692,7 @@ void parse(Module* module)
                                 .line = field_line,
                             };
 
-                            biggest_field = byte_size > field_byte_size ? field_index : biggest_field;
+                            biggest_field = field_byte_size > byte_size ? field_index : biggest_field;
                             byte_alignment = MAX(byte_alignment, field_byte_alignment);
                             byte_size = MAX(byte_size, field_byte_size);
 
@@ -3596,6 +3707,9 @@ void parse(Module* module)
                         auto fields = arena_allocate<UnionField>(module->arena, field_count);
                         memcpy(fields.pointer, field_buffer, sizeof(field_buffer[0]) * field_count);
 
+                        auto biggest_size = get_byte_size(fields[biggest_field].type);
+                        assert(biggest_size == byte_size);
+
                         union_type->union_type = {
                             .fields = fields,
                             .byte_size = byte_size,
@@ -3604,6 +3718,17 @@ void parse(Module* module)
                             .biggest_field = biggest_field,
                         };
                         union_type->id = TypeId::union_type;
+                    } break;
+                case GlobalKeyword::opaque:
+                    {
+                        skip_space(module);
+                        expect_character(module, ';');
+                        auto opaque_type = type_allocate_init(module, {
+                            .id = TypeId::opaque,
+                            .name = global_name,
+                            .scope = &module->scope,
+                        });
+                        unused(opaque_type);
                     } break;
                 case GlobalKeyword::count:
                     {

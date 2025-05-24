@@ -17,6 +17,8 @@ fn void analyze_block(Module* module, Block* block);
 fn void emit_local_storage(Module* module, Variable* variable);
 fn void emit_assignment(Module* module, LLVMValueRef left_llvm, Type* left_type, Value* right);
 fn void emit_macro_instantiation(Module* module, Value* value);
+fn void emit_value(Module* module, Value* value, TypeKind type_kind, bool must_be_constant);
+fn void analyze_value(Module* module, Value* value, Type* expected_type, TypeKind type_kind, bool must_be_constant);
 
 fn void emit_block(Module* module, LLVMBasicBlockRef basic_block)
 {
@@ -40,6 +42,24 @@ fn void emit_block(Module* module, LLVMBasicBlockRef basic_block)
     }
 
     LLVMPositionBuilderAtEnd(module->llvm.builder, basic_block);
+}
+
+fn LLVMValueRef emit_condition(Module* module, Value* condition_value)
+{
+    auto condition_llvm_value = condition_value->llvm;
+    auto condition_type = condition_value->type;
+    assert(condition_type);
+    assert(condition_llvm_value);
+
+    assert(condition_type->id == TypeId::integer || condition_type->id == TypeId::pointer);
+    if (!(condition_type->id == TypeId::integer && condition_type->integer.bit_count == 1))
+    {
+        condition_llvm_value = LLVMBuildICmp(module->llvm.builder, LLVMIntNE, condition_llvm_value, LLVMConstNull(condition_type->llvm.abi), "");
+    }
+
+    assert(condition_llvm_value);
+
+    return condition_llvm_value;
 }
 
 fn LLVMValueRef emit_intrinsic_call(Module* module, IntrinsicIndex index, Slice<LLVMTypeRef> argument_types, Slice<LLVMValueRef> argument_values)
@@ -70,6 +90,7 @@ fn EvaluationKind get_evaluation_kind(Type* type)
         case TypeId::array:
         case TypeId::structure:
         case TypeId::union_type:
+        case TypeId::enum_array:
             return EvaluationKind::aggregate;
         default:
             unreachable();
@@ -130,6 +151,7 @@ fn bool is_integral_or_enumeration_type(Type* type)
         case TypeId::alias: return is_integral_or_enumeration_type(type->alias.type);
         case TypeId::integer:
         case TypeId::bits:
+        case TypeId::enumerator:
             return true;
         case TypeId::structure:
             return false;
@@ -153,6 +175,7 @@ fn bool is_promotable_integer_type_for_abi(Type* type)
         case TypeId::integer: return type->integer.bit_count < 32;
         case TypeId::bits: return is_promotable_integer_type_for_abi(type->bits.backing_type);
         case TypeId::alias: return is_promotable_integer_type_for_abi(type->alias.type);
+        case TypeId::enumerator: return is_promotable_integer_type_for_abi(type->enumerator.backing_type);
         default: unreachable();
     }
 }
@@ -216,8 +239,6 @@ fn void dump_module(Module* module)
     print(llvm_module_to_string(module->llvm.module));
 }
 
-fn void emit_value(Module* module, Value* value, TypeKind type_kind);
-
 fn LLVMCallConv llvm_calling_convention(CallingConvention calling_convention)
 {
     LLVMCallConv cc;
@@ -235,20 +256,6 @@ fn Type* resolve_alias(Module* module, Type* type)
     Type* result_type = 0;
     switch (type->id)
     {
-        case TypeId::pointer:
-            {
-                auto* element_type = type->pointer.element_type;
-                auto* resolved_element_type = resolve_alias(module, element_type);
-                result_type = get_pointer_type(module, resolved_element_type);
-            } break;
-        case TypeId::array:
-            {
-                auto* element_type = type->array.element_type;
-                auto element_count = type->array.element_count;
-                assert(element_count);
-                auto* resolved_element_type = resolve_alias(module, element_type);
-                result_type = get_array_type(module, resolved_element_type, element_count);
-            } break;
         case TypeId::void_type:
         case TypeId::noreturn:
         case TypeId::integer:
@@ -256,15 +263,52 @@ fn Type* resolve_alias(Module* module, Type* type)
         case TypeId::function:
         case TypeId::bits:
         case TypeId::union_type:
+        case TypeId::opaque:
             {
                 result_type = type;
+            } break;
+        case TypeId::pointer:
+            {
+                auto* element_type = type->pointer.element_type;
+                auto* resolved_element_type = resolve_alias(module, element_type);
+                if (element_type == resolved_element_type)
+                {
+                    result_type = type;
+                }
+                else
+                {
+                    result_type = get_pointer_type(module, resolved_element_type);
+                }
+            } break;
+        case TypeId::array:
+            {
+                auto* element_type = type->array.element_type;
+                auto element_count = type->array.element_count;
+                assert(element_count);
+                auto* resolved_element_type = resolve_alias(module, element_type);
+                if (element_type == resolved_element_type)
+                {
+                    result_type = type;
+                }
+                else
+                {
+                    result_type = get_array_type(module, resolved_element_type, element_count);
+                }
             } break;
         case TypeId::structure:
             {
                 if (type->structure.is_slice)
                 {
-                    auto element_type = resolve_alias(module, type->structure.fields[0].type->pointer.element_type);
-                    result_type = get_slice_type(module, element_type);
+                    auto old_element_type = type->structure.fields[0].type->pointer.element_type;
+                    auto element_type = resolve_alias(module, old_element_type);
+                    if (old_element_type == element_type)
+                    {
+                        result_type = type;
+                    }
+                    else
+                    {
+                        result_type = get_slice_type(module, element_type);
+                    }
                 }
                 else
                 {
@@ -274,6 +318,22 @@ fn Type* resolve_alias(Module* module, Type* type)
         case TypeId::alias:
             {
                 result_type = resolve_alias(module, type->alias.type);
+            } break;
+        case TypeId::enum_array:
+            {
+                auto old_enum_type = type->enum_array.enum_type;
+                auto old_element_type = type->enum_array.element_type;
+                auto enum_type = resolve_alias(module, old_enum_type);
+                auto element_type = resolve_alias(module, old_element_type);
+
+                if (old_enum_type == enum_type && old_element_type == element_type)
+                {
+                    result_type = type;
+                }
+                else
+                {
+                    result_type = get_enum_array_type(module, enum_type, element_type);
+                }
             } break;
         default: unreachable();
     }
@@ -289,6 +349,41 @@ fn void llvm_initialize(Module* module)
     auto context = LLVMContextCreate();
     auto m = llvm_context_create_module(context, module->name);
     auto builder = LLVMCreateBuilderInContext(context);
+    BBLLVMCodeGenerationOptimizationLevel code_generation_optimization_level;
+    switch (module->build_mode)
+    {
+        case BuildMode::debug_none:
+        case BuildMode::debug:
+            code_generation_optimization_level = BBLLVMCodeGenerationOptimizationLevel::none;
+            break;
+        case BuildMode::soft_optimize:
+            code_generation_optimization_level = BBLLVMCodeGenerationOptimizationLevel::less;
+            break;
+        case BuildMode::optimize_for_speed:
+        case BuildMode::optimize_for_size:
+            code_generation_optimization_level = BBLLVMCodeGenerationOptimizationLevel::normal;
+            break;
+        case BuildMode::aggressively_optimize_for_speed:
+        case BuildMode::aggressively_optimize_for_size:
+            code_generation_optimization_level = BBLLVMCodeGenerationOptimizationLevel::aggressive;
+            break;
+        case BuildMode::count:
+            unreachable();
+    }
+    auto triple = llvm_default_target_triple();
+    BBLLVMTargetMachineCreate target_machine_options = {
+        .target_triple = triple,
+        .cpu_model = llvm_host_cpu_name(),
+        .cpu_features = llvm_host_cpu_features(),
+        .relocation_model = BBLLVMRelocationModel::default_relocation,
+        .code_model = BBLLVMCodeModel::none,
+        .optimization_level = code_generation_optimization_level,
+    };
+    String error_message = {};
+    auto target_machine = llvm_create_target_machine(&target_machine_options, &error_message);
+    auto target_data = LLVMCreateTargetDataLayout(target_machine);
+    LLVMSetModuleDataLayout(m, target_data);
+    LLVMSetTarget(m, (char*)triple.pointer);
     LLVMDIBuilderRef di_builder = 0;
     LLVMMetadataRef di_compile_unit = 0;
     LLVMMetadataRef di_file = 0;
@@ -321,6 +416,8 @@ fn void llvm_initialize(Module* module)
         .builder = builder,
         .di_builder = di_builder,
         .file = di_file,
+        .target_machine = target_machine,
+        .target_data = target_data,
         .compile_unit = di_compile_unit,
         .pointer_type = LLVMPointerTypeInContext(context, 0),
         .void_type = LLVMVoidTypeInContext(context),
@@ -460,9 +557,31 @@ fn bool contains_no_user_data(Type* type, u64 start, u64 end)
                     return true;
                 } break;
             case TypeId::array:
+            case TypeId::enum_array:
                 {
-                    auto element_type = type->array.element_type;
-                    auto element_count = type->array.element_count;
+                    Type* element_type = 0;
+                    u64 element_count = 0;
+
+                    switch (type->id)
+                    {
+                        case TypeId::array:
+                            {
+                                element_type = type->array.element_type;
+                                element_count = type->array.element_count;
+                            } break;
+                        case TypeId::enum_array:
+                            {
+                                auto enum_type = type->enum_array.enum_type;
+                                assert(enum_type->id == TypeId::enumerator);
+                                element_count = enum_type->enumerator.fields.length;
+                                element_type = type->enum_array.element_type;
+                            } break;
+                        default: unreachable();
+                    }
+
+                    assert(element_type);
+                    assert(element_count);
+
                     auto element_size = get_byte_size(element_type);
 
                     for (u64 i = 0; i < element_count; i += 1)
@@ -479,6 +598,7 @@ fn bool contains_no_user_data(Type* type, u64 start, u64 end)
                             return false;
                         }
                     }
+
                     trap();
                 } break;
             default: return false;
@@ -586,6 +706,11 @@ fn Type* abi_system_v_get_integer_type_at_offset(Module* module, Type* type, u32
         case TypeId::bits:
             {
                 auto backing_type = type->bits.backing_type;
+                return abi_system_v_get_integer_type_at_offset(module, backing_type, offset, source_type == type ? backing_type : source_type, source_offset);
+            } break;
+        case TypeId::enumerator:
+            {
+                auto backing_type = type->enumerator.backing_type;
                 return abi_system_v_get_integer_type_at_offset(module, backing_type, offset, source_type == type ? backing_type : source_type, source_offset);
             } break;
         default: unreachable();
@@ -807,24 +932,43 @@ fn void resolve_type_in_place_abi(Module* module, Type* type)
                     }
 
                     result = LLVMStructTypeInContext(module->llvm.context, llvm_type_buffer, fields.length, 0);
+                    auto llvm_size = LLVMStoreSizeOfType(module->llvm.target_data, result);
+                    assert(llvm_size == type->structure.byte_size);
                 } break;
             case TypeId::bits:
                 {
                     auto backing_type = type->bits.backing_type;
                     resolve_type_in_place_abi(module, backing_type);
                     result = backing_type->llvm.abi;
+                    auto llvm_size = LLVMStoreSizeOfType(module->llvm.target_data, result);
+                    assert(llvm_size == get_byte_size(type));
                 } break;
             case TypeId::union_type:
                 {
                     auto biggest_type = type->union_type.fields[type->union_type.biggest_field].type;
                     resolve_type_in_place_memory(module, biggest_type);
-                    result = LLVMStructTypeInContext(module->llvm.context, &biggest_type->llvm.memory, 1, 0);
+                    result = LLVMStructTypeInContext(module->llvm.context, &biggest_type->llvm.memory, 1, false);
+                    auto llvm_size = LLVMStoreSizeOfType(module->llvm.target_data, result);
+                    assert(llvm_size == get_byte_size(type));
                 } break;
             case TypeId::alias:
                 {
                     auto aliased = type->alias.type;
                     resolve_type_in_place_abi(module, aliased);
                     result = aliased->llvm.abi;
+                } break;
+            case TypeId::enum_array:
+                {
+                    auto enum_type = type->enum_array.enum_type;
+                    assert(enum_type->id == TypeId::enumerator);
+                    auto element_type = type->enum_array.element_type;
+                    resolve_type_in_place_memory(module, element_type);
+                    auto element_count = enum_type->enumerator.fields.length;
+                    assert(element_count);
+                    auto array_type = LLVMArrayType2(element_type->llvm.memory, element_count);
+                    result = array_type;
+                    auto llvm_size = LLVMStoreSizeOfType(module->llvm.target_data, result);
+                    assert(llvm_size == get_byte_size(type));
                 } break;
             default: unreachable();
         }
@@ -849,6 +993,7 @@ fn void resolve_type_in_place_memory(Module* module, Type* type)
             case TypeId::pointer:
             case TypeId::array:
             case TypeId::structure:
+            case TypeId::enum_array:
                 result = type->llvm.abi;
                 break;
             case TypeId::integer:
@@ -918,11 +1063,8 @@ fn void resolve_type_in_place_debug(Module* module, Type* type)
                 case TypeId::pointer:
                     {
                         resolve_type_in_place_debug(module, type->pointer.element_type);
-                        if (type->llvm.debug)
-                        {
-                            trap();
-                        }
-                        else
+                        result = type->llvm.debug;
+                        if (!result)
                         {
                             result = LLVMDIBuilderCreatePointerType(module->llvm.di_builder, type->pointer.element_type->llvm.debug, 64, 64, 0, (char*)type->name.pointer, type->name.length);
                         }
@@ -1025,6 +1167,23 @@ fn void resolve_type_in_place_debug(Module* module, Type* type)
                         resolve_type_in_place_debug(module, aliased);
                         auto alignment = get_byte_alignment(aliased);
                         result = LLVMDIBuilderCreateTypedef(module->llvm.di_builder, aliased->llvm.debug, (char*) type->name.pointer, type->name.length, module->llvm.file, type->alias.line, type->alias.scope->llvm, alignment * 8);
+                    } break;
+                case TypeId::enum_array:
+                    {
+                        auto enum_type = type->enum_array.enum_type;
+                        assert(enum_type->id == TypeId::enumerator);
+                        auto element_type = type->enum_array.element_type;
+                        auto element_count = enum_type->enumerator.fields.length;
+                        resolve_type_in_place_debug(module, element_type);
+                        assert(element_count);
+                        auto bit_alignment = get_byte_alignment(type) * 8;
+                        auto array_type = LLVMDIBuilderCreateArrayType(module->llvm.di_builder, element_count, bit_alignment, element_type->llvm.debug, 0, 0);
+                        result = array_type;
+                    } break;
+                case TypeId::opaque:
+                    {
+                        // TODO: ?
+                        return;
                     } break;
                 default: unreachable();
             }
@@ -1219,7 +1378,13 @@ fn Type* get_anonymous_struct_pair(Module* module, Type* low, Type* high)
 
     auto high_alignment = get_byte_alignment(high);
     auto alignment = MAX(get_byte_alignment(low), high_alignment);
-    u64 high_offset = align_forward(get_byte_size(low), high_alignment);
+    u64 high_offset = align_forward(get_byte_size(low), alignment);
+    auto byte_size = align_forward(high_offset + get_byte_size(high), alignment);
+
+    assert(low->scope);
+    assert(high->scope);
+
+    auto scope = low->scope->kind == ScopeKind::global ? high->scope : low->scope;
 
     auto fields = arena_allocate<Field>(module->arena, 2);
     fields[0] = {
@@ -1238,11 +1403,12 @@ fn Type* get_anonymous_struct_pair(Module* module, Type* low, Type* high)
     auto struct_type = type_allocate_init(module, {
         .structure = {
             .fields = fields,
-            .byte_size = high_offset + get_byte_size(high),
+            .byte_size = byte_size,
             .byte_alignment = alignment,
         },
         .id = TypeId::structure,
         .name = string_literal(""),
+        .scope = scope,
     });
 
     if (pair)
@@ -1596,10 +1762,11 @@ fn AbiInformation abi_system_classify_return_type(Module* module, Type* semantic
 
                 if (high_class == AbiSystemVClass::none && low_type->id == TypeId::integer)
                 {
-                    if (semantic_return_type->id == TypeId::enumerator)
-                    {
-                        trap();
-                    }
+                    // TODO
+                    // if (semantic_return_type->id == TypeId::enumerator)
+                    // {
+                    //     trap();
+                    // }
 
                     if (is_integral_or_enumeration_type(semantic_return_type) && is_promotable_integer_type_for_abi(semantic_return_type))
                     {
@@ -2074,9 +2241,9 @@ fn bool binary_is_shortcircuiting(BinaryId id)
     }
 }
 
-fn void analyze_type(Module* module, Value* value, Type* expected_type);
+fn void analyze_type(Module* module, Value* value, Type* expected_type, bool must_be_constant);
 
-fn void analyze_binary_type(Module* module, Value* left, Value* right, bool is_boolean, Type* expected_type)
+fn void analyze_binary_type(Module* module, Value* left, Value* right, bool is_boolean, Type* expected_type, bool must_be_constant)
 {
     auto left_constant = left->is_constant();
     auto right_constant = right->is_constant();
@@ -2105,19 +2272,19 @@ fn void analyze_binary_type(Module* module, Value* left, Value* right, bool is_b
     {
         if (left_constant)
         {
-            analyze_type(module, right, 0);
-            analyze_type(module, left, right->type);
+            analyze_type(module, right, 0, must_be_constant);
+            analyze_type(module, left, right->type, must_be_constant);
         }
         else 
         {
-            analyze_type(module, left, 0);
-            analyze_type(module, right, left->type);
+            analyze_type(module, left, 0, must_be_constant);
+            analyze_type(module, right, left->type, must_be_constant);
         }
     }
     else if (!is_boolean && expected_type)
     {
-        analyze_type(module, left, expected_type);
-        analyze_type(module, right, expected_type);
+        analyze_type(module, left, expected_type, must_be_constant);
+        analyze_type(module, right, expected_type, must_be_constant);
     }
     else
     {
@@ -2148,6 +2315,7 @@ fn Type* get_va_list_type(Module* module)
             },
             .id = TypeId::structure,
             .name = string_literal("va_list"),
+            .scope = &module->scope,
         });
 
         module->va_list_type = get_array_type(module, va_list_struct, 1);
@@ -2430,8 +2598,9 @@ fn void copy_block(Module* module, Scope* parent_scope, BlockCopy copy)
     }
 }
 
-fn void analyze_type(Module* module, Value* value, Type* expected_type)
+fn void analyze_type(Module* module, Value* value, Type* expected_type, bool must_be_constant)
 {
+    unused(must_be_constant);
     assert(!value->type);
     assert(!value->llvm);
 
@@ -2533,7 +2702,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                             }
 
                             auto extended_value = unary_value;
-                            analyze_type(module, extended_value, 0);
+                            analyze_type(module, extended_value, 0, must_be_constant);
                             auto source = extended_value->type;
                             assert(source);
 
@@ -2557,7 +2726,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                                 report_error();
                             }
 
-                            analyze_type(module, unary_value, 0);
+                            analyze_type(module, unary_value, 0, must_be_constant);
                             auto expected_bit_size = get_bit_size(expected_type);
                             auto source_bit_size = get_bit_size(unary_value->type);
 
@@ -2570,7 +2739,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                         } break;
                     case UnaryId::dereference:
                         {
-                            analyze_type(module, unary_value, 0);
+                            analyze_type(module, unary_value, 0, must_be_constant);
                             if (value->kind == ValueKind::left)
                             {
                                 report_error();
@@ -2584,7 +2753,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                         } break;
                     case UnaryId::int_from_enum:
                         {
-                            analyze_type(module, unary_value, 0);
+                            analyze_type(module, unary_value, 0, must_be_constant);
 
                             auto value_enum_type = unary_value->type;
                             if (value_enum_type->id != TypeId::enumerator)
@@ -2599,7 +2768,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                         } break;
                     case UnaryId::int_from_pointer:
                         {
-                            analyze_type(module, unary_value, 0);
+                            analyze_type(module, unary_value, 0, must_be_constant);
 
                             auto value_enum_type = unary_value->type;
                             if (value_enum_type->id != TypeId::pointer)
@@ -2622,7 +2791,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                                 report_error();
                             }
 
-                            analyze_type(module, unary_value, 0);
+                            analyze_type(module, unary_value, 0, must_be_constant);
                             auto value_pointer_type = unary_value->type;
                             if (value_pointer_type == expected_type)
                             {
@@ -2640,7 +2809,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                         {
                             auto string_type = get_slice_type(module, uint8(module));
                             typecheck(module, expected_type, string_type);
-                            analyze_type(module, unary_value, 0);
+                            analyze_type(module, unary_value, 0, must_be_constant);
                             auto enum_type = unary_value->type;
                             if (enum_type->id != TypeId::enumerator)
                             {
@@ -2755,7 +2924,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                                 report_error();
                             }
 
-                            analyze_type(module, unary_value, 0);
+                            analyze_type(module, unary_value, 0, must_be_constant);
                             auto unary_value_type = unary_value->type;
                             if (unary_value_type->id != TypeId::integer)
                             {
@@ -2775,12 +2944,12 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                             auto is_boolean = unary_is_boolean(unary_id);
                             if (is_boolean)
                             {
-                                analyze_type(module, unary_value, 0);
+                                analyze_type(module, unary_value, 0, must_be_constant);
                                 value_type = uint1(module);
                             }
                             else
                             {
-                                analyze_type(module, unary_value, expected_type);
+                                analyze_type(module, unary_value, expected_type, must_be_constant);
                                 value_type = unary_value->type;
                             }
 
@@ -2838,7 +3007,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
         case ValueId::binary:
             {
                 auto is_boolean = binary_is_boolean(value->binary.id);
-                analyze_binary_type(module, value->binary.left, value->binary.right, is_boolean, expected_type);
+                analyze_binary_type(module, value->binary.left, value->binary.right, is_boolean, expected_type, must_be_constant);
                 check_types(module, value->binary.left->type, value->binary.right->type);
 
                 value_type = is_boolean ? uint1(module) : value->binary.left->type;
@@ -2857,7 +3026,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
             {
                 auto call = &value->call;
                 auto callable = call->callable;
-                analyze_type(module, callable, 0);
+                analyze_type(module, callable, 0, must_be_constant);
                 Type* function_type = 0;
                 switch (callable->id)
                 {
@@ -2908,14 +3077,14 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                 {
                     auto* argument_type = semantic_argument_types[i];
                     auto* call_argument = call_arguments[i];
-                    analyze_type(module, call_argument, argument_type);
+                    analyze_type(module, call_argument, argument_type, must_be_constant);
                     check_types(module, argument_type, call_argument->type);
                 }
 
                 for (u64 i = semantic_argument_types.length; i < call_arguments.length; i += 1)
                 {
                     auto* call_argument = call_arguments[i];
-                    analyze_type(module, call_argument, 0);
+                    analyze_type(module, call_argument, 0, must_be_constant);
                 }
 
                 auto semantic_return_type = function_type->function.semantic_return_type;
@@ -2951,7 +3120,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                     auto* element_type = expected_type->array.element_type;
                     for (auto value : values)
                     {
-                        analyze_type(module, value, element_type);
+                        analyze_type(module, value, element_type, must_be_constant);
                         is_constant = is_constant && value->is_constant();
                     }
 
@@ -2976,7 +3145,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
 
                     for (auto value : values)
                     {
-                        analyze_type(module, value, expected_type);
+                        analyze_type(module, value, expected_type, must_be_constant);
 
                         is_constant = is_constant && value->is_constant();
 
@@ -3014,10 +3183,9 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
             } break;
         case ValueId::array_expression:
             {
-                analyze_type(module, value->array_expression.index, uint64(module));
                 auto array_like = value->array_expression.array_like;
                 array_like->kind = ValueKind::left;
-                analyze_type(module, array_like, 0);
+                analyze_type(module, array_like, 0, must_be_constant);
                 assert(array_like->kind == ValueKind::left);
                 auto array_like_type = array_like->type;
                 if (array_like_type->id != TypeId::pointer)
@@ -3025,6 +3193,8 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                     report_error();
                 }
                 auto pointer_element_type = array_like_type->pointer.element_type;
+
+                analyze_type(module, value->array_expression.index, pointer_element_type->id == TypeId::enum_array ? pointer_element_type->enum_array.enum_type : uint64(module), must_be_constant);
 
                 Type* element_type = 0;
                 switch (pointer_element_type->id)
@@ -3047,6 +3217,10 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                     case TypeId::pointer:
                         {
                             element_type = pointer_element_type->pointer.element_type;
+                        } break;
+                    case TypeId::enum_array:
+                        {
+                            element_type = pointer_element_type->enum_array.element_type;
                         } break;
                     default: report_error();
                 }
@@ -3083,7 +3257,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
             {
                 auto aggregate = value->field_access.aggregate;
                 auto field_name = value->field_access.field_name;
-                analyze_type(module, aggregate, 0);
+                analyze_type(module, aggregate, 0, must_be_constant);
 
                 if (aggregate->kind == ValueKind::right)
                 {
@@ -3118,6 +3292,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
 
                             if (!result_field)
                             {
+                                // Field not found
                                 report_error();
                             }
 
@@ -3214,7 +3389,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                     report_error();
                 }
 
-                analyze_type(module, array_like, 0);
+                analyze_type(module, array_like, 0, must_be_constant);
 
                 auto pointer_type = array_like->type;
                 if (pointer_type->id != TypeId::pointer)
@@ -3222,7 +3397,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                     report_error();
                 }
 
-                Type* sliceable_type = pointer_type->pointer.element_type;
+                Type* sliceable_type = resolve_alias(module, pointer_type->pointer.element_type);
 
                 Type* element_type = 0;
 
@@ -3263,7 +3438,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                 {
                     if (index)
                     {
-                        analyze_type(module, index, index_type);
+                        analyze_type(module, index, index_type, must_be_constant);
 
                         if (index->type->id != TypeId::integer)
                         {
@@ -3288,7 +3463,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
             } break;
         case ValueId::va_arg:
             {
-                analyze_type(module, value->va_arg.va_list, get_pointer_type(module, get_va_list_type(module)));
+                analyze_type(module, value->va_arg.va_list, get_pointer_type(module, get_va_list_type(module)), must_be_constant);
                 value_type = value->va_arg.type;
                 typecheck(module, expected_type, value_type);
             } break;
@@ -3304,8 +3479,14 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
 
                 assert(!value->aggregate_initialization.is_constant);
                 bool is_constant = true;
-                auto values = value->aggregate_initialization.values;
-                auto names = value->aggregate_initialization.names;
+                auto elements = value->aggregate_initialization.elements;
+                auto zero = value->aggregate_initialization.zero;
+                u64 field_mask = 0;
+
+                // TODO: make consecutive initialization with `zero` constant
+                // ie:
+                // Right now 0, 1, 2, 3 => constant values, rest zeroed is constant because `declaration_index == initialization_index`
+                // With constant initialization values 2, 3, 4 and rest zeroed, the aggregate initialization because `declaration_index != initialization_index`, that is, the first initialization index (0) does not match the declaration index (2). The same case can be applied for cases (1, 3) and (2, 4)
 
                 switch (resolved_type->id)
                 {
@@ -3313,11 +3494,27 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                         {
                             bool is_ordered = true;
                             auto fields = resolved_type->structure.fields;
+                            assert(fields.length <= 64);
 
-                            for (u32 initialization_index = 0; initialization_index < values.length; initialization_index += 1)
+                            auto same_values_as_field = fields.length == elements.length;
+                            auto is_properly_initialized = same_values_as_field || zero;
+
+                            if (zero && same_values_as_field)
                             {
-                                auto value = values[initialization_index];
-                                auto name = names[initialization_index];
+                                report_error();
+                            }
+
+                            if (!is_properly_initialized)
+                            {
+                                report_error();
+                            }
+
+                            assert(elements.length <= fields.length);
+
+                            for (u32 initialization_index = 0; initialization_index < elements.length; initialization_index += 1)
+                            {
+                                auto value = elements[initialization_index].value;
+                                auto name = elements[initialization_index].name;
 
                                 u32 declaration_index;
                                 for (declaration_index = 0; declaration_index < fields.length; declaration_index += 1)
@@ -3335,11 +3532,20 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                                     report_error();
                                 }
 
+                                auto mask = 1 << declaration_index;
+                                auto current_mask = field_mask;
+                                if (current_mask & mask)
+                                {
+                                    // Repeated field
+                                    report_error();
+                                }
+                                field_mask = current_mask | mask;
+
                                 is_ordered = is_ordered && declaration_index == initialization_index;
 
                                 auto field = fields[declaration_index];
                                 auto declaration_type = field.type;
-                                analyze_type(module, value, declaration_type);
+                                analyze_type(module, value, declaration_type, must_be_constant);
                                 is_constant = is_constant && value->is_constant();
                             }
 
@@ -3348,14 +3554,27 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                     case TypeId::bits:
                         {
                             auto fields = resolved_type->bits.fields;
+                            assert(fields.length <= 64);
 
+                            auto same_values_as_field = fields.length == elements.length;
+                            auto is_properly_initialized = same_values_as_field || zero;
 
-                            assert(values.length == names.length);
-
-                            for (u32 initialization_index = 0; initialization_index < values.length; initialization_index += 1)
+                            if (zero && same_values_as_field)
                             {
-                                auto value = values[initialization_index];
-                                auto name = names[initialization_index];
+                                report_error();
+                            }
+
+                            if (!is_properly_initialized)
+                            {
+                                report_error();
+                            }
+
+                            assert(elements.length <= fields.length);
+
+                            for (u32 initialization_index = 0; initialization_index < elements.length; initialization_index += 1)
+                            {
+                                auto value = elements[initialization_index].value;
+                                auto name = elements[initialization_index].name;
 
                                 u32 declaration_index;
                                 for (declaration_index = 0; declaration_index < fields.length; declaration_index += 1)
@@ -3373,9 +3592,18 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                                     report_error();
                                 }
 
+                                auto mask = 1 << declaration_index;
+                                auto current_mask = field_mask;
+                                if (current_mask & mask)
+                                {
+                                    // Repeated field
+                                    report_error();
+                                }
+                                field_mask = current_mask | mask;
+
                                 auto field = fields[declaration_index];
                                 auto declaration_type = field.type;
-                                analyze_type(module, value, declaration_type);
+                                analyze_type(module, value, declaration_type, must_be_constant);
                                 is_constant = is_constant && value->is_constant();
                             }
 
@@ -3383,14 +3611,13 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                         } break;
                     case TypeId::union_type:
                         {
-                            if (values.length != 1)
+                            if (elements.length != 1)
                             {
                                 report_error();
                             }
 
-                            auto initialization_value = values[0];
-                            assert(names.length == 1);
-                            auto initialization_name = names[0];
+                            auto initialization_value = elements[0].value;
+                            auto initialization_name = elements[0].name;
 
                             u64 i;
                             auto fields = resolved_type->union_type.fields;
@@ -3409,9 +3636,70 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                             }
 
                             auto field = &fields[i];
-                            analyze_type(module, initialization_value, field->type);
+                            analyze_type(module, initialization_value, field->type, must_be_constant);
+                        } break;
+                    case TypeId::enum_array:
+                        {
+                            bool is_ordered = true;
+                            auto enum_type = resolved_type->enum_array.enum_type;
+                            auto element_type = resolved_type->enum_array.element_type;
+                            assert(enum_type->id == TypeId::enumerator);
+                            auto fields = enum_type->enumerator.fields;
 
-                            value_type = expected_type;
+                            assert(fields.length <= 64);
+
+                            auto same_values_as_field = fields.length == elements.length;
+                            auto is_properly_initialized = same_values_as_field || zero;
+
+                            if (zero && same_values_as_field)
+                            {
+                                report_error();
+                            }
+
+                            if (!is_properly_initialized)
+                            {
+                                report_error();
+                            }
+
+                            assert(elements.length <= fields.length);
+
+                            for (u32 initialization_index = 0; initialization_index < elements.length; initialization_index += 1)
+                            {
+                                auto value = elements[initialization_index].value;
+                                auto name = elements[initialization_index].name;
+
+                                u32 declaration_index;
+                                for (declaration_index = 0; declaration_index < fields.length; declaration_index += 1)
+                                {
+                                    auto& field = fields[declaration_index];
+
+                                    if (name.equal(field.name))
+                                    {
+                                        break;
+                                    }
+                                }
+
+                                if (declaration_index == fields.length)
+                                {
+                                    report_error();
+                                }
+
+                                auto mask = 1 << declaration_index;
+                                auto current_mask = field_mask;
+                                if (current_mask & mask)
+                                {
+                                    // Repeated field
+                                    report_error();
+                                }
+                                field_mask = current_mask | mask;
+
+                                is_ordered = is_ordered && declaration_index == initialization_index;
+
+                                analyze_type(module, value, element_type, must_be_constant);
+                                is_constant = is_constant && value->is_constant();
+                            }
+
+                            value->aggregate_initialization.is_constant = is_constant && is_ordered;
                         } break;
                     default: report_error();
                 }
@@ -3435,9 +3723,9 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                 auto condition = value->select.condition;
                 auto true_value = value->select.true_value;
                 auto false_value = value->select.false_value;
-                analyze_type(module, condition, 0);
+                analyze_type(module, condition, 0, must_be_constant);
                 auto is_boolean = false;
-                analyze_binary_type(module, true_value, false_value, is_boolean, expected_type);
+                analyze_binary_type(module, true_value, false_value, is_boolean, expected_type, must_be_constant);
 
                 auto left_type = true_value->type;
                 auto right_type = false_value->type;
@@ -3505,6 +3793,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                         },
                         .id = TypeId::structure,
                         .name = string_literal("string_to_enum"),
+                        .scope = enum_type->scope,
                     });
                     resolve_type_in_place(module, struct_type);
 
@@ -3768,7 +4057,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
 
                 auto string_type = get_slice_type(module, uint8(module));
 
-                analyze_type(module, enum_string_value, string_type);
+                analyze_type(module, enum_string_value, string_type, must_be_constant);
                 value_type = struct_type;
             } break;
         case ValueId::undefined:
@@ -3875,6 +4164,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
                                     },
                                     .id = TypeId::alias,
                                     .name = declaration_constant_argument.name,
+                                    .scope = &macro_instantiation->scope,
                                 });
                                 instantiation_constant_argument.type = instantiation_type;
                             } break;
@@ -3905,7 +4195,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
 
                         auto argument_type = declaration_argument.variable.type;
                         assert(argument_type);
-                        analyze_type(module, instantiation_argument, argument_type);
+                        analyze_type(module, instantiation_argument, argument_type, must_be_constant);
                     }
 
                     LLVMMetadataRef type_buffer[64];
@@ -3949,7 +4239,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type)
 
                         auto argument_type = declaration_argument.variable.type;
                         assert(argument_type);
-                        analyze_type(module, instantiation_argument, argument_type);
+                        analyze_type(module, instantiation_argument, argument_type, must_be_constant);
                     }
                 }
 
@@ -3974,8 +4264,6 @@ fn LLVMTypeRef get_llvm_type(Type* type, TypeKind type_kind)
             return type->llvm.memory;
     }
 }
-
-fn void analyze_value(Module* module, Value* value, Type* expected_type, TypeKind type_kind);
 
 fn bool type_is_integer_backing(Type* type)
 {
@@ -4061,7 +4349,32 @@ fn LLVMValueRef create_coerced_load(Module* module, LLVMValueRef source, Type* s
             }
             else
             {
-                trap();
+                auto scalable_vector_type = false;
+                if (scalable_vector_type)
+                {
+                    trap();
+                }
+                else
+                {
+                    // Coercion through memory
+                    auto original_destination_alignment = get_byte_alignment(destination_type);
+                    auto source_alignment = get_byte_alignment(source_type);
+                    auto destination_alignment = MAX(original_destination_alignment, source_alignment);
+                    auto destination_alloca = create_alloca(module, {
+                        .type = destination_type,
+                        .name = string_literal("coerce"),
+                        .alignment = destination_alignment,
+                    });
+                    auto u64_type = uint64(module);
+                    resolve_type_in_place(module, u64_type);
+                    LLVMBuildMemCpy(module->llvm.builder, destination_alloca, destination_alignment, source, source_alignment, LLVMConstInt(u64_type->llvm.abi, source_size, false));
+                    auto load = create_load(module, {
+                        .type = destination_type,
+                        .pointer = destination_alloca,
+                        .alignment = destination_alignment,
+                    });
+                    result = load;
+                }
             }
         }
     }
@@ -4132,7 +4445,25 @@ fn void create_coerced_store(Module* module, LLVMValueRef source_value, Type* so
     }
     else
     {
-        trap();
+        // Coercion through memory
+
+        auto original_destination_alignment = get_byte_alignment(destination_type);
+        auto source_alloca_alignment = MAX(original_destination_alignment, get_byte_alignment(source_type));
+        auto source_alloca = create_alloca(module, {
+            .type = source_type,
+            .name = string_literal("coerce"),
+            .alignment = source_alloca_alignment,
+        });
+        create_store(module, {
+            .source = source_value,
+            .destination = source_alloca,
+            .type = source_type,
+            .alignment = source_alloca_alignment,
+        });
+
+        auto u64_type = uint64(module);
+        resolve_type_in_place(module, u64_type);
+        LLVMBuildMemCpy(module->llvm.builder, destination_value, original_destination_alignment, source_alloca, source_alloca_alignment, LLVMConstInt(u64_type->llvm.abi, destination_size, false));
     }
 }
 
@@ -4172,7 +4503,7 @@ fn SliceEmitResult emit_slice_expression(Module* module, Value* value)
                 auto end = value->slice_expression.end;
 
                 assert(array_like->kind == ValueKind::left);
-                emit_value(module, array_like, TypeKind::memory);
+                emit_value(module, array_like, TypeKind::memory, false);
 
                 auto pointer_type = array_like->type;
                 assert(pointer_type->id == TypeId::pointer);
@@ -4185,12 +4516,12 @@ fn SliceEmitResult emit_slice_expression(Module* module, Value* value)
 
                 if (start)
                 {
-                    emit_value(module, start, TypeKind::memory);
+                    emit_value(module, start, TypeKind::memory, false);
                 }
 
                 if (end)
                 {
-                    emit_value(module, end, TypeKind::memory);
+                    emit_value(module, end, TypeKind::memory, false);
                 }
 
                 switch (sliceable_type->id)
@@ -4507,7 +4838,7 @@ fn LLVMValueRef emit_call(Module* module, Value* value, LLVMValueRef left_llvm, 
 
                                 if (coerce_to_type->id != TypeId::structure && type_is_abi_equal(module, semantic_argument_type, coerce_to_type) && argument_abi.attributes.direct.offset == 0)
                                 {
-                                    emit_value(module, semantic_call_argument_value, TypeKind::memory);
+                                    emit_value(module, semantic_call_argument_value, TypeKind::memory, false);
 
                                     auto evaluation_kind = get_evaluation_kind(argument_abi.semantic_type);
                                     Value* v;
@@ -4563,11 +4894,11 @@ fn LLVMValueRef emit_call(Module* module, Value* value, LLVMValueRef left_llvm, 
                                                 {
                                                     src->type = 0;
                                                     src->kind = ValueKind::left;
-                                                    analyze_type(module, src, 0);
+                                                    analyze_type(module, src, 0, false);
                                                 }
                                             }
 
-                                            emit_value(module, semantic_call_argument_value, TypeKind::memory);
+                                            emit_value(module, semantic_call_argument_value, TypeKind::memory, false);
                                             auto destination_size = get_byte_size(coerce_to_type);
                                             auto source_size = get_byte_size(argument_abi.semantic_type);
                                             auto alignment = get_byte_alignment(argument_abi.semantic_type);
@@ -4575,7 +4906,15 @@ fn LLVMValueRef emit_call(Module* module, Value* value, LLVMValueRef left_llvm, 
                                             LLVMValueRef source = src->llvm;
                                             if (source_size < destination_size)
                                             {
-                                                trap();
+                                                auto alloca = create_alloca(module, {
+                                                    .type = argument_abi.semantic_type,
+                                                    .name = string_literal("coerce"),
+                                                    .alignment = alignment,
+                                                });
+                                                auto u64_type = uint64(module);
+                                                resolve_type_in_place(module, u64_type);
+                                                LLVMBuildMemCpy(module->llvm.builder, alloca, alignment, source, alignment, LLVMConstInt(u64_type->llvm.abi, source_size, false));
+                                                source = alloca;
                                             }
 
                                             auto coerce_fields = coerce_to_type->structure.fields;
@@ -4681,25 +5020,51 @@ fn LLVMValueRef emit_call(Module* module, Value* value, LLVMValueRef left_llvm, 
                                                 } break;
                                             default:
                                                 {
+                                                    LLVMValueRef pointer = 0;
+                                                    Type* pointer_type = 0;
                                                     if (src->type->id != TypeId::pointer)
                                                     {
-                                                        assert(src->kind == ValueKind::right);
-                                                        assert(src->type->id == TypeId::structure);
                                                         auto type = src->type;
-                                                        assert(src->kind == ValueKind::right);
-                                                        src->type = 0;
-                                                        src->kind = ValueKind::left;
-                                                        analyze_type(module, src, get_pointer_type(module, type));
+                                                        pointer_type = get_pointer_type(module, type);
+                                                        if (src->id != ValueId::variable_reference)
+                                                        {
+                                                            pointer = create_alloca(module, {
+                                                                .type = type,
+                                                                .name = string_literal("my.coerce"),
+                                                            });
+                                                            emit_assignment(module, pointer, pointer_type, src);
+                                                        }
+                                                        else
+                                                        {
+                                                            assert(src->kind == ValueKind::right);
+                                                            assert(src->type->id == TypeId::structure);
+                                                            assert(src->id == ValueId::variable_reference);
+                                                            assert(src->kind == ValueKind::right);
+                                                            src->type = 0;
+                                                            src->kind = ValueKind::left;
+                                                            analyze_type(module, src, pointer_type, false);
+                                                        }
+                                                    }
+                                                    else
+                                                    {
+                                                        trap();
                                                     }
 
-                                                    assert(src->type->id == TypeId::pointer);
-                                                    assert(src->type->llvm.abi == module->llvm.pointer_type);
-                                                    emit_value(module, src, TypeKind::memory);
+                                                    assert(pointer_type);
+                                                    assert(pointer_type->id == TypeId::pointer);
+                                                    auto element_type = pointer_type->pointer.element_type;
 
-                                                    assert(src->type->id == TypeId::pointer);
-                                                    auto source_type = src->type->pointer.element_type;
+                                                    if (!pointer)
+                                                    {
+                                                        assert(src->type->id == TypeId::pointer);
+                                                        assert(src->type->llvm.abi == module->llvm.pointer_type);
+                                                        emit_value(module, src, TypeKind::memory, false);
+                                                        pointer = src->llvm;
+                                                    }
+
+                                                    auto source_type = element_type;
                                                     assert(source_type == argument_abi.semantic_type);
-                                                    auto load = create_coerced_load(module, src->llvm, source_type, destination_type);
+                                                    auto load = create_coerced_load(module, pointer, source_type, destination_type);
 
                                                     auto is_cmse_ns_call = false;
                                                     if (is_cmse_ns_call)
@@ -4747,7 +5112,7 @@ fn LLVMValueRef emit_call(Module* module, Value* value, LLVMValueRef left_llvm, 
 
                                         if (is_constant)
                                         {
-                                            emit_value(module, semantic_call_argument_value, TypeKind::memory);
+                                            emit_value(module, semantic_call_argument_value, TypeKind::memory, true);
 
                                             bool is_constant = true;
                                             LLVMLinkage linkage_type = LLVMInternalLinkage;
@@ -4775,7 +5140,7 @@ fn LLVMValueRef emit_call(Module* module, Value* value, LLVMValueRef left_llvm, 
                                                     {
                                                         semantic_call_argument_value->type = 0;
                                                         semantic_call_argument_value->kind = ValueKind::left;
-                                                        analyze_value(module, semantic_call_argument_value, pointer_type, TypeKind::memory);
+                                                        analyze_value(module, semantic_call_argument_value, pointer_type, TypeKind::memory, false);
                                                         llvm_abi_argument_value_buffer[abi_argument_count] = semantic_call_argument_value->llvm;
                                                         abi_argument_count += 1;
                                                     } break;
@@ -4785,6 +5150,7 @@ fn LLVMValueRef emit_call(Module* module, Value* value, LLVMValueRef left_llvm, 
                                                         assert(abi_argument_type->pointer.element_type == semantic_call_argument_value->type);
                                                         auto alloca = create_alloca(module, {
                                                             .type = semantic_call_argument_value->type,
+                                                            .name = string_literal("indirect.struct.passing"),
                                                         });
                                                         emit_assignment(module, alloca, pointer_type, semantic_call_argument_value);
                                                         llvm_abi_argument_value_buffer[abi_argument_count] = alloca;
@@ -4977,7 +5343,7 @@ fn LLVMValueRef emit_va_arg(Module* module, Value* value, LLVMValueRef left_llvm
                 auto raw_va_list_type = get_va_list_type(module);
 
                 auto va_list_value = value->va_arg.va_list;
-                emit_value(module, va_list_value, TypeKind::memory);
+                emit_value(module, va_list_value, TypeKind::memory, false);
                 auto u64_type = uint64(module);
                 resolve_type_in_place(module, u64_type);
                 auto zero = LLVMConstNull(u64_type->llvm.memory);
@@ -5220,7 +5586,7 @@ fn LLVMValueRef emit_field_access(Module* module, Value* value, LLVMValueRef lef
                 auto aggregate = value->field_access.aggregate;
                 auto field_name = value->field_access.field_name;
 
-                emit_value(module, aggregate, TypeKind::memory);
+                emit_value(module, aggregate, TypeKind::memory, false);
 
                 assert(aggregate->kind == ValueKind::left);
                 auto aggregate_type = aggregate->type;
@@ -5306,6 +5672,7 @@ fn LLVMValueRef emit_field_access(Module* module, Value* value, LLVMValueRef lef
                                         }
 
                                         auto field_type = resolved_aggregate_type->union_type.fields[field_index].type;
+                                        resolve_type_in_place(module, field_type);
                                         auto struct_type = LLVMStructTypeInContext(module->llvm.context, &field_type->llvm.memory, 1, false);
                                         assert(struct_type);
 
@@ -5431,7 +5798,7 @@ fn void emit_assignment(Module* module, LLVMValueRef left_llvm, Type* left_type,
     {
         case EvaluationKind::scalar:
             {
-                emit_value(module, right, type_kind);
+                emit_value(module, right, type_kind, false);
                 create_store(module, {
                     .source = right->llvm,
                     .destination = left_llvm,
@@ -5451,7 +5818,7 @@ fn void emit_assignment(Module* module, LLVMValueRef left_llvm, Type* left_type,
 
                             if (right->array_initialization.is_constant)
                             {
-                                emit_value(module, right, TypeKind::memory);
+                                emit_value(module, right, TypeKind::memory, false);
 
                                 bool is_constant = true;
                                 LLVMLinkage linkage_type = LLVMInternalLinkage;
@@ -5525,15 +5892,19 @@ fn void emit_assignment(Module* module, LLVMValueRef left_llvm, Type* left_type,
                         } break;
                     case ValueId::aggregate_initialization:
                         {
-                            auto names = right->aggregate_initialization.names;
-                            auto values = right->aggregate_initialization.values;
+                            auto elements = right->aggregate_initialization.elements;
+                            auto scope = right->aggregate_initialization.scope;
                             auto is_constant = right->aggregate_initialization.is_constant;
                             auto zero = right->aggregate_initialization.zero;
-                            assert(names.length == values.length);
+                            auto u64_type = uint64(module);
+                            resolve_type_in_place(module, u64_type);
+                            u64 byte_size = get_byte_size(value_type);
+                            auto byte_size_value = LLVMConstInt(u64_type->llvm.abi, byte_size, false);
+                            auto alignment = get_byte_alignment(value_type);
 
                             if (is_constant)
                             {
-                                emit_value(module, right, TypeKind::memory);
+                                emit_value(module, right, TypeKind::memory, true);
 
                                 LLVMLinkage linkage_type = LLVMInternalLinkage;
                                 LLVMValueRef before = 0;
@@ -5542,12 +5913,8 @@ fn void emit_assignment(Module* module, LLVMValueRef left_llvm, Type* left_type,
                                 bool externally_initialized = false;
                                 auto global = llvm_module_create_global_variable(module->llvm.module, value_type->llvm.memory, is_constant, linkage_type, right->llvm, string_literal("constarray"), before, thread_local_mode, address_space, externally_initialized);
                                 LLVMSetUnnamedAddress(global, LLVMGlobalUnnamedAddr);
-                                auto alignment = get_byte_alignment(value_type);
                                 LLVMSetAlignment(global, alignment);
-                                auto u64_type = uint64(module);
-                                resolve_type_in_place(module, u64_type);
-                                u64 memcpy_size = get_byte_size(value_type);
-                                LLVMBuildMemCpy(module->llvm.builder, left_llvm, alignment, global, alignment, LLVMConstInt(u64_type->llvm.abi, memcpy_size, false));
+                                LLVMBuildMemCpy(module->llvm.builder, left_llvm, alignment, global, alignment, byte_size_value);
                             }
                             else
                             {
@@ -5561,10 +5928,17 @@ fn void emit_assignment(Module* module, LLVMValueRef left_llvm, Type* left_type,
                                             assert(fields.length <= 64);
                                             unused(field_mask);
 
-                                            for (u32 initialization_index = 0; initialization_index < (u32)values.length; initialization_index += 1)
+                                            if (zero)
                                             {
-                                                auto name = names[initialization_index];
-                                                auto value = values[initialization_index];
+                                                auto u8_type = uint8(module);
+                                                resolve_type_in_place(module, u8_type);
+                                                LLVMBuildMemSet(module->llvm.builder, left_llvm, LLVMConstNull(u8_type->llvm.memory), byte_size_value, alignment);
+                                            }
+
+                                            for (const auto& element : elements)
+                                            {
+                                                auto name = element.name;
+                                                auto value = element.value;
 
                                                 u32 declaration_index;
                                                 for (declaration_index = 0; declaration_index < (u32)fields.length; declaration_index += 1)
@@ -5579,56 +5953,43 @@ fn void emit_assignment(Module* module, LLVMValueRef left_llvm, Type* left_type,
 
                                                 assert(declaration_index < fields.length);
 
+                                                if (module->has_debug_info)
+                                                {
+                                                    auto debug_location = LLVMDIBuilderCreateDebugLocation(module->llvm.context, element.line, element.column, scope->llvm, module->llvm.inlined_at);
+                                                    LLVMSetCurrentDebugLocation2(module->llvm.builder, debug_location);
+                                                }
+
                                                 field_mask |= 1 << declaration_index;
                                                 max_field_index = MAX(max_field_index, declaration_index);
                                                 auto& field = fields[declaration_index];
                                                 auto destination_pointer = LLVMBuildStructGEP2(module->llvm.builder, resolved_value_type->llvm.memory, left_llvm, declaration_index, "");
                                                 emit_assignment(module, destination_pointer, get_pointer_type(module, field.type), value);
                                             }
-
-                                            if (zero)
-                                            {
-                                                u64 buffer_field_count = sizeof(field_mask) * 8;
-                                                auto raw_end_uninitialized_field_count = clz(field_mask);
-                                                auto unused_buffer_field_count = buffer_field_count - fields.length;
-                                                auto end_uninitialized_field_count = raw_end_uninitialized_field_count - unused_buffer_field_count;
-                                                auto initialized_field_count = __builtin_popcount(field_mask);
-                                                auto uninitialized_field_count = fields.length - initialized_field_count;
-
-                                                if (uninitialized_field_count != end_uninitialized_field_count)
-                                                {
-                                                    trap();
-                                                }
-
-                                                if (end_uninitialized_field_count == 0)
-                                                {
-                                                    report_error();
-                                                }
-
-                                                auto field_index_offset = fields.length - end_uninitialized_field_count;
-                                                auto destination_pointer = LLVMBuildStructGEP2(module->llvm.builder, resolved_value_type->llvm.abi, left_llvm, field_index_offset, "");
-                                                auto start_field = &fields[field_index_offset];
-                                                auto memset_size = get_byte_size(resolved_value_type) - start_field->offset;
-                                                auto u8_type = uint8(module);
-                                                auto u64_type = uint64(module);
-                                                resolve_type_in_place(module, u8_type);
-                                                resolve_type_in_place(module, u64_type);
-                                                LLVMBuildMemSet(module->llvm.builder, destination_pointer, LLVMConstNull(u8_type->llvm.memory), LLVMConstInt(u64_type->llvm.memory, memset_size, false), 1);
-                                            }
                                         } break;
                                     case TypeId::union_type:
                                         {
-                                            assert(names.length == 1);
-                                            assert(values.length == 1);
+                                            assert(elements.length == 1);
                                             auto fields = resolved_value_type->union_type.fields;
                                             auto biggest_field_index = resolved_value_type->union_type.biggest_field;
                                             auto& biggest_field = fields[biggest_field_index];
                                             auto biggest_field_type = fields[biggest_field_index].type;
-                                            auto value = values[0];
+                                            auto value = elements[0].value;
                                             auto field_value_type = value->type;
                                             auto field_type_size = get_byte_size(field_value_type);
 
                                             LLVMTypeRef struct_type;
+                                            auto union_size = resolved_value_type->union_type.byte_size;
+
+                                            if (field_type_size < union_size)
+                                            {
+                                                auto u8_type = uint8(module);
+                                                resolve_type_in_place(module, u8_type);
+                                                LLVMBuildMemSet(module->llvm.builder, left_llvm, LLVMConstNull(u8_type->llvm.memory), LLVMConstInt(u64_type->llvm.memory, union_size, false), alignment);
+                                            }
+                                            else if (field_type_size > union_size)
+                                            {
+                                                unreachable();
+                                            }
 
                                             if (type_is_abi_equal(module, field_value_type, biggest_field_type))
                                             {
@@ -5643,16 +6004,6 @@ fn void emit_assignment(Module* module, LLVMValueRef left_llvm, Type* left_type,
                                             auto field_pointer_type = get_pointer_type(module, field_value_type);
                                             unused(biggest_field);
                                             emit_assignment(module, destination_pointer, field_pointer_type, value);
-
-                                            auto union_size = resolved_value_type->union_type.byte_size;
-                                            if (field_type_size < union_size)
-                                            {
-                                                trap();
-                                            }
-                                            else if (field_type_size > union_size)
-                                            {
-                                                unreachable();
-                                            }
                                         } break;
                                     default: unreachable();
                                 }
@@ -5720,7 +6071,7 @@ fn void emit_assignment(Module* module, LLVMValueRef left_llvm, Type* left_type,
                         } break;
                     case ValueId::string_to_enum:
                         {
-                            emit_value(module, right, TypeKind::memory);
+                            emit_value(module, right, TypeKind::memory, false);
 
                             auto enum_type = right->string_to_enum.type;
                             auto s2e_struct_type = enum_type->enumerator.string_to_enum_struct_type;
@@ -5745,8 +6096,9 @@ fn void emit_assignment(Module* module, LLVMValueRef left_llvm, Type* left_type,
                         } break;
                     case ValueId::unary:
                     case ValueId::select:
+                    case ValueId::array_expression:
                         {
-                            emit_value(module, right, TypeKind::memory);
+                            emit_value(module, right, TypeKind::memory, false);
                             create_store(module, {
                                 .source = right->llvm,
                                 .destination = left_llvm,
@@ -5960,18 +6312,19 @@ fn void emit_macro_instantiation(Module* module, Value* value)
                 auto macro_instantiation = &value->macro_instantiation;
                 module->current_macro_instantiation = macro_instantiation;
 
-
-                for (Value* instantiation_argument: macro_instantiation->instantiation_arguments)
-                {
-                    emit_value(module, instantiation_argument, TypeKind::abi);
-                }
-
                 LLVMMetadataRef caller_debug_location = 0;
                 if (module->has_debug_info)
                 {
                     assert(!module->llvm.inlined_at);
                     caller_debug_location = LLVMDIBuilderCreateDebugLocation(module->llvm.context, macro_instantiation->line, macro_instantiation->column, macro_instantiation->scope.parent->llvm, 0);
+                    LLVMSetCurrentDebugLocation2(module->llvm.builder, caller_debug_location);
                 }
+
+                for (Value* instantiation_argument: macro_instantiation->instantiation_arguments)
+                {
+                    emit_value(module, instantiation_argument, TypeKind::abi, false);
+                }
+
                 auto older_inlined_at = module->llvm.inlined_at;
                 assert(!older_inlined_at);
                 module->llvm.inlined_at = caller_debug_location;
@@ -6072,14 +6425,31 @@ fn void analyze_block(Module* module, Block* block)
     }
 }
 
-fn void emit_value(Module* module, Value* value, TypeKind type_kind)
+fn LLVMValueRef emit_constant_array(Module* module, Slice<Value*> elements, Type* element_type)
+{
+    LLVMValueRef value_buffer[64];
+
+    resolve_type_in_place(module, element_type);
+
+    for (u64 i = 0; i < elements.length; i += 1)
+    {
+        auto* v = elements[i];
+        emit_value(module, v, TypeKind::memory, true);
+        value_buffer[i] = v->llvm;
+    }
+
+    auto constant_array = LLVMConstArray2(element_type->llvm.memory, value_buffer, elements.length);
+    return constant_array;
+}
+
+fn void emit_value(Module* module, Value* value, TypeKind type_kind, bool expect_constant)
 {
     assert(value->type);
     assert(!value->llvm);
     auto resolved_value_type = resolve_alias(module, value->type);
     resolve_type_in_place(module, resolved_value_type);
 
-    auto must_be_constant = !module->current_function && !module->current_macro_instantiation;
+    auto must_be_constant = expect_constant || (!module->current_function && !module->current_macro_instantiation);
 
     LLVMValueRef llvm_value = 0;
     switch (value->id)
@@ -6095,11 +6465,11 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind)
                 assert(!unary_value->llvm);
                 auto unary_id = value->unary.id;
                 auto resolved_unary_type = resolve_alias(module, unary_value->type);
-                emit_value(module, unary_value, type_kind);
                 if (unary_id == UnaryId::truncate || unary_id == UnaryId::enum_name)
                 {
                     type_kind = TypeKind::abi;
                 }
+                emit_value(module, unary_value, type_kind, must_be_constant);
                 auto destination_type = get_llvm_type(resolved_value_type, type_kind);
                 assert(destination_type);
                 auto llvm_unary_value = unary_value->llvm;
@@ -6286,41 +6656,10 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind)
                     }
 
                     auto* left = value->binary.left;
-                    if (left->llvm)
-                    {
-                        assert(false); // TODO: check if this if is really necessary
-                    }
-                    else
-                    {
-                        emit_value(module, left, TypeKind::abi);
-                    }
-
-                    auto left_llvm = left->llvm;
-
-                    LLVMValueRef left_condition = 0;
-
-                    switch (left->type->id)
-                    {
-                        case TypeId::integer:
-                            {
-                                switch (left->type->integer.bit_count)
-                                {
-                                    case 1:
-                                        left_condition = left_llvm;
-                                        break;
-                                    default: trap();
-                                }
-                            } break;
-                        default: trap();
-                    }
-
-                    assert(left_condition);
 
                     auto llvm_function = module->current_function->variable.storage->llvm;
                     assert(llvm_function);
 
-                    auto current_basic_block = LLVMGetInsertBlock(module->llvm.builder);
-                    
                     auto* right_block = llvm_context_create_basic_block(module->llvm.context, string_literal("shortcircuit.right"), llvm_function);
                     auto* end_block = llvm_context_create_basic_block(module->llvm.context, string_literal("shortcircuit.end"), llvm_function);
 
@@ -6339,7 +6678,11 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind)
                             break;
                     }
 
-                    LLVMBuildCondBr(module->llvm.builder, left_condition, true_block, false_block);
+                    emit_value(module, left, TypeKind::abi, must_be_constant);
+                    auto llvm_condition = emit_condition(module, left);
+                    auto current_basic_block = LLVMGetInsertBlock(module->llvm.builder);
+
+                    LLVMBuildCondBr(module->llvm.builder, llvm_condition, true_block, false_block);
 
                     LLVMPositionBuilderAtEnd(module->llvm.builder, right_block);
 
@@ -6350,7 +6693,7 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind)
                     }
                     else
                     {
-                        emit_value(module, right, TypeKind::abi);
+                        emit_value(module, right, TypeKind::abi, must_be_constant);
                     }
 
                     auto right_llvm = right->llvm;
@@ -6433,7 +6776,7 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind)
                         }
                         else
                         {
-                            emit_value(module, binary_value, TypeKind::abi);
+                            emit_value(module, binary_value, TypeKind::abi, must_be_constant);
                         }
 
                         llvm_values[i] = binary_value->llvm;
@@ -6492,6 +6835,7 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind)
                                         llvm_value = create_load(module, {
                                             .type = resolved_value_type,
                                             .pointer = variable->storage->llvm,
+                                            .kind = type_kind,
                                         });
                                     } break;
                                 case EvaluationKind::complex:
@@ -6509,25 +6853,12 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind)
         case ValueId::array_initialization:
             {
                 auto values = value->array_initialization.values;
-                auto element_count = values.length;
 
                 if (value->array_initialization.is_constant)
                 {
                     assert(value->kind == ValueKind::right);
                     auto element_type = resolved_value_type->array.element_type;
-                    LLVMValueRef value_buffer[64];
-
-                    resolve_type_in_place(module, element_type);
-
-                    for (u64 i = 0; i < element_count; i += 1)
-                    {
-                        auto* v = values[i];
-                        emit_value(module, v, TypeKind::memory);
-                        value_buffer[i] = v->llvm;
-                    }
-
-                    auto constant_array = LLVMConstArray2(element_type->llvm.memory, value_buffer, element_count);
-                    llvm_value = constant_array;
+                    llvm_value = emit_constant_array(module, values, element_type);
                 }
                 else
                 {
@@ -6583,8 +6914,8 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind)
                 {
                     case ValueKind::left:
                         {
-                            emit_value(module, array_like, TypeKind::memory);
-                            emit_value(module, index, TypeKind::memory);
+                            emit_value(module, array_like, TypeKind::memory, must_be_constant);
+                            emit_value(module, index, TypeKind::memory, must_be_constant);
 
                             auto array_like_type = array_like->type;
                             assert(array_like_type->id == TypeId::pointer);
@@ -6592,20 +6923,48 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind)
 
                             switch (pointer_element_type->id) 
                             {
+                                case TypeId::enum_array:
                                 case TypeId::array:
                                     {
                                         auto array_type = pointer_element_type;
 
                                         auto uint64_type = uint64(module);
                                         resolve_type_in_place(module, uint64_type);
-                                        auto zero_index = LLVMConstNull(uint64_type->llvm.abi);
+                                        auto u64_llvm = uint64_type->llvm.abi;
+                                        auto zero_index = LLVMConstNull(u64_llvm);
+
+                                        Type* element_type = 0;
+                                        LLVMValueRef llvm_index = index->llvm;
+
+                                        switch (pointer_element_type->id)
+                                        {
+                                            case TypeId::array:
+                                                {
+                                                    element_type = array_type->array.element_type;
+                                                } break;
+                                            case TypeId::enum_array:
+                                                {
+                                                    auto enum_type = array_type->enum_array.enum_type;
+                                                    assert(enum_type->id == TypeId::enumerator);
+                                                    auto enumerator_size = get_bit_size(enum_type->enumerator.backing_type);
+                                                    if (enumerator_size != 64)
+                                                    {
+                                                        llvm_index = LLVMBuildIntCast2(module->llvm.builder, llvm_index, u64_llvm, false, "");
+                                                    }
+                                                    element_type = array_type->enum_array.element_type;
+                                                } break;
+                                            default: unreachable();
+                                        }
+
+                                        assert(element_type);
+                                        assert(llvm_index);
+
                                         LLVMValueRef indices[] = { zero_index, index->llvm };
                                         auto gep = create_gep(module, {
                                             .type = array_type->llvm.memory,
                                             .pointer = array_like->llvm,
                                             .indices = array_to_slice(indices),
                                         });
-                                        auto element_type = array_type->array.element_type;
 
                                         switch (value->kind)
                                         {
@@ -6735,9 +7094,7 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind)
             } break;
         case ValueId::aggregate_initialization:
             {
-                auto names = value->aggregate_initialization.names;
-                auto values = value->aggregate_initialization.values;
-                assert(names.length == values.length);
+                auto elements = value->aggregate_initialization.elements;
                 auto is_constant = value->aggregate_initialization.is_constant;
                 auto zero = value->aggregate_initialization.zero;
 
@@ -6750,27 +7107,26 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind)
                             if (is_constant)
                             {
                                 LLVMValueRef constant_buffer[64];
-                                u32 constant_count = (u32)values.length;
+                                u32 constant_count = (u32)elements.length;
 
-                                for (u64 i = 0; i < values.length; i += 1)
+                                for (u64 i = 0; i < elements.length; i += 1)
                                 {
-                                    auto* value = values[i];
-                                    emit_value(module, value, TypeKind::memory);
+                                    auto* value = elements[i].value;
+                                    emit_value(module, value, TypeKind::memory, must_be_constant);
                                     auto llvm_value = value->llvm;
                                     assert(llvm_value);
                                     assert(LLVMIsAConstant(llvm_value));
                                     constant_buffer[i] = llvm_value;
                                 }
 
-
                                 if (zero)
                                 {
-                                    if (values.length == fields.length)
+                                    if (elements.length == fields.length)
                                     {
                                         unreachable();
                                     }
 
-                                    for (u64 i = values.length; i < fields.length; i += 1)
+                                    for (u64 i = elements.length; i < fields.length; i += 1)
                                     {
                                         auto& field = fields[i];
                                         auto field_type = field.type;
@@ -6804,10 +7160,10 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind)
                             {
                                 u64 bits_value = 0;
 
-                                for (u32 initialization_index = 0; initialization_index < values.length; initialization_index += 1)
+                                for (u32 initialization_index = 0; initialization_index < elements.length; initialization_index += 1)
                                 {
-                                    auto value = values[initialization_index];
-                                    auto name = names[initialization_index];
+                                    auto value = elements[initialization_index].value;
+                                    auto name = elements[initialization_index].name;
 
                                     u32 declaration_index;
                                     for (declaration_index = 0; declaration_index < fields.length; declaration_index += 1)
@@ -6845,10 +7201,10 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind)
                             {
                                 llvm_value = LLVMConstNull(abi_type);
 
-                                for (u32 initialization_index = 0; initialization_index < values.length; initialization_index += 1)
+                                for (u32 initialization_index = 0; initialization_index < elements.length; initialization_index += 1)
                                 {
-                                    auto value = values[initialization_index];
-                                    auto name = names[initialization_index];
+                                    auto value = elements[initialization_index].value;
+                                    auto name = elements[initialization_index].name;
 
                                     u32 declaration_index;
                                     for (declaration_index = 0; declaration_index < fields.length; declaration_index += 1)
@@ -6868,7 +7224,7 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind)
 
                                     const auto& field = fields[declaration_index];
 
-                                    emit_value(module, value, TypeKind::memory);
+                                    emit_value(module, value, TypeKind::memory, must_be_constant);
 
                                     auto extended = LLVMBuildZExt(module->llvm.builder, value->llvm, abi_type, "");
                                     auto shl = LLVMBuildShl(module->llvm.builder, extended, LLVMConstInt(abi_type, field.offset, false), "");
@@ -6876,6 +7232,19 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind)
                                     llvm_value = or_value;
                                 }
                             }
+                        } break;
+                    case TypeId::enum_array:
+                        {
+                            assert(is_constant);
+                            assert(elements.length <= 64);
+                            Value* value_buffer[64];
+                            for (u64 i = 0; i < elements.length; i += 1)
+                            {
+                                value_buffer[i] = elements[i].value;
+                            }
+                            Slice<Value*> values = { value_buffer, elements.length };
+                            auto element_type = resolved_value_type->enum_array.element_type;
+                            llvm_value = emit_constant_array(module, values, element_type);
                         } break;
                     default: unreachable();
                 }
@@ -6889,7 +7258,7 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind)
                 auto condition = value->select.condition;
                 auto true_value = value->select.true_value;
                 auto false_value = value->select.false_value;
-                emit_value(module, condition, TypeKind::abi);
+                emit_value(module, condition, TypeKind::abi, must_be_constant);
                 LLVMValueRef llvm_condition = condition->llvm;
                 auto condition_type = condition->type;
 
@@ -6905,13 +7274,17 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind)
                     default: trap();
                 }
 
-                emit_value(module, true_value, type_kind);
-                emit_value(module, false_value, type_kind);
+                emit_value(module, true_value, type_kind, must_be_constant);
+                emit_value(module, false_value, type_kind, must_be_constant);
 
                 llvm_value = LLVMBuildSelect(module->llvm.builder, llvm_condition, true_value->llvm, false_value->llvm, "");
             } break;
         case ValueId::unreachable:
             {
+                if (module->has_debug_info && !build_mode_is_optimized(module->build_mode))
+                {
+                    emit_intrinsic_call(module, IntrinsicIndex::trap, {}, {});
+                }
                 llvm_value = LLVMBuildUnreachable(module->llvm.builder);
                 LLVMClearInsertionPosition(module->llvm.builder);
             } break;
@@ -6919,7 +7292,7 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind)
             {
                 auto enum_type = value->string_to_enum.type;
                 auto string_value = value->string_to_enum.string;
-                emit_value(module, string_value, TypeKind::memory);
+                emit_value(module, string_value, TypeKind::memory, must_be_constant);
                 auto llvm_string_value = string_value->llvm;
 
                 auto s2e = enum_type->enumerator.string_to_enum_function;
@@ -6976,10 +7349,10 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind)
     value->llvm = llvm_value;
 }
 
-fn void analyze_value(Module* module, Value* value, Type* expected_type, TypeKind type_kind)
+fn void analyze_value(Module* module, Value* value, Type* expected_type, TypeKind type_kind, bool must_be_constant)
 {
-    analyze_type(module, value, expected_type);
-    emit_value(module, value, type_kind);
+    analyze_type(module, value, expected_type, must_be_constant);
+    emit_value(module, value, type_kind, must_be_constant);
 }
 
 fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u32* last_line, u32* last_column, LLVMMetadataRef* last_debug_location)
@@ -7056,7 +7429,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                                     report_error();
                                 }
 
-                                analyze_type(module, return_value, return_abi.semantic_type);
+                                analyze_type(module, return_value, return_abi.semantic_type, false);
                                 auto pointer_type = get_pointer_type(module, return_abi.semantic_type);
                                 emit_assignment(module, return_alloca, pointer_type, return_value);
                             } break;
@@ -7071,7 +7444,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                     auto macro_instantiation = module->current_macro_instantiation;
                     auto return_type = macro_instantiation->return_type;
                     assert(return_type);
-                    analyze_type(module, return_value, return_type);
+                    analyze_type(module, return_value, return_type, false);
                     emit_assignment(module, macro_instantiation->return_alloca, get_pointer_type(module, return_type), return_value);
                     LLVMBuildBr(module->llvm.builder, macro_instantiation->return_block);
                     LLVMClearInsertionPosition(module->llvm.builder);
@@ -7086,7 +7459,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                 auto local = statement->local;
                 auto expected_type = local->variable.type;
                 assert(!local->variable.storage);
-                analyze_type(module, local->variable.initial_value, expected_type);
+                analyze_type(module, local->variable.initial_value, expected_type, false);
                 local->variable.type = expected_type ? expected_type : local->variable.initial_value->type;
                 assert(local->variable.type);
                 if (expected_type)
@@ -7103,20 +7476,8 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                 auto* exit_block = llvm_context_create_basic_block(module->llvm.context, string_literal("if.exit"), llvm_function);
 
                 auto condition = statement->if_st.condition;
-                analyze_value(module, condition, 0, TypeKind::abi);
-                auto condition_type = condition->type;
-
-                LLVMValueRef llvm_condition = 0;
-                assert(condition_type->id == TypeId::integer || condition_type->id == TypeId::pointer);
-
-                llvm_condition = condition->llvm;
-
-                if (!(condition_type->id == TypeId::integer && condition_type->integer.bit_count == 1))
-                {
-                    llvm_condition = LLVMBuildICmp(module->llvm.builder, LLVMIntNE, llvm_condition, LLVMConstNull(condition_type->llvm.abi), "");
-                }
-
-                assert(llvm_condition);
+                analyze_value(module, condition, 0, TypeKind::abi, false);
+                auto llvm_condition = emit_condition(module, statement->if_st.condition);
 
                 LLVMBuildCondBr(module->llvm.builder, llvm_condition, taken_block, not_taken_block);
                 LLVMPositionBuilderAtEnd(module->llvm.builder, taken_block);
@@ -7148,7 +7509,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
             } break;
         case StatementId::expression:
             {
-                analyze_value(module, statement->expression, 0, TypeKind::memory);
+                analyze_value(module, statement->expression, 0, TypeKind::memory, false);
             } break;
         case StatementId::while_st:
             {
@@ -7186,23 +7547,8 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                 }
                 else
                 {
-                    analyze_value(module, condition, 0, TypeKind::abi);
-
-                    auto boolean = uint1(module);
-
-                    LLVMValueRef llvm_condition = condition->llvm;
-                    auto condition_type = condition->type;
-                    if (condition_type != boolean)
-                    {
-                        switch (condition_type->id)
-                        {
-                            case TypeId::integer:
-                                {
-                                    llvm_condition = LLVMBuildICmp(module->llvm.builder, LLVMIntNE, llvm_condition, LLVMConstNull(condition_type->llvm.abi), "");
-                                } break;
-                            default: unreachable();
-                        }
-                    }
+                    analyze_value(module, condition, 0, TypeKind::abi, false);
+                    auto llvm_condition = emit_condition(module, condition);
 
                     LLVMBuildCondBr(module->llvm.builder, llvm_condition, body_block, exit_block);
                 }
@@ -7240,7 +7586,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                 auto left = statement->assignment.left;
                 auto right = statement->assignment.right;
                 auto id = statement->assignment.id;
-                analyze_value(module, left, 0, TypeKind::memory);
+                analyze_value(module, left, 0, TypeKind::memory, false);
 
                 auto left_type = left->type;
                 if (left_type->id != TypeId::pointer)
@@ -7254,7 +7600,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                 {
                     case StatementAssignmentId::assign:
                         {
-                            analyze_type(module, right, element_type);
+                            analyze_type(module, right, element_type, false);
                             emit_assignment(module, left_llvm, left_type, right);
                         } break;
                     case StatementAssignmentId::assign_add:
@@ -7275,7 +7621,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                                 .pointer = left_llvm,
                                 .kind = TypeKind::abi,
                             });
-                            analyze_value(module, right, element_type, TypeKind::abi);
+                            analyze_value(module, right, element_type, TypeKind::abi, false);
                             auto a = load;
                             auto b = right->llvm;
 
@@ -7311,94 +7657,159 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
 
                 auto discriminant = statement->switch_st.discriminant;
                 auto clauses = statement->switch_st.clauses;
-                analyze_value(module, discriminant, 0, TypeKind::abi);
+                analyze_value(module, discriminant, 0, TypeKind::abi, false);
                 
                 auto discriminant_type = discriminant->type;
 
+                u32 invalid_clause_index = ~(u32)0;
+                u32 else_clause_index = invalid_clause_index;
+                u32 discriminant_case_count = 0;
+
+                // TODO: more analysis
                 switch (discriminant_type->id)
                 {
                     case TypeId::enumerator:
                         {
-                            u32 invalid_clause_index = ~(u32)0;
-                            u32 else_clause_index = invalid_clause_index;
-                            u32 discriminant_case_count = 0;
+                        } break;
+                    case TypeId::integer:
+                        {
+                        } break;
+                    default: report_error();
+                }
 
-                            for (u64 i = 0; i < clauses.length; i += 1)
+                for (u64 i = 0; i < clauses.length; i += 1)
+                {
+                    auto& clause = clauses[i];
+                    clause.basic_block = llvm_context_create_basic_block(module->llvm.context, clause.values.length == 0 ? string_literal("switch.else_case_block") : string_literal("switch.case_block"), llvm_function);
+                    discriminant_case_count += clause.values.length;
+
+                    if (clause.values.length == 0)
+                    {
+                        if (else_clause_index != invalid_clause_index)
+                        {
+                            report_error();
+                        }
+
+                        else_clause_index = i;
+                    }
+                    else
+                    {
+                        for (auto& value: clause.values)
+                        {
+                            switch (value.id)
                             {
-                                auto& clause = clauses[i];
-                                clause.basic_block = llvm_context_create_basic_block(module->llvm.context, clause.values.length == 0 ? string_literal("switch.else_case_block") : string_literal("switch.case_block"), llvm_function);
-                                discriminant_case_count += clause.values.length;
-
-                                if (clause.values.length == 0)
-                                {
-                                    if (else_clause_index != invalid_clause_index)
+                                case ClauseDiscriminantId::single:
                                     {
-                                        report_error();
-                                    }
-
-                                    else_clause_index = i;
-                                }
-                                else
-                                {
-                                    for (auto value: clause.values)
+                                        assert(value.single);
+                                        analyze_value(module, value.single, discriminant_type, TypeKind::abi, true);
+                                    } break;
+                                case ClauseDiscriminantId::range:
                                     {
-                                        analyze_value(module, value, discriminant_type, TypeKind::abi);
-                                        if (!value->is_constant())
+                                        auto start = value.range[0];
+                                        auto end = value.range[1];
+                                        for (auto v : value.range)
+                                        {
+                                            analyze_value(module, v, discriminant_type, TypeKind::abi, true);
+                                        }
+
+                                        if (start->id != end->id)
                                         {
                                             report_error();
                                         }
+
+                                        switch (start->id)
+                                        {
+                                            case ValueId::constant_integer:
+                                                {
+                                                    if (start->constant_integer.value >= end->constant_integer.value)
+                                                    {
+                                                        report_error();
+                                                    }
+                                                } break;
+                                            default: report_error();
+                                        }
+                                    } break;
+                            }
+                        }
+                    }
+                }
+
+                LLVMBasicBlockRef else_block;
+                if (else_clause_index != invalid_clause_index)
+                {
+                    else_block = clauses[else_clause_index].basic_block;
+                }
+                else
+                {
+                    else_block = llvm_context_create_basic_block(module->llvm.context, string_literal("switch.else_case_block"), llvm_function);
+                }
+
+                auto switch_instruction = LLVMBuildSwitch(module->llvm.builder, discriminant->llvm, else_block, discriminant_case_count);
+                bool all_blocks_terminated = true;
+
+                for (auto& clause : clauses)
+                {
+                    for (const auto& value : clause.values)
+                    {
+                        switch (value.id)
+                        {
+                            case ClauseDiscriminantId::single:
+                                {
+                                    LLVMAddCase(switch_instruction, value.single->llvm, clause.basic_block);
+                                } break;
+                            case ClauseDiscriminantId::range:
+                                {
+                                    auto start = value.range[0];
+                                    auto end = value.range[1];
+
+                                    LLVMAddCase(switch_instruction, start->llvm, clause.basic_block);
+
+                                    switch (start->id)
+                                    {
+                                        case ValueId::constant_integer:
+                                            {
+                                                auto start_value = start->constant_integer.value;
+                                                auto end_value = end->constant_integer.value;
+
+                                                for (u64 i = start_value + 1; i < end_value; i += 1)
+                                                {
+                                                    LLVMAddCase(switch_instruction, LLVMConstInt(start->type->llvm.abi, i, false), clause.basic_block);
+                                                }
+
+                                            } break;
+                                        default: unreachable();
                                     }
-                                }
-                            }
 
-                            LLVMBasicBlockRef else_block;
-                            if (else_clause_index != invalid_clause_index)
-                            {
-                                else_block = clauses[else_clause_index].basic_block;
-                            }
-                            else
-                            {
-                                else_block = llvm_context_create_basic_block(module->llvm.context, string_literal("switch.else_case_block"), llvm_function);
-                            }
+                                    LLVMAddCase(switch_instruction, end->llvm, clause.basic_block);
+                                } break;
+                        }
+                    }
 
-                            auto switch_instruction = LLVMBuildSwitch(module->llvm.builder, discriminant->llvm, else_block, discriminant_case_count);
-                            bool all_blocks_terminated = true;
+                    LLVMPositionBuilderAtEnd(module->llvm.builder, clause.basic_block);
 
-                            for (auto& clause : clauses)
-                            {
-                                for (auto value : clause.values)
-                                {
-                                    LLVMAddCase(switch_instruction, value->llvm, clause.basic_block);
-                                }
+                    analyze_block(module, clause.block);
 
-                                LLVMPositionBuilderAtEnd(module->llvm.builder, clause.basic_block);
+                    if (LLVMGetInsertBlock(module->llvm.builder))
+                    {
+                        all_blocks_terminated = false;
+                        LLVMBuildBr(module->llvm.builder, exit_block);
+                        LLVMClearInsertionPosition(module->llvm.builder);
+                    }
+                }
 
-                                analyze_block(module, clause.block);
+                if (else_clause_index == invalid_clause_index)
+                {
+                    LLVMPositionBuilderAtEnd(module->llvm.builder, else_block);
+                    LLVMBuildUnreachable(module->llvm.builder);
+                    LLVMClearInsertionPosition(module->llvm.builder);
+                }
 
-                                if (LLVMGetInsertBlock(module->llvm.builder))
-                                {
-                                    all_blocks_terminated = false;
-                                    LLVMBuildBr(module->llvm.builder, exit_block);
-                                    LLVMClearInsertionPosition(module->llvm.builder);
-                                }
-                            }
+                LLVMPositionBuilderAtEnd(module->llvm.builder, exit_block);
 
-                            if (else_clause_index == invalid_clause_index)
-                            {
-                                LLVMPositionBuilderAtEnd(module->llvm.builder, else_block);
-                                LLVMBuildUnreachable(module->llvm.builder);
-                                LLVMClearInsertionPosition(module->llvm.builder);
-                            }
-
-                            LLVMPositionBuilderAtEnd(module->llvm.builder, exit_block);
-
-                            if (all_blocks_terminated)
-                            {
-                                LLVMBuildUnreachable(module->llvm.builder);
-                                LLVMClearInsertionPosition(module->llvm.builder);
-                            }
-                        } break;
-                    default: trap();
+                if (all_blocks_terminated)
+                {
+                    LLVMBuildUnreachable(module->llvm.builder);
+                    LLVMClearInsertionPosition(module->llvm.builder);
                 }
             } break;
         case StatementId::for_each:
@@ -7439,16 +7850,32 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                             {
                                 auto kind = left_values[i];
                                 auto right = right_values[i];
-                                assert(right->kind == ValueKind::left);
-                                analyze_type(module, right, 0);
 
-                                auto pointer_type = right->type;
-                                if (pointer_type->id != TypeId::pointer)
+                                analyze_type(module, right, 0, false);
+
+                                Type* aggregate_type = 0;
+
+                                switch (right->kind)
                                 {
-                                    report_error();
-                                }
+                                    case ValueKind::right:
+                                        {
+                                            aggregate_type = right->type;
+                                            if (!is_slice(aggregate_type))
+                                            {
+                                                report_error();
+                                            }
+                                        } break;
+                                    case ValueKind::left:
+                                        {
+                                            auto pointer_type = right->type;
+                                            if (pointer_type->id != TypeId::pointer)
+                                            {
+                                                report_error();
+                                            }
 
-                                auto aggregate_type = pointer_type->pointer.element_type;
+                                            aggregate_type = pointer_type->pointer.element_type;
+                                        } break;
+                                }
 
                                 Type* child_type = 0;
 
@@ -7485,39 +7912,67 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                                 local->variable.type = local_type;
 
                                 emit_local_variable(module, local);
-                                emit_value(module, right, TypeKind::memory);
+                                emit_value(module, right, TypeKind::memory, false);
                             }
 
                             assert(!local);
 
                             LLVMValueRef length_value = 0;
 
-                            // TODO: make it right
                             for (auto value : right_values)
                             {
-                                auto pointer_type = value->type;
-                                if (pointer_type->id != TypeId::pointer)
+                                Type* aggregate_type = 0;
+                                auto value_type = value->type;
+
+                                switch (value->kind)
                                 {
-                                    report_error();
+                                    case ValueKind::right:
+                                        {
+                                            aggregate_type = value_type;
+                                        } break;
+                                    case ValueKind::left:
+                                        {
+                                            if (value_type->id != TypeId::pointer)
+                                            {
+                                                report_error();
+                                            }
+
+                                            aggregate_type = value_type->pointer.element_type;
+                                        } break;
                                 }
 
-                                auto aggregate_type = pointer_type->pointer.element_type;
+                                assert(aggregate_type);
+
+                                auto llvm_value = value->llvm;
+
                                 switch (aggregate_type->id)
                                 {
                                     case TypeId::array:
                                         {
+                                            assert(value->kind == ValueKind::left);
                                             length_value = LLVMConstInt(index_type->llvm.abi, aggregate_type->array.element_count, false);
                                         } break;
                                     case TypeId::structure:
                                         {
                                             assert(aggregate_type->structure.is_slice);
 
-                                            auto gep = LLVMBuildStructGEP2(module->llvm.builder, aggregate_type->llvm.abi, value->llvm, 1, "slice.length.pointer");
-                                            auto load = create_load(module, {
-                                                .type = index_type,
-                                                .pointer = gep,
-                                            });
-                                            length_value = load;
+                                            switch (value->kind)
+                                            {
+                                                case ValueKind::right:
+                                                    {
+                                                        length_value = LLVMBuildExtractValue(module->llvm.builder, llvm_value, 1, "slice.length");
+                                                    } break;
+                                                case ValueKind::left:
+                                                    {
+                                                        auto gep = LLVMBuildStructGEP2(module->llvm.builder, aggregate_type->llvm.abi, llvm_value, 1, "slice.length.pointer");
+                                                        auto load = create_load(module, {
+                                                            .type = index_type,
+                                                            .pointer = gep,
+                                                        });
+                                                        length_value = load;
+                                                    } break;
+                                            }
+
                                         } break;
                                     default: unreachable();
                                 }
@@ -7545,10 +8000,28 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
 
                             for (u64 i = 0; i < right_values.length; i += 1, local = local->next)
                             {
-                                auto kind = left_values[i];
+                                auto variable_kind = left_values[i];
                                 auto right = right_values[i];
 
-                                auto aggregate_type = right->type->pointer.element_type;
+                                auto right_type = right->type;
+                                auto right_kind = right->kind;
+                                auto right_llvm = right->llvm;
+
+                                Type* aggregate_type = 0;
+                                switch (right_kind)
+                                {
+                                    case ValueKind::right:
+                                        {
+                                            aggregate_type = right_type;
+                                        } break;
+                                    case ValueKind::left:
+                                        {
+                                            assert(right_type->id == TypeId::pointer);
+                                            aggregate_type = right_type->pointer.element_type;
+                                        } break;
+                                }
+
+                                assert(aggregate_type);
 
                                 LLVMValueRef element_pointer_value = 0;
 
@@ -7556,13 +8029,14 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                                 {
                                     case TypeId::array:
                                         {
+                                            assert(right_kind == ValueKind::left);
                                             LLVMValueRef indices[] = {
                                                 index_zero,
                                                 body_index_load,
                                             };
                                             element_pointer_value = create_gep(module, {
-                                                .type = right->type->pointer.element_type->llvm.memory,
-                                                .pointer = right->llvm,
+                                                .type = aggregate_type->llvm.memory,
+                                                .pointer = right_llvm,
                                                 .indices = array_to_slice(indices),
                                             });
                                         } break;
@@ -7570,11 +8044,15 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                                         {
                                             assert(aggregate_type->structure.is_slice);
 
-                                            auto load = create_load(module, {
-                                                .type = aggregate_type,
-                                                .pointer = right->llvm,
-                                            });
-                                            auto extract_pointer = LLVMBuildExtractValue(module->llvm.builder, load, 0, "");
+                                            if (right_kind == ValueKind::left)
+                                            {
+                                                right_llvm = create_load(module, {
+                                                    .type = aggregate_type,
+                                                    .pointer = right_llvm,
+                                                });
+                                            }
+
+                                            auto extract_pointer = LLVMBuildExtractValue(module->llvm.builder, right_llvm, 0, "");
 
                                             LLVMValueRef indices[] = {
                                                 body_index_load,
@@ -7593,7 +8071,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
 
                                 auto local_type = local->variable.type;
 
-                                switch (kind)
+                                switch (variable_kind)
                                 {
                                     case ValueKind::right:
                                         {
@@ -7676,7 +8154,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                                                     } break;
                                                 default:
                                                     {
-                                                        analyze_type(module, end, 0);
+                                                        analyze_type(module, end, 0, false);
                                                         auto end_type = end->type;
                                                         assert(end_type);
                                                         start->type = end_type;
@@ -7693,13 +8171,13 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                                 {
                                     if (!right->type)
                                     {
-                                        analyze_type(module, right, local_type);
+                                        analyze_type(module, right, local_type, false);
                                     }
                                 }
 
                                 local->variable.type = local_type;
                                 emit_local_variable(module, local);
-                                emit_value(module, start, TypeKind::memory);
+                                emit_value(module, start, TypeKind::memory, false);
 
                                 auto index_alloca = local->variable.storage->llvm;
 
@@ -7716,7 +8194,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                                     .type = local_type,
                                     .pointer = index_alloca,
                                 });
-                                emit_value(module, end, TypeKind::abi);
+                                emit_value(module, end, TypeKind::abi, false);
                                 auto length_value = end->llvm;
                                 auto index_compare = LLVMBuildICmp(module->llvm.builder, LLVMIntULT, header_index_load, length_value, "");
                                 LLVMBuildCondBr(module->llvm.builder, index_compare, body_block, exit_block);
@@ -7808,8 +8286,6 @@ struct ObjectGenerate
 
 fn BBLLVMCodeGenerationPipelineResult generate_object(LLVMModuleRef module, LLVMTargetMachineRef target_machine, ObjectGenerate options)
 {
-    llvm_module_set_target(module, target_machine);
-
     if (options.run_optimization_passes)
     {
         // BBLLVM
@@ -8351,8 +8827,8 @@ void emit(Module* module)
 
                                                     if (source_size > destination_size)
                                                     {
-                                                        unused(pointer);
-                                                        trap();
+                                                        auto u64_type = uint64(module);
+                                                        LLVMBuildMemCpy(module->llvm.builder, pointer, address_alignment, address, address_alignment, LLVMConstInt(u64_type->llvm.abi, destination_size, false));
                                                     }
                                                 }
                                             }
@@ -8541,7 +9017,7 @@ void emit(Module* module)
             case ValueId::global:
                 {
                     assert(!module->current_function);
-                    analyze_value(module, global->variable.initial_value, global->variable.type, TypeKind::memory);
+                    analyze_value(module, global->variable.initial_value, global->variable.type, TypeKind::memory, true);
 
                     auto initial_value_type = global->variable.initial_value->type;
 
@@ -8610,38 +9086,6 @@ void emit(Module* module)
         dump_module(module);
     }
 
-    BBLLVMCodeGenerationOptimizationLevel code_generation_optimization_level;
-    switch (module->build_mode)
-    {
-        case BuildMode::debug_none:
-        case BuildMode::debug:
-            code_generation_optimization_level = BBLLVMCodeGenerationOptimizationLevel::none;
-            break;
-        case BuildMode::soft_optimize:
-            code_generation_optimization_level = BBLLVMCodeGenerationOptimizationLevel::less;
-            break;
-        case BuildMode::optimize_for_speed:
-        case BuildMode::optimize_for_size:
-            code_generation_optimization_level = BBLLVMCodeGenerationOptimizationLevel::normal;
-            break;
-        case BuildMode::aggressively_optimize_for_speed:
-        case BuildMode::aggressively_optimize_for_size:
-            code_generation_optimization_level = BBLLVMCodeGenerationOptimizationLevel::aggressive;
-            break;
-        case BuildMode::count:
-            unreachable();
-    }
-    BBLLVMTargetMachineCreate target_machine_options = {
-        .target_triple = llvm_default_target_triple(),
-        .cpu_model = llvm_host_cpu_name(),
-        .cpu_features = llvm_host_cpu_features(),
-        .relocation_model = BBLLVMRelocationModel::default_relocation,
-        .code_model = BBLLVMCodeModel::none,
-        .optimization_level = code_generation_optimization_level,
-    };
-    String error_message = {};
-    auto target_machine = llvm_create_target_machine(&target_machine_options, &error_message);
-    assert(target_machine);
     BBLLVMOptimizationLevel optimization_level;
     switch (module->build_mode)
     {
@@ -8667,7 +9111,7 @@ void emit(Module* module)
         case BuildMode::count:
             unreachable();
     }
-    auto object_generation_result = generate_object(module->llvm.module, target_machine, {
+    auto object_generation_result = generate_object(module->llvm.module, module->llvm.target_machine, {
         .path = module->objects[0],
         .optimization_level = optimization_level,
         .run_optimization_passes = module->build_mode != BuildMode::debug_none,

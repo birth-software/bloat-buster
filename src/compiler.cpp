@@ -2,6 +2,7 @@
 
 fn void compile(Arena* arena, Options options)
 {
+    Module module;
     auto base_allocation_type_count = i128_offset + // 64 * 2 for basic integer types
         2 + // u128, s128
         2; // void, noreturn
@@ -32,6 +33,7 @@ fn void compile(Arena* arena, Options options)
                 },
                 .id = TypeId::integer,
                 .name = name,
+                .scope = &module.scope,
             };
             if (previous) previous->next = type_it;
             previous = type_it;
@@ -50,6 +52,7 @@ fn void compile(Arena* arena, Options options)
             .id = TypeId::integer,
             .name = name,
             .next = previous,
+            .scope = &module.scope,
         };
         if (previous) previous->next = type_it;
         previous = type_it;
@@ -67,18 +70,22 @@ fn void compile(Arena* arena, Options options)
         .id = TypeId::void_type,
         .name = string_literal("void"),
         .next = noreturn_type,
+        .scope = &module.scope,
     };
     *noreturn_type = {
         .id = TypeId::noreturn,
         .name = string_literal("noreturn"),
+        .scope = &module.scope,
     };
 
-    auto module = Module{
+    module = Module{
         .arena = arena,
         .content = options.content,
-        .first_type = base_type_allocation.pointer,
-        .last_type = noreturn_type,
         .scope = {
+            .types = {
+                .first = base_type_allocation.pointer,
+                .last = noreturn_type,
+            },
             .kind = ScopeKind::global,
         },
         .name = options.name,
@@ -306,13 +313,17 @@ global_variable String names[] =
     string_literal("noreturn_macro"),
     string_literal("generic_pointer_array"),
     
-    string_literal("self_referential_struct"), // TODO
-    // string_literal("forward_declared_type"),
+    string_literal("self_referential_struct"),
+    string_literal("forward_declared_type"),
+
+    string_literal("enum_array"),
+    string_literal("opaque"),
+    string_literal("basic_struct_passing"),
 };
 
 void entry_point(Slice<const char*> arguments, Slice<char* const> environment)
 {
-    Arena* arena = arena_initialize_default(8 * mb);
+    Arena* arena = arena_initialize_default(16 * mb);
 
     if (arguments.length < 2)
     {
@@ -382,7 +393,7 @@ void entry_point(Slice<const char*> arguments, Slice<char* const> environment)
 
             if (arguments.length >= 5)
             {
-                auto has_debug_info_string = c_string_to_slice(arguments[3]);
+                auto has_debug_info_string = c_string_to_slice(arguments[4]);
                 if (has_debug_info_string.equal(string_literal("true")))
                 {
                     has_debug_info = true;
@@ -488,7 +499,7 @@ void entry_point(Slice<const char*> arguments, Slice<char* const> environment)
                         auto success = execution.termination_kind == TerminationKind::exit && execution.termination_code == 0;
                         if (!success)
                         {
-                            print(string_literal("Standalone test failed: "));
+                            print(string_literal("Self-hosted test failed: "));
                             print(name);
                             print(string_literal("\n"));
                             bb_fail();

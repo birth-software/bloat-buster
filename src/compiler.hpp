@@ -1,7 +1,7 @@
 #pragma once
 
 #include <lib.hpp>
-#include <llvm-c/Types.h>
+#include <llvm-c/TargetMachine.h>
 #define report_error() trap()
 
 enum class Command
@@ -314,6 +314,8 @@ enum class TypeId
     unresolved,
     vector,
     floating_point,
+    enum_array,
+    opaque,
 };
 
 struct TypeInteger
@@ -448,6 +450,13 @@ struct LLVMType
     LLVMMetadataRef debug;
 };
 
+struct TypeEnumArray
+{
+    Type* enum_type;
+    Type* element_type;
+    Type* next;
+};
+
 struct Type
 {
     union
@@ -461,10 +470,12 @@ struct Type
         TypeBits bits;
         TypeAlias alias;
         TypeUnion union_type;
+        TypeEnumArray enum_array;
     };
     TypeId id;
     String name;
     Type* next;
+    Scope* scope;
     LLVMType llvm;
 };
 
@@ -528,6 +539,17 @@ fn u64 get_byte_size(Type* type)
                 auto result = type->union_type.byte_size;
                 return result;
             } break;
+        case TypeId::enum_array:
+            {
+                auto enum_type = type->enum_array.enum_type;
+                assert(enum_type->id == TypeId::enumerator);
+                auto element_count = enum_type->enumerator.fields.length;
+                auto element_type = type->enum_array.element_type;
+                auto element_size = get_byte_size(element_type);
+
+                auto result = element_size * element_count;
+                return result;
+            } break;
         default: trap();
     }
 }
@@ -575,6 +597,10 @@ fn u32 get_byte_alignment(Type* type)
             {
                 return get_byte_alignment(type->alias.type);
             } break;
+        case TypeId::enum_array:
+            {
+                return get_byte_alignment(type->enum_array.element_type);
+            } break;
         default: trap();
     }
 }
@@ -590,6 +616,12 @@ fn u64 get_bit_size(Type* type)
     }
 }
 
+struct TypeList
+{
+    Type* first;
+    Type* last;
+};
+
 enum class ScopeKind
 {
     global,
@@ -602,11 +634,19 @@ enum class ScopeKind
 
 struct Scope
 {
+    TypeList types;
     Scope* parent;
     u32 line;
     u32 column;
     ScopeKind kind;
     LLVMMetadataRef llvm;
+};
+
+struct SourceLocation
+{
+    Scope* scope;
+    u32 line;
+    u32 column;
 };
 
 enum class StatementId
@@ -659,9 +699,25 @@ struct StatementWhile
     Block* block;
 };
 
+enum class ClauseDiscriminantId
+{
+    single,
+    range,
+};
+
+struct ClauseDiscriminant
+{
+    union
+    {
+        Value* single;
+        Value* range[2];
+    };
+    ClauseDiscriminantId id;
+};
+
 struct StatementSwitchClause
 {
-    Slice<Value*> values;
+    Slice<ClauseDiscriminant> values;
     Block* block;
     LLVMBasicBlockRef basic_block;
 };
@@ -878,10 +934,18 @@ struct ValueVaArg
     Type* type;
 };
 
+struct AggregateInitializationElement
+{
+    String name;
+    Value* value;
+    u32 line;
+    u32 column;
+};
+
 struct ValueAggregateInitialization
 {
-    Slice<String> names;
-    Slice<Value*> values;
+    Slice<AggregateInitializationElement> elements;
+    Scope* scope;
     bool is_constant;
     bool zero;
 };
@@ -920,6 +984,7 @@ struct MacroDeclaration
 {
     Slice<Argument> arguments;
     Slice<ConstantArgument> constant_arguments;
+    TypeList types;
     Type* return_type;
     Block* block;
     String name;
@@ -987,6 +1052,7 @@ struct Value
             case ValueId::enum_literal:
             case ValueId::unary_type:
             case ValueId::string_literal:
+            case ValueId::zero:
                 return true;
             case ValueId::unary:
             case ValueId::binary:
@@ -1103,6 +1169,8 @@ struct ModuleLLVM
     LLVMBuilderRef builder;
     LLVMDIBuilderRef di_builder;
     LLVMMetadataRef file;
+    LLVMTargetMachineRef target_machine;
+    LLVMTargetDataRef target_data;
     LLVMMetadataRef compile_unit;
     LLVMTypeRef pointer_type;
     LLVMTypeRef void_type;
@@ -1126,9 +1194,8 @@ struct Module
     Type* first_slice_type;
     Type* first_pair_struct_type;
     Type* first_array_type;
+    Type* first_enum_array_type;
 
-    Type* first_type;
-    Type* last_type;
     Type* va_list_type;
 
     Value* void_value;
@@ -1167,7 +1234,7 @@ fn Type* integer_type(Module* module, TypeInteger integer)
         assert(integer.bit_count > 1);
     }
     auto index = integer.bit_count == 128 ? (i128_offset + integer.is_signed) : (integer.bit_count - 1 + (64 * integer.is_signed));
-    auto* result_type = module->first_type + index;
+    auto* result_type = module->scope.types.first + index;
     assert(result_type->id == TypeId::integer);
     assert(result_type->integer.bit_count == integer.bit_count);
     assert(result_type->integer.is_signed == integer.is_signed);
@@ -1176,7 +1243,7 @@ fn Type* integer_type(Module* module, TypeInteger integer)
 
 fn Type* void_type(Module* module)
 {
-    return module->first_type + void_offset;
+    return module->scope.types.first + void_offset;
 }
 
 fn Type* noreturn_type(Module* module)
@@ -1228,16 +1295,20 @@ fn Type* type_allocate_init(Module* module, Type type)
     auto* result = &arena_allocate<Type>(module->arena, 1)[0];
     *result = type;
 
-    if (module->last_type)
+    auto scope = type.scope;
+    assert(scope);
+
+    if (scope->types.last)
     {
-        module->last_type->next = result;
-        module->last_type = result;
+        assert(scope->types.first);
+        scope->types.last->next = result;
+        scope->types.last = result;
     }
     else
     {
-        assert(!module->first_type);
-        module->first_type = result;
-        module->last_type = result;
+        assert(!scope->types.first);
+        scope->types.first = result;
+        scope->types.last = result;
     }
 
     return result;
@@ -1310,6 +1381,7 @@ fn Type* get_pointer_type(Module* module, Type* element_type)
         },
         .id = TypeId::pointer,
         .name = arena_join_string(module->arena, array_to_slice(name_parts)),
+        .scope = element_type->scope,
     });
 
     if (last_pointer_type)
@@ -1394,6 +1466,7 @@ fn Type* get_slice_type(Module* module, Type* element_type)
         },
         .id = TypeId::structure,
         .name = arena_join_string(module->arena, array_to_slice(name_parts)),
+        .scope = element_type->scope,
     });
 
     if (last_slice_type)
@@ -1469,6 +1542,7 @@ fn Type* get_array_type(Module* module, Type* element_type, u64 element_count)
         },
         .id = TypeId::array,
         .name = array_name(module, element_type, element_count),
+        .scope = element_type->scope,
     });
 
     if (last_array_type)
@@ -1713,6 +1787,59 @@ fn Local* new_local(Module* module, Scope* scope)
 
     return result;
 }
+
+fn Type* get_enum_array_type(Module* module, Type* enum_type, Type* element_type)
+{
+    assert(enum_type);
+    assert(element_type);
+
+    Type* last_enum_type = module->first_enum_array_type;
+
+    if (last_enum_type)
+    {
+        while (1)
+        {
+            assert(last_enum_type->id == TypeId::enum_array);
+
+            if (last_enum_type->enum_array.enum_type == enum_type && last_enum_type->enum_array.element_type == element_type)
+            {
+                return last_enum_type;
+            }
+
+            if (!last_enum_type->enum_array.next)
+            {
+                break;
+            }
+
+            last_enum_type = last_enum_type->enum_array.next;
+        }
+    }
+
+    String name_parts[] = {
+        string_literal("enum_array["),
+        enum_type->name,
+        string_literal("]("),
+        element_type->name,
+        string_literal(")"),
+    };
+
+    assert(enum_type->scope);
+    assert(element_type->scope);
+
+    auto scope = element_type->scope->kind == ScopeKind::global ? enum_type->scope : element_type->scope;
+
+    auto enum_array_type = type_allocate_init(module, {
+        .enum_array = {
+            .enum_type = enum_type,
+            .element_type = element_type,
+        },
+        .id = TypeId::enum_array,
+        .name = arena_join_string(module->arena, array_to_slice(name_parts)),
+        .scope = scope,
+    });
+    return enum_array_type;
+}
+
 
 void parse(Module* module);
 void emit(Module* module);

@@ -295,6 +295,7 @@ os_file_open = fn (path: &u8, flags: OpenFlags, permissions: OpenPermissions) Fi
         .trunc = flags.truncate,
         .creat = flags.create,
         .directory = flags.directory,
+        zero,
     };
 
     >mode: mode_t = #select(permissions.execute, 0o755, 0o644);
@@ -448,6 +449,12 @@ arena_allocate = macro [T] (arena: &Arena, count: u64) &T
     return #pointer_cast(arena_allocate_bytes(arena, #byte_size(T) * count, #align_of(T)));
 }
 
+arena_allocate_slice = macro [T] (arena: &Arena, count: u64) []T
+{
+    >pointer: &T = #pointer_cast(arena_allocate_bytes(arena, #byte_size(T) * count, #align_of(T)));
+    return pointer[..count];
+}
+
 arena_duplicate_string = fn (arena: &Arena, string: []u8) []u8
 {
     >result = arena_allocate_bytes(arena, string.length + 1, 1);
@@ -481,7 +488,7 @@ arena_join_string = fn (arena: &Arena, pieces: [][]u8) []u8
 
 file_read = fn (arena: &Arena, path: []u8) []u8
 {
-    >fd = os_file_open(path.pointer, { .read = 1 }, { .read = 1 });
+    >fd = os_file_open(path.pointer, { .read = 1, zero }, { .read = 1, zero });
 
     >result: []u8 = zero;
 
@@ -533,8 +540,7 @@ CompilerCommand = enum
 BuildMode = enum
 {
     debug_none,
-    debug_fast,
-    debug_size,
+    debug,
     soft_optimize,
     optimize_for_speed,
     optimize_for_size,
@@ -580,17 +586,119 @@ CompileOptions = struct
     executable: []u8,
     name: []u8,
     objects: [][]u8,
+    libraries: [][]u8,
     target: Target,
     build_mode: BuildMode,
     has_debug_info: u1,
     silent: u1,
 }
 
+CallingConvention = enum
+{
+    c,
+}
+
+InlineBehavior = enum
+{
+    default = 0,
+    always_inline = 1,
+    no_inline = 2,
+    inline_hint = 3,
+}
+
+FunctionAttributes = struct
+{
+    inline_behavior: InlineBehavior,
+    naked: u1,
+}
+
+Type = struct;
+Value = struct;
+Local = struct;
+Block = struct;
+
+ScopeKind = enum
+{
+    global,
+    function,
+    local,
+    for_each,
+    macro_declaration,
+    macro_instantiation,
+}
+
+TypeList = struct
+{
+    first: &Type,
+    last: &Type,
+}
+
+Scope = struct
+{
+    types: TypeList,
+    parent: &Scope,
+    line: u32,
+    column: u32,
+    kind: ScopeKind,
+}
+
+Variable = struct
+{
+    storage: &Value,
+    type: &Type,
+    scope: &Scope,
+    name: []u8,
+    line: u32,
+    column: u32,
+}
+
+Linkage = enum
+{
+    internal,
+    external,
+}
+
+Global = struct
+{
+    variable: Variable,
+    initial_value: &Value,
+    next: &Global,
+    linkage: Linkage,
+    emitted: u1,
+}
+
+Local = struct
+{
+    variable: Variable,
+    initial_value: &Value,
+    next: &Local,
+}
+
+Argument = struct
+{
+    variable: Variable,
+    index: u32,
+}
+
 TypeId = enum
 {
     void,
     noreturn,
+    forward_declaration,
     integer,
+    function,
+    pointer,
+    array,
+    enum,
+    struct,
+    bits,
+    alias,
+    union,
+    unresolved,
+    vector,
+    floating_point,
+    enum_array,
+    opaque,
 }
 
 TypeInteger = struct
@@ -599,9 +707,47 @@ TypeInteger = struct
     signed: u1,
 }
 
+TypePointer = struct
+{
+    element_type: &Type,
+    next: &Type,
+}
+
+AbiRegisterCountSystemV = struct
+{
+    gpr: u32,
+    sse: u32,
+};
+
+AbiRegisterCount = union
+{
+    system_v: AbiRegisterCountSystemV,
+};
+
+AbiInformation = struct
+{
+    foo: u32,
+}
+
+TypeFunction = struct
+{
+    semantic_return_type: &Type,
+    semantic_argument_types: []&Type,
+    calling_convention: CallingConvention,
+    is_variable_arguments: u1,
+
+    abi_argument_types: []&Type,
+    abi_return_type: &Type,
+    available_registers: AbiRegisterCount,
+    argument_abis: []AbiInformation,
+    return_abi: AbiInformation,
+}
+
 TypeContent = union
 {
     integer: TypeInteger,
+    function: TypeFunction,
+    pointer: TypePointer,
 }
 
 Type = struct
@@ -609,50 +755,363 @@ Type = struct
     content: TypeContent,
     id: TypeId,
     name: []u8,
+    next: &Type,
+    scope: &Scope,
 }
 
 ValueId = enum
 {
     infer_or_ignore,
+    external_function,
+    function,
+    constant_integer,
+}
+
+ValueConstantInteger = struct
+{
+    value: u64,
+    is_signed: u1,
+}
+
+ValueFunction = struct
+{
+    arguments: []Argument,
+    scope: Scope,
+    block: &Block,
+    attributes: FunctionAttributes,
+}
+
+ValueContent = union
+{
+    constant_integer: ValueConstantInteger,
+    function: ValueFunction,
+}
+
+ValueKind = enum
+{
+    right,
+    left,
 }
 
 Value = struct
 {
+    content: ValueContent,
     type: &Type,
     id: ValueId,
+    kind: ValueKind,
 }
 
 i128_offset: u64 = 64 * 2;
 void_offset: u64 = i128_offset + 2;
 
+MacroDeclaration = struct
+{
+    foo: u32,
+}
+
+MacroInstantiation = struct
+{
+    foo: u32,
+}
+
+LLVMContext = opaque;
+LLVMModule = opaque;
+LLVMBuilder = opaque;
+LLVMDIBuilder = opaque;
+LLVMValue = opaque;
+LLVMType = opaque;
+LLVMMetadata = opaque;
+LLVMBasicBlock = opaque;
+LLVMIntrinsicId = typealias u32;
+
+LLVMIntrinsicIndex = enum
+{
+    trap,
+    va_start,
+    va_end,
+    va_copy,
+}
+
+ModuleLLVM = struct
+{
+    context: &LLVMContext,
+    module: &LLVMModule,
+    builder: &LLVMBuilder,
+    di_builder: &LLVMDIBuilder,
+    file: &LLVMMetadata,
+    compile_unit: &LLVMMetadata,
+    pointer_type: &LLVMType,
+    void_type: &LLVMType,
+    intrinsic_table: enum_array[LLVMIntrinsicIndex](LLVMIntrinsicId),
+    memcmp: &LLVMValue,
+    inlined_at: &LLVMMetadata,
+    continue_block: &LLVMBasicBlock,
+    exit_block: &LLVMBasicBlock,
+    debug_tag: u32,
+}
+
 Module = struct
 {
     arena: &Arena,
-    base_type_allocation: &Type,
-    void_value: &Value,
-    // Parser data
     content: []u8,
     offset: u64,
     line_offset: u64,
     line_character_offset: u64,
+
+    first_pointer_type: &Type,
+    first_slice_type: &Type,
+    first_pair_struct_type: &Type,
+    first_array_type: &Type,
+
+    va_list_type: &Type,
+
+    void_value: &Value,
+    first_global: &Global,
+    last_global: &Global,
+    first_macro_declaration: &MacroDeclaration,
+    last_macro_declaration: &MacroDeclaration,
+
+    current_function: &Global,
+    current_macro_declaration: &MacroDeclaration,
+    current_macro_instantiation: &MacroInstantiation,
+
+    llvm: ModuleLLVM,
+    scope: Scope,
+
+    name: []u8,
+    path: []u8,
+    executable: []u8,
+    objects: [][]u8,
+    libraries: [][]u8,
+
+    target: Target,
+    build_mode: BuildMode,
+    has_debug_info: u1,
+    silent: u1,
 }
 
-module_integer_type = fn (module: &Module, integer: TypeInteger) &Type
+Statement = struct;
+
+StatementId = enum
+{
+    local,
+    expression,
+    return,
+    assignment,
+    if,
+    block,
+    while,
+    switch,
+    for,
+    break,
+    continue,
+}
+
+StatementAssignmentId = enum
+{
+    assign,
+    assign_add,
+    assign_sub,
+    assign_mul,
+    assign_div,
+    assign_rem,
+    assign_shift_left,
+    assign_shift_right,
+    assign_and,
+    assign_or,
+    assign_xor,
+}
+
+StatementAssignment = struct
+{
+    left: &Value,
+    right: &Value,
+    id: StatementAssignmentId,
+}
+
+StatementIf = struct
+{
+    condition: &Value,
+    if: &Statement,
+    else: &Statement,
+}
+
+Block = struct
+{
+    first_local: &Local,
+    last_local: &Local,
+    first_statement: &Statement,
+    scope: Scope,
+}
+
+StatementWhile = struct
+{
+    condition: &Value,
+    block: &Block,
+}
+
+StatementSwitchClause = struct
+{
+    values: []&Value,
+    block: &Block,
+}
+
+StatementSwitch = struct
+{
+    discriminant: &Value,
+    clauses: []StatementSwitchClause,
+}
+
+StatementForKind = enum
+{
+    slice,
+    range,
+}
+
+StatementFor = struct
+{
+    first_local: &Local,
+    last_local: &Local,
+    kinds: ValueKind,
+    iteratables: &Value,
+    predicate: &Statement,
+    scope: Scope,
+    kind: StatementForKind,
+}
+
+StatementContent = union
+{
+    local: &Local,
+    expression: &Value,
+    return: &Value,
+    assignment: StatementAssignment,
+    if: StatementIf,
+    block: &Block,
+    while: StatementWhile,
+    switch: StatementSwitch,
+    for: StatementFor,
+}
+
+Statement = struct
+{
+    content: StatementContent,
+    next: &Statement,
+    line: u32,
+    column: u32,
+    id: StatementId,
+}
+
+new_global = fn (module: &Module) &Global
+{
+    >result = arena_allocate[Global](module.arena, 1);
+
+    if (module.last_global)
+    {
+        assert(module.first_global != zero);
+        module.last_global.next = result;
+        module.last_global = result;
+    }
+    else
+    {
+        assert(module.first_global == zero);
+        module.first_global = result;
+        module.last_global = result;
+    }
+
+    return result;
+}
+
+new_type = fn (module: &Module, type: Type) &Type
+{
+    >result = arena_allocate[Type](module.arena, 1);
+    result.& = type;
+
+    >scope = type.scope;
+    assert(scope != zero);
+
+    if (scope.types.last)
+    {
+        assert(scope.types.first != zero);
+        scope.types.last.next = result;
+        scope.types.last = result;
+    }
+    else
+    {
+        assert(scope.types.first == zero);
+        scope.types.first = result;
+        scope.types.last = result;
+    }
+
+    return result;
+}
+
+integer_type = fn (module: &Module, integer: TypeInteger) &Type
 {
     assert(integer.bit_count != 0);
     assert(integer.bit_count <= 64);
     >index = #select(integer.bit_count == 128, i128_offset + #extend(integer.signed), #extend(integer.bit_count) - 1 + 64 * #extend(integer.signed));
-    return module.base_type_allocation + index;
+    >result = module.scope.types.first + index;
+    assert(result.id == .integer);
+    assert(result.content.integer.bit_count == integer.bit_count);
+    assert(result.content.integer.signed == integer.signed);
+    return result;
 }
 
-module_void_type = fn (module: &Module) &Type
+void_type = fn (module: &Module) &Type
 {
-    return module.base_type_allocation + void_offset;
+    return module.scope.types.first + void_offset;
 }
 
-module_noreturn_type = fn (module: &Module) &Type
+noreturn_type = fn (module: &Module) &Type
 {
-    return module_void_type(module) + 1;
+    return void_type(module) + 1;
+}
+
+get_pointer_type = fn (module: &Module, element_type: &Type) &Type
+{
+    >last_pointer_type = module.first_pointer_type;
+
+    while (last_pointer_type)
+    {
+        assert(last_pointer_type.id == .pointer);
+        if (last_pointer_type.content.pointer.element_type == element_type)
+        {
+            return last_pointer_type;
+        }
+
+        if (!last_pointer_type.content.pointer.next)
+        {
+            break;
+        }
+
+        last_pointer_type = last_pointer_type.content.pointer.next;
+    }
+
+    >result = new_type(module, {
+        .content = {
+            .pointer = {
+                .element_type = element_type,
+                zero,
+            },
+        },
+        .id = .pointer,
+        .name = arena_join_string(module.arena, [ "&", element_type.name ][..]),
+        .scope = element_type.scope,
+        zero,
+    });
+
+    if (last_pointer_type)
+    {
+        assert(module.first_pointer_type != zero);
+        last_pointer_type.content.pointer.next = result;
+    }
+    else
+    {
+        assert(!module.first_pointer_type);
+        module.first_pointer_type = result;
+    }
+
+    return result;
 }
 
 is_space = fn (ch: u8) u1
@@ -675,29 +1134,29 @@ is_binary = fn (ch: u8) u1
     return ch == '0' or ch == '1';
 }
 
-is_hex_alpha_lower = fn (ch: u8) u1
+is_hexadecimal_alpha_lower = fn (ch: u8) u1
 {
     return ch >= 'a' and ch <= 'f';
 }
 
-is_hex_alpha_upper = fn (ch: u8) u1
+is_hexadecimal_alpha_upper = fn (ch: u8) u1
 {
     return ch >= 'A' and ch <= 'F';
 }
 
-is_hex_alpha = fn (ch: u8) u1
+is_hexadecimal_alpha = fn (ch: u8) u1
 {
-    return is_hex_alpha_lower(ch) or is_hex_alpha_upper(ch);
+    return is_hexadecimal_alpha_lower(ch) or is_hexadecimal_alpha_upper(ch);
 }
 
-is_hex = fn (ch: u8) u1
+is_hexadecimal = fn (ch: u8) u1
 {
-    return is_decimal(ch) or is_hex_alpha(ch);
+    return is_decimal(ch) or is_hexadecimal_alpha(ch);
 }
 
 is_identifier_start = fn (ch: u8) u1
 {
-    return (ch >= 'a' and ch >= 'z') or (ch >= 'A' and ch <= 'Z') or ch == '_';
+    return (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or ch == '_';
 }
 
 is_identifier = fn (ch: u8) u1
@@ -722,6 +1181,29 @@ get_column = fn (module: &Module) u32
     >column = module.offset - module.line_character_offset + 1;
     assert(column <= #integer_max(u32));
     return #truncate(column);
+}
+
+Checkpoint = struct
+{
+    offset: u64,
+    line_offset: u64,
+    line_character_offset: u64,
+}
+
+get_checkpoint = fn (module: &Module) Checkpoint
+{
+    return {
+        .offset = module.offset,
+        .line_offset = module.line_offset,
+        .line_character_offset = module.line_character_offset,
+    };
+}
+
+set_checkpoint = fn (module: &Module, checkpoint: Checkpoint) void
+{
+    module.offset = checkpoint.offset;
+    module.line_offset = checkpoint.line_offset;
+    module.line_character_offset = checkpoint.line_character_offset;
 }
 
 skip_space = fn (module: &Module) void
@@ -817,8 +1299,1315 @@ parse_identifier = fn (module: &Module) []u8
     return result;
 }
 
+new_value = fn (module: &Module) &Value
+{
+    >value = arena_allocate[Value](module.arena, 1);
+    return value;
+}
+
+GlobalAttributeKeyword = enum
+{
+    export,
+    extern,
+}
+
+GlobalKeyword = enum
+{
+    bits,
+    enum,
+    fn,
+    macro,
+    opaque,
+    struct,
+    typealias,
+    union,
+}
+
+FunctionTypeAttribute = enum
+{
+    cc,
+}
+
+left_bracket: u8 = '[';
+right_bracket: u8 = ']';
+left_parenthesis: u8 = '(';
+right_parenthesis: u8 = ')';
+left_brace: u8 = '{';
+right_brace: u8 = '}';
+
+accumulate_decimal = fn(accumulator: u64, ch: u8) u64
+{
+    assert(is_decimal(ch));
+    return (accumulator * 10) + #extend(ch - '0');
+}
+
+parse_decimal = fn (module: &Module) u64
+{
+    >value: u64 = 0;
+
+    while (1)
+    {
+        >ch = module.content[module.offset];
+
+        if (!is_decimal(ch))
+        {
+            break;
+        }
+
+        module.offset += 1;
+        value = accumulate_decimal(value, ch);
+    }
+
+    return value;
+}
+
+parse_integer_decimal_assume_valid = fn (string: []u8) u64
+{
+    >value: u64 = 0;
+
+    for (ch: string)
+    {
+        value = accumulate_decimal(value, ch);
+    }
+
+    return value;
+}
+
+accumulate_octal = fn (accumulator: u64, ch: u8) u64
+{
+    assert(is_octal(ch));
+
+    return (accumulator * 8) + #extend(ch - '0');
+}
+
+parse_octal = fn (module: &Module) u64
+{
+    >value: u64 = 0;
+
+    while (1)
+    {
+        >ch = module.content[module.offset];
+
+        if (!is_octal(ch))
+        {
+            break;
+        }
+
+        module.offset += 1;
+
+        value = accumulate_octal(value, ch);
+    }
+
+    return value;
+}
+
+accumulate_binary = fn (accumulator: u64, ch: u8) u64
+{
+    assert(is_binary(ch));
+    return (accumulator * 2) + #extend(ch - '0');
+}
+
+parse_binary = fn (module: &Module) u64
+{
+    >value: u64 = 0;
+
+    while (1)
+    {
+        >ch = module.content[module.offset];
+
+        if (!is_binary(ch))
+        {
+            break;
+        }
+
+        module.offset += 1;
+
+        value = accumulate_binary(value, ch);
+    }
+
+    return value;
+}
+
+TypeKeyword = enum
+{
+    void,
+    noreturn,
+    enum_array,
+}
+
+parse_type = fn (module: &Module, scope: &Scope) &Type
+{
+    >start_character = module.content[module.offset];
+
+    if (is_identifier_start(start_character))
+    {
+        >identifier = parse_identifier(module);
+
+        >type_keyword_s2e = #string_to_enum(TypeKeyword, identifier);
+
+        if (type_keyword_s2e.is_valid)
+        {
+            >type_keyword = type_keyword_s2e.enum_value;
+
+            switch (type_keyword)
+            {
+                .void =>
+                {
+                    #trap();
+                },
+                .noreturn =>
+                {
+                    #trap();
+                },
+                .enum_array =>
+                {
+                    #trap();
+                },
+            }
+        }
+        else
+        {
+            >is_integer_type = identifier.length > 1 and (identifier[0] == 's' or identifier[0] == 'u');
+
+            if (is_integer_type)
+            {
+                for (ch: identifier[1..])
+                {
+                    is_integer_type = is_integer_type and is_decimal(ch);
+                }
+            }
+
+            if (is_integer_type)
+            {
+                >is_signed: u1 = undefined;
+                switch (identifier[0])
+                {
+                    's' =>
+                    {
+                        is_signed = 1;
+                    },
+                    'u' =>
+                    {
+                        is_signed = 0;
+                    },
+                    else =>
+                    {
+                        unreachable;
+                    },
+                }
+
+                >bit_count = parse_integer_decimal_assume_valid(identifier[1..]);
+
+                if (bit_count == 0)
+                {
+                    report_error();
+                }
+
+                if (bit_count > 64)
+                {
+                    if (bit_count != 128)
+                    {
+                        report_error();
+                    }
+                }
+
+                >result = integer_type(module, { .bit_count = #truncate(bit_count), .signed = is_signed }); 
+                return result;
+            }
+            else
+            {
+                //>type = module.first_type;
+
+                //while (type)
+                //{
+                //    if (string_equal(identifier, type.name))
+                //    {
+                //        return type;
+                //    }
+
+                //    type = type.next;
+                //}
+
+                report_error();
+            }
+        }
+    }
+    else if (start_character == '&')
+    {
+        #trap();
+    }
+    else if (start_character == left_bracket)
+    {
+        #trap();
+    }
+    else if (start_character == '#')
+    {
+        #trap();
+    }
+    else
+    {
+        report_error();
+    }
+}
+
+accumulate_hexadecimal = fn (accumulator: u64, ch: u8) u64
+{
+    >value: u8 = undefined;
+
+    if (is_decimal(ch))
+    {
+        value = (ch - '0');
+    }
+    else if (is_hexadecimal_alpha_upper(ch))
+    {
+        value = (ch - 'A' + 10);
+    }
+    else if (is_hexadecimal_alpha_lower(ch))
+    {
+        value = (ch - 'a' + 10);
+    }
+    else
+    {
+        unreachable;
+    }
+
+    return (accumulator * 16) + #extend(value);
+}
+
+parse_hexadecimal = fn (module: &Module) u64
+{
+    >value: u64 = 0;
+
+    while (1)
+    {
+        >ch = module.content[module.offset];
+
+        if (!is_hexadecimal(ch))
+        {
+            break;
+        }
+
+        module.offset += 1;
+        value = accumulate_hexadecimal(value, ch);
+    }
+
+    return value;
+}
+
+TokenId = enum
+{
+    none,
+    comma,
+    end_of_statement,
+    integer,
+    left_brace,
+    left_bracket,
+    left_parenthesis,
+    right_brace,
+    right_bracket,
+    right_parenthesis,
+
+    plus,
+    dash,
+    asterisk,
+    forward_slash,
+    percentage,
+    caret,
+    bar,
+    ampersand,
+    exclamation,
+
+    assign_plus,
+    assign_dash,
+    assign_asterisk,
+    assign_forward_slash,
+    assign_percentage,
+    assign_caret,
+    assign_bar,
+    assign_ampersand,
+
+    value_keyword,
+    operator_keyword,
+    identifier,
+    string_literal,
+    value_intrinsic,
+
+    shift_left,
+    shift_right,
+    assign_shift_left,
+    assign_shift_right,
+
+    compare_less,
+    compare_less_equal,
+    compare_greater,
+    compare_greater_equal,
+    compare_equal,
+    compare_not_equal,
+
+    dot,
+    double_dot,
+    triple_dot,
+
+    pointer_dereference,
+
+    assign,
+    tilde,
+}
+
+TokenIntegerKind = enum
+{
+    hexadecimal,
+    decimal,
+    octal,
+    binary,
+    character_literal,
+}
+
+TokenInteger = struct
+{
+    value: u64,
+    kind: TokenIntegerKind,
+};
+
+ValueKeyword = enum
+{
+    undefined,
+    unreachable,
+    zero,
+}
+
+ValueIntrinsic = enum
+{
+    align_of,
+    byte_size,
+    enum_name,
+    extend,
+    integer_max,
+    int_from_enum,
+    int_from_pointer,
+    pointer_cast,
+    pointer_from_int,
+    select,
+    string_to_enum,
+    trap,
+    truncate,
+    va_start,
+    va_end,
+    va_arg,
+    va_copy,
+}
+
+OperatorKeyword = enum
+{
+    and,
+    or,
+    "and?",
+    "or?",
+}
+
+TokenContent = union
+{
+    integer: TokenInteger,
+    value_keyword: ValueKeyword,
+    value_intrinsic: ValueIntrinsic,
+    operator_keyword: OperatorKeyword,
+    identifier: []u8,
+    string_literal: []u8,
+}
+Token = struct
+{
+    content: TokenContent,
+    id: TokenId,
+}
+
+tokenize = fn (module: &Module) Token
+{
+    skip_space(module);
+
+    >start_index = module.offset;
+    if (start_index == module.content.length)
+    {
+        report_error();
+    }
+
+    >start_character = module.content[start_index];
+    
+    >token: Token = undefined;
+
+    switch (start_character)
+    {
+        ',',
+        ';',
+        '~',
+        left_brace,
+        left_parenthesis,
+        left_bracket,
+        right_brace,
+        right_parenthesis,
+        right_bracket,
+        =>
+        {
+            module.offset += 1;
+
+            >id: TokenId = undefined;
+
+            switch (start_character)
+            {
+                ',' => { id = .comma; },
+                ';' => { id = .end_of_statement; },
+                '~' => { id = .tilde; },
+                left_brace => { id = .left_brace; },
+                left_parenthesis => { id = .left_parenthesis; },
+                left_bracket => { id = .left_bracket; },
+                right_brace => { id = .right_brace; },
+                right_parenthesis => { id = .right_parenthesis; },
+                right_bracket => { id = .right_bracket; },
+                else =>
+                {
+                    unreachable;
+                },
+            }
+
+            token = {
+                .id = id,
+                zero,
+            };
+        },
+        '#' =>
+        {
+            #trap();
+        },
+        '<' =>
+        {
+            #trap();
+        },
+        '>' =>
+        {
+            #trap();
+        },
+        '=' =>
+        {
+            #trap();
+        },
+        '.' =>
+        {
+            #trap();
+        },
+        '"' =>
+        {
+            #trap();
+        },
+        '\'' =>
+        {
+            #trap();
+        },
+        '0'...'9' =>
+        {
+            >next_ch = module.content[start_index + 1];
+            >token_integer_kind: TokenIntegerKind = .decimal;
+
+            if (start_character == '0')
+            {
+                switch (next_ch)
+                {
+                    'x' => { token_integer_kind = .hexadecimal; },
+                    'd' => { token_integer_kind = .decimal; },
+                    'o' => { token_integer_kind = .octal; },
+                    'b' => { token_integer_kind = .binary; },
+                    else => { token_integer_kind = .decimal; },
+                }
+
+                >inferred_decimal = token_integer_kind == .decimal and next_ch != 'd';
+                module.offset += 2 * #extend(token_integer_kind != .decimal or !inferred_decimal);
+            }
+
+            >value: u64 = undefined;
+
+            switch (token_integer_kind)
+            {
+                .hexadecimal => { value = parse_hexadecimal(module); },
+                .decimal => { value = parse_decimal(module); },
+                .octal => { value = parse_octal(module); },
+                .binary => { value = parse_binary(module); },
+                .character_literal => { report_error(); },
+            }
+
+            token = {
+                .content = {
+                    .integer = {
+                        .value = value,
+                        .kind = token_integer_kind,
+                    },
+                },
+                .id = .integer,
+            };
+        },
+        '+',
+        '-',
+        '*',
+        '/',
+        '%',
+        '&',
+        '|',
+        '^',
+        '!',
+        =>
+        {
+            #trap();
+        },
+        else =>
+        {
+            if (is_identifier_start(start_character))
+            {
+                #trap();
+            }
+            else
+            {
+                report_error();
+            }
+        }
+    }
+
+    assert(start_index != module.offset);
+    return token;
+}
+
+Precedence = enum
+{
+    none,
+    assignment,
+    boolean_or,
+    boolean_and,
+    comparison,
+    bitwise,
+    shifting,
+    add_like,
+    div_like,
+    prefix,
+    aggregate_initialization,
+    postfix,
+}
+
+ValueBuilder = struct
+{
+    token: Token,
+    left: &Value,
+    precedence: Precedence,
+    kind: ValueKind,
+    allow_assignment_operators: u1,
+}
+
+parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
+{
+    >token = builder.token;
+    >result: &Value = zero;
+
+    switch (token.id)
+    {
+        .integer =>
+        {
+            >integer_value = token.content.integer.value;
+            result = new_value(module);
+            result.& = {
+                .content = {
+                    .constant_integer = {
+                        .value = integer_value,
+                        .is_signed = 0,
+                    },
+                },
+                .id = .constant_integer,
+                .kind = .right,
+                zero,
+            };
+        },
+        else =>
+        {
+            report_error();
+        },
+    }
+
+    assert(result != zero);
+    return result;
+}
+
+get_token_precedence = fn (token: Token) Precedence
+{
+    switch (token.id)
+    {
+        .none => { unreachable; },
+        .comma,
+        .double_dot,
+        .triple_dot,
+        .end_of_statement,
+        .right_brace,
+        .right_bracket,
+        .right_parenthesis,
+        =>
+        {
+            return .none;
+        },
+        .assign,
+        .assign_shift_left,
+        .assign_shift_right,
+        .assign_plus,
+        .assign_dash,
+        .assign_asterisk,
+        .assign_forward_slash,
+        .assign_percentage,
+        .assign_caret,
+        .assign_bar,
+        .assign_ampersand,
+        =>
+        {
+            return .assignment;
+        },
+        .operator_keyword =>
+        {
+            #trap();
+        },
+        .compare_equal,
+        .compare_not_equal,
+        .compare_less,
+        .compare_less_equal,
+        .compare_greater,
+        .compare_greater_equal,
+        =>
+        {
+            return .comparison;
+        },
+        .ampersand,
+        .bar,
+        .caret,
+        =>
+        {
+            return .bitwise;
+        },
+        .shift_left,
+        .shift_right,
+        =>
+        {
+            return .shifting;
+        },
+        .plus,
+        .dash,
+        =>
+        {
+            return .add_like;
+        },
+        .asterisk,
+        .forward_slash,
+        .percentage,
+        =>
+        {
+            return .div_like;
+        },
+        .pointer_dereference,
+        .left_parenthesis,
+        .left_bracket,
+        .dot,
+        =>
+        {
+            return .postfix;
+        },
+        else => { unreachable; },
+    }
+}
+
+parse_right = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
+{
+    #trap();
+}
+
+parse_right_with_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
+{
+    >result = builder.left;
+    >precedence = builder.precedence;
+
+    while (1)
+    {
+        >checkpoint = get_checkpoint(module);
+        >token = tokenize(module);
+        >token_precedence = get_token_precedence(token);
+        if (token_precedence == .assignment)
+        {
+            token_precedence = #select(builder.allow_assignment_operators, token_precedence, .none);
+        }
+
+        if (precedence > token_precedence)
+        {
+            set_checkpoint(module, checkpoint);
+            break;
+        }
+
+        >left = result;
+        >right_builder = builder;
+        right_builder.token = token;
+        right_builder.precedence = .none;
+        right_builder.left = left;
+        >right = parse_right(module, scope, right_builder);
+        result = right;
+    }
+
+    return result;
+}
+
+parse_precedence = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
+{
+    assert(builder.token.id == .none);
+    >token = tokenize(module);
+    >left_builder = builder;
+    left_builder.token = token;
+    >left = parse_left(module, scope, left_builder);
+    >right_builder = builder;
+    right_builder.left = left;
+    >result = parse_right_with_left(module, scope, right_builder);
+    return result;
+}
+
+parse_value = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
+{
+    assert(builder.precedence == .none);
+    assert(!builder.left);
+    builder.precedence = .assignment;
+    >value = parse_precedence(module, scope, builder);
+    return value;
+}
+
+StatementStartKeyword = enum
+{
+    _,
+    return,
+    if,
+    for,
+    while,
+    switch,
+    break,
+    continue,
+}
+
+parse_statement = fn (module: &Module, scope: &Scope) &Statement
+{
+    >require_semicolon: u1 = 1;
+
+    >statement_line = get_line(module);
+    >statement_column = get_column(module);
+
+    >statement = arena_allocate[Statement](module.arena, 1);
+    statement.& = {
+        .line = statement_line,
+        .column = statement_column,
+        zero,
+    };
+
+    >statement_start_character = module.content[module.offset];
+
+    switch (statement_start_character)
+    {
+        '>' =>
+        {
+            #trap();
+        },
+        '#' =>
+        {
+            statement.content.expression = parse_value(module, scope, zero);
+            statement.id = .expression;
+        },
+        left_brace =>
+        {
+            #trap();
+        },
+        else =>
+        {
+            if (is_identifier_start(statement_start_character))
+            {
+                >checkpoint = get_checkpoint(module);
+                >statement_start_identifier = parse_identifier(module);
+
+                skip_space(module);
+
+                >statement_start_keyword_s2e = #string_to_enum(StatementStartKeyword, statement_start_identifier);
+                if (statement_start_keyword_s2e.is_valid)
+                {
+                    >statement_start_keyword = statement_start_keyword_s2e.enum_value;
+
+                    switch (statement_start_keyword)
+                    {
+                        ._ =>
+                        {
+                            #trap();
+                        },
+                        .return =>
+                        {
+                            >return_value = parse_value(module, scope, zero);
+                            statement.content.return = return_value;
+                            statement.id = .return;
+                        },
+                        .if =>
+                        {
+                            #trap();
+                        },
+                        .for =>
+                        {
+                            #trap();
+                        },
+                        .while =>
+                        {
+                            #trap();
+                        },
+                        .switch =>
+                        {
+                            #trap();
+                        },
+                        .break =>
+                        {
+                            #trap();
+                        },
+                        .continue =>
+                        {
+                            #trap();
+                        },
+                    }
+                }
+                else
+                {
+                    set_checkpoint(module, checkpoint);
+
+                    >left = parse_value(module, scope, { .kind = .left, zero });
+                    #trap();
+                }
+            }
+            else
+            {
+                report_error();
+            }
+        },
+    }
+
+    if (require_semicolon)
+    {
+        expect_character(module, ';');
+    }
+
+    return statement;
+}
+
+parse_block = fn (module: &Module, parent_scope: &Scope) &Block
+{
+    >block = arena_allocate[Block](module.arena, 1);
+    block.& = {
+        .scope = {
+            .parent = parent_scope,
+            .line = get_line(module),
+            .column = get_column(module),
+            .kind = .local,
+            zero,
+        },
+        zero,
+    };
+
+    >scope = &block.scope;
+
+    expect_character(module, left_brace);
+
+    >current_statement: &Statement = zero;
+
+    while (1)
+    {
+        skip_space(module);
+
+        if (module.offset == module.content.length)
+        {
+            break;
+        }
+
+        if (consume_character_if_match(module, right_brace))
+        {
+            break;
+        }
+
+        >statement = parse_statement(module, scope);
+
+        if (!block.first_statement)
+        {
+            block.first_statement = statement;
+        }
+
+        if (current_statement)
+        {
+            current_statement.next = statement;
+        }
+
+        assert(!statement.next);
+        current_statement = statement;
+    }
+
+    return block;
+}
+
 parse = fn (module: &Module) void
 {
+    >scope = &module.scope;
+
+    while (1)
+    {
+        skip_space(module);
+
+        if (module.offset == module.content.length)
+        {
+            break;
+        }
+
+        >is_export: u1 = 0;
+        >is_extern: u1 = 0;
+
+        >global_line = get_line(module);
+        >global_column = get_line(module);
+
+        if (consume_character_if_match(module, left_bracket))
+        {
+            while (module.offset < module.content.length)
+            {
+                >global_attribute_keyword_string = parse_identifier(module);
+                >global_attribute_keyword_s2e = #string_to_enum(GlobalAttributeKeyword, global_attribute_keyword_string);
+                if (!global_attribute_keyword_s2e.is_valid)
+                {
+                    report_error();
+                }
+
+                >global_attribute_keyword = global_attribute_keyword_s2e.enum_value;
+                switch (global_attribute_keyword)
+                {
+                    .export =>
+                    {
+                        is_export = 1;
+                    },
+                    .extern =>
+                    {
+                        is_extern = 1;
+                    },
+                }
+
+                if (consume_character_if_match(module, right_bracket))
+                {
+                    break;
+                }
+                else
+                {
+                    report_error();
+                }
+            }
+
+            skip_space(module);
+        }
+
+        >global_name = parse_identifier(module);
+
+        >last_global = module.first_global;
+
+        while (last_global)
+        {
+            if (string_equal(global_name, last_global.variable.name))
+            {
+                report_error();
+            }
+
+            if (!last_global.next)
+            {
+                break;
+            }
+
+            last_global = last_global.next;
+        }
+
+        >type_it = module.scope.types.first;
+        >forward_declaration: &Type = zero;
+
+        while (type_it)
+        {
+            if (string_equal(global_name, type_it.name))
+            {
+                if (type_it.id == .forward_declaration)
+                {
+                    forward_declaration = type_it;
+                    break;
+                }
+                else
+                {
+                    report_error();
+                }
+            }
+
+            if (!type_it.next)
+            {
+                break;
+            }
+
+            type_it = type_it.next;
+        }
+
+        skip_space(module);
+
+        >global_type: &Type = zero;
+
+        if (consume_character_if_match(module, ':'))
+        {
+            skip_space(module);
+
+            global_type = parse_type(module, scope);
+
+            skip_space(module);
+        }
+
+        expect_character(module, '=');
+
+        skip_space(module);
+
+        >is_global_keyword: u1 = 0;
+
+        if (is_identifier_start(module.content[module.offset]))
+        {
+            >checkpoint = get_checkpoint(module);
+            >global_keyword_string = parse_identifier(module);
+            skip_space(module);
+
+            >global_keyword_s2e = #string_to_enum(GlobalKeyword, global_keyword_string);
+
+            is_global_keyword = global_keyword_s2e.is_valid;
+
+            if (is_global_keyword)
+            {
+                >global_keyword = global_keyword_s2e.enum_value;
+
+                switch (global_keyword)
+                {
+                    .bits =>
+                    {
+                        #trap();
+                    },
+                    .enum =>
+                    {
+                        #trap();
+                    },
+                    .fn =>
+                    {
+                        >calling_convention: CallingConvention = .c;
+                        >function_attributes: FunctionAttributes = zero;
+                        >is_variable_arguments: u1 = 0;
+
+                        if (consume_character_if_match(module, left_bracket))
+                        {
+                            while (module.offset < module.content.length)
+                            {
+                                >function_identifier = parse_identifier(module);
+
+                                >function_type_attribute_s2e = #string_to_enum(FunctionTypeAttribute, function_identifier);
+
+                                if (!function_type_attribute_s2e.is_valid)
+                                {
+                                    report_error();
+                                }
+
+                                >function_type_attribute = function_type_attribute_s2e.enum_value;
+
+                                switch (function_type_attribute)
+                                {
+                                    .cc =>
+                                    {
+                                        expect_character(module, left_parenthesis);
+                                        skip_space(module);
+                                        >calling_convention_string = parse_identifier(module);
+
+                                        >calling_convention_s2e = #string_to_enum(CallingConvention, calling_convention_string);
+
+                                        if (!calling_convention_s2e.is_valid)
+                                        {
+                                            report_error();
+                                        }
+
+                                        >candidate_calling_convention = calling_convention_s2e.enum_value;
+                                        calling_convention = candidate_calling_convention;
+
+                                        skip_space(module);
+                                        expect_character(module, right_parenthesis);
+                                    },
+                                }
+
+                                skip_space(module);
+
+                                if (consume_character_if_match(module, right_bracket))
+                                {
+                                    break;
+                                }
+                                else
+                                {
+                                    report_error();
+                                }
+                            }
+                        }
+
+                        skip_space(module);
+
+                        expect_character(module, left_parenthesis);
+
+                        >semantic_argument_type_buffer: [64]&Type = undefined;
+                        >semantic_argument_name_buffer: [64][]u8 = undefined;
+                        >argument_line_buffer: [64]u32 = undefined;
+                        >semantic_argument_count: u64 = 0;
+
+                        while (module.offset < module.content.length)
+                        {
+                            skip_space(module);
+
+                            if (consume_character_if_match(module, '.'))
+                            {
+                                #trap();
+                            }
+
+                            if (consume_character_if_match(module, right_parenthesis))
+                            {
+                                break;
+                            }
+
+                            >line = get_line(module);
+                            argument_line_buffer[semantic_argument_count] = line;
+
+                            >argument_name = parse_identifier(module);
+                            semantic_argument_name_buffer[semantic_argument_count] = argument_name;
+
+                            skip_space(module);
+
+                            expect_character(module, ':');
+
+                            skip_space(module);
+
+                            >argument_type = parse_type(module, scope);
+                            semantic_argument_type_buffer[semantic_argument_count] = argument_type;
+
+                            skip_space(module);
+
+                            consume_character_if_match(module, '.');
+
+                            semantic_argument_count += 1;
+                        }
+
+                        skip_space(module);
+
+                        >return_type = parse_type(module, scope);
+
+                        skip_space(module);
+
+                        >argument_types: []&Type = zero;
+
+                        if (semantic_argument_count != 0)
+                        {
+                            #trap();
+                        }
+
+                        >is_declaration = consume_character_if_match(module, ';');
+
+                        >function_type = new_type(module, {
+                            .content = {
+                                .function = {
+                                    .semantic_return_type = return_type,
+                                    .semantic_argument_types = argument_types,
+                                    .calling_convention = calling_convention,
+                                    .is_variable_arguments = is_variable_arguments,
+                                    zero,
+                                },
+                            },
+                            .id = .function,
+                            .name = "",
+                            .scope = &module.scope,
+                            zero,
+                        });
+
+                        >storage = new_value(module);
+                        storage.& = {
+                            .id = .external_function,
+                            .type = get_pointer_type(module, function_type),
+                            zero,
+                            // TODO? kind = .left,
+                        };
+
+                        >global = new_global(module);
+                        global.& = {
+                            .variable = {
+                                .storage = storage,
+                                .type = function_type,
+                                .scope = scope,
+                                .name = global_name,
+                                .line = global_line,
+                                .column = global_column,
+                            },
+                            .linkage = #select(is_export or is_extern, .external, .internal),
+                            zero,
+                        };
+
+                        if (!is_declaration)
+                        {
+                            module.current_function = global;
+                            >arguments = arena_allocate_slice[Argument](module.arena, semantic_argument_count);
+
+                            for (i: 0..semantic_argument_count)
+                            {
+                                >argument = &arguments[i];
+                                >name = semantic_argument_name_buffer[i];
+                                >type = semantic_argument_type_buffer[i];
+                                >line = argument_line_buffer[i];
+
+                                #trap();
+                            }
+
+                            storage.content.function = {
+                                .arguments = arguments,
+                                .scope = {
+                                    .parent = scope,
+                                    .line = global_line,
+                                    .column = global_column,
+                                    .kind = .function,
+                                    zero,
+                                },
+                                .attributes = function_attributes,
+                                zero,
+                            };
+                            storage.id = .function;
+                            storage.content.function.block = parse_block(module, &storage.content.function.scope);
+                            module.current_function = zero;
+                        }
+                    },
+                    .macro =>
+                    {
+                        #trap();
+                    },
+                    .opaque =>
+                    {
+                        #trap();
+                    },
+                    .struct =>
+                    {
+                        #trap();
+                    },
+                    .typealias =>
+                    {
+                        #trap();
+                    },
+                    .union =>
+                    {
+                        #trap();
+                    },
+                }
+            }
+            else
+            {
+                set_checkpoint(module, checkpoint);
+            }
+        }
+
+        if (!is_global_keyword)
+        {
+            #trap();
+        }
+    }
 }
 
 emit = fn (module: &Module) void
@@ -836,6 +2625,7 @@ compile = fn (arena: &Arena, options: CompileOptions) void
     );
 
     >type_it = base_type_allocation;
+    >previous: &Type = zero;
 
     for (sign: signs)
     {
@@ -858,7 +2648,16 @@ compile = fn (arena: &Arena, options: CompileOptions) void
                 },
                 .id = .integer,
                 .name = name,
+                zero,
             };
+
+            if (previous)
+            {
+                previous.next = type_it;
+            }
+
+            previous = type_it;
+
             type_it += 1;
         }
     }
@@ -875,7 +2674,12 @@ compile = fn (arena: &Arena, options: CompileOptions) void
             },
             .id = .integer,
             .name = name,
+            zero,
         };
+
+        previous.next = type_it;
+        previous = type_it;
+
         type_it += 1;
     }
 
@@ -884,31 +2688,45 @@ compile = fn (arena: &Arena, options: CompileOptions) void
     >noreturn_type = type_it;
     type_it += 1;
 
+    previous.next = void_type;
+
     void_type.& = {
         .id = .void,
         .name = "void",
+        .next = noreturn_type,
+        zero,
     };
 
     noreturn_type.& = {
         .id = .noreturn,
         .name = "noreturn",
+        zero,
     };
 
     >void_value = arena_allocate[Value](arena, 1);
     void_value.& = {
-        .type = void_type,
         .id = .infer_or_ignore,
+        .type = void_type,
+        zero,
     };
 
     >module: Module = {
         .arena = arena,
-        .base_type_allocation = base_type_allocation,
-        .void_value = void_value,
         .content = options.content,
-        .offset = 0,
-        .line_offset = 0,
-        .line_character_offset = 0,
+        .void_value = void_value,
+        .name = options.name,
+        .path = options.path,
+        .executable = options.executable,
+        .objects = options.objects,
+        .libraries = options.libraries,
+        .target = options.target,
+        .build_mode = options.build_mode,
+        .has_debug_info = options.has_debug_info,
+        .silent = options.silent,
+        zero,
     };
+    module.scope.types.first = base_type_allocation;
+    module.scope.types.last = noreturn_type;
 
     parse(&module);
     emit(&module);
@@ -969,18 +2787,12 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile) void
     >c_abi_object_path = ""; // TODO
 
     >objects: [][]u8 = undefined;
-    if (string_equal(base_name, "c_abi"))
-    {
-        objects = [ output_object_path, c_abi_object_path ][..];
-    }
-    else
-    {
-        objects = [ output_object_path ][..];
-    }
+    objects = [ output_object_path ][..];
 
     >options: CompileOptions = {
         .executable = output_executable_path,
         .objects = objects,
+        .libraries = zero,
         .name = base_name,
         .build_mode = compile_options.build_mode,
         .content = file_content,
