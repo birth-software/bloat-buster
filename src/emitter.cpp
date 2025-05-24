@@ -956,6 +956,7 @@ fn void resolve_type_in_place_debug(Module* module, Type* type)
                     {
                         LLVMDIFlags flags = {};
                         auto forward_declaration = LLVMDIBuilderCreateReplaceableCompositeType(module->llvm.di_builder, module->llvm.debug_tag, (char*)type->name.pointer, type->name.length, module->scope.llvm, module->llvm.file, type->structure.line, 0, type->structure.byte_size * 8, type->structure.byte_alignment * 8, flags, (char*)type->name.pointer, type->name.length);
+                        type->llvm.debug = forward_declaration;
                         module->llvm.debug_tag += 1;
 
                         LLVMMetadataRef llvm_type_buffer[64];

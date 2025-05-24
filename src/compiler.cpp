@@ -306,7 +306,7 @@ global_variable String names[] =
     string_literal("noreturn_macro"),
     string_literal("generic_pointer_array"),
     
-    // string_literal("self_referential_struct"), // TODO
+    string_literal("self_referential_struct"), // TODO
     // string_literal("forward_declared_type"),
 };
 
