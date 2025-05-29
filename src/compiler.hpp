@@ -1213,8 +1213,10 @@ struct Module
     String name;
     String path;
     String executable;
-    Slice<String>objects;
-    Slice<String>libraries;
+    Slice<String> objects;
+    Slice<String> library_directories;
+    Slice<String> library_names;
+    Slice<String> library_paths;
 
     Target target;
     BuildMode build_mode;
@@ -1283,7 +1285,9 @@ struct Options
     String executable;
     String name;
     Slice<String> objects;
-    Slice<String> libraries;
+    Slice<String> library_paths;
+    Slice<String> library_names;
+    Slice<String> library_directories;
     Target target;
     BuildMode build_mode;
     bool has_debug_info;
@@ -1850,6 +1854,16 @@ struct ArgBuilder
         assert(argument_count < array_length(args));
         args[argument_count] = (char*)arg;
         argument_count += 1;
+    }
+
+    void add(Arena* arena, String arg)
+    {
+        if (arg.pointer[arg.length] != 0)
+        {
+            arg = arena_duplicate_string(arena, arg);
+        }
+
+        add((const char*)arg.pointer);
     }
 
     Slice<char* const> flush()

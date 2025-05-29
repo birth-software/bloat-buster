@@ -8325,16 +8325,33 @@ fn void link(Module* module)
     builder.add("-o");
     assert(module->executable.pointer[module->executable.length] == 0);
     builder.add((char*)module->executable.pointer);
+
     for (String object: module->objects)
     {
-        assert(object.pointer[object.length] == 0);
-        builder.add((char*)object.pointer);
+        builder.add(arena, object);
     }
 
-    for (String library: module->libraries)
+    for (String library_directory: module->library_directories)
     {
-        assert(library.pointer[library.length] == 0);
-        builder.add((char*)library.pointer);
+        String parts[] = {
+            string_literal("-L"),
+            library_directory,
+        };
+        builder.add(arena, arena_join_string(arena, array_to_slice(parts)));
+    }
+
+    for (String library_path: module->library_paths)
+    {
+        builder.add(arena, library_path);
+    }
+
+    for (String library_name: module->library_names)
+    {
+        String parts[] = {
+            string_literal("-l"),
+            library_name,
+        };
+        builder.add(arena, arena_join_string(arena, array_to_slice(parts)));
     }
 
     String candidate_library_paths[] = {

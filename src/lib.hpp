@@ -551,7 +551,11 @@ fn void* arena_allocate_bytes(Arena* arena, u64 size, u64 alignment)
 
         if (aligned_size_after > arena->os_position)
         {
-            unreachable();
+            auto target_commited_size = align_forward(aligned_size_after, arena->granularity);
+            auto size_to_commit = target_commited_size - arena->os_position;
+            auto commit_pointer = ((u8*)arena) + arena->os_position;
+            os_commit(commit_pointer, size_to_commit, { .read = 1, .write = 1 });
+            arena->os_position = target_commited_size;
         }
 
         result = (u8*)arena + aligned_offset;
@@ -709,8 +713,7 @@ enum class TerminationKind : u8
 
 struct Execution
 {
-    String stdout;
-    String stderr;
+    String streams[2];
     TerminationKind termination_kind;
     u32 termination_code;
 };

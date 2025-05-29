@@ -94,7 +94,9 @@ fn void compile(Arena* arena, Options options)
         .path = options.path,
         .executable = options.executable,
         .objects = options.objects,
-        .libraries = options.libraries,
+        .library_directories = options.library_directories,
+        .library_names = options.library_names,
+        .library_paths = options.library_paths,
         .target = options.target,
         .build_mode = options.build_mode,
         .has_debug_info = options.has_debug_info,
@@ -179,17 +181,80 @@ fn String compile_file(Arena* arena, Compile options)
     String c_abi_libraries[] = {
         string_literal("build/libc_abi.a"),
     };
-    Slice<String> library_slice = {};
+    Slice<String> library_names = {};
+    Slice<String> library_paths = {};
+    String library_buffer[256];
+
+    Slice<String> library_directories = {};
+    String library_directory = {};
 
     if (is_compiler)
     {
-        // ArgBuilder builder = {};
-        // auto arguments = builder.flush();
-        // os_execute(arena, arguments, environment, {});
+        ArgBuilder builder = {};
+        String llvm_config_parts[] = {
+            string_literal(CMAKE_PREFIX_PATH),
+            string_literal("/bin/llvm-config"),
+        };
+        builder.add(arena, arena_join_string(arena, array_to_slice(llvm_config_parts)));
+        builder.add("--libdir");
+        builder.add("--libs");
+        auto arguments = builder.flush();
+        auto llvm_config = os_execute(arena, arguments, environment, {
+            .policies = { ExecuteStandardStreamPolicy::pipe, ExecuteStandardStreamPolicy::ignore },
+        });
+        auto success = llvm_config.termination_kind == TerminationKind::exit && llvm_config.termination_code == 0;
+        if (!success)
+        {
+            report_error();
+        }
+
+        auto stream = llvm_config.streams[0];
+        auto line = string_first_character(stream, '\n');
+        if (line == string_no_match)
+        {
+            report_error();
+        }
+
+        library_directory = stream(0, line);
+        library_directories = { &library_directory, 1 };
+
+        stream = stream(line + 1);
+
+        line = string_first_character(stream, '\n');
+        if (line == string_no_match)
+        {
+            report_error();
+        }
+        if (line != stream.length - 1)
+        {
+            report_error();
+        }
+
+        auto library_list = stream(0, line);
+        u64 library_count = 0;
+
+        while (1)
+        {
+            auto space = string_first_character(library_list, ' ');
+            if (space == string_no_match)
+            {
+                auto library_argument = library_list(2);
+                library_buffer[library_count] = library_argument;
+                library_count += 1;
+                break;
+            }
+            // Omit the first two characters: "-l"
+            auto library_argument = library_list(2, space);
+            library_buffer[library_count] = library_argument;
+            library_count += 1;
+            library_list = library_list(space + 1);
+        }
+
+        library_names = { library_buffer, library_count };
     }
     else if (base_name.equal(string_literal("c_abi")))
     {
-        library_slice = array_to_slice(c_abi_libraries);
+        library_paths = array_to_slice(c_abi_libraries);
     }
 
     compile(arena, {
@@ -198,10 +263,12 @@ fn String compile_file(Arena* arena, Compile options)
             .executable = output_executable_path,
             .name = base_name,
             .objects = object_slice,
-            .libraries = library_slice,
+            .library_paths = library_paths,
+            .library_names = library_names,
+            .library_directories = library_directories,
             .target = {
-            .cpu = CPUArchitecture::x86_64,
-            .os = OperatingSystem::linux_,
+                .cpu = CPUArchitecture::x86_64,
+                .os = OperatingSystem::linux_,
             },
             .build_mode = options.build_mode,
             .has_debug_info = options.has_debug_info,

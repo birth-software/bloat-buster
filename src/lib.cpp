@@ -37,6 +37,7 @@ extern "C" s32 fork();
 extern "C" s32 dup2(s32, s32);
 extern "C" s32 execve(const char* path_name, const char* const argv[], char* const envp[]);
 extern "C" s32 waitpid(s32 pid, int* wstatus, int options);
+extern "C" s32 pipe(int fd[2]);
 
 u64 os_file_size(s32 fd)
 {
@@ -75,6 +76,7 @@ fn bool IFSIGNALED(u32 s)
 {
     return (s & 0xffff) - 1 < 0xff;
 }
+
 Execution os_execute(Arena* arena, Slice<char* const> arguments, Slice<char* const> environment, ExecuteOptions options)
 {
     unused(arena);
@@ -90,7 +92,7 @@ Execution os_execute(Arena* arena, Slice<char* const> arguments, Slice<char* con
     }
     else if (options.policies[0] == ExecuteStandardStreamPolicy::ignore || options.policies[1] == ExecuteStandardStreamPolicy::ignore)
     {
-        trap();
+        null_file_descriptor = open("/dev/null", { .access_mode = OPEN::AccessMode::write_only });
     }
 
     int pipes[standard_stream_count][2];
@@ -99,7 +101,10 @@ Execution os_execute(Arena* arena, Slice<char* const> arguments, Slice<char* con
     {
         if (options.policies[i] == ExecuteStandardStreamPolicy::pipe)
         {
-            trap();
+            if (pipe(pipes[i]) == -1)
+            {
+                trap();
+            }
         }
     }
 
@@ -154,16 +159,26 @@ Execution os_execute(Arena* arena, Slice<char* const> arguments, Slice<char* con
                     }
                 }
 
+                // TODO: better allocation strategy
+                u64 allocation_size = 1024 * 1024;
+                Slice<u8> allocation = {};
                 if (options.policies[0] == ExecuteStandardStreamPolicy::pipe || options.policies[1] == ExecuteStandardStreamPolicy::pipe)
                 {
-                    trap();
+                    allocation = arena_allocate<u8>(arena, allocation_size * ((options.policies[0] == ExecuteStandardStreamPolicy::pipe) + (options.policies[1] == ExecuteStandardStreamPolicy::pipe)));
                 }
 
+                u64 offset = 0;
                 for (u64 i = 0; i < standard_stream_count; i += 1)
                 {
                     if (options.policies[i] == ExecuteStandardStreamPolicy::pipe)
                     {
-                        trap();
+                        auto buffer = allocation(offset)(0, allocation_size);
+                        auto byte_count = read(pipes[i][0], buffer.pointer, buffer.length);
+                        assert(byte_count >= 0);
+                        execution.streams[i] = buffer(0, byte_count);
+                        close(pipes[i][0]);
+
+                        offset += allocation_size;
                     }
                 }
 
