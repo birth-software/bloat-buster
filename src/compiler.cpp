@@ -1,5 +1,7 @@
 #include <compiler.hpp>
 
+global_variable Slice<char* const> environment;
+
 fn void compile(Arena* arena, Options options)
 {
     Module module;
@@ -174,13 +176,17 @@ fn String compile_file(Arena* arena, Compile options)
     };
     Slice<String> object_slice = array_to_slice(objects);
 
-    String libraries[] = {
+    String c_abi_libraries[] = {
         string_literal("build/libc_abi.a"),
     };
     Slice<String> library_slice = {};
-    if (base_name.equal(string_literal("c_abi")))
+
+    if (is_compiler)
     {
-        library_slice = array_to_slice(libraries);
+    }
+    else if (base_name.equal(string_literal("c_abi")))
+    {
+        library_slice = array_to_slice(c_abi_libraries);
     }
 
     compile(arena, {
@@ -321,8 +327,9 @@ global_variable String names[] =
     string_literal("basic_struct_passing"),
 };
 
-void entry_point(Slice<const char*> arguments, Slice<char* const> environment)
+void entry_point(Slice<const char*> arguments, Slice<char* const> envp)
 {
+    environment = envp;
     Arena* arena = arena_initialize_default(16 * mb);
 
     if (arguments.length < 2)

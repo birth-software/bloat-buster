@@ -18,18 +18,16 @@ add_executable(bb
     src/compiler.cpp
     src/parser.cpp
     src/emitter.cpp
-    src/llvm.cpp
 )
 
 add_library(c_abi tests/c_abi.c)
+add_library(llvm_bindings src/llvm.cpp)
 
-target_include_directories(bb PUBLIC src)
-target_compile_definitions(bb PUBLIC
+include_directories(src)
+add_compile_definitions(
   $<$<CONFIG:Debug>:BB_DEBUG=1>
   $<$<NOT:$<CONFIG:Debug>>:BB_DEBUG=0>
 )
-
-target_link_libraries(bb PUBLIC ${LLVM_AVAILABLE_LIBS})
 
 find_library(LLD_COMMON NAMES liblldCommon.dylib lldCommon.lib lldCommon.a liblldCommon.dll.a liblldCommon.a PATHS ${LLVM_LIBRARY_DIRS} NO_DEFAULT_PATH)
 find_library(LLD_ELF NAMES liblldELF.dylib lldELF.lib lldELF.a liblldELF.dll.a liblldELF.a PATHS ${LLVM_LIBRARY_DIRS} NO_DEFAULT_PATH)
@@ -38,7 +36,8 @@ find_library(LLD_ELF NAMES liblldELF.dylib lldELF.lib lldELF.a liblldELF.dll.a l
 # find_library(LLD_MINGW NAMES liblldMinGW.dylib lldMinGW.lib lldMinGW.a liblldMinGW.dll.a liblldMinGW.a PATHS ${LLVM_LIBRARY_DIRS} NO_DEFAULT_PATH)
 # find_library(LLD_WASM NAMES liblldWasm.dylib lldWasm.lib lldWasm.a liblldWasm.dll.a liblldWasm.a PATHS ${LLVM_LIBRARY_DIRS} NO_DEFAULT_PATH)
 
-target_link_libraries(bb PUBLIC 
+target_link_libraries(llvm_bindings PUBLIC
+    ${LLVM_AVAILABLE_LIBS}
     ${LLD_COMMON}
     # ${LLD_COFF}
     ${LLD_ELF}
@@ -47,4 +46,7 @@ target_link_libraries(bb PUBLIC
     # ${LLD_WASM}
 )
 
-target_compile_options(bb PRIVATE -Wall -Wextra -pedantic -Wpedantic -Werror -Wno-c99-extensions -Wno-unused-function -Wno-missing-designated-field-initializers -funsigned-char -fwrapv -fno-strict-aliasing)
+target_link_libraries(bb PUBLIC llvm_bindings)
+
+add_compile_options(-Wall -Wextra -pedantic -Wpedantic -Werror -Wno-c99-extensions -Wno-unused-function -Wno-missing-designated-field-initializers -funsigned-char -fwrapv -fno-strict-aliasing)
+add_compile_definitions(CMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}")
