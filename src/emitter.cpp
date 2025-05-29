@@ -8326,30 +8326,11 @@ fn void link(Module* module)
     assert(module->executable.pointer[module->executable.length] == 0);
     builder.add((char*)module->executable.pointer);
 
-    for (String object: module->objects)
-    {
-        builder.add(arena, object);
-    }
-
     for (String library_directory: module->library_directories)
     {
         String parts[] = {
             string_literal("-L"),
             library_directory,
-        };
-        builder.add(arena, arena_join_string(arena, array_to_slice(parts)));
-    }
-
-    for (String library_path: module->library_paths)
-    {
-        builder.add(arena, library_path);
-    }
-
-    for (String library_name: module->library_names)
-    {
-        String parts[] = {
-            string_literal("-l"),
-            library_name,
         };
         builder.add(arena, arena_join_string(arena, array_to_slice(parts)));
     }
@@ -8391,8 +8372,29 @@ fn void link(Module* module)
         builder.add((char*)arena_join_string(arena, array_to_slice(parts)).pointer);
     }
 
-    auto link_libcpp = false;
-    if (link_libcpp)
+    builder.add("-L/usr/lib/gcc/x86_64-pc-linux-gnu/15.1.1");
+    builder.add("-L/usr/lib/gcc/x86_64-linux-gnu/13");
+
+    for (String object: module->objects)
+    {
+        builder.add(arena, object);
+    }
+
+    for (String library_path: module->library_paths)
+    {
+        builder.add(arena, library_path);
+    }
+
+    for (String library_name: module->library_names)
+    {
+        String parts[] = {
+            string_literal("-l"),
+            library_name,
+        };
+        builder.add(arena, arena_join_string(arena, array_to_slice(parts)));
+    }
+
+    if (module->link_libcpp)
     {
         builder.add("-lstdc++");
     }

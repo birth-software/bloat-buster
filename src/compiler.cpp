@@ -97,6 +97,7 @@ fn void compile(Arena* arena, Options options)
         .library_directories = options.library_directories,
         .library_names = options.library_names,
         .library_paths = options.library_paths,
+        .link_libcpp = options.link_libcpp,
         .target = options.target,
         .build_mode = options.build_mode,
         .has_debug_info = options.has_debug_info,
@@ -250,6 +251,13 @@ fn String compile_file(Arena* arena, Compile options)
             library_list = library_list(space + 1);
         }
 
+        library_buffer[library_count] = string_literal("gcc");
+        library_count += 1;
+        library_buffer[library_count] = string_literal("gcc_s");
+        library_count += 1;
+        library_buffer[library_count] = string_literal("m");
+        library_count += 1;
+
         library_names = { library_buffer, library_count };
     }
     else if (base_name.equal(string_literal("c_abi")))
@@ -266,6 +274,7 @@ fn String compile_file(Arena* arena, Compile options)
             .library_paths = library_paths,
             .library_names = library_names,
             .library_directories = library_directories,
+            .link_libcpp = is_compiler,
             .target = {
                 .cpu = CPUArchitecture::x86_64,
                 .os = OperatingSystem::linux_,

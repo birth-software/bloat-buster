@@ -1213,10 +1213,13 @@ struct Module
     String name;
     String path;
     String executable;
+
     Slice<String> objects;
     Slice<String> library_directories;
     Slice<String> library_names;
     Slice<String> library_paths;
+    bool link_libc = true;
+    bool link_libcpp = false;
 
     Target target;
     BuildMode build_mode;
@@ -1288,6 +1291,7 @@ struct Options
     Slice<String> library_paths;
     Slice<String> library_names;
     Slice<String> library_directories;
+    bool link_libcpp;
     Target target;
     BuildMode build_mode;
     bool has_debug_info;
