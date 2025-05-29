@@ -715,4 +715,4 @@ struct Execution
     u32 termination_code;
 };
 
-Execution os_execute(Arena* arena, Slice<const char* const> arguments, Slice<char* const> environment, ExecuteOptions options);
+Execution os_execute(Arena* arena, Slice<char* const> arguments, Slice<char* const> environment, ExecuteOptions options);

@@ -75,7 +75,7 @@ fn bool IFSIGNALED(u32 s)
 {
     return (s & 0xffff) - 1 < 0xff;
 }
-Execution os_execute(Arena* arena, Slice<const char* const> arguments, Slice<char* const> environment, ExecuteOptions options)
+Execution os_execute(Arena* arena, Slice<char* const> arguments, Slice<char* const> environment, ExecuteOptions options)
 {
     unused(arena);
     assert(arguments.pointer[arguments.length] == 0);

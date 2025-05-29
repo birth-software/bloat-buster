@@ -8316,27 +8316,7 @@ fn BBLLVMCodeGenerationPipelineResult generate_object(LLVMModuleRef module, LLVM
     return result;
 }
 
-struct ArgBuilder
-{
-    const char* args[128];
-    u32 argument_count = 0;
-
-    void add(const char* arg)
-    {
-        assert(argument_count < array_length(args));
-        args[argument_count] = arg;
-        argument_count += 1;
-    }
-
-    Slice<const char*> flush()
-    {
-        assert(argument_count < array_length(args));
-        args[argument_count] = 0;
-        return { args, argument_count };
-    }
-};
-
-void link(Module* module)
+fn void link(Module* module)
 {
     Arena* arena = module->arena;
     ArgBuilder builder;

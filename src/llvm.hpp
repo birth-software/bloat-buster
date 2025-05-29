@@ -640,6 +640,6 @@ extern "C" void llvm_module_set_target(LLVMModuleRef m, LLVMTargetMachineRef tm)
 extern "C" void llvm_module_run_optimization_pipeline(LLVMModuleRef module, LLVMTargetMachineRef target_machine, BBLLVMOptimizationPipelineOptions options);
 extern "C" BBLLVMCodeGenerationPipelineResult llvm_module_run_code_generation_pipeline(LLVMModuleRef m, LLVMTargetMachineRef tm, const BBLLVMCodeGenerationPipelineOptions* options);
 
-#define lld_api_args() const char** argument_pointer, u64 argument_count, bool exit_early, bool disable_output
+#define lld_api_args() char* const* argument_pointer, u64 argument_count, bool exit_early, bool disable_output
 #define lld_api_function_decl(link_name) LLDResult lld_ ## link_name ## _link(lld_api_args())
 extern "C" lld_api_function_decl(elf);

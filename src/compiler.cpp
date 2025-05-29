@@ -183,6 +183,9 @@ fn String compile_file(Arena* arena, Compile options)
 
     if (is_compiler)
     {
+        // ArgBuilder builder = {};
+        // auto arguments = builder.flush();
+        // os_execute(arena, arguments, environment, {});
     }
     else if (base_name.equal(string_literal("c_abi")))
     {
@@ -327,7 +330,7 @@ global_variable String names[] =
     string_literal("basic_struct_passing"),
 };
 
-void entry_point(Slice<const char*> arguments, Slice<char* const> envp)
+void entry_point(Slice<char* const> arguments, Slice<char* const> envp)
 {
     environment = envp;
     Arena* arena = arena_initialize_default(16 * mb);
@@ -457,7 +460,7 @@ void entry_point(Slice<const char*> arguments, Slice<char* const> envp)
                             (char*)executable_path.pointer,
                             0,
                         };
-                        Slice<const char* const> arg_slice = array_to_slice(arguments);
+                        Slice<char* const> arg_slice = array_to_slice(arguments);
                         arg_slice.length -= 1;
                         auto execution = os_execute(arena, arg_slice, environment, {});
                         auto success = execution.termination_kind == TerminationKind::exit && execution.termination_code == 0;
@@ -491,16 +494,16 @@ void entry_point(Slice<const char*> arguments, Slice<char* const> envp)
                         bool has_debug_info = true;
                         String relative_file_path_parts[] = { string_literal("tests/"), name, string_literal(".bbb") };
                         auto relative_file_path = arena_join_string(arena, array_to_slice(relative_file_path_parts));
-                        const char* const arguments[] =
+                        char* const arguments[] =
                         {
                             (char*)compiler.pointer,
-                            "compile",
+                            (char*)"compile",
                             (char*)relative_file_path.pointer,
                             (char*)build_mode_to_string(build_mode).pointer,
-                            has_debug_info ? "true" : "false",
+                            (char*)(has_debug_info ? "true" : "false"),
                             0,
                         };
-                        Slice<const char* const> arg_slice = array_to_slice(arguments);
+                        Slice<char* const> arg_slice = array_to_slice(arguments);
                         arg_slice.length -= 1;
                         auto execution = os_execute(arena, arg_slice, environment, {});
                         auto success = execution.termination_kind == TerminationKind::exit && execution.termination_code == 0;

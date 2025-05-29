@@ -1840,6 +1840,25 @@ fn Type* get_enum_array_type(Module* module, Type* enum_type, Type* element_type
     return enum_array_type;
 }
 
+struct ArgBuilder
+{
+    char* args[128];
+    u32 argument_count = 0;
+
+    void add(const char* arg)
+    {
+        assert(argument_count < array_length(args));
+        args[argument_count] = (char*)arg;
+        argument_count += 1;
+    }
+
+    Slice<char* const> flush()
+    {
+        assert(argument_count < array_length(args));
+        args[argument_count] = 0;
+        return { args, argument_count };
+    }
+};
 
 void parse(Module* module);
 void emit(Module* module);
