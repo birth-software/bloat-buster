@@ -179,9 +179,8 @@ fn String compile_file(Arena* arena, Compile options)
     };
     Slice<String> object_slice = array_to_slice(objects);
 
-    String c_abi_libraries[] = {
-        string_literal("build/libc_abi.a"),
-    };
+    String c_abi_library = string_literal("build/libc_abi.a");
+    String llvm_bindings_library = string_literal("build/libllvm_bindings.a");
     Slice<String> library_names = {};
     Slice<String> library_paths = {};
     String library_buffer[256];
@@ -199,6 +198,7 @@ fn String compile_file(Arena* arena, Compile options)
         builder.add(arena, arena_join_string(arena, array_to_slice(llvm_config_parts)));
         builder.add("--libdir");
         builder.add("--libs");
+        builder.add("--system-libs");
         auto arguments = builder.flush();
         auto llvm_config = os_execute(arena, arguments, environment, {
             .policies = { ExecuteStandardStreamPolicy::pipe, ExecuteStandardStreamPolicy::ignore },
@@ -226,43 +226,73 @@ fn String compile_file(Arena* arena, Compile options)
         {
             report_error();
         }
-        if (line != stream.length - 1)
-        {
-            report_error();
-        }
 
-        auto library_list = stream(0, line);
+        auto llvm_library_stream = stream(0, line);
+
+        stream = stream(line + 1);
+
         u64 library_count = 0;
 
         while (1)
         {
-            auto space = string_first_character(library_list, ' ');
+            auto space = string_first_character(llvm_library_stream, ' ');
             if (space == string_no_match)
             {
-                auto library_argument = library_list(2);
+                auto library_argument = llvm_library_stream;
+                library_buffer[library_count] = library_argument(2);
+                library_count += 1;
+                break;
+            }
+
+            // Omit the first two characters: "-l"
+            auto library_argument = llvm_library_stream(2, space);
+            library_buffer[library_count] = library_argument;
+            library_count += 1;
+            llvm_library_stream = llvm_library_stream(space + 1);
+        }
+
+        line = string_first_character(stream, '\n');
+        if (line == string_no_match)
+        {
+            report_error();
+        }
+        assert(line == stream.length - 1);
+        auto system_library_stream = stream(0, line);
+
+        while (1)
+        {
+            auto space = string_first_character(system_library_stream, ' ');
+            if (space == string_no_match)
+            {
+                auto library_argument = system_library_stream(2);
                 library_buffer[library_count] = library_argument;
                 library_count += 1;
                 break;
             }
+
             // Omit the first two characters: "-l"
-            auto library_argument = library_list(2, space);
+            auto library_argument = system_library_stream(2, space);
             library_buffer[library_count] = library_argument;
             library_count += 1;
-            library_list = library_list(space + 1);
+            system_library_stream = system_library_stream(space + 1);
         }
 
         library_buffer[library_count] = string_literal("gcc");
         library_count += 1;
         library_buffer[library_count] = string_literal("gcc_s");
         library_count += 1;
-        library_buffer[library_count] = string_literal("m");
+
+        library_buffer[library_count] = string_literal("lldCommon");
+        library_count += 1;
+        library_buffer[library_count] = string_literal("lldELF");
         library_count += 1;
 
         library_names = { library_buffer, library_count };
+        library_paths = { &llvm_bindings_library, 1 };
     }
     else if (base_name.equal(string_literal("c_abi")))
     {
-        library_paths = array_to_slice(c_abi_libraries);
+        library_paths = { &c_abi_library, 1 };
     }
 
     compile(arena, {
@@ -564,6 +594,7 @@ void entry_point(Slice<char* const> arguments, Slice<char* const> envp)
                             .silent = true,
                             });
 
+#if BB_DEBUG == 0 || BB_CI == 0
                     for (auto name: names)
                     {
                         BuildMode build_mode = BuildMode::debug_none;
@@ -592,6 +623,7 @@ void entry_point(Slice<char* const> arguments, Slice<char* const> envp)
                         }
                         break;
                     }
+#endif
                 }
             }
         } break;

@@ -832,6 +832,42 @@ LLVMIntrinsicIndex = enum
     va_copy,
 }
 
+[extern] LLVMInitializeX86TargetInfo = fn [cc(c)] () void;
+[extern] LLVMInitializeX86Target = fn [cc(c)] () void;
+[extern] LLVMInitializeX86TargetMC = fn [cc(c)] () void;
+[extern] LLVMInitializeX86AsmPrinter = fn [cc(c)] () void;
+[extern] LLVMInitializeX86AsmParser = fn [cc(c)] () void;
+[extern] LLVMInitializeX86Disassembler = fn [cc(c)] () void;
+
+[extern] llvm_default_target_triple = fn [cc(c)] () []u8;
+[extern] llvm_host_cpu_name = fn [cc(c)] () []u8;
+[extern] llvm_host_cpu_features = fn [cc(c)] () []u8;
+
+host_triple: []u8 = zero;
+host_cpu_model: []u8 = zero;
+host_cpu_features: []u8 = zero;
+
+llvm_targets_initialized: u1 = 0;
+
+llvm_initialize_targets = fn () void
+{
+    if (!llvm_targets_initialized)
+    {
+        LLVMInitializeX86TargetInfo();
+        LLVMInitializeX86Target();
+        LLVMInitializeX86TargetMC();
+        LLVMInitializeX86AsmPrinter();
+        LLVMInitializeX86AsmParser();
+        LLVMInitializeX86Disassembler();
+
+        host_triple = llvm_default_target_triple();
+        host_cpu_model = llvm_host_cpu_name();
+        host_cpu_features = llvm_host_cpu_features();
+
+        llvm_targets_initialized = 1;
+    }
+}
+
 [extern] LLVMContextCreate = fn [cc(c)] () &LLVMContext;
 
 ModuleLLVM = struct
@@ -2614,6 +2650,7 @@ parse = fn (module: &Module) void
 
 emit = fn (module: &Module) void
 {
+    llvm_initialize_targets();
     >context = LLVMContextCreate();
 }
 
