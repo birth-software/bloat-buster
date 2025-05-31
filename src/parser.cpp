@@ -4,6 +4,7 @@ enum class ValueIntrinsic
 {
     align_of,
     byte_size,
+    enum_from_int,
     enum_name,
     extend,
     integer_max,
@@ -855,6 +856,7 @@ fn Token tokenize(Module* module)
                     String value_intrinsics[] = {
                         string_literal("align_of"),
                         string_literal("byte_size"),
+                        string_literal("enum_from_int"),
                         string_literal("enum_name"),
                         string_literal("extend"),
                         string_literal("integer_max"),
@@ -1363,6 +1365,7 @@ fn Value* parse_left(Module* module, Scope* scope, ValueBuilder builder)
 
                 switch (intrinsic)
                 {
+                    case ValueIntrinsic::enum_from_int:
                     case ValueIntrinsic::enum_name:
                     case ValueIntrinsic::extend:
                     case ValueIntrinsic::int_from_enum:
@@ -1375,6 +1378,7 @@ fn Value* parse_left(Module* module, Scope* scope, ValueBuilder builder)
                             UnaryId id;
                             switch (intrinsic)
                             {
+                                case ValueIntrinsic::enum_from_int: id = UnaryId::enum_from_int; break;
                                 case ValueIntrinsic::enum_name: id = UnaryId::enum_name; break;
                                 case ValueIntrinsic::extend: id = UnaryId::extend; break;
                                 case ValueIntrinsic::int_from_enum: id = UnaryId::int_from_enum; break;

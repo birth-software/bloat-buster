@@ -531,6 +531,32 @@ fail = fn () noreturn
     exit(1);
 }
 
+LLVMContext = opaque;
+LLVMModule = opaque;
+
+LLVMBuilder = opaque;
+
+LLVMValue = opaque;
+LLVMType = opaque;
+LLVMBasicBlock = opaque;
+LLVMIntrinsicId = typealias u32;
+
+LLVMMetadata = opaque;
+LLVMDIBuilder = opaque;
+
+LLVMTarget = opaque;
+LLVMTargetDataLayout = opaque;
+LLVMTargetMachine = opaque;
+LLVMTargetMachineOptions = opaque;
+
+LLVMIntrinsicIndex = enum u32
+{
+    trap,
+    va_start,
+    va_end,
+    va_copy,
+}
+
 CompilerCommand = enum
 {
     compile,
@@ -546,6 +572,15 @@ BuildMode = enum
     optimize_for_size,
     aggressively_optimize_for_speed,
     aggressively_optimize_for_size,
+}
+
+build_mode_is_optimized = fn (build_mode: BuildMode) u1
+{
+    switch (build_mode)
+    {
+        .debug_none, .debug => { return 0; },
+        else => { return 1; },
+    }
 }
 
 CompileFile = struct
@@ -644,6 +679,7 @@ Scope = struct
 {
     types: TypeList,
     parent: &Scope,
+    llvm: &LLVMMetadata,
     line: u32,
     column: u32,
     kind: ScopeKind,
@@ -821,31 +857,6 @@ MacroInstantiation = struct
     foo: u32,
 }
 
-LLVMContext = opaque;
-LLVMModule = opaque;
-
-LLVMBuilder = opaque;
-
-LLVMValue = opaque;
-LLVMType = opaque;
-LLVMBasicBlock = opaque;
-LLVMIntrinsicId = typealias u32;
-
-LLVMMetadata = opaque;
-LLVMDIBuilder = opaque;
-
-LLVMTarget = opaque;
-LLVMTargetMachine = opaque;
-LLVMTargetMachineOptions = opaque;
-
-LLVMIntrinsicIndex = enum
-{
-    trap,
-    va_start,
-    va_end,
-    va_copy,
-}
-
 [extern] LLVMInitializeX86TargetInfo = fn [cc(c)] () void;
 [extern] LLVMInitializeX86Target = fn [cc(c)] () void;
 [extern] LLVMInitializeX86TargetMC = fn [cc(c)] () void;
@@ -882,7 +893,7 @@ llvm_initialize_targets = fn () void
     }
 }
 
-LLVMCodeGenerationOptimizationLevel = enum
+LLVMCodeGenerationOptimizationLevel = enum u32
 {
     none = 0,
     less = 1,
@@ -890,9 +901,97 @@ LLVMCodeGenerationOptimizationLevel = enum
     aggressive = 3,
 }
 
+LLVMDwarfSourceLanguage = enum u32
+{
+    C89,
+    C,
+    Ada83,
+    C_plus_plus,
+    Cobol74,
+    Cobol85,
+    Fortran77,
+    Fortran90,
+    Pascal83,
+    Modula2,
+    // New in DWARF v3:
+    Java,
+    C99,
+    Ada95,
+    Fortran95,
+    PLI,
+    ObjC,
+    ObjC_plus_plus,
+    UPC,
+    D,
+    // New in DWARF v4:
+    Python,
+    // New in DWARF v5:
+    OpenCL,
+    Go,
+    Modula3,
+    Haskell,
+    C_plus_plus_03,
+    C_plus_plus_11,
+    OCaml,
+    Rust,
+    C11,
+    Swift,
+    Julia,
+    Dylan,
+    C_plus_plus_14,
+    Fortran03,
+    Fortran08,
+    RenderScript,
+    BLISS,
+    Kotlin,
+    Zig,
+    Crystal,
+    C_plus_plus_17,
+    C_plus_plus_20,
+    C17,
+    Fortran18,
+    Ada2005,
+    Ada2012,
+    HIP,
+    Assembly,
+    C_sharp,
+    Mojo,
+    GLSL,
+    GLSL_ES,
+    HLSL,
+    OpenCL_CPP,
+    CPP_for_OpenCL,
+    SYCL,
+    Ruby,
+    Move,
+    Hylo,
+    Metal,
+
+    // Vendor extensions:
+    Mips_Assembler,
+    GOOGLE_RenderScript,
+    BORLAND_Delphi
+}
+
+LLVMDwarfEmissionKind = enum u32
+{
+    none,
+    full,
+    line_tables_only,
+}
+
 [extern] LLVMContextCreate = fn [cc(c)] () &LLVMContext;
 [extern] llvm_context_create_module = fn (context: &LLVMContext, name: []u8) &LLVMModule;
 [extern] LLVMCreateBuilderInContext = fn (context: &LLVMContext) &LLVMBuilder;
+
+[extern] LLVMVoidTypeInContext = fn [cc(c)] (context: &LLVMContext) &LLVMType;
+[extern] LLVMPointerTypeInContext = fn [cc(c)] (context: &LLVMContext, address_space: u32) &LLVMType;
+
+[extern] LLVMCreateDIBuilder = fn (module: &LLVMModule) &LLVMDIBuilder;
+[extern] LLVMDIBuilderCreateFile = fn (di_builder: &LLVMDIBuilder, file_pointer: &u8, file_length: u64, directory_pointer: &u8, directory_length: u64) &LLVMMetadata;
+[extern] LLVMDIBuilderCreateCompileUnit = fn (di_builder: &LLVMDIBuilder, language: LLVMDwarfSourceLanguage, file: &LLVMMetadata, producer_name_pointer: &u8, producer_name_length: u64, is_optimized: s32, flags_pointer: &u8, flags_length: u64, runtime_version: u32, split_name_pointer: &u8, split_name_length: u64, emission_kind: LLVMDwarfEmissionKind, dwo_id: u32, split_debug_inlining: s32, debug_info_for_profiling: s32, sysroot_pointer: &u8, sysroot_length: u64, sdk_pointer: &u8, sdk_length: u64) &LLVMMetadata;
+
+[extern] LLVMLookupIntrinsicID = fn [cc(c)] (name_pointer: &u8, name_length: u64) LLVMIntrinsicId;
 
 [extern] LLVMCreateTargetMachineOptions = fn () &LLVMTargetMachineOptions;
 [extern] LLVMTargetMachineOptionsSetCPU = fn (target_machine_options: &LLVMTargetMachineOptions, cpu: &u8) void;
@@ -900,6 +999,11 @@ LLVMCodeGenerationOptimizationLevel = enum
 [extern] LLVMTargetMachineOptionsSetCodeGenOptLevel = fn (target_machine_options: &LLVMTargetMachineOptions, optimization_level: LLVMCodeGenerationOptimizationLevel) void;
 [extern] LLVMGetTargetFromTriple = fn (target_triple: &u8, target_pointer: &&LLVMTarget, error_message_pointer: &&u8) s32;
 [extern] LLVMCreateTargetMachineWithOptions = fn (target: &LLVMTarget, target_triple: &u8, target_machine_options: &LLVMTargetMachineOptions) &LLVMTargetMachine;
+[extern] LLVMCreateTargetDataLayout = fn (target_machine: &LLVMTargetMachine) &LLVMTargetDataLayout;
+[extern] LLVMSetModuleDataLayout = fn (module: &LLVMModule, target_data_layout: &LLVMTargetDataLayout) void;
+[extern] LLVMSetTarget = fn (module: &LLVMModule, target_triple: &u8) void;
+
+default_address_space: u32 = 0;
 
 ModuleLLVM = struct
 {
@@ -908,7 +1012,8 @@ ModuleLLVM = struct
     builder: &LLVMBuilder,
     di_builder: &LLVMDIBuilder,
     file: &LLVMMetadata,
-    compile_unit: &LLVMMetadata,
+    target_machine: &LLVMTargetMachine,
+    target_data_layout: &LLVMTargetDataLayout,
     pointer_type: &LLVMType,
     void_type: &LLVMType,
     intrinsic_table: enum_array[LLVMIntrinsicIndex](LLVMIntrinsicId),
@@ -2689,6 +2794,36 @@ emit = fn (module: &Module) void
     >m = llvm_context_create_module(context, module.name);
     >builder = LLVMCreateBuilderInContext(context);
 
+    >di_builder: &LLVMDIBuilder = zero;
+    >di_file: &LLVMMetadata = zero;
+
+    if (module.has_debug_info)
+    {
+        di_builder = LLVMCreateDIBuilder(m);
+        >last_slash = string_last_character(module.path, '/');
+        if (last_slash == string_no_match)
+        {
+            report_error();
+        }
+
+        >directory = module.path[..last_slash];
+        >file_name = module.path[last_slash + 1..];
+
+        >di_file = LLVMDIBuilderCreateFile(di_builder, file_name.pointer, file_name.length, directory.pointer, directory.length);
+        
+        >language: LLVMDwarfSourceLanguage = .C17;
+        >producer_name = "bloat buster";
+        >is_optimized = build_mode_is_optimized(module.build_mode);
+        >flags = "";
+        >emission_kind: LLVMDwarfEmissionKind = .full;
+        >runtime_version: u32 = 0;
+        >split_name = "";
+        >sysroot = "";
+        >sdk = "";
+
+        module.scope.llvm = LLVMDIBuilderCreateCompileUnit(di_builder, language, di_file, producer_name.pointer, producer_name.length, #extend(is_optimized), flags.pointer, flags.length, runtime_version, split_name.pointer, split_name.length, emission_kind, 0, 0, #extend(is_optimized), sysroot.pointer, sysroot.length, sdk.pointer, sdk.length);
+    }
+
     >target_triple: []u8 = undefined;
     >cpu_model: []u8 = undefined;
     >cpu_features: []u8 = undefined;
@@ -2729,7 +2864,31 @@ emit = fn (module: &Module) void
 
     assert(!error_message);
 
-    LLVMCreateTargetMachineWithOptions(target, target_triple.pointer, target_machine_options);
+    >target_machine = LLVMCreateTargetMachineWithOptions(target, target_triple.pointer, target_machine_options);
+
+    >target_data_layout = LLVMCreateTargetDataLayout(target_machine);
+    LLVMSetModuleDataLayout(m, target_data_layout);
+    LLVMSetTarget(m, target_triple.pointer);
+
+    module.llvm = {
+        .context = context,
+        .module = m,
+        .builder = builder,
+        .di_builder = di_builder,
+        .file = di_file,
+        .target_machine = target_machine,
+        .target_data_layout = target_data_layout,
+        .pointer_type = LLVMPointerTypeInContext(context, default_address_space),
+        .void_type = LLVMVoidTypeInContext(context),
+        zero,
+    };
+
+    for (i: 0..module.llvm.intrinsic_table.length)
+    {
+        >e: LLVMIntrinsicIndex = #enum_from_int(i);
+        >name = #enum_name(e);
+        module.llvm.intrinsic_table[i] = LLVMLookupIntrinsicID(name.pointer, name.length);
+    }
 }
 
 compile = fn (arena: &Arena, options: CompileOptions) void

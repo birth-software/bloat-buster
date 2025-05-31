@@ -176,6 +176,7 @@ fn bool is_promotable_integer_type_for_abi(Type* type)
         case TypeId::bits: return is_promotable_integer_type_for_abi(type->bits.backing_type);
         case TypeId::alias: return is_promotable_integer_type_for_abi(type->alias.type);
         case TypeId::enumerator: return is_promotable_integer_type_for_abi(type->enumerator.backing_type);
+        case TypeId::pointer: return false;
         default: unreachable();
     }
 }
@@ -927,6 +928,7 @@ fn void resolve_type_in_place_abi(Module* module, Type* type)
                 result = LLVMIntTypeInContext(module->llvm.context, type->integer.bit_count);
                 break;
             case TypeId::pointer:
+            case TypeId::opaque:
                 result = module->llvm.pointer_type;
                 break;
             case TypeId::array:
@@ -1015,6 +1017,7 @@ fn void resolve_type_in_place_memory(Module* module, Type* type)
             case TypeId::void_type:
             case TypeId::noreturn:
             case TypeId::pointer:
+            case TypeId::opaque:
             case TypeId::array:
             case TypeId::structure:
             case TypeId::enum_array:
@@ -2220,6 +2223,7 @@ fn bool unary_is_boolean(UnaryId id)
         case UnaryId::bitwise_not:
         case UnaryId::dereference:
         case UnaryId::pointer_from_int:
+        case UnaryId::enum_from_int:
             return false;
     }
 }
@@ -2265,7 +2269,20 @@ fn bool binary_is_shortcircuiting(BinaryId id)
     }
 }
 
-fn void analyze_type(Module* module, Value* value, Type* expected_type, bool must_be_constant);
+enum class IndexType
+{
+    none,
+    array,
+    enum_array,
+};
+
+struct TypeAnalysis
+{
+    bool must_be_constant;
+    bool is_index;
+};
+
+fn void analyze_type(Module* module, Value* value, Type* expected_type, TypeAnalysis analysis);
 
 fn void analyze_binary_type(Module* module, Value* left, Value* right, bool is_boolean, Type* expected_type, bool must_be_constant)
 {
@@ -2296,19 +2313,19 @@ fn void analyze_binary_type(Module* module, Value* left, Value* right, bool is_b
     {
         if (left_constant)
         {
-            analyze_type(module, right, 0, must_be_constant);
-            analyze_type(module, left, right->type, must_be_constant);
+            analyze_type(module, right, 0, { .must_be_constant = must_be_constant });
+            analyze_type(module, left, right->type, { .must_be_constant = must_be_constant });
         }
         else 
         {
-            analyze_type(module, left, 0, must_be_constant);
-            analyze_type(module, right, left->type, must_be_constant);
+            analyze_type(module, left, 0, { .must_be_constant = must_be_constant });
+            analyze_type(module, right, left->type, { .must_be_constant = must_be_constant });
         }
     }
     else if (!is_boolean && expected_type)
     {
-        analyze_type(module, left, expected_type, must_be_constant);
-        analyze_type(module, right, expected_type, must_be_constant);
+        analyze_type(module, left, expected_type, { .must_be_constant = must_be_constant });
+        analyze_type(module, right, expected_type, { .must_be_constant = must_be_constant });
     }
     else
     {
@@ -2622,9 +2639,8 @@ fn void copy_block(Module* module, Scope* parent_scope, BlockCopy copy)
     }
 }
 
-fn void analyze_type(Module* module, Value* value, Type* expected_type, bool must_be_constant)
+fn void analyze_type(Module* module, Value* value, Type* expected_type, TypeAnalysis analysis)
 {
-    unused(must_be_constant);
     assert(!value->type);
     assert(!value->llvm);
 
@@ -2674,6 +2690,14 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
     {
         case ValueId::constant_integer:
             {
+                if (!expected_type)
+                {
+                    if (analysis.is_index)
+                    {
+                        expected_type = uint64(module);
+                    }
+                }
+
                 if (!expected_type)
                 {
                     report_error();
@@ -2726,7 +2750,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
                             }
 
                             auto extended_value = unary_value;
-                            analyze_type(module, extended_value, 0, must_be_constant);
+                            analyze_type(module, extended_value, 0, { .must_be_constant = analysis.must_be_constant });
                             auto source = extended_value->type;
                             assert(source);
 
@@ -2750,7 +2774,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
                                 report_error();
                             }
 
-                            analyze_type(module, unary_value, 0, must_be_constant);
+                            analyze_type(module, unary_value, 0, { .must_be_constant = analysis.must_be_constant });
                             auto expected_bit_size = get_bit_size(expected_type);
                             auto source_bit_size = get_bit_size(unary_value->type);
 
@@ -2763,7 +2787,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
                         } break;
                     case UnaryId::dereference:
                         {
-                            analyze_type(module, unary_value, 0, must_be_constant);
+                            analyze_type(module, unary_value, 0, { .must_be_constant = analysis.must_be_constant });
                             if (value->kind == ValueKind::left)
                             {
                                 report_error();
@@ -2777,7 +2801,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
                         } break;
                     case UnaryId::int_from_enum:
                         {
-                            analyze_type(module, unary_value, 0, must_be_constant);
+                            analyze_type(module, unary_value, 0, { .must_be_constant = analysis.must_be_constant });
 
                             auto value_enum_type = unary_value->type;
                             if (value_enum_type->id != TypeId::enumerator)
@@ -2792,7 +2816,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
                         } break;
                     case UnaryId::int_from_pointer:
                         {
-                            analyze_type(module, unary_value, 0, must_be_constant);
+                            analyze_type(module, unary_value, 0, { .must_be_constant = analysis.must_be_constant });
 
                             auto value_enum_type = unary_value->type;
                             if (value_enum_type->id != TypeId::pointer)
@@ -2815,7 +2839,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
                                 report_error();
                             }
 
-                            analyze_type(module, unary_value, 0, must_be_constant);
+                            analyze_type(module, unary_value, 0, { .must_be_constant = analysis.must_be_constant });
                             auto value_pointer_type = unary_value->type;
                             if (value_pointer_type == expected_type)
                             {
@@ -2833,7 +2857,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
                         {
                             auto string_type = get_slice_type(module, uint8(module));
                             typecheck(module, expected_type, string_type);
-                            analyze_type(module, unary_value, 0, must_be_constant);
+                            analyze_type(module, unary_value, 0, { .must_be_constant = analysis.must_be_constant });
                             auto enum_type = unary_value->type;
                             if (enum_type->id != TypeId::enumerator)
                             {
@@ -2948,7 +2972,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
                                 report_error();
                             }
 
-                            analyze_type(module, unary_value, 0, must_be_constant);
+                            analyze_type(module, unary_value, 0, { .must_be_constant = analysis.must_be_constant });
                             auto unary_value_type = unary_value->type;
                             if (unary_value_type->id != TypeId::integer)
                             {
@@ -2963,17 +2987,43 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
 
                             value_type = expected_type;
                         } break;
+                    case UnaryId::enum_from_int:
+                        {
+                            if (!expected_type)
+                            {
+                                report_error();
+                            }
+
+                            if (expected_type->id != TypeId::enumerator)
+                            {
+                                report_error();
+                            }
+
+                            analyze_type(module, unary_value, expected_type->enumerator.backing_type, { .must_be_constant = analysis.must_be_constant });
+                            auto unary_value_type = unary_value->type;
+                            if (unary_value_type->id != TypeId::integer)
+                            {
+                                report_error();
+                            }
+
+                            if (get_bit_size(unary_value_type) != get_bit_size(expected_type))
+                            {
+                                report_error();
+                            }
+
+                            value_type = expected_type;
+                        } break;
                     default:
                         {
                             auto is_boolean = unary_is_boolean(unary_id);
                             if (is_boolean)
                             {
-                                analyze_type(module, unary_value, 0, must_be_constant);
+                                analyze_type(module, unary_value, 0, { .must_be_constant = analysis.must_be_constant });
                                 value_type = uint1(module);
                             }
                             else
                             {
-                                analyze_type(module, unary_value, expected_type, must_be_constant);
+                                analyze_type(module, unary_value, expected_type, { .must_be_constant = analysis.must_be_constant });
                                 value_type = unary_value->type;
                             }
 
@@ -3031,7 +3081,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
         case ValueId::binary:
             {
                 auto is_boolean = binary_is_boolean(value->binary.id);
-                analyze_binary_type(module, value->binary.left, value->binary.right, is_boolean, expected_type, must_be_constant);
+                analyze_binary_type(module, value->binary.left, value->binary.right, is_boolean, expected_type, analysis.must_be_constant);
                 check_types(module, value->binary.left->type, value->binary.right->type);
 
                 value_type = is_boolean ? uint1(module) : value->binary.left->type;
@@ -3050,7 +3100,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
             {
                 auto call = &value->call;
                 auto callable = call->callable;
-                analyze_type(module, callable, 0, must_be_constant);
+                analyze_type(module, callable, 0, { .must_be_constant = analysis.must_be_constant });
                 Type* function_type = 0;
                 switch (callable->id)
                 {
@@ -3101,14 +3151,14 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
                 {
                     auto* argument_type = semantic_argument_types[i];
                     auto* call_argument = call_arguments[i];
-                    analyze_type(module, call_argument, argument_type, must_be_constant);
+                    analyze_type(module, call_argument, argument_type, { .must_be_constant = analysis.must_be_constant });
                     check_types(module, argument_type, call_argument->type);
                 }
 
                 for (u64 i = semantic_argument_types.length; i < call_arguments.length; i += 1)
                 {
                     auto* call_argument = call_arguments[i];
-                    analyze_type(module, call_argument, 0, must_be_constant);
+                    analyze_type(module, call_argument, 0, { .must_be_constant = analysis.must_be_constant });
                 }
 
                 auto semantic_return_type = function_type->function.semantic_return_type;
@@ -3144,7 +3194,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
                     auto* element_type = expected_type->array.element_type;
                     for (auto value : values)
                     {
-                        analyze_type(module, value, element_type, must_be_constant);
+                        analyze_type(module, value, element_type, { .must_be_constant = analysis.must_be_constant });
                         is_constant = is_constant && value->is_constant();
                     }
 
@@ -3169,7 +3219,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
 
                     for (auto value : values)
                     {
-                        analyze_type(module, value, expected_type, must_be_constant);
+                        analyze_type(module, value, expected_type, { .must_be_constant = analysis.must_be_constant });
 
                         is_constant = is_constant && value->is_constant();
 
@@ -3209,7 +3259,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
             {
                 auto array_like = value->array_expression.array_like;
                 array_like->kind = ValueKind::left;
-                analyze_type(module, array_like, 0, must_be_constant);
+                analyze_type(module, array_like, 0, { .must_be_constant = analysis.must_be_constant });
                 assert(array_like->kind == ValueKind::left);
                 auto array_like_type = array_like->type;
                 if (array_like_type->id != TypeId::pointer)
@@ -3218,7 +3268,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
                 }
                 auto pointer_element_type = array_like_type->pointer.element_type;
 
-                analyze_type(module, value->array_expression.index, pointer_element_type->id == TypeId::enum_array ? pointer_element_type->enum_array.enum_type : uint64(module), must_be_constant);
+                analyze_type(module, value->array_expression.index, 0, { .must_be_constant = analysis.must_be_constant, .is_index = true });
 
                 Type* element_type = 0;
                 switch (pointer_element_type->id)
@@ -3281,7 +3331,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
             {
                 auto aggregate = value->field_access.aggregate;
                 auto field_name = value->field_access.field_name;
-                analyze_type(module, aggregate, 0, must_be_constant);
+                analyze_type(module, aggregate, 0, { .must_be_constant = analysis.must_be_constant });
 
                 if (aggregate->kind == ValueKind::right)
                 {
@@ -3373,6 +3423,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
                             auto field = fields[i];
                             value_type = field.type;
                         } break;
+                    case TypeId::enum_array:
                     case TypeId::array:
                         {
                             if (!field_name.equal(string_literal("length")))
@@ -3391,7 +3442,16 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
                             }
                             else
                             {
-                                trap();
+                                if (resolved_aggregate_type->id == TypeId::enum_array)
+                                {
+                                    auto enum_type = resolved_aggregate_type->enum_array.enum_type;
+                                    auto backing_type = enum_type->enumerator.backing_type;
+                                    value_type = backing_type;
+                                }
+                                else
+                                {
+                                    report_error();
+                                }
                             }
                         } break;
                     case TypeId::pointer: report_error(); // Double indirection is not allowed
@@ -3413,7 +3473,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
                     report_error();
                 }
 
-                analyze_type(module, array_like, 0, must_be_constant);
+                analyze_type(module, array_like, 0, { .must_be_constant = analysis.must_be_constant });
 
                 auto pointer_type = array_like->type;
                 if (pointer_type->id != TypeId::pointer)
@@ -3462,7 +3522,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
                 {
                     if (index)
                     {
-                        analyze_type(module, index, index_type, must_be_constant);
+                        analyze_type(module, index, index_type, { .must_be_constant = analysis.must_be_constant });
 
                         if (index->type->id != TypeId::integer)
                         {
@@ -3487,7 +3547,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
             } break;
         case ValueId::va_arg:
             {
-                analyze_type(module, value->va_arg.va_list, get_pointer_type(module, get_va_list_type(module)), must_be_constant);
+                analyze_type(module, value->va_arg.va_list, get_pointer_type(module, get_va_list_type(module)), { .must_be_constant = analysis.must_be_constant });
                 value_type = value->va_arg.type;
                 typecheck(module, expected_type, value_type);
             } break;
@@ -3569,7 +3629,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
 
                                 auto field = fields[declaration_index];
                                 auto declaration_type = field.type;
-                                analyze_type(module, value, declaration_type, must_be_constant);
+                                analyze_type(module, value, declaration_type, { .must_be_constant = analysis.must_be_constant });
                                 is_constant = is_constant && value->is_constant();
                             }
 
@@ -3627,7 +3687,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
 
                                 auto field = fields[declaration_index];
                                 auto declaration_type = field.type;
-                                analyze_type(module, value, declaration_type, must_be_constant);
+                                analyze_type(module, value, declaration_type, { .must_be_constant = analysis.must_be_constant });
                                 is_constant = is_constant && value->is_constant();
                             }
 
@@ -3660,7 +3720,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
                             }
 
                             auto field = &fields[i];
-                            analyze_type(module, initialization_value, field->type, must_be_constant);
+                            analyze_type(module, initialization_value, field->type, { .must_be_constant = analysis.must_be_constant });
                         } break;
                     case TypeId::enum_array:
                         {
@@ -3719,7 +3779,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
 
                                 is_ordered = is_ordered && declaration_index == initialization_index;
 
-                                analyze_type(module, value, element_type, must_be_constant);
+                                analyze_type(module, value, element_type, { .must_be_constant = analysis.must_be_constant });
                                 is_constant = is_constant && value->is_constant();
                             }
 
@@ -3747,9 +3807,9 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
                 auto condition = value->select.condition;
                 auto true_value = value->select.true_value;
                 auto false_value = value->select.false_value;
-                analyze_type(module, condition, 0, must_be_constant);
+                analyze_type(module, condition, 0, { .must_be_constant = analysis.must_be_constant });
                 auto is_boolean = false;
-                analyze_binary_type(module, true_value, false_value, is_boolean, expected_type, must_be_constant);
+                analyze_binary_type(module, true_value, false_value, is_boolean, expected_type, analysis.must_be_constant);
 
                 auto left_type = true_value->type;
                 auto right_type = false_value->type;
@@ -4081,7 +4141,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
 
                 auto string_type = get_slice_type(module, uint8(module));
 
-                analyze_type(module, enum_string_value, string_type, must_be_constant);
+                analyze_type(module, enum_string_value, string_type, { .must_be_constant = analysis.must_be_constant });
                 value_type = struct_type;
             } break;
         case ValueId::undefined:
@@ -4219,7 +4279,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
 
                         auto argument_type = declaration_argument.variable.type;
                         assert(argument_type);
-                        analyze_type(module, instantiation_argument, argument_type, must_be_constant);
+                        analyze_type(module, instantiation_argument, argument_type, { .must_be_constant = analysis.must_be_constant });
                     }
 
                     LLVMMetadataRef type_buffer[64];
@@ -4263,7 +4323,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, bool mus
 
                         auto argument_type = declaration_argument.variable.type;
                         assert(argument_type);
-                        analyze_type(module, instantiation_argument, argument_type, must_be_constant);
+                        analyze_type(module, instantiation_argument, argument_type, { .must_be_constant = analysis.must_be_constant });
                     }
                 }
 
@@ -4918,7 +4978,7 @@ fn LLVMValueRef emit_call(Module* module, Value* value, LLVMValueRef left_llvm, 
                                                 {
                                                     src->type = 0;
                                                     src->kind = ValueKind::left;
-                                                    analyze_type(module, src, 0, false);
+                                                    analyze_type(module, src, 0, {});
                                                 }
                                             }
 
@@ -5066,7 +5126,7 @@ fn LLVMValueRef emit_call(Module* module, Value* value, LLVMValueRef left_llvm, 
                                                             assert(src->kind == ValueKind::right);
                                                             src->type = 0;
                                                             src->kind = ValueKind::left;
-                                                            analyze_type(module, src, pointer_type, false);
+                                                            analyze_type(module, src, pointer_type, {});
                                                         }
                                                     }
                                                     else
@@ -5771,11 +5831,31 @@ fn LLVMValueRef emit_field_access(Module* module, Value* value, LLVMValueRef lef
 
                             return trunc;
                         } break;
+                    case TypeId::enum_array:
                     case TypeId::array:
                         {
                             assert(value->field_access.field_name.equal(string_literal("length")));
                             auto array_length_type = get_llvm_type(value->type, type_kind);
-                            auto result = LLVMConstInt(array_length_type, resolved_aggregate_type->array.element_count, false);
+                            u64 array_element_count = 0;
+
+                            switch (resolved_aggregate_type->id)
+                            {
+                                case TypeId::enum_array:
+                                    {
+                                        auto enum_type = resolved_aggregate_type->enum_array.enum_type;
+                                        assert(enum_type->id == TypeId::enumerator);
+                                        array_element_count = enum_type->enumerator.fields.length;
+                                    } break;
+                                case TypeId::array:
+                                    {
+                                        array_element_count = resolved_aggregate_type->array.element_count;
+                                    } break;
+                                default: unreachable();
+                            }
+
+                            assert(array_element_count);
+
+                            auto result = LLVMConstInt(array_length_type, array_element_count, false);
                             return result;
                         } break;
                     default: unreachable();
@@ -6619,6 +6699,10 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind, bool expect
                         {
                             llvm_value = LLVMBuildIntToPtr(module->llvm.builder, llvm_unary_value, resolved_value_type->llvm.abi, "");
                         } break;
+                    case UnaryId::enum_from_int:
+                        {
+                            llvm_value = llvm_unary_value;
+                        } break;
                 }
             } break;
         case ValueId::unary_type:
@@ -7375,7 +7459,7 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind, bool expect
 
 fn void analyze_value(Module* module, Value* value, Type* expected_type, TypeKind type_kind, bool must_be_constant)
 {
-    analyze_type(module, value, expected_type, must_be_constant);
+    analyze_type(module, value, expected_type, { .must_be_constant = must_be_constant });
     emit_value(module, value, type_kind, must_be_constant);
 }
 
@@ -7453,7 +7537,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                                     report_error();
                                 }
 
-                                analyze_type(module, return_value, return_abi.semantic_type, false);
+                                analyze_type(module, return_value, return_abi.semantic_type, {});
                                 auto pointer_type = get_pointer_type(module, return_abi.semantic_type);
                                 emit_assignment(module, return_alloca, pointer_type, return_value);
                             } break;
@@ -7468,7 +7552,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                     auto macro_instantiation = module->current_macro_instantiation;
                     auto return_type = macro_instantiation->return_type;
                     assert(return_type);
-                    analyze_type(module, return_value, return_type, false);
+                    analyze_type(module, return_value, return_type, {});
                     emit_assignment(module, macro_instantiation->return_alloca, get_pointer_type(module, return_type), return_value);
                     LLVMBuildBr(module->llvm.builder, macro_instantiation->return_block);
                     LLVMClearInsertionPosition(module->llvm.builder);
@@ -7483,7 +7567,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                 auto local = statement->local;
                 auto expected_type = local->variable.type;
                 assert(!local->variable.storage);
-                analyze_type(module, local->variable.initial_value, expected_type, false);
+                analyze_type(module, local->variable.initial_value, expected_type, {});
                 local->variable.type = expected_type ? expected_type : local->variable.initial_value->type;
                 assert(local->variable.type);
                 if (expected_type)
@@ -7624,7 +7708,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                 {
                     case StatementAssignmentId::assign:
                         {
-                            analyze_type(module, right, element_type, false);
+                            analyze_type(module, right, element_type, {});
                             emit_assignment(module, left_llvm, left_type, right);
                         } break;
                     case StatementAssignmentId::assign_add:
@@ -7875,7 +7959,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                                 auto kind = left_values[i];
                                 auto right = right_values[i];
 
-                                analyze_type(module, right, 0, false);
+                                analyze_type(module, right, 0, {});
 
                                 Type* aggregate_type = 0;
 
@@ -8178,7 +8262,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                                                     } break;
                                                 default:
                                                     {
-                                                        analyze_type(module, end, 0, false);
+                                                        analyze_type(module, end, 0, {});
                                                         auto end_type = end->type;
                                                         assert(end_type);
                                                         start->type = end_type;
@@ -8195,7 +8279,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                                 {
                                     if (!right->type)
                                     {
-                                        analyze_type(module, right, local_type, false);
+                                        analyze_type(module, right, local_type, {});
                                     }
                                 }
 

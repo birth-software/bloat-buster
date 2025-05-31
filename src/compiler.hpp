@@ -597,6 +597,7 @@ fn u32 get_byte_alignment(Type* type)
                 return result;
             } break;
         case TypeId::pointer:
+        case TypeId::opaque:
             {
                 return 8;
             } break;
@@ -860,6 +861,7 @@ enum class UnaryId
     bitwise_not,
     dereference,
     pointer_from_int,
+    enum_from_int,
 };
 
 struct ValueUnary
