@@ -351,18 +351,28 @@ union AbiRegisterCount
     AbiRegisterCountSystemV system_v;
 };
 
-struct TypeFunction
+struct TypeFunctionBase
 {
     Type* semantic_return_type;
     Slice<Type*> semantic_argument_types;
     CallingConvention calling_convention;
     bool is_variable_arguments;
-    // ABI
+};
+
+struct TypeFunctionAbi
+{
     Slice<Type*> abi_argument_types;
     Type* abi_return_type;
     AbiRegisterCount available_registers;
     Slice<AbiInformation> argument_abis;
     AbiInformation return_abi;
+};
+
+struct TypeFunction
+{
+    TypeFunctionBase base;
+    TypeFunctionAbi abi;
+    Type* next;
 };
 
 struct TypePointer
@@ -618,6 +628,10 @@ fn u32 get_byte_alignment(Type* type)
             {
                 return get_byte_alignment(type->enum_array.element_type);
             } break;
+        case TypeId::function:
+            {
+                return 1;
+            } break;
         default: trap();
     }
 }
@@ -629,6 +643,11 @@ fn u64 get_bit_size(Type* type)
         case TypeId::integer: return type->integer.bit_count;
         case TypeId::enumerator: return get_bit_size(type->enumerator.backing_type);
         case TypeId::alias: return get_bit_size(type->alias.type);
+        case TypeId::array: return get_byte_size(type->array.element_type) * type->array.element_count * 8;
+        case TypeId::pointer: return 64;
+        case TypeId::structure: return type->structure.byte_size * 8;
+        case TypeId::union_type: return type->union_type.byte_size * 8;
+        case TypeId::enum_array: return get_byte_size(type->enum_array.element_type) * type->enum_array.enum_type->enumerator.fields.length * 8;
         default: trap();
     }
 }
@@ -793,7 +812,7 @@ struct Block
 enum class ValueId
 {
     infer_or_ignore,
-    external_function,
+    forward_declared_function,
     function,
     constant_integer,
     unary,
@@ -905,6 +924,8 @@ enum class BinaryId
     logical_or,
     logical_and_shortcircuit,
     logical_or_shortcircuit,
+    max,
+    min,
 };
 
 struct ValueBinary
@@ -1078,6 +1099,7 @@ struct Value
             case ValueId::array_expression:
             case ValueId::call:
             case ValueId::select:
+            case ValueId::slice_expression:
                 return false;
             case ValueId::variable_reference:
                 {
@@ -1164,7 +1186,11 @@ struct LLVMIntrinsicId
 
 enum class IntrinsicIndex
 {
+    smax,
+    smin,
     trap,
+    umax,
+    umin,
     va_start,
     va_end,
     va_copy,
@@ -1172,13 +1198,63 @@ enum class IntrinsicIndex
 };
 
 global_variable String intrinsic_names[] = {
+    string_literal("llvm.smax"),
+    string_literal("llvm.smin"),
     string_literal("llvm.trap"),
+    string_literal("llvm.umax"),
+    string_literal("llvm.umin"),
     string_literal("llvm.va_start"),
     string_literal("llvm.va_end"),
     string_literal("llvm.va_copy"),
 };
 
 static_assert(array_length(intrinsic_names) == (u64)IntrinsicIndex::count);
+
+struct LLVMAttributeId
+{
+    u32 n;
+};
+
+enum class AttributeIndex
+{
+    align,
+    alwaysinline,
+    byval,
+    dead_on_unwind,
+    inlinehint,
+    inreg,
+    naked,
+    noalias,
+    noinline,
+    noreturn,
+    nounwind,
+    signext,
+    sret,
+    writable,
+    zeroext,
+
+    count,
+};
+
+global_variable String attribute_names[] = {
+    string_literal("align"),
+    string_literal("alwaysinline"),
+    string_literal("byval"),
+    string_literal("dead_on_unwind"),
+    string_literal("inlinehint"),
+    string_literal("inreg"),
+    string_literal("naked"),
+    string_literal("noalias"),
+    string_literal("noinline"),
+    string_literal("noreturn"),
+    string_literal("nounwind"),
+    string_literal("signext"),
+    string_literal("sret"),
+    string_literal("writable"),
+    string_literal("zeroext"),
+};
+
+static_assert(array_length(attribute_names) == (u64)AttributeIndex::count);
 
 struct ModuleLLVM
 {
@@ -1193,6 +1269,7 @@ struct ModuleLLVM
     LLVMTypeRef pointer_type;
     LLVMTypeRef void_type;
     LLVMIntrinsicId intrinsic_table[(u64)IntrinsicIndex::count];
+    LLVMAttributeId attribute_table[(u64)AttributeIndex::count];
     LLVMValueRef memcmp;
     LLVMMetadataRef inlined_at;
     LLVMBasicBlockRef continue_block;
@@ -1213,6 +1290,7 @@ struct Module
     Type* first_pair_struct_type;
     Type* first_array_type;
     Type* first_enum_array_type;
+    Type* first_function_type;
 
     Type* va_list_type;
 
@@ -1865,6 +1943,99 @@ fn Type* get_enum_array_type(Module* module, Type* enum_type, Type* element_type
     });
     return enum_array_type;
 }
+
+fn Type* resolve_alias(Module* module, Type* type)
+{
+    Type* result_type = 0;
+    switch (type->id)
+    {
+        case TypeId::void_type:
+        case TypeId::noreturn:
+        case TypeId::integer:
+        case TypeId::enumerator:
+        case TypeId::function:
+        case TypeId::bits:
+        case TypeId::union_type:
+        case TypeId::opaque:
+        case TypeId::forward_declaration:
+            {
+                result_type = type;
+            } break;
+        case TypeId::pointer:
+            {
+                auto* element_type = type->pointer.element_type;
+                auto* resolved_element_type = resolve_alias(module, element_type);
+                if (element_type == resolved_element_type)
+                {
+                    result_type = type;
+                }
+                else
+                {
+                    result_type = get_pointer_type(module, resolved_element_type);
+                }
+            } break;
+        case TypeId::array:
+            {
+                auto* element_type = type->array.element_type;
+                auto element_count = type->array.element_count;
+                assert(element_count);
+                auto* resolved_element_type = resolve_alias(module, element_type);
+                if (element_type == resolved_element_type)
+                {
+                    result_type = type;
+                }
+                else
+                {
+                    result_type = get_array_type(module, resolved_element_type, element_count);
+                }
+            } break;
+        case TypeId::structure:
+            {
+                if (type->structure.is_slice)
+                {
+                    auto old_element_type = type->structure.fields[0].type->pointer.element_type;
+                    auto element_type = resolve_alias(module, old_element_type);
+                    if (old_element_type == element_type)
+                    {
+                        result_type = type;
+                    }
+                    else
+                    {
+                        result_type = get_slice_type(module, element_type);
+                    }
+                }
+                else
+                {
+                    result_type = type;
+                }
+            } break;
+        case TypeId::alias:
+            {
+                result_type = resolve_alias(module, type->alias.type);
+            } break;
+        case TypeId::enum_array:
+            {
+                auto old_enum_type = type->enum_array.enum_type;
+                auto old_element_type = type->enum_array.element_type;
+                auto enum_type = resolve_alias(module, old_enum_type);
+                auto element_type = resolve_alias(module, old_element_type);
+
+                if (old_enum_type == enum_type && old_element_type == element_type)
+                {
+                    result_type = type;
+                }
+                else
+                {
+                    result_type = get_enum_array_type(module, enum_type, element_type);
+                }
+            } break;
+        default: unreachable();
+    }
+
+    assert(result_type);
+    return result_type;
+}
+
 
 struct ArgBuilder
 {

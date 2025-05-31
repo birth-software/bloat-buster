@@ -13,3 +13,4 @@ imgui.ini
 /.zig-cache/
 /zig-out/
 /bb-cache/
+/self-hosted-bb-cache/

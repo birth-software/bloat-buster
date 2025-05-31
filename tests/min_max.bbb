@@ -1,0 +1,10 @@
+[export] main = fn [cc(c)] () s32
+{
+    >a: u32 = 1;
+    >b: u32 = 2;
+    >min = #min(a, b);
+    >max = #max(a, b);
+    if (min != a) #trap();
+    if (max != b) #trap();
+    return 0;
+}
