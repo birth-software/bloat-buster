@@ -579,6 +579,13 @@ target_get_native = fn () Target
     return { .cpu = .x86_64, .os = .linux };
 }
 
+target_compare = fn (a: Target, b: Target) u1
+{
+    >is_same_cpu = a.cpu == b.cpu;
+    >is_same_os = a.cpu == b.cpu;
+    return is_same_cpu and is_same_os;
+}
+
 CompileOptions = struct
 {
     content: []u8,
@@ -843,7 +850,7 @@ LLVMIntrinsicIndex = enum
 [extern] llvm_host_cpu_name = fn [cc(c)] () []u8;
 [extern] llvm_host_cpu_features = fn [cc(c)] () []u8;
 
-host_triple: []u8 = zero;
+host_target_triple: []u8 = zero;
 host_cpu_model: []u8 = zero;
 host_cpu_features: []u8 = zero;
 
@@ -860,7 +867,7 @@ llvm_initialize_targets = fn () void
         LLVMInitializeX86AsmParser();
         LLVMInitializeX86Disassembler();
 
-        host_triple = llvm_default_target_triple();
+        host_target_triple = llvm_default_target_triple();
         host_cpu_model = llvm_host_cpu_name();
         host_cpu_features = llvm_host_cpu_features();
 
@@ -868,7 +875,17 @@ llvm_initialize_targets = fn () void
     }
 }
 
+LLVMCodeGenerationOptimizationLevel = enum
+{
+    none = 0,
+    less = 1,
+    default = 2,
+    aggressive = 3,
+}
+
 [extern] LLVMContextCreate = fn [cc(c)] () &LLVMContext;
+[extern] llvm_context_create_module = fn (context: &LLVMContext, name: []u8) &LLVMModule;
+[extern] LLVMCreateBuilderInContext = fn (context: &LLVMContext) &LLVMBuilder;
 
 ModuleLLVM = struct
 {
@@ -2650,8 +2667,37 @@ parse = fn (module: &Module) void
 
 emit = fn (module: &Module) void
 {
+    assert(!module.current_function);
+    assert(!module.current_macro_instantiation);
+    assert(!module.current_macro_declaration);
     llvm_initialize_targets();
     >context = LLVMContextCreate();
+    >m = llvm_context_create_module(context, module.name);
+    >builder = LLVMCreateBuilderInContext(context);
+
+    >target_triple: []u8 = undefined;
+    >cpu_model: []u8 = undefined;
+    >cpu_features: []u8 = undefined;
+
+    if (target_compare(module.target, target_get_native()))
+    {
+        target_triple = host_target_triple;
+        cpu_model = host_cpu_model;
+        cpu_features = host_cpu_features;
+    }
+    else
+    {
+        #trap();
+    }
+
+    >code_generation_optimization_level: LLVMCodeGenerationOptimizationLevel = undefined;
+    switch (module.build_mode)
+    {
+        .debug_none, .debug => { code_generation_optimization_level = .none; },
+        .soft_optimize => { code_generation_optimization_level = .less; },
+        .optimize_for_speed, .optimize_for_size => { code_generation_optimization_level = .default; },
+        .aggressively_optimize_for_speed, .aggressively_optimize_for_size => { code_generation_optimization_level = .aggressive; },
+    }
 }
 
 compile = fn (arena: &Arena, options: CompileOptions) void

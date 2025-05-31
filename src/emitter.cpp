@@ -349,41 +349,7 @@ fn void llvm_initialize(Module* module)
     auto context = LLVMContextCreate();
     auto m = llvm_context_create_module(context, module->name);
     auto builder = LLVMCreateBuilderInContext(context);
-    BBLLVMCodeGenerationOptimizationLevel code_generation_optimization_level;
-    switch (module->build_mode)
-    {
-        case BuildMode::debug_none:
-        case BuildMode::debug:
-            code_generation_optimization_level = BBLLVMCodeGenerationOptimizationLevel::none;
-            break;
-        case BuildMode::soft_optimize:
-            code_generation_optimization_level = BBLLVMCodeGenerationOptimizationLevel::less;
-            break;
-        case BuildMode::optimize_for_speed:
-        case BuildMode::optimize_for_size:
-            code_generation_optimization_level = BBLLVMCodeGenerationOptimizationLevel::normal;
-            break;
-        case BuildMode::aggressively_optimize_for_speed:
-        case BuildMode::aggressively_optimize_for_size:
-            code_generation_optimization_level = BBLLVMCodeGenerationOptimizationLevel::aggressive;
-            break;
-        case BuildMode::count:
-            unreachable();
-    }
-    auto triple = llvm_default_target_triple();
-    BBLLVMTargetMachineCreate target_machine_options = {
-        .target_triple = triple,
-        .cpu_model = llvm_host_cpu_name(),
-        .cpu_features = llvm_host_cpu_features(),
-        .relocation_model = BBLLVMRelocationModel::default_relocation,
-        .code_model = BBLLVMCodeModel::none,
-        .optimization_level = code_generation_optimization_level,
-    };
-    String error_message = {};
-    auto target_machine = llvm_create_target_machine(&target_machine_options, &error_message);
-    auto target_data = LLVMCreateTargetDataLayout(target_machine);
-    LLVMSetModuleDataLayout(m, target_data);
-    LLVMSetTarget(m, (char*)triple.pointer);
+
     LLVMDIBuilderRef di_builder = 0;
     LLVMMetadataRef di_compile_unit = 0;
     LLVMMetadataRef di_file = 0;
@@ -409,6 +375,64 @@ fn void llvm_initialize(Module* module)
         di_compile_unit = LLVMDIBuilderCreateCompileUnit(di_builder, LLVMDWARFSourceLanguageC17, di_file, (char*)producer_name.pointer, producer_name.length, is_optimized, (char*)flags.pointer, flags.length, runtime_version, (char*)split_name.pointer, split_name.length, LLVMDWARFEmissionFull, 0, 0, is_optimized, (char*)sysroot.pointer, sysroot.length, (char*)sdk.pointer, sdk.length);
         module->scope.llvm = di_compile_unit;
     }
+
+    String target_triple = {};
+    String cpu_model = {};
+    String cpu_features = {};
+
+    if (target_compare(module->target, target_get_native()))
+    {
+        target_triple = llvm_global.host_triple;
+        cpu_model = llvm_global.host_cpu_model;
+        cpu_features = llvm_global.host_cpu_features;
+    }
+    else
+    {
+        // TODO
+        report_error();
+    }
+
+    auto target_machine_options = LLVMCreateTargetMachineOptions();
+    LLVMTargetMachineOptionsSetCPU(target_machine_options, (char*)cpu_model.pointer);
+    LLVMTargetMachineOptionsSetFeatures(target_machine_options, (char*)cpu_features.pointer);
+
+    LLVMCodeGenOptLevel code_generation_optimization_level;
+    switch (module->build_mode)
+    {
+        case BuildMode::debug_none:
+        case BuildMode::debug:
+            code_generation_optimization_level = LLVMCodeGenLevelNone;
+            break;
+        case BuildMode::soft_optimize:
+            code_generation_optimization_level = LLVMCodeGenLevelLess;
+            break;
+        case BuildMode::optimize_for_speed:
+        case BuildMode::optimize_for_size:
+            code_generation_optimization_level = LLVMCodeGenLevelDefault;
+            break;
+        case BuildMode::aggressively_optimize_for_speed:
+        case BuildMode::aggressively_optimize_for_size:
+            code_generation_optimization_level = LLVMCodeGenLevelAggressive;
+            break;
+        case BuildMode::count:
+            unreachable();
+    }
+    LLVMTargetMachineOptionsSetCodeGenOptLevel(target_machine_options, code_generation_optimization_level);
+
+    LLVMTargetRef target = 0;
+    char* error_message = 0;
+    auto result = LLVMGetTargetFromTriple((char*)target_triple.pointer, &target, &error_message);
+    if (result != 0)
+    {
+        report_error();
+    }
+    assert(!error_message);
+
+    auto target_machine = LLVMCreateTargetMachineWithOptions(target, (char*)target_triple.pointer, target_machine_options);
+
+    auto target_data = LLVMCreateTargetDataLayout(target_machine);
+    LLVMSetModuleDataLayout(m, target_data);
+    LLVMSetTarget(m, (char*)target_triple.pointer);
 
     module->llvm = {
         .context = context,

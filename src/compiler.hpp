@@ -249,6 +249,22 @@ struct Target
     OperatingSystem os;
 };
 
+fn Target target_get_native()
+{
+    return {
+        .cpu = CPUArchitecture::x86_64,
+        .os = OperatingSystem::linux_,
+    };
+}
+
+fn bool target_compare(Target a, Target b)
+{
+    auto is_same_cpu = a.cpu == b.cpu;
+    auto is_same_os = a.os == b.os;
+
+    return is_same_cpu && is_same_os;
+}
+
 struct Compile
 {
     String relative_file_path;
