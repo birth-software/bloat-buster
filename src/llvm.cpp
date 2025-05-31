@@ -879,8 +879,9 @@ EXPORT String llvm_default_target_triple()
     u8* pointer = 0;
     if (length)
     {
-        pointer = new u8[length];
+        pointer = new u8[length + 1];
         memcpy(pointer, triple.c_str(), length);
+        pointer[length] = 0;
     }
 
     return { pointer, length };
@@ -889,7 +890,9 @@ EXPORT String llvm_default_target_triple()
 EXPORT String llvm_host_cpu_name()
 {
     auto cpu = llvm::sys::getHostCPUName();
-    return { (u8*)cpu.data(), cpu.size() };
+    auto result = String { (u8*)cpu.data(), cpu.size() };
+    assert(result.pointer[result.length] == 0);
+    return result;
 }
 
 EXPORT String llvm_host_cpu_features()
@@ -916,7 +919,8 @@ EXPORT String llvm_host_cpu_features()
     if (length)
     {
         result = new u8[length];
-        memcpy(result, feature_string.c_str(), length);
+        memcpy(result, feature_string.c_str(), length + 1);
+        result[length] = 0;
     }
 
     return { result, length };

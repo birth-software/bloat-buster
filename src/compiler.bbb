@@ -823,13 +823,20 @@ MacroInstantiation = struct
 
 LLVMContext = opaque;
 LLVMModule = opaque;
+
 LLVMBuilder = opaque;
-LLVMDIBuilder = opaque;
+
 LLVMValue = opaque;
 LLVMType = opaque;
-LLVMMetadata = opaque;
 LLVMBasicBlock = opaque;
 LLVMIntrinsicId = typealias u32;
+
+LLVMMetadata = opaque;
+LLVMDIBuilder = opaque;
+
+LLVMTarget = opaque;
+LLVMTargetMachine = opaque;
+LLVMTargetMachineOptions = opaque;
 
 LLVMIntrinsicIndex = enum
 {
@@ -886,6 +893,13 @@ LLVMCodeGenerationOptimizationLevel = enum
 [extern] LLVMContextCreate = fn [cc(c)] () &LLVMContext;
 [extern] llvm_context_create_module = fn (context: &LLVMContext, name: []u8) &LLVMModule;
 [extern] LLVMCreateBuilderInContext = fn (context: &LLVMContext) &LLVMBuilder;
+
+[extern] LLVMCreateTargetMachineOptions = fn () &LLVMTargetMachineOptions;
+[extern] LLVMTargetMachineOptionsSetCPU = fn (target_machine_options: &LLVMTargetMachineOptions, cpu: &u8) void;
+[extern] LLVMTargetMachineOptionsSetFeatures = fn (target_machine_options: &LLVMTargetMachineOptions, features: &u8) void;
+[extern] LLVMTargetMachineOptionsSetCodeGenOptLevel = fn (target_machine_options: &LLVMTargetMachineOptions, optimization_level: LLVMCodeGenerationOptimizationLevel) void;
+[extern] LLVMGetTargetFromTriple = fn (target_triple: &u8, target_pointer: &&LLVMTarget, error_message_pointer: &&u8) s32;
+[extern] LLVMCreateTargetMachineWithOptions = fn (target: &LLVMTarget, target_triple: &u8, target_machine_options: &LLVMTargetMachineOptions) &LLVMTargetMachine;
 
 ModuleLLVM = struct
 {
@@ -2690,6 +2704,10 @@ emit = fn (module: &Module) void
         #trap();
     }
 
+    >target_machine_options = LLVMCreateTargetMachineOptions();
+    LLVMTargetMachineOptionsSetCPU(target_machine_options, cpu_model.pointer);
+    LLVMTargetMachineOptionsSetFeatures(target_machine_options, cpu_features.pointer);
+
     >code_generation_optimization_level: LLVMCodeGenerationOptimizationLevel = undefined;
     switch (module.build_mode)
     {
@@ -2698,6 +2716,20 @@ emit = fn (module: &Module) void
         .optimize_for_speed, .optimize_for_size => { code_generation_optimization_level = .default; },
         .aggressively_optimize_for_speed, .aggressively_optimize_for_size => { code_generation_optimization_level = .aggressive; },
     }
+
+    LLVMTargetMachineOptionsSetCodeGenOptLevel(target_machine_options, code_generation_optimization_level);
+
+    >target: &LLVMTarget = zero;
+    >error_message: &u8 = zero;
+    >result = LLVMGetTargetFromTriple(target_triple.pointer, &target, &error_message);
+    if (result != 0)
+    {
+        report_error();
+    }
+
+    assert(!error_message);
+
+    LLVMCreateTargetMachineWithOptions(target, target_triple.pointer, target_machine_options);
 }
 
 compile = fn (arena: &Arena, options: CompileOptions) void

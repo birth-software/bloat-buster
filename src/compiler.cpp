@@ -434,6 +434,7 @@ global_variable String names[] =
     string_literal("enum_array"),
     string_literal("opaque"),
     string_literal("basic_struct_passing"),
+    string_literal("enum_arbitrary_abi"),
 };
 
 void entry_point(Slice<char* const> arguments, Slice<char* const> envp)

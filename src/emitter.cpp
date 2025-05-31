@@ -4862,7 +4862,7 @@ fn LLVMValueRef emit_call(Module* module, Value* value, LLVMValueRef left_llvm, 
 
                                 if (coerce_to_type->id != TypeId::structure && type_is_abi_equal(module, semantic_argument_type, coerce_to_type) && argument_abi.attributes.direct.offset == 0)
                                 {
-                                    emit_value(module, semantic_call_argument_value, TypeKind::memory, false);
+                                    emit_value(module, semantic_call_argument_value, TypeKind::abi, false);
 
                                     auto evaluation_kind = get_evaluation_kind(argument_abi.semantic_type);
                                     Value* v;
