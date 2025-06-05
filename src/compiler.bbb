@@ -97,6 +97,19 @@ align_forward = fn (value: u64, alignment: u64) u64
     return result;
 }
 
+next_power_of_two = fn (n: u64) u64
+{
+    n -= 1;
+    n |= n >> 1;
+    n |= n >> 2;
+    n |= n >> 4;
+    n |= n >> 8;
+    n |= n >> 16;
+    n |= n >> 32;
+    n += 1;
+    return n;
+}
+
 string_no_match = #integer_max(u64);
 
 c_string_length = fn (c_string: &u8) u64
@@ -342,6 +355,24 @@ os_file_read = fn (fd: File, buffer: []u8, byte_count: u64) void
     }
 }
 
+os_file_write_partially = fn (fd: File, pointer: &u8, length: u64) u64
+{
+    >result = write(fd, pointer, length);
+    assert(result > 0);
+    return #extend(result);
+}
+
+os_file_write = fn (fd: File, buffer: []u8) void
+{
+    >total_written_byte_count: u64 = 0;
+
+    while (total_written_byte_count < buffer.length)
+    {
+        >written_byte_count = os_file_write_partially(fd, buffer.pointer + total_written_byte_count, buffer.length - total_written_byte_count);
+        total_written_byte_count += written_byte_count;
+    }
+}
+
 os_path_absolute_stack = fn (buffer: []u8, relative_file_path: &u8) []u8
 {
     >syscall_result = realpath(relative_file_path, buffer.pointer);
@@ -504,6 +535,11 @@ file_read = fn (arena: &Arena, path: []u8) []u8
     return result;
 }
 
+print = fn (string: []u8) void
+{
+    os_file_write(1, string);
+}
+
 path_absolute = fn (arena: &Arena, relative_file_path: &u8) []u8
 {
     >buffer: [4096]u8 = undefined;
@@ -531,6 +567,126 @@ fail = fn () noreturn
     exit(1);
 }
 
+LLVMContext = opaque;
+LLVMModule = opaque;
+
+LLVMBuilder = opaque;
+
+LLVMValue = opaque;
+LLVMUse = opaque;
+LLVMType = opaque;
+LLVMBasicBlock = opaque;
+
+LLVMIntrinsicId = typealias u32;
+
+LLVMAttributeId = typealias u32;
+LLVMAttribute = opaque;
+
+LLVMMetadata = opaque;
+LLVMDIBuilder = opaque;
+
+LLVMTarget = opaque;
+LLVMTargetDataLayout = opaque;
+LLVMTargetMachine = opaque;
+LLVMTargetMachineOptions = opaque;
+
+LLVMIntrinsicIndex = enum u32
+{
+    "llvm.smax",
+    "llvm.smin",
+    "llvm.trap",
+    "llvm.umax",
+    "llvm.umin",
+    "llvm.va_start",
+    "llvm.va_end",
+    "llvm.va_copy",
+}
+
+LLVMAttributeIndex = enum u32
+{
+    align,
+    alwaysinline,
+    byval,
+    dead_on_unwind,
+    inlinehint,
+    inreg,
+    naked,
+    noalias,
+    noinline,
+    noreturn,
+    nounwind,
+    signext,
+    sret,
+    writable,
+    zeroext,
+}
+
+LLVMLinkage = enum u32
+{
+    external,    // Externally visible function available_externally,
+    link_once_any, // Keep one copy of function when linking (inline)*/
+    link_once_odr, // Same, but only replaced by something
+
+    link_once_odr_auto_hide, // Obsolete
+    weak_any,     // Keep one copy of function when linking (weak) */
+    weak_odr,     // Same, but only replaced by something equivalent
+    appending,   // Special purpose, only applies to global arrays */
+    internal,    // Rename collisions when linking (static functions) */
+    private,     // Like Internal, but omit from symbol table */
+    dll_import,   // Obsolete */
+    dll_export,   // Obsolete */
+    external_weak,// ExternalWeak linkage description */
+    ghost,       // Obsolete */
+    common,      // Tentative definitions */
+    linker_private, // Like Private, but linker removes. */
+    linker_private_weak // Like LinkerPrivate, but is weak. */
+}
+
+LLVMCallingConvention = enum
+{
+    c = 0,
+    fast = 8,
+    cold = 9,
+    ghc = 10,
+    hi_pe = 11,
+    any_reg = 13,
+    preserve_most = 14,
+    preserve_all = 15,
+    swift = 16,
+    cxx_fast_tls = 17,
+    x86_stdcall = 64,
+    x86_fastcall = 65,
+    arm_apcs = 66,
+    arm_aapcs = 67,
+    arm_aapcs_vfp = 68,
+    msp430_intr = 69,
+    x86_this_call = 70,
+    ptx_kernel = 71,
+    ptx_device = 72,
+    spir_function = 75,
+    spir_kernel = 76,
+    intel_oclbi = 77,
+    x86_64_system_v = 78,
+    win64 = 79,
+    x86_vector_call = 80,
+    hhvm = 81,
+    hhvm_c = 82,
+    x86_intr = 83,
+    avr_intr = 84,
+    avr_signal = 85,
+    avr_builtin = 86,
+    amdgpu_vs = 87,
+    amdgpu_gs = 88,
+    amdgpu_ps = 89,
+    amdgpu_cs = 90,
+    amdgpu_kernel = 91,
+    x86_regcall = 92,
+    amdgpu_hs = 93,
+    msp430_builtin = 94,
+    amdgpu_ls = 95,
+    amdgpu_es = 96
+}
+
 CompilerCommand = enum
 {
     compile,
@@ -548,6 +704,15 @@ BuildMode = enum
     aggressively_optimize_for_size,
 }
 
+build_mode_is_optimized = fn (build_mode: BuildMode) u1
+{
+    switch (build_mode)
+    {
+        .debug_none, .debug => { return 0; },
+        else => { return 1; },
+    }
+}
+
 CompileFile = struct
 {
     relative_file_path: []u8,
@@ -556,7 +721,7 @@ CompileFile = struct
     silent: u1,
 }
 
-base_cache_dir = "bb-cache";
+base_cache_dir = "self-hosted-bb-cache";
 
 CPUArchitecture = enum
 {
@@ -593,7 +758,11 @@ CompileOptions = struct
     executable: []u8,
     name: []u8,
     objects: [][]u8,
-    libraries: [][]u8,
+    library_directories: [][]u8,
+    library_names: [][]u8,
+    library_paths: [][]u8,
+    link_libc: u1,
+    link_libcpp: u1,
     target: Target,
     build_mode: BuildMode,
     has_debug_info: u1,
@@ -623,6 +792,7 @@ Type = struct;
 Value = struct;
 Local = struct;
 Block = struct;
+Module = struct;
 
 ScopeKind = enum
 {
@@ -644,6 +814,7 @@ Scope = struct
 {
     types: TypeList,
     parent: &Scope,
+    llvm: &LLVMMetadata,
     line: u32,
     column: u32,
     kind: ScopeKind,
@@ -710,7 +881,7 @@ TypeId = enum
 
 TypeInteger = struct
 {
-    bit_count: u32,
+    bit_count: u64,
     signed: u1,
 }
 
@@ -731,23 +902,193 @@ AbiRegisterCount = union
     system_v: AbiRegisterCountSystemV,
 };
 
-AbiInformation = struct
+AbiInformationPadding = union
 {
-    foo: u32,
+    type: &Type,
+    unpadded_coerce_and_expand_type: &Type,
 }
 
-TypeFunction = struct
+AbiInformationDirectAttributes = struct
+{
+    offset: u32,
+    alignment: u32,
+}
+
+AbiInformationIndirectAttributes = struct
+{
+    alignment: u32,
+    address_space: u32,
+}
+
+AbiInformationAttributes = union
+{
+    direct: AbiInformationDirectAttributes,
+    indirect: AbiInformationIndirectAttributes,
+    alloca_field_index: u32,
+}
+
+AbiKind = enum
+{
+    ignore,
+    direct,
+    extend,
+    indirect,
+    indirect_aliased,
+    expand,
+    coerce_and_expand,
+    in_alloca,
+}
+
+AbiFlags = struct
+{
+    kind: AbiKind,
+    padding_in_reg: u1,
+    in_alloca_sret: u1,
+    in_alloca_indirect: u1,
+    indirect_by_value: u1,
+    indirect_realign: u1,
+    sret_after_this: u1,
+    in_reg: u1,
+    can_be_flattened: u1,
+    sign_extension: u1,
+}
+
+AbiInformation = struct
+{
+    semantic_type: &Type,
+    coerce_to_type: &Type,
+    padding: AbiInformationPadding,
+    padding_argument_index: u16,
+    attributes: AbiInformationAttributes,
+    flags: AbiFlags,
+    abi_start: u16,
+    abi_count: u16,
+}
+
+abi_set_sret_after_this = fn (abi_information: &AbiInformation, value: u1) void
+{
+    assert(abi_information.flags.kind == .indirect);
+    abi_information.flags.sret_after_this = value;
+}
+
+abi_set_indirect_realign = fn (abi_information: &AbiInformation, value: u1) void
+{
+    assert(abi_information.flags.kind == .indirect);
+    abi_information.flags.indirect_realign = value;
+}
+
+abi_set_indirect_by_value = fn (abi_information: &AbiInformation, value: u1) void
+{
+    assert(abi_information.flags.kind == .indirect);
+    abi_information.flags.indirect_by_value = value;
+}
+
+abi_set_indirect_align = fn (abi_information: &AbiInformation, value: u32) void
+{
+    assert(abi_information.flags.kind == .indirect);
+    abi_information.attributes.indirect.alignment = value;
+}
+
+abi_can_have_coerce_to_type = fn (abi_information: &AbiInformation) u1
+{
+    switch (abi_information.flags.kind)
+    {
+        .direct, .extend, .coerce_and_expand =>
+        {
+            return 1;
+        },
+        else =>
+        {
+            return 0;
+        },
+    }
+}
+
+abi_set_coerce_to_type = fn (abi_information: &AbiInformation, type: &Type) void
+{
+    assert(abi_can_have_coerce_to_type(abi_information));
+    abi_information.coerce_to_type = type;
+}
+
+abi_get_coerce_to_type = fn (abi_information: &AbiInformation) &Type
+{
+    assert(abi_can_have_coerce_to_type(abi_information));
+    return abi_information.coerce_to_type;
+}
+
+abi_can_have_padding_type = fn (abi_information: &AbiInformation) u1
+{
+    switch (abi_information.flags.kind)
+    {
+        .direct, .extend, .indirect, .indirect_aliased, .expand =>
+        {
+            return 1;
+        },
+        else =>
+        {
+            return 0;
+        }
+    }
+}
+
+abi_set_padding_type = fn (abi_information: &AbiInformation, type: &Type) void
+{
+    assert(abi_can_have_padding_type(abi_information));
+    abi_information.padding = {
+        .type = type,
+    };
+}
+
+abi_get_padding_type = fn (abi_information: &AbiInformation) &Type
+{
+    return #select(abi_can_have_padding_type(abi_information), abi_information.padding.type, zero);
+}
+
+abi_set_direct_offset = fn (abi_information: &AbiInformation, offset: u32) void
+{
+    assert(abi_information.flags.kind == .direct or abi_information.flags.kind == .extend);
+    abi_information.attributes.direct.offset = offset;
+}
+
+abi_set_direct_alignment = fn (abi_information: &AbiInformation, alignment: u32) void
+{
+    assert(abi_information.flags.kind == .direct or abi_information.flags.kind == .extend);
+    abi_information.attributes.direct.alignment = alignment;
+}
+
+abi_set_can_be_flattened = fn (abi_information: &AbiInformation, value: u1) void
+{
+    assert(abi_information.flags.kind == .direct);
+    abi_information.flags.can_be_flattened = value;
+}
+
+abi_get_can_be_flattened = fn (abi_information: &AbiInformation) u1
+{
+    return abi_information.flags.can_be_flattened;
+}
+
+TypeFunctionBase = struct
 {
     semantic_return_type: &Type,
     semantic_argument_types: []&Type,
     calling_convention: CallingConvention,
-    is_variable_arguments: u1,
+    is_variable_argument: u1,
+}
 
+TypeFunctionAbi = struct
+{
     abi_argument_types: []&Type,
     abi_return_type: &Type,
     available_registers: AbiRegisterCount,
     argument_abis: []AbiInformation,
     return_abi: AbiInformation,
+}
+
+TypeFunction = struct
+{
+    base: TypeFunctionBase,
+    abi: TypeFunctionAbi,
+    next: &Type,
 }
 
 TypeContent = union
@@ -757,6 +1098,13 @@ TypeContent = union
     pointer: TypePointer,
 }
 
+TypeLLVM = struct
+{
+    abi: &LLVMType,
+    memory: &LLVMType,
+    debug: &LLVMMetadata,
+}
+
 Type = struct
 {
     content: TypeContent,
@@ -764,20 +1112,175 @@ Type = struct
     name: []u8,
     next: &Type,
     scope: &Scope,
+    llvm: TypeLLVM,
+}
+
+type_is_signed = fn (type: &Type) u1
+{
+    switch (type.id)
+    {
+        .integer =>
+        {
+            return type.content.integer.signed;
+        },
+        else =>
+        {
+            #trap();
+        },
+    }
+}
+
+EvaluationKind = enum
+{
+    scalar,
+    aggregate,
+    complex,
+}
+
+get_evaluation_kind = fn (type: &Type) EvaluationKind
+{
+    switch (type.id)
+    {
+        .integer,
+        .pointer,
+        .bits,
+        .enum,
+        =>
+        {
+            return .scalar;
+        },
+        .array,
+        .struct,
+        .union,
+        .enum_array,
+        =>
+        {
+            return .aggregate;
+        },
+        else =>
+        {
+            unreachable;
+        },
+    }
+}
+
+integer_max_value = fn (bit_count: u64, signed: u1) u64
+{
+    >value: u64 = #select(bit_count == 64, ~0, (1 << (bit_count - #extend(signed))) - 1);
+    return value;
+}
+
+align_bit_count = fn (bit_count: u64) u64
+{
+    >aligned_bit_count = #max(next_power_of_two(bit_count), 8);
+    assert(aligned_bit_count % 8 == 0);
+    return aligned_bit_count;
+}
+
+aligned_byte_count_from_bit_count = fn (bit_count: u64) u64
+{
+    >aligned_bit_count = align_bit_count(bit_count);
+    return aligned_bit_count / 8;
+}
+
+get_byte_size = fn (type: &Type) u64
+{
+    switch (type.id)
+    {
+        .integer =>
+        {
+            >byte_count = aligned_byte_count_from_bit_count(type.content.integer.bit_count);
+            assert(byte_count == 1 or byte_count == 2 or byte_count == 4 or byte_count == 8 or byte_count == 16);
+            return byte_count;
+        },
+        else =>
+        {
+            #trap();
+        },
+    }
+}
+
+get_byte_alignment = fn (type: &Type) u32
+{
+    switch (type.id)
+    {
+        .integer =>
+        {
+            >aligned_byte_count: u32 = #truncate(aligned_byte_count_from_bit_count(type.content.integer.bit_count));
+            assert(aligned_byte_count == 1 or aligned_byte_count == 2 or aligned_byte_count == 4 or aligned_byte_count == 8 or aligned_byte_count == 16);
+            return aligned_byte_count;
+        },
+        else =>
+        {
+            #trap();
+        },
+    }
+}
+
+is_integral_or_enumeration_type = fn (type: &Type) u1
+{
+    switch (type.id)
+    {
+        .integer, .bits, .enum =>
+        {
+            return 1;
+        },
+        .array, .struct =>
+        {
+            return 0;
+        },
+        else =>
+        {
+            unreachable;
+        },
+    }
+}
+
+is_promotable_integer_type_for_abi = fn (type: &Type) u1
+{
+    switch (type.id)
+    {
+        .integer =>
+        {
+            return type.content.integer.bit_count < 32;
+        },
+        else =>
+        {
+            #trap();
+        }
+    }
+}
+
+resolve_type_in_place_abi = fn (module: &Module, type: &Type) void;
+resolve_type_in_place_memory = fn (module: &Module, type: &Type) void;
+resolve_type_in_place_debug = fn (module: &Module, type: &Type) void;
+
+resolve_type_in_place = fn (module: &Module, type: &Type) void
+{
+    resolve_type_in_place_abi(module, type);
+    resolve_type_in_place_memory(module, type);
+    resolve_type_in_place_debug(module, type);
 }
 
 ValueId = enum
 {
     infer_or_ignore,
-    external_function,
+    forward_declared_function,
     function,
     constant_integer,
+    global,
 }
 
 ValueConstantInteger = struct
 {
     value: u64,
-    is_signed: u1,
+    signed: u1,
+}
+
+ValueFunctionLLVM = struct
+{
+    return_block: &LLVMBasicBlock,
+    return_alloca: &LLVMValue,
 }
 
 ValueFunction = struct
@@ -785,6 +1288,7 @@ ValueFunction = struct
     arguments: []Argument,
     scope: Scope,
     block: &Block,
+    llvm: ValueFunctionLLVM,
     attributes: FunctionAttributes,
 }
 
@@ -806,6 +1310,7 @@ Value = struct
     type: &Type,
     id: ValueId,
     kind: ValueKind,
+    llvm: &LLVMValue,
 }
 
 i128_offset: u64 = 64 * 2;
@@ -819,31 +1324,6 @@ MacroDeclaration = struct
 MacroInstantiation = struct
 {
     foo: u32,
-}
-
-LLVMContext = opaque;
-LLVMModule = opaque;
-
-LLVMBuilder = opaque;
-
-LLVMValue = opaque;
-LLVMType = opaque;
-LLVMBasicBlock = opaque;
-LLVMIntrinsicId = typealias u32;
-
-LLVMMetadata = opaque;
-LLVMDIBuilder = opaque;
-
-LLVMTarget = opaque;
-LLVMTargetMachine = opaque;
-LLVMTargetMachineOptions = opaque;
-
-LLVMIntrinsicIndex = enum
-{
-    trap,
-    va_start,
-    va_end,
-    va_copy,
 }
 
 [extern] LLVMInitializeX86TargetInfo = fn [cc(c)] () void;
@@ -882,7 +1362,7 @@ llvm_initialize_targets = fn () void
     }
 }
 
-LLVMCodeGenerationOptimizationLevel = enum
+LLVMCodeGenerationOptimizationLevel = enum u32
 {
     none = 0,
     less = 1,
@@ -890,16 +1370,325 @@ LLVMCodeGenerationOptimizationLevel = enum
     aggressive = 3,
 }
 
+LLVMDwarfSourceLanguage = enum u32
+{
+    C89,
+    C,
+    Ada83,
+    C_plus_plus,
+    Cobol74,
+    Cobol85,
+    Fortran77,
+    Fortran90,
+    Pascal83,
+    Modula2,
+    // New in DWARF v3:
+    Java,
+    C99,
+    Ada95,
+    Fortran95,
+    PLI,
+    ObjC,
+    ObjC_plus_plus,
+    UPC,
+    D,
+    // New in DWARF v4:
+    Python,
+    // New in DWARF v5:
+    OpenCL,
+    Go,
+    Modula3,
+    Haskell,
+    C_plus_plus_03,
+    C_plus_plus_11,
+    OCaml,
+    Rust,
+    C11,
+    Swift,
+    Julia,
+    Dylan,
+    C_plus_plus_14,
+    Fortran03,
+    Fortran08,
+    RenderScript,
+    BLISS,
+    Kotlin,
+    Zig,
+    Crystal,
+    C_plus_plus_17,
+    C_plus_plus_20,
+    C17,
+    Fortran18,
+    Ada2005,
+    Ada2012,
+    HIP,
+    Assembly,
+    C_sharp,
+    Mojo,
+    GLSL,
+    GLSL_ES,
+    HLSL,
+    OpenCL_CPP,
+    CPP_for_OpenCL,
+    SYCL,
+    Ruby,
+    Move,
+    Hylo,
+    Metal,
+
+    // Vendor extensions:
+    Mips_Assembler,
+    GOOGLE_RenderScript,
+    BORLAND_Delphi
+}
+
+LLVMDwarfEmissionKind = enum u32
+{
+    none,
+    full,
+    line_tables_only,
+}
+
+LLVMDwarfTypeEncoding = enum
+{
+    void = 0x0,
+    address = 0x1,
+    boolean = 0x2,
+    complex_float = 0x3,
+    float = 0x4,
+    signed = 0x5,
+    signed_char = 0x6,
+    unsigned = 0x7,
+    unsigned_char = 0x8,
+
+    // DWARF 3.
+    imaginary_float = 0x9,
+    packed_decimal = 0xa,
+    numeric_string = 0xb,
+    edited = 0xc,
+    signed_fixed = 0xd,
+    unsigned_fixed = 0xe,
+    decimal_float = 0xf,
+
+    // DWARF 4.
+    UTF = 0x10,
+
+    // DWARF 5.
+    UCS = 0x11,
+    ASCII = 0x12,
+
+    // HP extensions.
+    HP_float80 = 0x80, // Floating-point (80 bit).
+    HP_complex_float80 = 0x81, // Complex floating-point (80 bit).
+    HP_float128 = 0x82, // Floating-point (128 bit).
+    HP_complex_float128 = 0x83, // Complex fp (128 bit).
+    HP_floathpintel = 0x84, // Floating-point (82 bit IA64).
+    HP_imaginary_float80 = 0x85,
+    HP_imaginary_float128 = 0x86,
+    HP_VAX_float = 0x88, // F or G floating.
+    HP_VAX_float_d = 0x89, // D floating.
+    HP_packed_decimal = 0x8a, // Cobol.
+    HP_zoned_decimal = 0x8b, // Cobol.
+    HP_edited = 0x8c, // Cobol.
+    HP_signed_fixed = 0x8d, // Cobol.
+    HP_unsigned_fixed = 0x8e, // Cobol.
+    HP_VAX_complex_float = 0x8f, // F or G floating complex.
+    HP_VAX_complex_float_d = 0x90, // D floating complex.
+}
+
+LLVMDIFlagsVisibility = enum u2
+{
+    none = 0,
+    private = 1,
+    protected = 2,
+    public = 3,
+}
+
+LLVMDIFlagsInheritance = enum u2
+{
+    none = 0,
+    single = 1,
+    multiple = 2,
+    virtual = 3,
+}
+
+LLVMDIFlags = bits u32
+{
+    visibility: LLVMDIFlagsVisibility,
+    forward_declaration: u1,
+    apple_block: u1,
+    block_by_ref_struct: u1,
+    virtual: u1,
+    artificial: u1,
+    explicit: u1,
+    prototyped: u1,
+    objective_c_class_complete: u1,
+    object_pointer: u1,
+    vector: u1,
+    static_member: u1,
+    lvalue_reference: u1,
+    rvalue_reference: u1,
+    _: u1,
+    inheritance: LLVMDIFlagsInheritance,
+    introduced_virtual: u1,
+    bit_field: u1,
+    noreturn: u1,
+    type_pass_by_value: u1,
+    type_pass_by_reference: u1,
+    enum_class: u1,
+    thunk: u1,
+    non_trivial: u1,
+    big_endian: u1,
+    little_endian: u1,
+    all_calls_described: u1,
+    _: u3,
+}
+
+LLVMOptimizationLevel = enum u3
+{
+    O0 = 0,
+    O1 = 1,
+    O2 = 2,
+    O3 = 3,
+    Os = 4,
+    Oz = 5,
+}
+
+LLVMOptimizationOptions = bits u64
+{
+    optimization_level: LLVMOptimizationLevel,
+    debug_info: u1,
+    loop_unrolling: u1,
+    loop_interleaving: u1,
+    loop_vectorization: u1,
+    slp_vectorization: u1,
+    merge_functions: u1,
+    call_graph_profile: u1,
+    unified_lto: u1,
+    assignment_tracking: u1,
+    verify_module: u1,
+    reserved: u51,
+}
+
+LLVMCodeGenerationFileType = enum u8
+{
+    assembly = 0,
+    object = 1,
+    null = 2,
+}
+
+LLVMCodeGenerationOptions = struct
+{
+    output_dwarf_file_path: []u8,
+    output_file_path: []u8,
+    file_type: LLVMCodeGenerationFileType,
+    optimize_when_possible: u8,
+    verify_module: u8,
+}
+
+LLVMCodeGenerationResult = enum u8
+{
+    success = 0,
+    failed_to_create_file = 1,
+    failed_to_emit_passes = 2,
+}
+
 [extern] LLVMContextCreate = fn [cc(c)] () &LLVMContext;
 [extern] llvm_context_create_module = fn (context: &LLVMContext, name: []u8) &LLVMModule;
 [extern] LLVMCreateBuilderInContext = fn (context: &LLVMContext) &LLVMBuilder;
 
-[extern] LLVMCreateTargetMachineOptions = fn () &LLVMTargetMachineOptions;
-[extern] LLVMTargetMachineOptionsSetCPU = fn (target_machine_options: &LLVMTargetMachineOptions, cpu: &u8) void;
-[extern] LLVMTargetMachineOptionsSetFeatures = fn (target_machine_options: &LLVMTargetMachineOptions, features: &u8) void;
-[extern] LLVMTargetMachineOptionsSetCodeGenOptLevel = fn (target_machine_options: &LLVMTargetMachineOptions, optimization_level: LLVMCodeGenerationOptimizationLevel) void;
-[extern] LLVMGetTargetFromTriple = fn (target_triple: &u8, target_pointer: &&LLVMTarget, error_message_pointer: &&u8) s32;
-[extern] LLVMCreateTargetMachineWithOptions = fn (target: &LLVMTarget, target_triple: &u8, target_machine_options: &LLVMTargetMachineOptions) &LLVMTargetMachine;
+[extern] LLVMVoidTypeInContext = fn [cc(c)] (context: &LLVMContext) &LLVMType;
+[extern] LLVMPointerTypeInContext = fn [cc(c)] (context: &LLVMContext, address_space: u32) &LLVMType;
+[extern] LLVMIntTypeInContext = fn [cc(c)] (context: &LLVMContext, bit_count: u32) &LLVMType;
+[extern] LLVMFunctionType = fn [cc(c)] (return_type: &LLVMType, argument_pointer: &&LLVMType, argument_count: u32, is_variable_argument: s32) &LLVMType;
+
+[extern] LLVMConstInt = fn [cc(c)] (type: &LLVMType, value: u64, is_signed: s32) &LLVMValue;
+
+[extern] LLVMCreateDIBuilder = fn (module: &LLVMModule) &LLVMDIBuilder;
+[extern] LLVMDIBuilderCreateFile = fn (di_builder: &LLVMDIBuilder, file_pointer: &u8, file_length: u64, directory_pointer: &u8, directory_length: u64) &LLVMMetadata;
+[extern] LLVMDIBuilderCreateCompileUnit = fn (di_builder: &LLVMDIBuilder, language: LLVMDwarfSourceLanguage, file: &LLVMMetadata, producer_name_pointer: &u8, producer_name_length: u64, is_optimized: s32, flags_pointer: &u8, flags_length: u64, runtime_version: u32, split_name_pointer: &u8, split_name_length: u64, emission_kind: LLVMDwarfEmissionKind, dwo_id: u32, split_debug_inlining: s32, debug_info_for_profiling: s32, sysroot_pointer: &u8, sysroot_length: u64, sdk_pointer: &u8, sdk_length: u64) &LLVMMetadata;
+
+[extern] LLVMDIBuilderCreateBasicType = fn [cc(c)] (di_builder: &LLVMDIBuilder, name_pointer: &u8, name_length: u64, bit_size: u64, dwarf_encoding: LLVMDwarfTypeEncoding, flags: LLVMDIFlags) &LLVMMetadata;
+[extern] LLVMDIBuilderCreatePointerType = fn [cc(c)] (di_builder: &LLVMDIBuilder, element_type: &LLVMMetadata, bit_size: u64, bit_alignment: u32, address_space: u32, name_pointer: &u8, name_length: u64) &LLVMMetadata;
+[extern] LLVMDIBuilderCreateSubroutineType = fn [cc(c)] (di_builder: &LLVMDIBuilder, file: &LLVMMetadata, argument_type_pointer: &&LLVMMetadata, argument_type_count: u32, flags: LLVMDIFlags) &LLVMMetadata;
+
+[extern] LLVMDIBuilderCreateFunction = fn [cc(c)] (di_builder: &LLVMDIBuilder, scope: &LLVMMetadata, name_pointer: &u8, name_length: u64, linkage_name_pointer: &u8, linkage_name_length: u64, file: &LLVMMetadata, line: u32, type: &LLVMMetadata, is_local_to_unit: s32, is_definition: s32, scope_line: u32, flags: LLVMDIFlags, is_optimized: s32) &LLVMMetadata;
+[extern] LLVMDIBuilderFinalizeSubprogram = fn [cc(c)] (di_builder: &LLVMDIBuilder, subprogram: &LLVMMetadata) void;
+
+[extern] LLVMDIBuilderCreateLexicalBlock = fn [cc(c)] (di_builder: &LLVMDIBuilder, scope: &LLVMMetadata, file: &LLVMMetadata, line: u32, column: u32) &LLVMMetadata;
+[extern] LLVMDIBuilderCreateDebugLocation = fn [cc(c)] (context: &LLVMContext, line: u32, column: u32, scope: &LLVMMetadata, inlined_at: &LLVMMetadata) &LLVMMetadata;
+[extern] LLVMDIBuilderFinalize = fn [cc(c)] (di_builder: &LLVMDIBuilder) void;
+
+[extern] LLVMSetSubprogram = fn [cc(c)] (function: &LLVMValue, subprogram: &LLVMMetadata) void;
+[extern] LLVMGetSubprogram = fn [cc(c)] (function: &LLVMValue) &LLVMMetadata;
+
+[extern] LLVMLookupIntrinsicID = fn [cc(c)] (name_pointer: &u8, name_length: u64) LLVMIntrinsicId;
+
+[extern] LLVMGetEnumAttributeKindForName = fn [cc(c)] (name_pointer: &u8, name_length: u64) LLVMAttributeId;
+
+[extern] LLVMCreateEnumAttribute = fn [cc(c)] (context: &LLVMContext, attribute_id: LLVMAttributeId, value: u64) &LLVMAttribute;
+[extern] LLVMCreateTypeAttribute = fn [cc(c)] (context: &LLVMContext, attribute_id: LLVMAttributeId, type: &LLVMType) &LLVMAttribute;
+[extern] LLVMCreateStringAttribute = fn [cc(c)] (context: &LLVMContext, attribute_key_pointer: &u8, attribute_key_length: u64, attribute_value_pointer: &u8, attribute_value_length: u64) &LLVMAttribute;
+[extern] LLVMAddAttributeAtIndex = fn [cc(c)] (value: &LLVMValue, index: u32, attribute: &LLVMAttribute) void;
+
+[extern] LLVMGetParams = fn [cc(c)] (function: &LLVMValue, parameter_pointer: &&LLVMValue) void;
+
+[extern] llvm_context_create_basic_block = fn [cc(c)] (context: &LLVMContext, name: []u8, parent_function: &LLVMValue) &LLVMBasicBlock;
+[extern] llvm_builder_create_alloca = fn [cc(c)] (builder: &LLVMBuilder, type: &LLVMType, address_space: u32, alignment: u32, name: []u8) &LLVMValue;
+[extern] LLVMBuildStore = fn [cc(c)] (builder: &LLVMBuilder, source: &LLVMValue, destination: &LLVMValue) &LLVMValue;
+[extern] LLVMBuildLoad2 = fn [cc(c)] (builder: &LLVMBuilder, type: &LLVMType, pointer: &LLVMValue, name: &u8) &LLVMValue;
+[extern] LLVMPositionBuilderAtEnd = fn [cc(c)] (builder: &LLVMBuilder, basic_block: &LLVMBasicBlock) void;
+[extern] LLVMClearInsertionPosition = fn [cc(c)] (builder: &LLVMBuilder) void;
+[extern] LLVMSetCurrentDebugLocation2 = fn [cc(c)] (builder: &LLVMBuilder, debug_location: &LLVMMetadata) void;
+[extern] LLVMBuildRet = fn [cc(c)] (builder: &LLVMBuilder, value: &LLVMValue) &LLVMValue;
+[extern] LLVMBuildRetVoid = fn [cc(c)] (builder: &LLVMBuilder) &LLVMValue;
+[extern] LLVMBuildBr = fn [cc(c)] (builder: &LLVMBuilder, target_block: &LLVMBasicBlock) &LLVMValue;
+[extern] LLVMBuildIntCast2 = fn [cc(c)] (builder: &LLVMBuilder, value: &LLVMValue, type: &LLVMType, signed: s32, name: &u8) &LLVMValue;
+[extern] LLVMGetInsertBlock = fn [cc(c)] (builder: &LLVMBuilder) &LLVMBasicBlock;
+[extern] LLVMGetBasicBlockTerminator = fn [cc(c)] (basic_block: &LLVMBasicBlock) &LLVMValue;
+[extern] LLVMGetBasicBlockParent = fn [cc(c)] (basic_block: &LLVMBasicBlock) &LLVMValue;
+
+[extern] LLVMInstructionEraseFromParent = fn [cc(c)] (value: &LLVMValue) void;
+[extern] LLVMGetOperand = fn [cc(c)] (value: &LLVMValue, index: u32) &LLVMValue;
+[extern] LLVMGetFirstUse = fn [cc(c)] (value: &LLVMValue) &LLVMUse;
+[extern] LLVMGetNextUse = fn [cc(c)] (use: &LLVMUse) &LLVMUse;
+[extern] LLVMGetUser = fn [cc(c)] (use: &LLVMUse) &LLVMValue;
+
+[extern] LLVMIsABranchInst = fn [cc(c)] (value: &LLVMValue) &LLVMValue;
+[extern] LLVMIsConditional = fn [cc(c)] (value: &LLVMValue) s32;
+[extern] LLVMGetSuccessor = fn [cc(c)] (value: &LLVMValue, index: u32) &LLVMBasicBlock;
+
+[extern] LLVMSetAlignment = fn [cc(c)] (value: &LLVMValue, alignment: u32) void;
+
+[extern] llvm_find_return_value_dominating_store = fn [cc(c)] (builder: &LLVMBuilder, return_alloca: &LLVMValue, element_type: &LLVMType) &LLVMValue;
+[extern] llvm_module_verify = fn [cc(c)] (module: &LLVMModule, error_message: &[]u8) u1;
+[extern] llvm_module_to_string = fn [cc(c)] (module: &LLVMModule) []u8;
+
+[extern] LLVMCreateTargetMachineOptions = fn [cc(c)] () &LLVMTargetMachineOptions;
+[extern] LLVMTargetMachineOptionsSetCPU = fn [cc(c)] (target_machine_options: &LLVMTargetMachineOptions, cpu: &u8) void;
+[extern] LLVMTargetMachineOptionsSetFeatures = fn [cc(c)] (target_machine_options: &LLVMTargetMachineOptions, features: &u8) void;
+[extern] LLVMTargetMachineOptionsSetCodeGenOptLevel = fn [cc(c)] (target_machine_options: &LLVMTargetMachineOptions, optimization_level: LLVMCodeGenerationOptimizationLevel) void;
+[extern] LLVMGetTargetFromTriple = fn [cc(c)] (target_triple: &u8, target_pointer: &&LLVMTarget, error_message_pointer: &&u8) s32;
+[extern] LLVMCreateTargetMachineWithOptions = fn [cc(c)] (target: &LLVMTarget, target_triple: &u8, target_machine_options: &LLVMTargetMachineOptions) &LLVMTargetMachine;
+[extern] LLVMCreateTargetDataLayout = fn [cc(c)] (target_machine: &LLVMTargetMachine) &LLVMTargetDataLayout;
+[extern] LLVMSetModuleDataLayout = fn [cc(c)] (module: &LLVMModule, target_data_layout: &LLVMTargetDataLayout) void;
+[extern] LLVMSetTarget = fn [cc(c)] (module: &LLVMModule, target_triple: &u8) void;
+
+[extern] llvm_module_create_function = fn [cc(c)] (module: &LLVMModule, function_type: &LLVMType, linkage_type: LLVMLinkage, address_space: u32, name: []u8) &LLVMValue;
+[extern] LLVMSetFunctionCallConv = fn [cc(c)] (function: &LLVMValue, calling_convention: LLVMCallingConvention) void;
+
+[extern] llvm_module_run_optimization_pipeline = fn [cc(c)] (module: &LLVMModule, target_machine: &LLVMTargetMachine, options: &LLVMOptimizationOptions) void;
+[extern] llvm_module_run_code_generation_pipeline = fn [cc(c)] (module: &LLVMModule, target_machine: &LLVMTargetMachine, options: &LLVMCodeGenerationOptions) LLVMCodeGenerationResult;
+
+LLDResult = struct
+{
+    stdout: []u8,
+    stderr: []u8,
+    success: u1,
+}
+[extern] lld_elf_link = fn [cc(c)] (argument_pointer: &&u8, argument_count: u64, exit_early: u1, disable_output: u1) LLDResult;
+
+default_address_space: u32 = 0;
 
 ModuleLLVM = struct
 {
@@ -908,10 +1697,12 @@ ModuleLLVM = struct
     builder: &LLVMBuilder,
     di_builder: &LLVMDIBuilder,
     file: &LLVMMetadata,
-    compile_unit: &LLVMMetadata,
+    target_machine: &LLVMTargetMachine,
+    target_data_layout: &LLVMTargetDataLayout,
     pointer_type: &LLVMType,
     void_type: &LLVMType,
     intrinsic_table: enum_array[LLVMIntrinsicIndex](LLVMIntrinsicId),
+    attribute_table: enum_array[LLVMAttributeIndex](LLVMAttributeId),
     memcmp: &LLVMValue,
     inlined_at: &LLVMMetadata,
     continue_block: &LLVMBasicBlock,
@@ -951,7 +1742,11 @@ Module = struct
     path: []u8,
     executable: []u8,
     objects: [][]u8,
-    libraries: [][]u8,
+    library_directories: [][]u8,
+    library_names: [][]u8,
+    library_paths: [][]u8,
+    link_libc: u1,
+    link_libcpp: u1,
 
     target: Target,
     build_mode: BuildMode,
@@ -1118,12 +1913,17 @@ integer_type = fn (module: &Module, integer: TypeInteger) &Type
 {
     assert(integer.bit_count != 0);
     assert(integer.bit_count <= 64);
-    >index = #select(integer.bit_count == 128, i128_offset + #extend(integer.signed), #extend(integer.bit_count) - 1 + 64 * #extend(integer.signed));
+    >index = #select(integer.bit_count == 128, i128_offset + #extend(integer.signed), integer.bit_count - 1 + 64 * #extend(integer.signed));
     >result = module.scope.types.first + index;
     assert(result.id == .integer);
     assert(result.content.integer.bit_count == integer.bit_count);
     assert(result.content.integer.signed == integer.signed);
     return result;
+}
+
+uint64 = fn (module: &Module) &Type
+{
+    return integer_type(module, { .bit_count = 64, .signed = 0 });
 }
 
 void_type = fn (module: &Module) &Type
@@ -1580,7 +2380,7 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
                     }
                 }
 
-                >result = integer_type(module, { .bit_count = #truncate(bit_count), .signed = is_signed }); 
+                >result = integer_type(module, { .bit_count = bit_count, .signed = is_signed }); 
                 return result;
             }
             else
@@ -1981,7 +2781,7 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                 .content = {
                     .constant_integer = {
                         .value = integer_value,
-                        .is_signed = 0,
+                        .signed = 0,
                     },
                 },
                 .id = .constant_integer,
@@ -2461,7 +3261,7 @@ parse = fn (module: &Module) void
                     {
                         >calling_convention: CallingConvention = .c;
                         >function_attributes: FunctionAttributes = zero;
-                        >is_variable_arguments: u1 = 0;
+                        >is_variable_argument: u1 = 0;
 
                         if (consume_character_if_match(module, left_bracket))
                         {
@@ -2577,10 +3377,12 @@ parse = fn (module: &Module) void
                         >function_type = new_type(module, {
                             .content = {
                                 .function = {
-                                    .semantic_return_type = return_type,
-                                    .semantic_argument_types = argument_types,
-                                    .calling_convention = calling_convention,
-                                    .is_variable_arguments = is_variable_arguments,
+                                    .base = {
+                                        .semantic_return_type = return_type,
+                                        .semantic_argument_types = argument_types,
+                                        .calling_convention = calling_convention,
+                                        .is_variable_argument = is_variable_argument,
+                                    },
                                     zero,
                                 },
                             },
@@ -2592,7 +3394,7 @@ parse = fn (module: &Module) void
 
                         >storage = new_value(module);
                         storage.& = {
-                            .id = .external_function,
+                            .id = .forward_declared_function,
                             .type = get_pointer_type(module, function_type),
                             zero,
                             // TODO? kind = .left,
@@ -2679,6 +3481,1228 @@ parse = fn (module: &Module) void
     }
 }
 
+resolve_alias = fn (module: &Module, type: &Type) &Type
+{
+    >result: &Type = zero;
+
+    switch (type.id)
+    {
+        .void,
+        .integer,
+        =>
+        {
+            result = type;
+        },
+        .pointer =>
+        {
+            >element_type = type.content.pointer.element_type;
+            >resolved_element_type = resolve_alias(module, element_type);
+            if (element_type == resolved_element_type)
+            {
+                result = type;
+            }
+            else
+            {
+                result = get_pointer_type(module, resolved_element_type);
+            }
+        },
+        else =>
+        {
+            #trap();
+        },
+    }
+
+    assert(result != zero);
+
+    return result;
+}
+
+resolve_type_in_place_abi = fn (module: &Module, type: &Type) void
+{
+    if (!type.llvm.abi)
+    {
+        >result: &LLVMType = zero;
+
+        switch (type.id)
+        {
+            .void, .noreturn =>
+            {
+                result = module.llvm.void_type;
+            },
+            .integer =>
+            {
+                >bit_count = type.content.integer.bit_count;
+                assert(bit_count <= #integer_max(u32));
+                result = LLVMIntTypeInContext(module.llvm.context, #truncate(bit_count));
+            },
+            .pointer,
+            .opaque,
+            =>
+            {
+                result = module.llvm.pointer_type;
+            },
+            else =>
+            {
+                #trap();
+            },
+        }
+
+        assert(result != zero);
+        type.llvm.abi = result;
+    }
+}
+
+resolve_type_in_place_memory = fn (module: &Module, type: &Type) void
+{
+    if (!type.llvm.memory)
+    {
+        resolve_type_in_place_abi(module, type);
+
+        >result: &LLVMType = zero;
+
+        switch (type.id)
+        {
+            .void,
+            .noreturn,
+            .pointer,
+            .opaque,
+            .array,
+            .struct,
+            .enum_array,
+            =>
+            {
+                result = type.llvm.abi;
+            },
+            .integer =>
+            {
+                >byte_size = get_byte_size(type);
+                >bit_count = byte_size * 8;
+                result = LLVMIntTypeInContext(module.llvm.context, #truncate(bit_count));
+            },
+            else =>
+            {
+                #trap();
+            },
+        }
+
+        assert(result != zero);
+        type.llvm.memory = result;
+    }
+}
+
+resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
+{
+    if (module.has_debug_info)
+    {
+        if (!type.llvm.debug)
+        {
+            >result: &LLVMMetadata = zero;
+
+            switch (type.id)
+            {
+                .void, .noreturn =>
+                {
+                    >bit_size: u64 = 0;
+                    >dwarf_encoding: LLVMDwarfTypeEncoding = .void;
+                    >flags: LLVMDIFlags = {
+                        .noreturn = type.id == .noreturn,
+                        zero,
+                    };
+                    result = LLVMDIBuilderCreateBasicType(module.llvm.di_builder, type.name.pointer, type.name.length, bit_size, dwarf_encoding, flags);
+                },
+                .integer =>
+                {
+                    >bit_count = type.content.integer.bit_count;
+                    >dwarf_encoding: LLVMDwarfTypeEncoding = #select(type.content.integer.signed, .signed, .unsigned);
+                    dwarf_encoding = #select(bit_count == 1, .boolean, dwarf_encoding);
+                    >flags: LLVMDIFlags = zero;
+                    result = LLVMDIBuilderCreateBasicType(module.llvm.di_builder, type.name.pointer, type.name.length, bit_count, dwarf_encoding, flags);
+                },
+                .pointer =>
+                {
+                    >element_type = type.content.pointer.element_type;
+                    resolve_type_in_place_debug(module, element_type);
+
+                    result = type.llvm.debug;
+
+                    if (!result)
+                    {
+                        result = LLVMDIBuilderCreatePointerType(module.llvm.di_builder, element_type.llvm.debug, 64, 64, default_address_space, type.name.pointer, type.name.length);
+                    }
+                },
+                else =>
+                {
+                    #trap();
+                },
+            }
+
+            assert(result != zero);
+            type.llvm.debug = result;
+        }
+    }
+}
+
+AbiSystemVClass = enum
+{
+    none,
+    integer,
+    sse,
+    sse_up,
+    x87,
+    x87_up,
+    complex_x87,
+    memory,
+}
+
+AbiSystemVClassifyArgument = struct
+{
+    base_offset: u64,
+    is_variable_argument: u1,
+    is_register_call: u1,
+}
+
+abi_system_v_classify_type = fn (type: &Type, options: AbiSystemVClassifyArgument) [2]AbiSystemVClass
+{
+    >result: [2]AbiSystemVClass = zero;
+
+    >is_memory = options.base_offset >= 8;
+    >current_index: u64 = #extend(is_memory);
+    >not_current_index: u64 = #extend(!is_memory);
+    assert(current_index != not_current_index);
+    result[current_index] = .memory;
+
+    switch (type.id)
+    {
+        .void, .noreturn =>
+        {
+            result[current_index] = .none;
+        },
+        .integer =>
+        {
+            >bit_count = type.content.integer.bit_count;
+            if (bit_count <= 64)
+            {
+                result[current_index] = .integer;
+            }
+            else if (bit_count == 128)
+            {
+                #trap();
+            }
+            else
+            {
+                report_error();
+            }
+        },
+        else =>
+        {
+            #trap();
+        },
+    }
+
+    return result;
+}
+
+contains_no_user_data = fn (type: &Type, start: u64, end: u64) u1
+{
+    >byte_size = get_byte_size(type);
+    >result = byte_size <= start;
+
+    if (!result)
+    {
+        switch (type.id)
+        {
+            .struct =>
+            {
+                result = 1;
+                #trap();
+            },
+            .array, .enum_array =>
+            {
+                result = 1;
+                #trap();
+            },
+            else => {},
+        }
+    }
+
+    return result;
+}
+
+abi_system_v_get_integer_type_at_offset = fn (module: &Module, type: &Type, offset: u64, source_type: &Type, source_offset: u64) &Type
+{
+    switch (type.id)
+    {
+        .integer =>
+        {
+            if (offset == 0)
+            {
+                >bit_count = type.content.integer.bit_count;
+                >start = source_offset + get_byte_size(type);
+                >end = source_offset + 8;
+
+                if (bit_count == 64)
+                {
+                    return type;
+                }
+
+                if (bit_count == 32 or bit_count == 16 or bit_count == 8)
+                {
+                    if (contains_no_user_data(source_type, start, end))
+                    {
+                        return type;
+                    }
+                }
+            }
+        },
+    }
+
+    >source_size = get_byte_size(source_type);
+    assert(source_size != source_offset);
+    >byte_count = source_size - source_offset;
+    >bit_count = #select(byte_count > 8, 64, byte_count * 8);
+    >result = integer_type(module, { .bit_count = bit_count, .signed = 0 });
+    return result;
+}
+
+AbiSystemVDirect = struct
+{
+    semantic_type: &Type,
+    type: &Type,
+    padding: &Type,
+    offset: u32,
+    alignment: u32,
+    cannot_be_flattened: u1,
+}
+
+abi_system_v_get_direct = fn (module: &Module, direct: AbiSystemVDirect) AbiInformation
+{
+    >result: AbiInformation = {
+        .semantic_type = direct.semantic_type,
+        .flags = {
+            .kind = .direct,
+            zero,
+        },
+        zero,
+    };
+
+    resolve_type_in_place(module, direct.semantic_type);
+    resolve_type_in_place(module, direct.type);
+
+    if (direct.padding)
+    {
+        resolve_type_in_place(module, direct.padding);
+    }
+
+    abi_set_coerce_to_type(&result, direct.type);
+    abi_set_padding_type(&result, direct.padding);
+    abi_set_direct_offset(&result, direct.offset);
+    abi_set_direct_alignment(&result, direct.alignment);
+    abi_set_can_be_flattened(&result, !direct.cannot_be_flattened);
+
+    return result;
+}
+
+abi_system_v_classify_return_type = fn (module: &Module, semantic_return_type: &Type) AbiInformation
+{
+    >classes = abi_system_v_classify_type(semantic_return_type, zero);
+    assert(classes[1] != .memory or classes[0] == .memory);
+    assert(classes[1] != .sse_up or classes[0] == .sse);
+
+    >low_type: &Type = zero;
+
+    switch (classes[0])
+    {
+        .none =>
+        {
+            if (classes[1] == .none)
+            {
+                #trap();
+            }
+            else
+            {
+                report_error();
+            }
+        },
+        .integer =>
+        {
+            low_type = abi_system_v_get_integer_type_at_offset(module, semantic_return_type, 0, semantic_return_type, 0);
+
+            if (classes[1] == .none and low_type.id == .integer)
+            {
+                if (is_integral_or_enumeration_type(semantic_return_type) and? is_promotable_integer_type_for_abi(semantic_return_type))
+                {
+                    #trap();
+                }
+            }
+        },
+        else =>
+        {
+            #trap();
+        },
+    }
+
+    >high_type: &Type = zero;
+
+    switch (classes[1])
+    {
+        .none => {},
+        .integer =>
+        {
+            >high_offset: u64 = 8;
+            high_type = abi_system_v_get_integer_type_at_offset(module, semantic_return_type, high_offset, semantic_return_type, high_offset);
+
+            if (classes[0] == .none)
+            {
+                #trap();
+            }
+        },
+        else =>
+        {
+            #trap();
+        },
+    }
+
+    if (high_type)
+    {
+        #trap();
+    }
+
+    >result = abi_system_v_get_direct(module, {
+        .semantic_type = semantic_return_type,
+        .type = low_type,
+        zero,
+    });
+
+    return result;
+}
+
+LLVMAttributeCallback = typealias fn [cc(c)] (&LLVMValue, u32, &LLVMAttribute) void;
+
+add_enum_attribute = fn (module: &Module, attribute_index: LLVMAttributeIndex, attribute_value: u64, add_callback: &LLVMAttributeCallback, value: &LLVMValue, index: u32) &LLVMAttribute
+{
+    >attribute = LLVMCreateEnumAttribute(module.llvm.context, module.llvm.attribute_table[attribute_index], attribute_value);
+    add_callback(value, index, attribute);
+}
+
+add_type_attribute = fn (module: &Module, attribute_index: LLVMAttributeIndex, type: &LLVMType, add_callback: &LLVMAttributeCallback, value: &LLVMValue, index: u32) &LLVMAttribute
+{
+    >attribute = LLVMCreateTypeAttribute(module.llvm.context, module.llvm.attribute_table[attribute_index], type);
+    add_callback(value, index, attribute);
+}
+
+add_string_attribute = fn (module: &Module, attribute_key: []u8, attribute_value: []u8, add_callback: &LLVMAttributeCallback, value: &LLVMValue, index: u32) &LLVMAttribute
+{
+    >attribute = LLVMCreateStringAttribute(module.llvm.context, attribute_key.pointer, attribute_key.length, attribute_value.pointer, attribute_value.length);
+    add_callback(value, index, attribute);
+}
+
+LLVMAttributes = struct
+{
+    alignment: u32,
+    sign_extend: u1,
+    zero_extend: u1,
+    no_alias: u1,
+    in_reg: u1,
+    sret: u1,
+    writable: u1,
+    dead_on_unwind: u1,
+    by_value: u1,
+}
+
+add_value_attribute = fn (module: &Module, value: &LLVMValue, index: u32, add_callback: &LLVMAttributeCallback, semantic_type: &LLVMType, abi_type: &LLVMType, attributes: LLVMAttributes) void
+{
+    assert(value != zero);
+    assert(semantic_type != zero);
+    assert(abi_type != zero);
+
+    if (attributes.alignment)
+    {
+        add_enum_attribute(module, .align, #extend(attributes.alignment), add_callback, value, index);
+    }
+
+    if (attributes.sign_extend)
+    {
+        add_enum_attribute(module, .signext, 0, add_callback, value, index);
+    }
+
+    if (attributes.zero_extend)
+    {
+        add_enum_attribute(module, .zeroext, 0, add_callback, value, index);
+    }
+
+    if (attributes.no_alias)
+    {
+        add_enum_attribute(module, .noalias, 0, add_callback, value, index);
+    }
+
+    if (attributes.in_reg)
+    {
+        add_enum_attribute(module, .inreg, 0, add_callback, value, index);
+    }
+
+    if (attributes.sret)
+    {
+        add_type_attribute(module, .sret, semantic_type, add_callback, value, index);
+    }
+
+    if (attributes.writable)
+    {
+        add_enum_attribute(module, .writable, 0, add_callback, value, index);
+    }
+
+    if (attributes.dead_on_unwind)
+    {
+        add_enum_attribute(module, .dead_on_unwind, 0, add_callback, value, index);
+    }
+
+    if (attributes.by_value)
+    {
+        add_type_attribute(module, .byval, semantic_type, add_callback, value, index);
+    }
+}
+
+AttributeBuildOptions = struct
+{
+    return_abi: AbiInformation,
+    argument_abis: []AbiInformation,
+    abi_argument_types: []&Type,
+    abi_return_type: &Type,
+    attributes: FunctionAttributes,
+}
+
+emit_attributes = fn (module: &Module, value: &LLVMValue, add_callback: &LLVMAttributeCallback, options: AttributeBuildOptions) void
+{
+    >return_abi = &options.return_abi;
+    >semantic_return_type = return_abi.semantic_type;
+    resolve_type_in_place(module, semantic_return_type);
+    >abi_return_type = options.abi_return_type;
+    resolve_type_in_place(module, abi_return_type);
+
+    add_value_attribute(module, value, 0, add_callback, semantic_return_type.llvm.memory, abi_return_type.llvm.abi, {
+        .alignment = 0,
+        .sign_extend = return_abi.flags.kind == .extend and return_abi.flags.sign_extension,
+        .zero_extend = return_abi.flags.kind == .extend and !return_abi.flags.sign_extension,
+        .no_alias = 0,
+        .in_reg = 0,
+        .sret = 0,
+        .writable = 0,
+        .dead_on_unwind = 0,
+        .by_value = 0,
+    });
+    
+    >total_abi_count: u64 = 0;
+
+    if (return_abi.flags.kind == .indirect)
+    {
+        >abi = return_abi;
+        >abi_index = abi.flags.sret_after_this;
+
+        >abi_type = options.abi_argument_types[abi_index];
+        resolve_type_in_place(module, abi_type);
+
+        add_value_attribute(module, value, #extend(abi_index + 1), add_callback, semantic_return_type.llvm.memory, abi_type.llvm.abi, {
+            .alignment = get_byte_alignment(semantic_return_type),
+            .sign_extend = 0,
+            .zero_extend = 0,
+            .no_alias = 1,
+            .in_reg = abi.flags.in_reg,
+            .sret = 1,
+            .writable = 1,
+            .dead_on_unwind = 1,
+            .by_value = 0,
+        });
+
+        total_abi_count += 1;
+    }
+
+    for (&abi: options.argument_abis)
+    {
+        resolve_type_in_place(module, abi.semantic_type);
+
+        for (abi_index: abi.abi_start..abi.abi_start + abi.abi_count)
+        {
+            >abi_type = options.abi_argument_types[abi_index];
+            resolve_type_in_place(module, abi_type);
+
+            add_value_attribute(module, value, #extend(abi_index + 1), add_callback, semantic_return_type.llvm.memory, abi_type.llvm.abi, {
+                .alignment = #select(abi.flags.kind == .indirect, 8, 0),
+                .sign_extend = abi.flags.kind == .extend and abi.flags.sign_extension,
+                .zero_extend = abi.flags.kind == .extend and !abi.flags.sign_extension,
+                .no_alias = 0,
+                .in_reg = abi.flags.in_reg,
+                .sret = 0,
+                .writable = 0,
+                .dead_on_unwind = 0,
+                .by_value = abi.flags.indirect_by_value,
+            });
+
+            total_abi_count += 1;
+        }
+    }
+
+    assert(total_abi_count == options.abi_argument_types.length);
+
+    >index: u32 = ~0;
+
+    >is_noreturn = semantic_return_type == noreturn_type(module);
+    if (is_noreturn)
+    {
+        add_enum_attribute(module, .noreturn, 0, add_callback, value, index);
+    }
+
+    >nounwind: u1 = 1;
+    if (nounwind)
+    {
+        add_enum_attribute(module, .nounwind, 0, add_callback, value, index);
+    }
+
+    >no_inline = options.attributes.inline_behavior == .no_inline;
+    if (no_inline)
+    {
+        add_enum_attribute(module, .noinline, 0, add_callback, value, index);
+    }
+
+    >always_inline = options.attributes.inline_behavior == .always_inline;
+    if (always_inline)
+    {
+        add_enum_attribute(module, .alwaysinline, 0, add_callback, value, index);
+    }
+
+    if (module.has_debug_info)
+    {
+        add_string_attribute(module, "frame-pointer", "all", add_callback, value, index);
+    }
+
+    >is_definition = add_callback == &LLVMAddAttributeAtIndex;
+    if (is_definition)
+    {
+        if (options.attributes.naked)
+        {
+            add_enum_attribute(module, .naked, 0, add_callback, value, index);
+        }
+
+        if (options.attributes.inline_behavior == .inline_hint)
+        {
+            add_enum_attribute(module, .inlinehint, 0, add_callback, value, index);
+        }
+    }
+}
+
+ResolvedCallingConvention = enum
+{
+    system_v,
+    win64,
+}
+
+AllocaOptions = struct
+{
+    type: &Type,
+    name: []u8,
+    alignment: u32,
+}
+
+create_alloca = fn (module: &Module, options: AllocaOptions) &LLVMValue
+{
+    >abi_type = options.type;
+    resolve_type_in_place(module, abi_type);
+
+    >alignment = options.alignment;
+    if (alignment == 0)
+    {
+        alignment = get_byte_alignment(abi_type);
+    }
+
+    >alloca = llvm_builder_create_alloca(module.llvm.builder, abi_type.llvm.memory, default_address_space, alignment, options.name);
+    return alloca;
+}
+
+StoreOptions = struct
+{
+    source: &LLVMValue,
+    destination: &LLVMValue,
+    type: &Type,
+    alignment: u32,
+}
+
+create_store = fn (module: &Module, options: StoreOptions) void
+{
+    assert(options.source != zero);
+    assert(options.destination != zero);
+    assert(options.type != zero);
+
+    >resolved_type = resolve_alias(module, options.type);
+    resolve_type_in_place(module, resolved_type);
+    >memory_type = resolved_type.llvm.memory;
+
+    >source_value: &LLVMValue = options.source;
+
+    if (resolved_type.llvm.abi != memory_type)
+    {
+        source_value = LLVMBuildIntCast2(module.llvm.builder, source_value, memory_type, #extend(type_is_signed(resolved_type)), "");
+    }
+
+    >alignment = options.alignment;
+    if (alignment == 0)
+    {
+        alignment = get_byte_alignment(resolved_type);
+    }
+
+    >store = LLVMBuildStore(module.llvm.builder, source_value, options.destination);
+    LLVMSetAlignment(store, alignment);
+}
+
+TypeKind = enum
+{
+    abi,
+    memory,
+}
+
+memory_to_abi = fn (module: &Module, value: &LLVMValue, type: &Type) &LLVMValue
+{
+    >result = value;
+    if (type.llvm.memory != type.llvm.abi)
+    {
+        result = LLVMBuildIntCast2(module.llvm.builder, result, type.llvm.abi, #extend(type_is_signed(type)), "");
+    }
+    return result;
+}
+
+LoadOptions = struct
+{
+    type: &Type,
+    pointer: &LLVMValue,
+    alignment: u32,
+    kind: TypeKind,
+}
+
+create_load = fn (module: &Module, options: LoadOptions) &LLVMValue
+{
+    resolve_type_in_place(module, options.type);
+    >alignment = options.alignment;
+    if (alignment == 0)
+    {
+        alignment = get_byte_alignment(options.type);
+    }
+
+    >result = LLVMBuildLoad2(module.llvm.builder, options.type.llvm.memory, options.pointer, "");
+    LLVMSetAlignment(result, alignment);
+
+    switch (options.kind)
+    {
+        .abi =>
+        {
+            result = memory_to_abi(module, result, options.type);
+        },
+        .memory => {},
+    }
+
+    return result;
+}
+
+check_types = fn (module: &Module, expected: &Type, source: &Type) void
+{
+    assert(expected != zero);
+    assert(source != zero);
+
+    if (expected != source)
+    {
+        >resolved_expected = resolve_alias(module, expected);
+        >resolved_source = resolve_alias(module, source);
+
+        if (resolved_expected != resolved_source)
+        {
+            >is_dst_p_and_source_int = resolved_expected.id == .pointer and resolved_source.id == .integer;
+
+            if (!is_dst_p_and_source_int)
+            {
+                report_error();
+            }
+        }
+    }
+}
+
+typecheck = fn (module: &Module, expected: &Type, source: &Type) void
+{
+    if (expected)
+    {
+        check_types(module, expected, source);
+    }
+}
+
+TypeAnalysis = struct
+{
+    indexing_type: &Type,
+    must_be_constant: u1,
+}
+
+analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysis: TypeAnalysis) void
+{
+    assert(!value.type);
+    assert(!value.llvm);
+
+    if (expected_type != zero and expected_type.id == .unresolved)
+    {
+        #trap();
+    }
+
+    >value_type: &Type = zero;
+
+    switch (value.id)
+    {
+        .constant_integer =>
+        {
+            if (!expected_type)
+            {
+                if (analysis.indexing_type)
+                {
+                    expected_type = uint64(module);
+                }
+            }
+
+            if (!expected_type)
+            {
+                report_error();
+            }
+
+            resolve_type_in_place(module, expected_type);
+            >resolved_type = resolve_alias(module, expected_type);
+
+            >value_constant = value.content.constant_integer.value;
+            >value_is_signed = value.content.constant_integer.signed;
+
+            switch (resolved_type.id)
+            {
+                .integer =>
+                {
+                    >type_bit_count = resolved_type.content.integer.bit_count;
+                    >type_is_signed = resolved_type.content.integer.signed;
+
+                    if (value_is_signed)
+                    {
+                        if (type_is_signed)
+                        {
+                            report_error();
+                        }
+
+                        #trap();
+                    }
+                    else
+                    {
+                        >max_value = integer_max_value(type_bit_count, type_is_signed);
+                        if (value_constant > max_value)
+                        {
+                            report_error();
+                        }
+
+                        value_type = expected_type;
+                    }
+                },
+                .pointer =>
+                {
+                    value_type = uint64(module);
+                },
+                else =>
+                {
+                    report_error();
+                },
+            }
+
+            typecheck(module, expected_type, value_type);
+        },
+        else =>
+        {
+            #trap();
+        },
+    }
+
+    assert(value_type != zero);
+    value.type = value_type;
+}
+
+get_llvm_type = fn (type: &Type, kind: TypeKind) &LLVMType
+{
+    switch (kind)
+    {
+        .abi =>
+        {
+            return type.llvm.abi;
+        },
+        .memory =>
+        {
+            return type.llvm.memory;
+        },
+    }
+}
+
+emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_constant: u1) void
+{
+    assert(value.type != zero);
+    assert(!value.llvm);
+
+    >resolved_value_type = resolve_alias(module, value.type);
+    resolve_type_in_place(module, resolved_value_type);
+
+    >must_be_constant = expect_constant or (!module.current_function and !module.current_macro_instantiation);
+
+    >llvm_value: &LLVMValue = zero;
+
+    switch (value.id)
+    {
+        .constant_integer =>
+        {
+            >llvm_integer_type = get_llvm_type(resolved_value_type, type_kind);
+            llvm_value = LLVMConstInt(llvm_integer_type, value.content.constant_integer.value, #extend(value.content.constant_integer.signed));
+        },
+        else =>
+        {
+            #trap();
+        },
+    }
+
+    assert(llvm_value != zero);
+    value.llvm = llvm_value;
+}
+
+emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, right: &Value) void
+{
+    assert(right.llvm == zero);
+
+    >pointer_type = left_type;
+    >value_type = right.type;
+
+    assert(pointer_type != zero);
+    assert(value_type != zero);
+    resolve_type_in_place(module, pointer_type);
+    resolve_type_in_place(module, value_type);
+
+    >resolved_pointer_type = resolve_alias(module, pointer_type);
+    >resolved_value_type = resolve_alias(module, value_type);
+    assert(resolved_pointer_type.id == .pointer);
+    assert(resolved_pointer_type.content.pointer.element_type == resolved_value_type);
+
+    >type_kind: TypeKind = .memory;
+
+    >evaluation_kind = get_evaluation_kind(resolved_value_type);
+
+    switch (evaluation_kind)
+    {
+        .scalar =>
+        {
+            emit_value(module, right, type_kind, 0);
+            create_store(module, {
+                .source = right.llvm,
+                .destination = left_llvm,
+                .type = resolved_value_type,
+                zero,
+            });
+        },
+        .aggregate =>
+        {
+            #trap();
+        },
+        .complex =>
+        {
+            #trap();
+        },
+    }
+}
+
+analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) void
+{
+    >parent_function_global: &Global = undefined;
+    if (module.current_function)
+    {
+        parent_function_global = module.current_function;
+        assert(parent_function_global != zero);
+    }
+    else if (module.current_macro_instantiation)
+    {
+        #trap();
+    }
+    else
+    {
+        report_error();
+    }
+
+    >llvm_function = parent_function_global.variable.storage.llvm;
+    assert(llvm_function != zero);
+
+    >statement_location: &LLVMMetadata = zero;
+    if (module.has_debug_info)
+    {
+        statement_location = LLVMDIBuilderCreateDebugLocation(module.llvm.context, statement.line, statement.column, scope.llvm, module.llvm.inlined_at);
+        LLVMSetCurrentDebugLocation2(module.llvm.builder, statement_location);
+    }
+
+    switch (statement.id)
+    {
+        .return =>
+        {
+            >return_value = statement.content.return;
+
+            if (module.current_function)
+            {
+                assert(!module.current_macro_instantiation);
+                >function_type = &parent_function_global.variable.storage.type.content.pointer.element_type.content.function;
+                >return_abi = &function_type.abi.return_abi;
+
+                switch (return_abi.semantic_type.id)
+                {
+                    .void =>
+                    {
+                        if (return_value)
+                        {
+                            report_error();
+                        }
+                    },
+                    .noreturn =>
+                    {
+                        report_error();
+                    },
+                    else =>
+                    {
+                        if (!return_value)
+                        {
+                            report_error();
+                        }
+
+                        if (module.has_debug_info)
+                        {
+                            LLVMSetCurrentDebugLocation2(module.llvm.builder, statement_location);
+                        }
+
+                        >return_alloca = parent_function_global.variable.storage.content.function.llvm.return_alloca;
+                        assert(return_alloca != zero);
+
+                        >return_type = return_abi.semantic_type;
+                        analyze_type(module, return_value, return_type, zero);
+
+                        >pointer_type = get_pointer_type(module, return_type);
+                        emit_assignment(module, return_alloca, pointer_type, return_value);
+                    },
+                }
+
+                >return_block = parent_function_global.variable.storage.content.function.llvm.return_block;
+                assert(return_block != zero);
+                LLVMBuildBr(module.llvm.builder, return_block);
+                LLVMClearInsertionPosition(module.llvm.builder);
+            }
+            else if (module.current_macro_instantiation)
+            {
+                #trap();
+            }
+            else
+            {
+                report_error();
+            }
+        },
+        else =>
+        {
+            #trap();
+        },
+    }
+}
+
+analyze_block = fn (module: &Module, block: &Block) void
+{
+    if (module.has_debug_info)
+    {
+        >lexical_block = LLVMDIBuilderCreateLexicalBlock(module.llvm.di_builder, block.scope.parent.llvm, module.llvm.file, block.scope.line, block.scope.column);
+        block.scope.llvm = lexical_block;
+    }
+
+    >statement = block.first_statement;
+
+    while (statement)
+    {
+        analyze_statement(module, &block.scope, statement);
+
+        statement = statement.next;
+    }
+}
+
+emit_block = fn (module: &Module, basic_block: &LLVMBasicBlock) void
+{
+    >current_basic_block = LLVMGetInsertBlock(module.llvm.builder);
+    if (current_basic_block)
+    {
+        if (!LLVMGetBasicBlockTerminator(current_basic_block))
+        {
+            LLVMBuildBr(module.llvm.builder, basic_block);
+        }
+    }
+
+    assert(LLVMGetBasicBlockParent(basic_block) != zero);
+    LLVMPositionBuilderAtEnd(module.llvm.builder, basic_block);
+}
+
+type_is_abi_equal = fn (module: &Module, a: &Type, b: &Type) u1
+{
+    resolve_type_in_place(module, a);
+    resolve_type_in_place(module, b);
+
+    >result = a == b;
+    if (!result)
+    {
+        result = a.llvm.abi == b.llvm.abi;
+    }
+
+    return result;
+}
+
+LLVMObjectGenerate = struct
+{
+    path: []u8,
+    optimization_level: LLVMOptimizationLevel,
+    run_optimization_passes: u1,
+    has_debug_info: u1,
+}
+
+generate_object = fn (module: &LLVMModule, target_machine: &LLVMTargetMachine, options: LLVMObjectGenerate) LLVMCodeGenerationResult
+{
+    if (options.run_optimization_passes)
+    {
+        >prefer_speed = options.optimization_level == .O2 or options.optimization_level == .O3;
+        >options: LLVMOptimizationOptions = {
+            .optimization_level = options.optimization_level,
+            .debug_info = options.has_debug_info,
+            .loop_unrolling = prefer_speed,
+            .loop_interleaving = prefer_speed,
+            .loop_vectorization = prefer_speed,
+            .slp_vectorization = prefer_speed,
+            .merge_functions = prefer_speed,
+            .call_graph_profile = 0,
+            .unified_lto = 0,
+            .assignment_tracking = options.has_debug_info,
+            .verify_module = 1,
+            zero,
+        };
+        llvm_module_run_optimization_pipeline(module, target_machine, &options);
+    }
+
+    >code_generation_options: LLVMCodeGenerationOptions = {
+        .output_file_path = options.path,
+        .file_type = .object,
+        .optimize_when_possible = #extend(options.optimization_level > .O0),
+        .verify_module = 1,
+        zero,
+    };
+
+    >result = llvm_module_run_code_generation_pipeline(module, target_machine, &code_generation_options);
+    return result;
+}
+
+ArgumentBuilder = struct
+{
+    buffer: [128]&u8,
+    count: u64,
+}
+
+add_argument = fn (builder: &ArgumentBuilder, argument: []u8) void
+{
+    assert(argument.pointer[argument.length] == 0);
+    >index = builder.count;
+    assert(index < builder.buffer.length);
+    builder.buffer[index] = argument.pointer;
+    builder.count = index + 1;
+}
+
+flush_arguments = fn (builder: &ArgumentBuilder) []&u8
+{
+    >argument_count = builder.count;
+    assert(argument_count < builder.buffer.length);
+    builder.buffer[argument_count] = zero;
+    return builder.buffer[..argument_count];
+}
+
+link = fn (module: &Module) void
+{
+    >arena = module.arena;
+    >builder: ArgumentBuilder = zero;
+    add_argument(&builder, "ld.lld");
+    add_argument(&builder, "--error-limit=0");
+    add_argument(&builder, "-o");
+    add_argument(&builder, module.executable);
+
+    for (library_directory: module.library_directories)
+    {
+        add_argument(&builder, arena_join_string(arena, [ "-L", library_directory ][..]));
+    }
+
+    >candidate_library_paths: [_][]u8 = [
+        "/usr/lib",
+        "/usr/lib/x86_64-linux-gnu",
+    ];
+
+    >i: u64 = 0;
+    >scrt1_directory_path: []u8 = zero;
+    >scrt1_object_path: []u8 = zero;
+    for (directory_path: candidate_library_paths)
+    {
+        >object_path = arena_join_string(arena, [ directory_path, "/Scrt1.o" ][..]);
+        >file = os_file_open(object_path.pointer, { .read = 1, zero }, zero);
+        if (file >= 0)
+        {
+            os_file_close(file);
+            scrt1_directory_path = directory_path;
+            scrt1_object_path = object_path;
+            break;
+        }
+    }
+
+    if (scrt1_object_path.length == 0)
+    {
+        report_error();
+    }
+
+    add_argument(&builder, arena_join_string(arena, [ "-L", scrt1_directory_path ][..]));
+    add_argument(&builder, "-L/usr/lib/gcc/x86_64-pc-linux-gnu/15.1.1");
+    add_argument(&builder, "-L/usr/lib/gcc/x86_64-linux-gnu/13");
+
+    for (object: module.objects)
+    {
+        add_argument(&builder, object);
+    }
+
+    for (library_path: module.library_paths)
+    {
+        add_argument(&builder, library_path);
+    }
+
+    for (library_name: module.library_names)
+    {
+        add_argument(&builder, arena_join_string(arena, [ "-l", library_name ][..]));
+    }
+
+    if (module.link_libcpp)
+    {
+        add_argument(&builder, "-lstdc++");
+    }
+    
+    >link_libc: u1 = 1;
+    >dynamic_linker: u1 = 1;
+
+    if (dynamic_linker)
+    {
+        add_argument(&builder, "-dynamic-linker");
+        add_argument(&builder, "/usr/lib64/ld-linux-x86-64.so.2");
+    }
+
+    if (link_libc)
+    {
+        add_argument(&builder, scrt1_object_path);
+        add_argument(&builder, "-lc");
+    }
+
+    >linker_arguments = flush_arguments(&builder);
+
+    >result = lld_elf_link(linker_arguments.pointer, linker_arguments.length, 1, 0);
+    if (!result.success)
+    {
+        #trap();
+    }
+}
+
 emit = fn (module: &Module) void
 {
     assert(!module.current_function);
@@ -2688,6 +4712,36 @@ emit = fn (module: &Module) void
     >context = LLVMContextCreate();
     >m = llvm_context_create_module(context, module.name);
     >builder = LLVMCreateBuilderInContext(context);
+
+    >di_builder: &LLVMDIBuilder = zero;
+    >di_file: &LLVMMetadata = zero;
+
+    if (module.has_debug_info)
+    {
+        di_builder = LLVMCreateDIBuilder(m);
+        >last_slash = string_last_character(module.path, '/');
+        if (last_slash == string_no_match)
+        {
+            report_error();
+        }
+
+        >directory = module.path[..last_slash];
+        >file_name = module.path[last_slash + 1..];
+
+        di_file = LLVMDIBuilderCreateFile(di_builder, file_name.pointer, file_name.length, directory.pointer, directory.length);
+        
+        >language: LLVMDwarfSourceLanguage = .C17;
+        >producer_name = "bloat buster";
+        >is_optimized = build_mode_is_optimized(module.build_mode);
+        >flags = "";
+        >emission_kind: LLVMDwarfEmissionKind = .full;
+        >runtime_version: u32 = 0;
+        >split_name = "";
+        >sysroot = "";
+        >sdk = "";
+
+        module.scope.llvm = LLVMDIBuilderCreateCompileUnit(di_builder, language, di_file, producer_name.pointer, producer_name.length, #extend(is_optimized), flags.pointer, flags.length, runtime_version, split_name.pointer, split_name.length, emission_kind, 0, 0, #extend(is_optimized), sysroot.pointer, sysroot.length, sdk.pointer, sdk.length);
+    }
 
     >target_triple: []u8 = undefined;
     >cpu_model: []u8 = undefined;
@@ -2729,11 +4783,519 @@ emit = fn (module: &Module) void
 
     assert(!error_message);
 
-    LLVMCreateTargetMachineWithOptions(target, target_triple.pointer, target_machine_options);
+    >target_machine = LLVMCreateTargetMachineWithOptions(target, target_triple.pointer, target_machine_options);
+
+    >target_data_layout = LLVMCreateTargetDataLayout(target_machine);
+    LLVMSetModuleDataLayout(m, target_data_layout);
+    LLVMSetTarget(m, target_triple.pointer);
+
+    module.llvm = {
+        .context = context,
+        .module = m,
+        .builder = builder,
+        .di_builder = di_builder,
+        .file = di_file,
+        .target_machine = target_machine,
+        .target_data_layout = target_data_layout,
+        .pointer_type = LLVMPointerTypeInContext(context, default_address_space),
+        .void_type = LLVMVoidTypeInContext(context),
+        zero,
+    };
+
+    for (i: 0..module.llvm.intrinsic_table.length)
+    {
+        >e: LLVMIntrinsicIndex = #enum_from_int(i);
+        >name = #enum_name(e);
+        module.llvm.intrinsic_table[i] = LLVMLookupIntrinsicID(name.pointer, name.length);
+    }
+
+    for (i: 0..module.llvm.attribute_table.length)
+    {
+        >e: LLVMAttributeIndex = #enum_from_int(i);
+        >name = #enum_name(e);
+        >attribute_id = LLVMGetEnumAttributeKindForName(name.pointer, name.length);
+        assert(attribute_id != 0);
+        module.llvm.attribute_table[i] = attribute_id;
+    }
+
+    >global = module.first_global;
+
+    while (global)
+    {
+        assert(!module.current_function);
+        assert(!module.current_macro_instantiation);
+        assert(!module.current_macro_declaration);
+
+        if (global.emitted)
+        {
+            continue;
+        }
+
+        >global_pointer_type = global.variable.storage.type;
+        assert(global_pointer_type.id == .pointer);
+        >global_value_type = global_pointer_type.content.pointer.element_type;
+
+        switch (global.variable.storage.id)
+        {
+            .function, .forward_declared_function =>
+            {
+                >function_type = &global_value_type.content.function;
+                >semantic_argument_types = function_type.base.semantic_argument_types;
+                >semantic_return_type = function_type.base.semantic_return_type;
+                function_type.abi.argument_abis = arena_allocate_slice[AbiInformation](module.arena, semantic_argument_types.length);
+                >llvm_abi_argument_type_buffer: [64]&LLVMType = undefined;
+
+                >resolved_calling_convention: ResolvedCallingConvention = undefined;
+                >calling_convention = function_type.base.calling_convention;
+                switch (calling_convention)
+                {
+                    .c =>
+                    {
+                        // TODO: switch on platform
+                        resolved_calling_convention = .system_v;
+                    },
+                }
+
+                >is_reg_call = resolved_calling_convention == .system_v and 0; // TODO: regcall calling convention
+
+                switch (resolved_calling_convention)
+                {
+                    .system_v =>
+                    {
+                        >abi_argument_type_buffer: [64]&Type = undefined;
+                        >abi_argument_type_count: u16 = 0;
+
+                        function_type.abi.available_registers = {
+                            .system_v = {
+                                .gpr = #select(is_reg_call, 11, 6),
+                                .sse = #select(is_reg_call, 16, 8),
+                            },
+                        };
+
+                        function_type.abi.return_abi = abi_system_v_classify_return_type(module, resolve_alias(module, semantic_return_type));
+
+                        >return_abi_kind = function_type.abi.return_abi.flags.kind;
+
+                        >abi_return_type: &Type = undefined;
+                        
+                        switch (return_abi_kind)
+                        {
+                            .direct, .extend =>
+                            {
+                                abi_return_type = function_type.abi.return_abi.coerce_to_type;
+                            },
+                            else =>
+                            {
+                                unreachable;
+                            },
+                        }
+
+                        assert(abi_return_type != zero);
+                        function_type.abi.abi_return_type = abi_return_type;
+                        resolve_type_in_place(module, abi_return_type);
+
+                        if (return_abi_kind == .indirect)
+                        {
+                            #trap();
+                        }
+
+                        if (semantic_argument_types.length != 0)
+                        {
+                            for (i: 0..semantic_argument_types.length)
+                            {
+                                #trap();
+                            }
+                        }
+                    },
+                    .win64 =>
+                    {
+                        #trap();
+                    },
+                }
+
+                >llvm_function_type = LLVMFunctionType(function_type.abi.abi_return_type.llvm.abi, &llvm_abi_argument_type_buffer[0], #truncate(function_type.abi.abi_argument_types.length), #extend(function_type.base.is_variable_argument));
+
+                >subroutine_type: &LLVMMetadata = zero;
+
+                if (module.has_debug_info)
+                {
+                    >debug_argument_type_buffer: [64]&LLVMMetadata = undefined;
+                    >debug_argument_types = debug_argument_type_buffer[..function_type.abi.argument_abis.length + 1 + #extend(function_type.base.is_variable_argument)];
+                    debug_argument_types[0] = function_type.abi.return_abi.semantic_type.llvm.debug;
+                    assert(debug_argument_types[0] != zero);
+
+                    // TODO: support double slicing: sliceable_value[1..][0..length] -- 2 slicing expressions
+                    >debug_argument_type_slice = debug_argument_types[1..];
+                    debug_argument_type_slice = debug_argument_type_slice[0..function_type.abi.argument_abis.length];
+
+                    for (i: 0..function_type.abi.argument_abis.length)
+                    {
+                        >abi = &function_type.abi.argument_abis[i];
+                        >debug_argument_type = &debug_argument_type_slice[i];
+                        debug_argument_type.& = abi.semantic_type.llvm.debug;
+                        assert(debug_argument_type.& != zero);
+                    }
+
+                    if (function_type.base.is_variable_argument)
+                    {
+                        >void_ty = void_type(module);
+                        assert(void_ty.llvm.debug != zero);
+                        debug_argument_types[function_type.abi.argument_abis.length + 1] = void_ty.llvm.debug;
+                        #trap();
+                    }
+
+                    >flags: LLVMDIFlags = zero;
+                    subroutine_type = LLVMDIBuilderCreateSubroutineType(module.llvm.di_builder, module.llvm.file, debug_argument_types.pointer, #truncate(debug_argument_types.length), flags);
+                }
+
+                assert(global.variable.storage.type.id == .pointer);
+                >value_type = global.variable.storage.type.content.pointer.element_type;
+                value_type.llvm.abi = llvm_function_type;
+                value_type.llvm.debug = subroutine_type;
+
+                >llvm_linkage: LLVMLinkage = undefined;
+
+                switch (global.linkage)
+                {
+                    .internal =>
+                    {
+                        llvm_linkage = .internal;
+                    },
+                    .external =>
+                    {
+                        llvm_linkage = .external;
+                    },
+                }
+
+                >llvm_function = llvm_module_create_function(module.llvm.module, llvm_function_type, llvm_linkage, default_address_space, global.variable.name);
+                global.variable.storage.llvm = llvm_function;
+                >llvm_calling_convention: LLVMCallingConvention = undefined;
+                switch (calling_convention)
+                {
+                    .c =>
+                    {
+                        llvm_calling_convention = .c;
+                    },
+                }
+
+                LLVMSetFunctionCallConv(llvm_function, llvm_calling_convention);
+
+                emit_attributes(module, llvm_function, &LLVMAddAttributeAtIndex, {
+                    .return_abi = function_type.abi.return_abi,
+                    .argument_abis = function_type.abi.argument_abis,
+                    .abi_argument_types = function_type.abi.abi_argument_types,
+                    .abi_return_type = function_type.abi.abi_return_type,
+                    .attributes = global.variable.storage.content.function.attributes,
+                });
+
+                >subprogram: &LLVMMetadata = zero;
+
+                if (module.has_debug_info)
+                {
+                    >name = global.variable.name;
+                    >linkage_name = name;
+                    >line = global.variable.line;
+                    >is_local_to_unit = global.linkage == .internal;
+                    >is_definition = global.variable.storage.id == .function;
+                    >scope_line = line + 1;
+                    >flags: LLVMDIFlags = zero;
+                    >is_optimized = build_mode_is_optimized(module.build_mode);
+                    subprogram = LLVMDIBuilderCreateFunction(module.llvm.di_builder, module.scope.llvm, name.pointer, name.length, linkage_name.pointer, linkage_name.length, module.llvm.file, line, subroutine_type, #extend(is_local_to_unit), #extend(is_definition), scope_line, flags, #extend(is_optimized));
+                    LLVMSetSubprogram(llvm_function, subprogram);
+                }
+
+                switch (global.variable.storage.id)
+                {
+                    .function =>
+                    {
+                        global.variable.storage.content.function.scope.llvm = subprogram;
+                    },
+                    .forward_declared_function =>
+                    {
+                        assert(global.linkage == .external);
+                        if (module.has_debug_info)
+                        {
+                            LLVMDIBuilderFinalizeSubprogram(module.llvm.di_builder, subprogram);
+                        }
+                    },
+                    else => { unreachable; },
+                }
+            },
+            .global =>
+            {
+                #trap();
+            },
+            else =>
+            {
+                report_error();
+            },
+        }
+
+        global = global.next;
+    }
+
+    global = module.first_global;
+
+    while (global)
+    {
+        assert(!module.current_function);
+        assert(!module.current_macro_instantiation);
+        assert(!module.current_macro_declaration);
+
+        if (global.variable.storage.id == .function)
+        {
+            module.current_function = global;
+
+            >function = global.variable.storage;
+            assert(function.id == .function);
+            >pointer_type = function.type;
+            assert(pointer_type.id == .pointer);
+            >value_type = pointer_type.content.pointer.element_type;
+            assert(value_type == global.variable.type);
+            assert(value_type.id == .function);
+            >function_type = &value_type.content.function;
+            >semantic_argument_types = function_type.base.semantic_argument_types;
+            >llvm_function = function.llvm;
+            assert(llvm_function != zero);
+
+            >llvm_abi_argument_buffer: [64]&LLVMValue = undefined;
+            >llvm_abi_arguments = llvm_abi_argument_buffer[..function_type.abi.abi_argument_types.length];
+            LLVMGetParams(llvm_function, &llvm_abi_argument_buffer[0]);
+
+            >entry_block = llvm_context_create_basic_block(module.llvm.context, "entry", llvm_function);
+            >return_block = llvm_context_create_basic_block(module.llvm.context, "return_block", llvm_function);
+            function.content.function.llvm.return_block = return_block;
+
+            LLVMPositionBuilderAtEnd(module.llvm.builder, entry_block);
+            LLVMSetCurrentDebugLocation2(module.llvm.builder, zero);
+
+            >return_abi = &function_type.abi.return_abi;
+            switch (return_abi.flags.kind)
+            {
+                .ignore => {},
+                .indirect =>
+                {
+                    #trap();
+                },
+                .in_alloca =>
+                {
+                    #trap();
+                },
+                else =>
+                {
+                    >alloca = create_alloca(module, {
+                        .type = return_abi.semantic_type,
+                        .name = "return_value",
+                        zero,
+                    });
+                    function.content.function.llvm.return_alloca = alloca;
+                },
+            }
+            
+            >arguments = function.content.function.arguments;
+            >argument_abis = function_type.abi.argument_abis;
+            assert(arguments.length == argument_abis.length);
+
+            for (i: 0..semantic_argument_types.length)
+            {
+                >argument = &arguments[i];
+                >argument_abi = &argument_abis[i];
+                // TODO: double slice
+                >argument_abi_arguments = llvm_abi_arguments[#extend(argument_abi.abi_start)..];
+                argument_abi_arguments = argument_abi_arguments[..#extend(argument_abi.abi_count)];
+
+                >semantic_argument_storage: &LLVMValue = zero;
+
+                switch (argument_abi.flags.kind)
+                {
+                    .direct, .extend =>
+                    {
+                        #trap();
+                    },
+                    .indirect =>
+                    {
+                        #trap();
+                    },
+                    else =>
+                    {
+                        unreachable;
+                    },
+                }
+            }
+
+            analyze_block(module, function.content.function.block);
+
+            >current_basic_block = LLVMGetInsertBlock(module.llvm.builder);
+
+            if (current_basic_block)
+            {
+                assert(!LLVMGetBasicBlockTerminator(current_basic_block));
+                #trap();
+            }
+            else
+            {
+                >has_single_jump_to_return_block: u1 = 0;
+
+                >first_use = LLVMGetFirstUse(#pointer_cast(return_block));
+                >user: &LLVMValue = zero;
+
+                if (first_use)
+                {
+                    >second_use = LLVMGetNextUse(first_use);
+                    >has_one_use = first_use != zero and first_use == zero;
+
+                    if (has_one_use)
+                    {
+                        user = LLVMGetUser(first_use);
+                        has_single_jump_to_return_block = LLVMIsABranchInst(user) != zero and? LLVMIsConditional(user) != 0 and? LLVMGetSuccessor(user, 0) == return_block;
+                    }
+                }
+
+                if (has_single_jump_to_return_block)
+                {
+                    #trap();
+                }
+                else
+                {
+                    emit_block(module, return_block);
+                }
+            }
+
+            if (module.has_debug_info)
+            {
+                LLVMSetCurrentDebugLocation2(module.llvm.builder, zero);
+                >subprogram = LLVMGetSubprogram(llvm_function);
+                LLVMDIBuilderFinalizeSubprogram(module.llvm.di_builder, subprogram);
+            }
+
+            >semantic_return_type = return_abi.semantic_type;
+            if (semantic_return_type == noreturn_type(module) or function.content.function.attributes.naked)
+            {
+                #trap();
+            }
+            else if (semantic_return_type == void_type(module))
+            {
+                LLVMBuildRetVoid(module.llvm.builder);
+            }
+            else
+            {
+                >return_value: &LLVMValue = zero;
+
+                switch (return_abi.flags.kind)
+                {
+                    .direct, .extend =>
+                    {
+                        >return_alloca = function.content.function.llvm.return_alloca;
+                        >coerce_to_type = abi_get_coerce_to_type(return_abi);
+                        if (type_is_abi_equal(module, coerce_to_type, semantic_return_type) and? return_abi.attributes.direct.offset == 0)
+                        {
+                            >store = llvm_find_return_value_dominating_store(module.llvm.builder, return_alloca, semantic_return_type.llvm.abi);
+                            if (store)
+                            {
+                                return_value = LLVMGetOperand(store, 0);
+                                >alloca = LLVMGetOperand(store, 1);
+                                assert(alloca == return_alloca);
+                                LLVMInstructionEraseFromParent(store);
+                                LLVMInstructionEraseFromParent(alloca);
+                            }
+                            else
+                            {
+                                return_value = create_load(module, {
+                                    .type = semantic_return_type,
+                                    .pointer = return_alloca,
+                                    zero,
+                                });
+                            }
+                        }
+                        else
+                        {
+                            #trap();
+                        }
+                    },
+                    .indirect =>
+                    {
+                        #trap();
+                    },
+                }
+
+                LLVMBuildRet(module.llvm.builder, return_value);
+            }
+
+            // END OF SCOPE
+            module.current_function = zero;
+        }
+
+        global = global.next;
+    }
+
+    if (module.has_debug_info)
+    {
+        LLVMDIBuilderFinalize(module.llvm.di_builder);
+    }
+
+    >verification_error_message: []u8 = zero;
+    if (!llvm_module_verify(module.llvm.module, &verification_error_message))
+    {
+        print(llvm_module_to_string(module.llvm.module));
+        print("\n==========================\nLLVM VERIFICATION ERROR\n==========================\n");
+        print(verification_error_message);
+        print("\n");
+        report_error();
+    }
+
+    if (!module.silent)
+    {
+        print(llvm_module_to_string(module.llvm.module));
+    }
+
+    >optimization_level: LLVMOptimizationLevel = undefined;
+
+    switch (module.build_mode)
+    {
+        .debug_none, .debug =>
+        {
+            optimization_level = .O0;
+        },
+        .soft_optimize =>
+        {
+            optimization_level = .O1;
+        },
+        .optimize_for_speed =>
+        {
+            optimization_level = .O2;
+        },
+        .optimize_for_size =>
+        {
+            optimization_level = .Os;
+        },
+        .aggressively_optimize_for_speed =>
+        {
+            optimization_level = .O3;
+        },
+        .aggressively_optimize_for_size =>
+        {
+            optimization_level = .Oz;
+        },
+    }
+
+    >object_generation_result = generate_object(module.llvm.module, module.llvm.target_machine, {
+        .path = module.objects[0],
+        .optimization_level = optimization_level,
+        .run_optimization_passes = module.build_mode != .debug_none,
+        .has_debug_info = module.has_debug_info,
+    });
+
+    if (object_generation_result != .success)
+    {
+        report_error();
+    }
+
+    link(module);
 }
 
 compile = fn (arena: &Arena, options: CompileOptions) void
 {
+    >module: Module = undefined;
     >signs: [2]u1 = [0, 1];
 
     >base_type_allocation = arena_allocate[Type](arena,
@@ -2760,12 +5322,13 @@ compile = fn (arena: &Arena, options: CompileOptions) void
             type_it.& = {
                 .content = {
                     .integer = {
-                        .bit_count = #truncate(bit_count),
+                        .bit_count = bit_count,
                         .signed = sign,
                     },
                 },
                 .id = .integer,
                 .name = name,
+                .scope = &module.scope,
                 zero,
             };
 
@@ -2792,6 +5355,7 @@ compile = fn (arena: &Arena, options: CompileOptions) void
             },
             .id = .integer,
             .name = name,
+            .scope = &module.scope,
             zero,
         };
 
@@ -2812,12 +5376,14 @@ compile = fn (arena: &Arena, options: CompileOptions) void
         .id = .void,
         .name = "void",
         .next = noreturn_type,
+        .scope = &module.scope,
         zero,
     };
 
     noreturn_type.& = {
         .id = .noreturn,
         .name = "noreturn",
+        .scope = &module.scope,
         zero,
     };
 
@@ -2828,7 +5394,7 @@ compile = fn (arena: &Arena, options: CompileOptions) void
         zero,
     };
 
-    >module: Module = {
+    module = {
         .arena = arena,
         .content = options.content,
         .void_value = void_value,
@@ -2836,7 +5402,11 @@ compile = fn (arena: &Arena, options: CompileOptions) void
         .path = options.path,
         .executable = options.executable,
         .objects = options.objects,
-        .libraries = options.libraries,
+        .library_directories = options.library_directories,
+        .library_names = options.library_names,
+        .library_paths = options.library_paths,
+        .link_libc = options.link_libc,
+        .link_libcpp = options.link_libcpp,
         .target = options.target,
         .build_mode = options.build_mode,
         .has_debug_info = options.has_debug_info,
@@ -2907,10 +5477,23 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile) void
     >objects: [][]u8 = undefined;
     objects = [ output_object_path ][..];
 
+    >library_directories: [][]u8 = zero;
+    >library_names: [][]u8 = zero;
+    >library_paths: [][]u8 = zero;
+
+    if (is_compiler)
+    {
+        #trap();
+    }
+
     >options: CompileOptions = {
         .executable = output_executable_path,
         .objects = objects,
-        .libraries = zero,
+        .library_directories = library_directories,
+        .library_names = library_names,
+        .library_paths = library_paths,
+        .link_libc = 1,
+        .link_libcpp = 0,
         .name = base_name,
         .build_mode = compile_options.build_mode,
         .content = file_content,

@@ -4,11 +4,14 @@ enum class ValueIntrinsic
 {
     align_of,
     byte_size,
+    enum_from_int,
     enum_name,
     extend,
     integer_max,
     int_from_enum,
     int_from_pointer,
+    max,
+    min,
     pointer_cast,
     pointer_from_int,
     select,
@@ -450,6 +453,280 @@ fn u64 parse_integer_decimal_assume_valid(String string)
 
 fn Value* parse_value(Module* module, Scope* scope, ValueBuilder builder);
 
+struct FunctionHeaderArgument
+{
+    String name;
+    u32 line;
+};
+
+struct FunctionHeaderParsing
+{
+    Type* type;
+    Slice<FunctionHeaderArgument> arguments;
+    FunctionAttributes attributes;
+};
+
+fn bool type_function_base_compare(Module* module, TypeFunctionBase& a, TypeFunctionBase& b)
+{
+    auto same_return_type = resolve_alias(module, a.semantic_return_type) == b.semantic_return_type;
+    auto same_calling_convention = a.calling_convention == b.calling_convention;
+    auto same_is_variable_arguments = a.is_variable_arguments == b.is_variable_arguments;
+
+    auto same_argument_length = a.semantic_argument_types.length == b.semantic_argument_types.length;
+    auto same_argument_types = same_argument_length;
+
+    if (same_argument_length)
+    {
+        for (u64 i = 0; i < a.semantic_argument_types.length; i += 1)
+        {
+            auto a_type = resolve_alias(module, a.semantic_argument_types[i]);
+            auto b_type = resolve_alias(module, b.semantic_argument_types[i]);
+
+            auto is_same_argument_type = a_type == b_type;
+
+            same_argument_types = same_argument_types && is_same_argument_type;
+        }
+    }
+
+    return same_return_type && same_calling_convention && same_is_variable_arguments && same_argument_types;
+}
+
+fn Type* get_function_type(Module* module, TypeFunctionBase base)
+{
+    base.semantic_return_type = resolve_alias(module, base.semantic_return_type);
+    for (u64 i = 0; i < base.semantic_argument_types.length; i += 1)
+    {
+        base.semantic_argument_types[i] = resolve_alias(module, base.semantic_argument_types[i]);
+    }
+
+    Type* last_function_type = module->first_function_type;
+
+    while (last_function_type)
+    {
+        assert(last_function_type->id == TypeId::function);
+        if (type_function_base_compare(module, base, last_function_type->function.base))
+        {
+            return last_function_type;
+        }
+
+        auto next = last_function_type->function.next;
+        if (!next)
+        {
+            break;
+        }
+
+        last_function_type = next;
+    }
+
+    auto result = type_allocate_init(module, Type{
+        .function = {
+            .base = base,
+        },
+        .id = TypeId::function,
+        .name = string_literal(""),
+        .scope = &module->scope,
+    });
+
+    if (last_function_type)
+    {
+        assert(module->first_function_type);
+        last_function_type->function.next = result;
+    }
+    else
+    {
+        assert(!module->first_function_type);
+        module->first_function_type = result;
+    }
+
+    return result;
+}
+
+
+fn Type* parse_type(Module* module, Scope* scope);
+fn FunctionHeaderParsing parse_function_header(Module* module, Scope* scope, bool mandate_argument_names)
+{
+    auto calling_convention = CallingConvention::c;
+    auto function_attributes = FunctionAttributes{};
+    bool is_variable_arguments = false;
+
+    if (consume_character_if_match(module, left_bracket))
+    {
+        while (module->offset < module->content.length)
+        {
+            auto function_identifier = parse_identifier(module);
+
+            enum class FunctionKeyword
+            {
+                cc,
+                count,
+            };
+
+            String function_keywords[] = {
+                string_literal("cc"),
+            };
+            static_assert(array_length(function_keywords) == (u64)FunctionKeyword::count);
+
+            backing_type(FunctionKeyword) i;
+            for (i = 0; i < (backing_type(FunctionKeyword))(FunctionKeyword::count); i += 1)
+            {
+                auto function_keyword = function_keywords[i];
+                if (function_keyword.equal(function_identifier))
+                {
+                    break;
+                }
+            }
+
+            auto function_keyword = (FunctionKeyword)i;
+            skip_space(module);
+
+            switch (function_keyword)
+            {
+                case FunctionKeyword::cc:
+                    {
+                        expect_character(module, left_parenthesis);
+                        skip_space(module);
+                        auto calling_convention_string = parse_identifier(module);
+                        String calling_conventions[] = {
+                            string_literal("c"),
+                        };
+                        static_assert(array_length(calling_conventions) == (u64)CallingConvention::count);
+
+                        backing_type(CallingConvention) i;
+                        for (i = 0; i < (backing_type(CallingConvention))CallingConvention::count; i += 1)
+                        {
+                            auto calling_convention = calling_conventions[i];
+                            if (calling_convention.equal(calling_convention_string))
+                            {
+                                break;
+                            }
+                        }
+
+                        auto candidate_calling_convention = (CallingConvention)i;
+                        if (candidate_calling_convention == CallingConvention::count)
+                        {
+                            report_error();
+                        }
+
+                        calling_convention = candidate_calling_convention;
+
+                        skip_space(module);
+                        expect_character(module, right_parenthesis);
+                    } break;
+                case FunctionKeyword::count:
+                    {
+                        report_error();
+                    } break;
+            }
+
+            skip_space(module);
+
+            if (consume_character_if_match(module, right_bracket))
+            {
+                break;
+            }
+            else
+            {
+                report_error();
+            }
+        }
+    }
+
+    skip_space(module);
+
+    expect_character(module, left_parenthesis);
+
+    Type* semantic_argument_type_buffer[64];
+    String semantic_argument_name_buffer[64];
+    u32 argument_line_buffer[64];
+    u32 semantic_argument_count = 0;
+
+    while (module->offset < module->content.length)
+    {
+        skip_space(module);
+
+        if (consume_character_if_match(module, '.'))
+        {
+            expect_character(module, '.');
+            expect_character(module, '.');
+            skip_space(module);
+            expect_character(module, right_parenthesis);
+            is_variable_arguments = true;
+            break;
+        }
+
+        if (consume_character_if_match(module, right_parenthesis))
+        {
+            break;
+        }
+
+        auto line = get_line(module);
+        argument_line_buffer[semantic_argument_count] = line;
+
+        String argument_name = {};
+
+        if (mandate_argument_names)
+        {
+            argument_name = parse_identifier(module);
+
+            skip_space(module);
+
+            expect_character(module, ':');
+
+            skip_space(module);
+        }
+
+        semantic_argument_name_buffer[semantic_argument_count] = argument_name;
+
+        auto argument_type = parse_type(module, scope);
+        semantic_argument_type_buffer[semantic_argument_count] = argument_type;
+
+        skip_space(module);
+
+        unused(consume_character_if_match(module, ','));
+
+        semantic_argument_count += 1;
+    }
+
+    skip_space(module);
+
+    auto return_type = parse_type(module, scope);
+
+    skip_space(module);
+
+    Slice<Type*> argument_types = {};
+    if (semantic_argument_count != 0)
+    {
+        argument_types = new_type_array(module, semantic_argument_count);
+        memcpy(argument_types.pointer, semantic_argument_type_buffer, semantic_argument_count * sizeof(Type*));
+    }
+
+    auto function_type = get_function_type(module, {
+        .semantic_return_type = return_type,
+        .semantic_argument_types = argument_types,
+        .calling_convention = calling_convention,
+        .is_variable_arguments = is_variable_arguments,
+    });
+
+    Slice<FunctionHeaderArgument> arguments = {};
+    if (mandate_argument_names)
+    {
+        arguments = arena_allocate<FunctionHeaderArgument>(module->arena, semantic_argument_count);
+        for (u64 i = 0; i < semantic_argument_count; i += 1)
+        {
+            arguments[i] = {
+                .name = semantic_argument_name_buffer[i],
+                .line = argument_line_buffer[i],
+            };
+        }
+    }
+
+    return {
+        .type = function_type,
+        .arguments = arguments,
+        .attributes = function_attributes,
+    };
+}
+
 fn Type* parse_type(Module* module, Scope* scope)
 {
     auto start_character = module->content[module->offset];
@@ -477,6 +754,14 @@ fn Type* parse_type(Module* module, Scope* scope)
 
             auto enum_array_type = get_enum_array_type(module, enum_type, element_type);
             return enum_array_type;
+        }
+        else if (identifier.equal(string_literal("fn")))
+        {
+            skip_space(module);
+            auto mandate_argument_names = false;
+            auto function_header = parse_function_header(module, scope, mandate_argument_names);
+            auto result = function_header.type;
+            return result;
         }
         else
         {
@@ -667,7 +952,7 @@ fn Type* parse_type(Module* module, Scope* scope)
         {
             case TypeIntrinsic::return_type:
                 {
-                    auto return_type = module->current_function->variable.type->function.semantic_return_type;
+                    auto return_type = module->current_function->variable.type->function.base.semantic_return_type;
                     return return_type;
                 } break;
             case TypeIntrinsic::count: report_error();
@@ -767,7 +1052,7 @@ fn u8 escape_character(u8 ch)
         case 't': return '\t';
         case 'r': return '\r';
         case '\'': return '\'';
-        default: trap();
+        default: report_error();
     }
 }
 
@@ -776,6 +1061,7 @@ fn String parse_string_literal(Module* module)
     expect_character(module, '"');
 
     auto start = module->offset;
+    u64 escape_character_count = 0;
 
     while (1)
     {
@@ -784,19 +1070,32 @@ fn String parse_string_literal(Module* module)
         {
             break;
         }
-        else if (ch == '\\')
-        {
-            trap();
-        }
-        else
-        {
-            module->offset += 1;
-        }
+        escape_character_count += ch == '\\';
+        module->offset += 1;
     }
 
     auto end = module->offset;
-    module->offset += 1;
-    auto string_literal = module->content(start, end);
+    auto length = end - start - escape_character_count;
+    auto pointer = (u8*)arena_allocate_bytes(module->arena, length + 1, 1);
+    auto string_literal = String{ .pointer = pointer, .length = length };
+
+    for (u64 source_i = start, i = 0; source_i < end; source_i += 1, i += 1)
+    {
+        auto ch = module->content[source_i];
+        if (ch == '\\')
+        {
+            source_i += 1;
+            ch = module->content[source_i];
+            string_literal[i] = escape_character(ch);
+        }
+        else
+        {
+            string_literal[i] = ch;
+        }
+    }
+
+    expect_character(module, '"');
+
     return string_literal;
 }
 
@@ -855,11 +1154,14 @@ fn Token tokenize(Module* module)
                     String value_intrinsics[] = {
                         string_literal("align_of"),
                         string_literal("byte_size"),
+                        string_literal("enum_from_int"),
                         string_literal("enum_name"),
                         string_literal("extend"),
                         string_literal("integer_max"),
                         string_literal("int_from_enum"),
                         string_literal("int_from_pointer"),
+                        string_literal("max"),
+                        string_literal("min"),
                         string_literal("pointer_cast"),
                         string_literal("pointer_from_int"),
                         string_literal("select"),
@@ -1239,6 +1541,7 @@ fn Value* parse_aggregate_initialization(Module* module, Scope* scope, ValueBuil
         }
 
         auto field_index = field_count;
+        auto checkpoint = get_checkpoint(module);
         if (consume_character_if_match(module, '.'))
         {
             auto name = parse_identifier(module);
@@ -1363,6 +1666,7 @@ fn Value* parse_left(Module* module, Scope* scope, ValueBuilder builder)
 
                 switch (intrinsic)
                 {
+                    case ValueIntrinsic::enum_from_int:
                     case ValueIntrinsic::enum_name:
                     case ValueIntrinsic::extend:
                     case ValueIntrinsic::int_from_enum:
@@ -1375,6 +1679,7 @@ fn Value* parse_left(Module* module, Scope* scope, ValueBuilder builder)
                             UnaryId id;
                             switch (intrinsic)
                             {
+                                case ValueIntrinsic::enum_from_int: id = UnaryId::enum_from_int; break;
                                 case ValueIntrinsic::enum_name: id = UnaryId::enum_name; break;
                                 case ValueIntrinsic::extend: id = UnaryId::extend; break;
                                 case ValueIntrinsic::int_from_enum: id = UnaryId::int_from_enum; break;
@@ -1526,6 +1831,37 @@ fn Value* parse_left(Module* module, Scope* scope, ValueBuilder builder)
                         {
                             trap();
                         } break;
+                    case ValueIntrinsic::min:
+                    case ValueIntrinsic::max:
+                        {
+                            skip_space(module);
+                            expect_character(module, left_parenthesis);
+                            skip_space(module);
+                            auto left = parse_value(module, scope, {});
+                            skip_space(module);
+                            expect_character(module, ',');
+                            skip_space(module);
+                            auto right = parse_value(module, scope, {});
+                            skip_space(module);
+                            expect_character(module, right_parenthesis);
+
+                            BinaryId binary_id;
+                            switch (intrinsic)
+                            {
+                                case ValueIntrinsic::max: binary_id = BinaryId::max; break;
+                                case ValueIntrinsic::min: binary_id = BinaryId::min; break;
+                                default: unreachable();
+                            }
+
+                            *result = {
+                                .binary = {
+                                    .left = left,
+                                    .right = right,
+                                    .id = binary_id,
+                                },
+                                .id = ValueId::binary,
+                            };
+                        } break;
                     case ValueIntrinsic::count: unreachable();
                 }
             } break;
@@ -1536,7 +1872,26 @@ fn Value* parse_left(Module* module, Scope* scope, ValueBuilder builder)
 
                 skip_space(module);
 
-                if (module->content[module->offset] == '.')
+                auto checkpoint = get_checkpoint(module);
+                bool is_aggregate_initialization = false;
+                if (consume_character_if_match(module, '.'))
+                {
+                    auto identifier = parse_identifier(module);
+
+                    skip_space(module);
+                    is_aggregate_initialization = consume_character_if_match(module, '=');
+                    if (!is_aggregate_initialization)
+                    {
+                        if (!consume_character_if_match(module, ','))
+                        {
+                            report_error();
+                        }
+                    }
+                }
+
+                set_checkpoint(module, checkpoint);
+
+                if (is_aggregate_initialization)
                 {
                     result = parse_aggregate_initialization(module, scope, builder, right_bracket);
                 }
@@ -2819,16 +3174,23 @@ void parse(Module* module)
 
         auto global_name = parse_identifier(module);
 
+        Global* global_forward_declaration = 0;
         Global* last_global = module->first_global;
         while (last_global)
         {
             if (global_name.equal(last_global->variable.name))
             {
-                report_error();
-            }
+                global_forward_declaration = last_global;
+                if (last_global->variable.storage->id != ValueId::forward_declared_function)
+                {
+                    report_error();
+                }
 
-            if (!last_global->next)
-            {
+                if (last_global->linkage == Linkage::external)
+                {
+                    report_error();
+                }
+
                 break;
             }
 
@@ -2836,14 +3198,14 @@ void parse(Module* module)
         }
 
         Type* type_it = module->scope.types.first;
-        Type* forward_declaration = 0;
+        Type* type_forward_declaration = 0;
         while (type_it)
         {
             if (global_name.equal(type_it->name))
             {
                 if (type_it->id == TypeId::forward_declaration)
                 {
-                    forward_declaration = type_it;
+                    type_forward_declaration = type_it;
                     break;
                 }
                 else
@@ -2920,6 +3282,12 @@ void parse(Module* module)
             }
 
             auto global_keyword = (GlobalKeyword)i;
+
+            if (global_forward_declaration && global_keyword != GlobalKeyword::function)
+            {
+                report_error();
+            }
+
             switch (global_keyword)
             {
                 case GlobalKeyword::bits:
@@ -3137,206 +3505,73 @@ void parse(Module* module)
                     } break;
                 case GlobalKeyword::function:
                     {
-                        auto calling_convention = CallingConvention::c;
-                        auto function_attributes = FunctionAttributes{};
-                        bool is_variable_arguments = false;
+                        auto mandate_argument_names = true;
+                        auto function_header = parse_function_header(module, scope, mandate_argument_names);
 
-                        if (consume_character_if_match(module, left_bracket))
+                        auto function_type = function_header.type;
+                        auto function_attributes = function_header.attributes;
+
+                        auto semantic_argument_types = function_type->function.base.semantic_argument_types;
+
+                        auto pointer_to_function_type = get_pointer_type(module, function_type);
+
+                        Global* global = 0;
+                        if (global_forward_declaration)
                         {
-                            while (module->offset < module->content.length)
+                            global = global_forward_declaration;
+                            if (global_forward_declaration->variable.type != function_type)
                             {
-                                auto function_identifier = parse_identifier(module);
-
-                                enum class FunctionKeyword
-                                {
-                                    cc,
-                                    count,
-                                };
-
-                                String function_keywords[] = {
-                                    string_literal("cc"),
-                                };
-                                static_assert(array_length(function_keywords) == (u64)FunctionKeyword::count);
-
-                                backing_type(FunctionKeyword) i;
-                                for (i = 0; i < (backing_type(FunctionKeyword))(FunctionKeyword::count); i += 1)
-                                {
-                                    auto function_keyword = function_keywords[i];
-                                    if (function_keyword.equal(function_identifier))
-                                    {
-                                        break;
-                                    }
-                                }
-
-                                auto function_keyword = (FunctionKeyword)i;
-                                skip_space(module);
-
-                                switch (function_keyword)
-                                {
-                                    case FunctionKeyword::cc:
-                                        {
-                                            expect_character(module, left_parenthesis);
-                                            skip_space(module);
-                                            auto calling_convention_string = parse_identifier(module);
-                                            String calling_conventions[] = {
-                                                string_literal("c"),
-                                            };
-                                            static_assert(array_length(calling_conventions) == (u64)CallingConvention::count);
-
-                                            backing_type(CallingConvention) i;
-                                            for (i = 0; i < (backing_type(CallingConvention))CallingConvention::count; i += 1)
-                                            {
-                                                auto calling_convention = calling_conventions[i];
-                                                if (calling_convention.equal(calling_convention_string))
-                                                {
-                                                    break;
-                                                }
-                                            }
-
-                                            auto candidate_calling_convention = (CallingConvention)i;
-                                            if (candidate_calling_convention == CallingConvention::count)
-                                            {
-                                                report_error();
-                                            }
-
-                                            calling_convention = candidate_calling_convention;
-
-                                            skip_space(module);
-                                            expect_character(module, right_parenthesis);
-                                        } break;
-                                    case FunctionKeyword::count:
-                                        {
-                                            report_error();
-                                        } break;
-                                }
-
-                                skip_space(module);
-
-                                if (consume_character_if_match(module, right_bracket))
-                                {
-                                    break;
-                                }
-                                else
-                                {
-                                    report_error();
-                                }
-                            }
-                        }
-
-                        skip_space(module);
-
-                        expect_character(module, left_parenthesis);
-
-                        Type* semantic_argument_type_buffer[64];
-                        String semantic_argument_name_buffer[64];
-                        u32 argument_line_buffer[64];
-                        u32 semantic_argument_count = 0;
-
-                        while (module->offset < module->content.length)
-                        {
-                            skip_space(module);
-
-                            if (consume_character_if_match(module, '.'))
-                            {
-                                expect_character(module, '.');
-                                expect_character(module, '.');
-                                skip_space(module);
-                                expect_character(module, right_parenthesis);
-                                is_variable_arguments = true;
-                                break;
+                                report_error();
                             }
 
-                            if (consume_character_if_match(module, right_parenthesis))
-                            {
-                                break;
-                            }
+                            assert(global_forward_declaration->variable.storage->type == pointer_to_function_type);
 
-                            auto line = get_line(module);
-                            argument_line_buffer[semantic_argument_count] = line;
-
-                            auto argument_name = parse_identifier(module);
-                            semantic_argument_name_buffer[semantic_argument_count] = argument_name;
-
-                            skip_space(module);
-
-                            expect_character(module, ':');
-
-                            skip_space(module);
-
-                            auto argument_type = parse_type(module, scope);
-                            semantic_argument_type_buffer[semantic_argument_count] = argument_type;
-
-                            skip_space(module);
-
-                            unused(consume_character_if_match(module, ','));
-
-                            semantic_argument_count += 1;
+                            global->variable.name = global_name;
+                            global->variable.line = global_line;
+                            global->variable.column = global_column;
                         }
-
-                        skip_space(module);
-
-                        auto return_type = parse_type(module, scope);
-
-                        skip_space(module);
-
-                        Slice<Type*> argument_types = {};
-                        if (semantic_argument_count != 0)
+                        else
                         {
-                            argument_types = new_type_array(module, semantic_argument_count);
-                            memcpy(argument_types.pointer, semantic_argument_type_buffer, semantic_argument_count * sizeof(Type*));
+                            auto storage = new_value(module);
+                            *storage = {
+                                .type = pointer_to_function_type,
+                                .id = ValueId::forward_declared_function,
+                                // TODO? .kind = ValueKind::left,
+                            };
+
+                            global = new_global(module);
+                            *global = {
+                                .variable = {
+                                    .storage = storage,
+                                    .initial_value = 0,
+                                    .type = function_type,
+                                    .scope = scope,
+                                    .name = global_name,
+                                    .line = global_line,
+                                    .column = global_column,
+                                },
+                                .linkage = (is_export | is_extern) ? Linkage::external : Linkage::internal,
+                            };
                         }
 
-                        auto is_declaration = consume_character_if_match(module, ';');
-
-                        auto function_type = type_allocate_init(module, {
-                            .function = {
-                                .semantic_return_type = return_type,
-                                .semantic_argument_types = argument_types,
-                                .calling_convention = calling_convention,
-                                .is_variable_arguments = is_variable_arguments,
-                            },
-                            .id = TypeId::function,
-                            .name = string_literal(""),
-                            .scope = &module->scope,
-                        });
-
-                        auto storage = new_value(module);
-                        *storage = {
-                            .type = get_pointer_type(module, function_type),
-                            .id = ValueId::external_function,
-                            // TODO? .kind = ValueKind::left,
-                        };
-                        auto global = new_global(module);
-                        *global = {
-                            .variable = {
-                                .storage = storage,
-                                .initial_value = 0,
-                                .type = function_type,
-                                .scope = scope,
-                                .name = global_name,
-                                .line = global_line,
-                                .column = global_column,
-                            },
-                            .linkage = (is_export | is_extern) ? Linkage::external : Linkage::internal,
-                        };
-
-                        if (!is_declaration)
+                        if (!consume_character_if_match(module, ';'))
                         {
                             module->current_function = global;
-                            Slice<Argument> arguments = arena_allocate<Argument>(module->arena, semantic_argument_count);
-                            for (u32 i = 0; i < semantic_argument_count; i += 1)
+                            Slice<Argument> arguments = arena_allocate<Argument>(module->arena, semantic_argument_types.length);
+                            for (u32 i = 0; i < semantic_argument_types.length; i += 1)
                             {
                                 Argument* argument = &arguments[i];
-                                auto name = semantic_argument_name_buffer[i];
-                                auto* type = semantic_argument_type_buffer[i];
-                                auto line = argument_line_buffer[i];
+                                auto header_argument = function_header.arguments[i];
+                                auto name = header_argument.name;
+                                auto* type = semantic_argument_types[i];
+                                auto line = header_argument.line;
 
                                 *argument = {
                                     .variable = {
                                         .storage = 0,
                                         .initial_value = 0,
                                         .type = type,
-                                        .scope = &storage->function.scope,
+                                        .scope = &global->variable.storage->function.scope,
                                         .name = name,
                                         .line = line,
                                         .column = 0,
@@ -3345,7 +3580,7 @@ void parse(Module* module)
                                 };
                             }
 
-                            storage->function = {
+                            global->variable.storage->function = {
                                 .arguments = arguments,
                                 .scope = {
                                     .parent = scope,
@@ -3356,9 +3591,9 @@ void parse(Module* module)
                                 .block = 0,
                                 .attributes = function_attributes,
                             };
-                            storage->id = ValueId::function;
+                            global->variable.storage->id = ValueId::function;
 
-                            storage->function.block = parse_block(module, &storage->function.scope);
+                            global->variable.storage->function.block = parse_block(module, &global->variable.storage->function.scope);
                             module->current_function = 0;
                         }
                     } break;
@@ -3528,9 +3763,9 @@ void parse(Module* module)
                         skip_space(module);
 
                         Type* struct_type;
-                        if (forward_declaration)
+                        if (type_forward_declaration)
                         {
-                            struct_type = forward_declaration;
+                            struct_type = type_forward_declaration;
                         }
                         else
                         {
@@ -3642,9 +3877,9 @@ void parse(Module* module)
                         expect_character(module, left_brace);
 
                         Type* union_type;
-                        if (forward_declaration)
+                        if (type_forward_declaration)
                         {
-                            union_type = forward_declaration;
+                            union_type = type_forward_declaration;
                         }
                         else
                         {

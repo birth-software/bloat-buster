@@ -1,0 +1,22 @@
+SomeEnum = enum
+{
+    a,
+    b,
+    c,
+    d,
+    e,
+    f,
+}
+
+foo = fn () [2]SomeEnum
+{
+    return [ .f, .e ];
+}
+
+[export] main = fn [cc(c)] () s32
+{
+    >result = foo();
+    if (result[0] != .f) #trap();
+    if (result[1] != .e) #trap();
+    return 0;
+}

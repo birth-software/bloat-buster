@@ -181,12 +181,12 @@ fn String compile_file(Arena* arena, Compile options)
 
     String c_abi_library = string_literal("build/libc_abi.a");
     String llvm_bindings_library = string_literal("build/libllvm_bindings.a");
-    Slice<String> library_names = {};
-    Slice<String> library_paths = {};
     String library_buffer[256];
+    String library_directory = {};
 
     Slice<String> library_directories = {};
-    String library_directory = {};
+    Slice<String> library_names = {};
+    Slice<String> library_paths = {};
 
     if (is_compiler)
     {
@@ -435,6 +435,10 @@ global_variable String names[] =
     string_literal("opaque"),
     string_literal("basic_struct_passing"),
     string_literal("enum_arbitrary_abi"),
+    string_literal("enum_debug_info"),
+    string_literal("return_array"),
+    string_literal("bool_pair"),
+    string_literal("min_max"),
 };
 
 void entry_point(Slice<char* const> arguments, Slice<char* const> envp)
