@@ -3,10 +3,12 @@
 enum class ValueIntrinsic
 {
     align_of,
+    build_mode,
     byte_size,
     enum_from_int,
     enum_name,
     extend,
+    has_debug_info,
     integer_max,
     int_from_enum,
     int_from_pointer,
@@ -1153,10 +1155,12 @@ fn Token tokenize(Module* module)
 
                     String value_intrinsics[] = {
                         string_literal("align_of"),
+                        string_literal("build_mode"),
                         string_literal("byte_size"),
                         string_literal("enum_from_int"),
                         string_literal("enum_name"),
                         string_literal("extend"),
+                        string_literal("has_debug_info"),
                         string_literal("integer_max"),
                         string_literal("int_from_enum"),
                         string_literal("int_from_pointer"),
@@ -1790,6 +1794,7 @@ fn Value* parse_left(Module* module, Scope* scope, ValueBuilder builder)
                         } break;
                     case ValueIntrinsic::trap:
                     case ValueIntrinsic::va_start:
+                    case ValueIntrinsic::has_debug_info:
                         {
                             skip_space(module);
                             expect_character(module, left_parenthesis);
@@ -1801,6 +1806,7 @@ fn Value* parse_left(Module* module, Scope* scope, ValueBuilder builder)
                             {
                                 case ValueIntrinsic::trap: id = ValueId::trap; break;
                                 case ValueIntrinsic::va_start: id = ValueId::va_start; break;
+                                case ValueIntrinsic::has_debug_info: id = ValueId::has_debug_info; break;
                                 default: unreachable();
                             }
                             *result = {
@@ -1860,6 +1866,12 @@ fn Value* parse_left(Module* module, Scope* scope, ValueBuilder builder)
                                     .id = binary_id,
                                 },
                                 .id = ValueId::binary,
+                            };
+                        } break;
+                    case ValueIntrinsic::build_mode:
+                        {
+                            *result = {
+                                .id = ValueId::build_mode,
                             };
                         } break;
                     case ValueIntrinsic::count: unreachable();
@@ -3477,8 +3489,7 @@ void parse(Module* module)
                                 };
                             }
 
-                            auto needed_bit_count = 64 - (u32)clz(highest_value);
-                            needed_bit_count = needed_bit_count ? needed_bit_count : 1;
+                            auto needed_bit_count = enum_bit_count(highest_value);
 
                             if (!backing_type)
                             {

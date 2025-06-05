@@ -5449,8 +5449,15 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile) void
     >base_name = relative_file_path[base_start..extension_start];
 
     >is_compiler = string_equal(relative_file_path, "src/compiler.bbb");
-    >outputh_path_dir = arena_join_string(arena, [
+    >base_dir = arena_join_string(arena, [
         base_cache_dir,
+        "/",
+        #enum_name(#build_mode),
+        "_",
+        #select(#has_debug_info(), "di", "nodi"),
+    ][..]);
+    >outputh_path_dir = arena_join_string(arena, [
+        base_dir,
         #select(is_compiler, "/compiler/", "/"),
         #enum_name(compile_options.build_mode),
         "_",
@@ -5458,11 +5465,14 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile) void
     ][..]);
 
     os_make_directory(base_cache_dir.pointer);
+    os_make_directory(base_dir.pointer);
+
     if (is_compiler)
     {
-        >compiler_dir = arena_join_string(arena, [ base_cache_dir, "/compiler" ][..]);
+        >compiler_dir = arena_join_string(arena, [ base_dir, "/compiler" ][..]);
         os_make_directory(compiler_dir.pointer);
     }
+
     os_make_directory(outputh_path_dir.pointer);
 
     >outputh_path_base = arena_join_string(arena, [ outputh_path_dir, "/", base_name ][..]);
