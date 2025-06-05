@@ -2609,6 +2609,52 @@ fn void copy_block(Module* module, Scope* parent_scope, BlockCopy copy)
     }
 }
 
+fn Type* get_build_mode_enum(Module* module)
+{
+    auto result = module->build_mode_enum;
+
+    if (!result)
+    {
+        String enum_names[] = {
+            string_literal("debug_none"),
+            string_literal("debug"),
+            string_literal("soft_optimize"),
+            string_literal("optimize_for_speed"),
+            string_literal("optimize_for_size"),
+            string_literal("aggressively_optimize_for_speed"),
+            string_literal("aggressively_optimize_for_size"),
+        };
+
+        auto enum_fields = arena_allocate<EnumField>(module->arena, array_length(enum_names));
+
+        u64 field_value = 0;
+        for (String enum_name : enum_names)
+        {
+            enum_fields[field_value] = {
+                .name = enum_name,
+                .value = field_value,
+            };
+
+            field_value += 1;
+        }
+
+        auto backing_type = integer_type(module, { .bit_count = array_length(enum_names) - 1, .is_signed = false });
+
+        result = type_allocate_init(module, {
+            .enumerator = {
+                .fields = enum_fields,
+                .backing_type = backing_type,
+            },
+            .id = TypeId::enumerator,
+            .name = string_literal("BuildMode"),
+            .scope = &module->scope,
+        });
+    }
+
+    assert(result);
+    return result;
+}
+
 fn void analyze_type(Module* module, Value* value, Type* expected_type, TypeAnalysis analysis)
 {
     assert(!value->type);
@@ -2829,6 +2875,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, TypeAnal
                             typecheck(module, expected_type, string_type);
                             analyze_type(module, unary_value, 0, { .must_be_constant = analysis.must_be_constant });
                             auto enum_type = unary_value->type;
+                            resolve_type_in_place(module, enum_type);
                             if (enum_type->id != TypeId::enumerator)
                             {
                                 report_error();
@@ -4340,6 +4387,22 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, TypeAnal
                 // END of scope
                 module->current_macro_instantiation = current_macro_instantiation;
                 module->current_function = current_function;
+            } break;
+        case ValueId::build_mode:
+            {
+                value_type = get_build_mode_enum(module);
+                if (expected_type)
+                {
+                    // typecheck(module, expected_type);
+                    trap();
+                }
+
+                typecheck(module, expected_type, value_type);
+            } break;
+        case ValueId::has_debug_info:
+            {
+                value_type = uint1(module);
+                typecheck(module, expected_type, value_type);
             } break;
         default: unreachable();
     }
@@ -7645,6 +7708,14 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind, bool expect
         case ValueId::undefined:
             {
                 llvm_value = LLVMGetPoison(get_llvm_type(resolved_value_type, type_kind));
+            } break;
+        case ValueId::build_mode:
+            {
+                llvm_value = LLVMConstInt(get_llvm_type(resolved_value_type->enumerator.backing_type, type_kind), (u64)module->build_mode, false);
+            } break;
+        case ValueId::has_debug_info:
+            {
+                llvm_value = LLVMConstInt(get_llvm_type(resolved_value_type, type_kind), module->has_debug_info, false);
             } break;
         default: unreachable();
     }

@@ -336,7 +336,7 @@ enum class TypeId
 
 struct TypeInteger
 {
-    u32 bit_count;
+    u64 bit_count;
     bool is_signed;
 };
 
@@ -840,6 +840,8 @@ enum class ValueId
     string_to_enum,
     local,
     argument,
+    build_mode,
+    has_debug_info,
 };
 
 struct ValueConstantInteger
@@ -1293,6 +1295,7 @@ struct Module
     Type* first_function_type;
 
     Type* va_list_type;
+    Type* build_mode_enum;
 
     Value* void_value;
     Global* first_global;
@@ -2036,6 +2039,13 @@ fn Type* resolve_alias(Module* module, Type* type)
     return result_type;
 }
 
+
+fn u64 enum_bit_count(u64 highest_value)
+{
+    auto needed_bit_count = 64 - (u64)clz(highest_value);
+    needed_bit_count = needed_bit_count ? needed_bit_count : 1;
+    return needed_bit_count;
+}
 
 struct ArgBuilder
 {
