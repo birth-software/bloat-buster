@@ -599,7 +599,6 @@ void entry_point(Slice<char* const> arguments, Slice<char* const> envp)
                             .silent = true,
                             });
 
-#if BB_DEBUG == 0 || BB_CI == 0
                     for (auto name: names)
                     {
                         BuildMode build_mode = BuildMode::debug_none;
@@ -621,14 +620,13 @@ void entry_point(Slice<char* const> arguments, Slice<char* const> envp)
                         auto success = execution.termination_kind == TerminationKind::exit && execution.termination_code == 0;
                         if (!success)
                         {
-                            print(string_literal("Self-hosted test failed: "));
+                            print(string_literal("Self-hosted test failed to compile: "));
                             print(name);
                             print(string_literal("\n"));
                             bb_fail();
                         }
                         break;
                     }
-#endif
                 }
             }
         } break;
