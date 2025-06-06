@@ -7,6 +7,7 @@ enum class ValueIntrinsic
     byte_size,
     enum_from_int,
     enum_name,
+    enum_values,
     extend,
     has_debug_info,
     integer_max,
@@ -1159,6 +1160,7 @@ fn Token tokenize(Module* module)
                         string_literal("byte_size"),
                         string_literal("enum_from_int"),
                         string_literal("enum_name"),
+                        string_literal("enum_values"),
                         string_literal("extend"),
                         string_literal("has_debug_info"),
                         string_literal("integer_max"),
@@ -1711,6 +1713,7 @@ fn Value* parse_left(Module* module, Scope* scope, ValueBuilder builder)
                         } break;
                     case ValueIntrinsic::align_of:
                     case ValueIntrinsic::byte_size:
+                    case ValueIntrinsic::enum_values:
                     case ValueIntrinsic::integer_max:
                         {
                             skip_space(module);
@@ -1726,6 +1729,7 @@ fn Value* parse_left(Module* module, Scope* scope, ValueBuilder builder)
                             {
                                 case ValueIntrinsic::align_of: id = UnaryTypeId::align_of; break;
                                 case ValueIntrinsic::byte_size: id = UnaryTypeId::byte_size; break;
+                                case ValueIntrinsic::enum_values: id = UnaryTypeId::enum_values; break;
                                 case ValueIntrinsic::integer_max: id = UnaryTypeId::integer_max; break;
                                 default: unreachable();
                             }

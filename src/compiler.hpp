@@ -895,6 +895,7 @@ enum class UnaryTypeId
 {
     align_of,
     byte_size,
+    enum_values,
     integer_max,
 };
 

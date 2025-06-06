@@ -599,75 +599,22 @@ void entry_point(Slice<char* const> arguments, Slice<char* const> envp)
                         .silent = true,
                     });
 
-                    Slice<String> name_slice = array_to_slice(names);
-                    for (auto name: name_slice(0, 1))
+                    char* const compiler_arguments[] =
                     {
-                        for (BuildMode build_mode = BuildMode::debug_none; build_mode < BuildMode::count; build_mode = (BuildMode)((backing_type(BuildMode))build_mode + 1))
-                        {
-                            for (bool has_debug_info : has_debug_info_array)
-                            {
-                                // COMPILATION START
-
-                                String relative_file_path_parts[] = { string_literal("tests/"), name, string_literal(".bbb") };
-                                auto relative_file_path = arena_join_string(arena, array_to_slice(relative_file_path_parts));
-                                char* const compiler_arguments[] =
-                                {
-                                    (char*)compiler.pointer,
-                                    (char*)"compile",
-                                    (char*)relative_file_path.pointer,
-                                    (char*)build_mode_to_string(build_mode).pointer,
-                                    (char*)(has_debug_info ? "true" : "false"),
-                                    0,
-                                };
-                                Slice<char* const> arg_slice = array_to_slice(compiler_arguments);
-                                arg_slice.length -= 1;
-                                auto execution = os_execute(arena, arg_slice, environment, {});
-                                auto success = execution.termination_kind == TerminationKind::exit && execution.termination_code == 0;
-                                if (!success)
-                                {
-                                    print(string_literal("Self-hosted test failed to compile: "));
-                                    print(name);
-                                    print(string_literal("\n"));
-                                    bb_fail();
-                                }
-
-                                // COMPILATION END
-
-                                // RUN START
-
-                                String exe_parts[] = {
-                                    string_literal("self-hosted-bb-cache/"),
-                                    build_mode_to_string(compiler_build_mode),
-                                    string_literal("_"),
-                                    compiler_has_debug_info ? string_literal("di") : string_literal("nodi"),
-                                    string_literal("/"),
-                                    build_mode_to_string(build_mode),
-                                    string_literal("_"),
-                                    has_debug_info ? string_literal("di") : string_literal("nodi"),
-                                    string_literal("/"),
-                                    name,
-                                };
-                                String exe_path = arena_join_string(arena, array_to_slice(exe_parts));
-                                char* const run_arguments[] =
-                                {
-                                    (char*)exe_path.pointer,
-                                    0,
-                                };
-                                arg_slice = array_to_slice(run_arguments);
-                                arg_slice.length -= 1;
-                                execution = os_execute(arena, arg_slice, environment, {});
-                                success = execution.termination_kind == TerminationKind::exit && execution.termination_code == 0;
-                                if (!success)
-                                {
-                                    print(string_literal("Self-hosted test failed to run: "));
-                                    print(name);
-                                    print(string_literal("\n"));
-                                    bb_fail();
-                                }
-
-                                // RUN END
-                            }
-                        }
+                        (char*)compiler.pointer,
+                        (char*)"test",
+                        0,
+                    };
+                    Slice<char* const> arg_slice = array_to_slice(compiler_arguments);
+                    arg_slice.length -= 1;
+                    auto execution = os_execute(arena, arg_slice, environment, {});
+                    auto success = execution.termination_kind == TerminationKind::exit && execution.termination_code == 0;
+                    if (!success)
+                    {
+                        print(string_literal("Self-hosted tests failed to compile: "));
+                        print(build_mode_to_string(compiler_build_mode));
+                        print(compiler_has_debug_info ? string_literal(" with debug info\n") : string_literal(" with no debug info\n"));
+                        bb_fail();
                     }
                 }
             }

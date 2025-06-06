@@ -77,9 +77,16 @@ O = bits u32
 
 [extern] open = fn [cc(c)] (path: &u8, o: O, ...) int;
 [extern] close = fn [cc(c)] (fd: File) int;
+[extern] dup2 = fn [cc(c)] (old_fd: s32, new_fd: s32) s32;
+[extern] pipe = fn [cc(c)] (fd: &[2]s32) s32;
+
 [extern] fstat = fn [cc(c)] (fd: File, s: &Stat) int;
 [extern] write = fn [cc(c)] (fd: File, pointer: &u8, byte_count: u64) ssize;
 [extern] read = fn [cc(c)] (fd: File, pointer: &u8, byte_count: u64) ssize;
+
+[extern] fork = fn [cc(c)] () s32;
+[extern] execve = fn [cc(c)] (name: &u8, arguments: &&u8, environment: &&u8) s32;
+[extern] waitpid = fn [cc(c)] (pid: s32, wait_status: &u32, options: s32) s32;
 
 assert = macro (ok: u1) void
 {
@@ -515,6 +522,217 @@ arena_join_string = fn (arena: &Arena, pieces: [][]u8) []u8
     pointer[i] = 0;
 
     return pointer[..size];
+}
+
+exit_status = fn (s: u32) u8
+{
+    return #truncate((s & 0xff00) >> 8);
+}
+
+term_sig = fn (s: u32) u32
+{
+    return s & 0x7f;
+}
+
+stop_sig = fn (s: u32) u32
+{
+    return #extend(exit_status(s));
+}
+
+if_exited = fn (s: u32) u1
+{
+    return term_sig(s) == 0;
+}
+
+if_stopped = fn (s: u32) u1
+{
+    >v: u16 = #truncate(((s & 0xffff) * 0x10001) >> 8);
+    return v > 0x7f00;
+}
+
+if_signaled = fn (s: u32) u1
+{
+    return (s & 0xffff) - 1 < 0xff;
+}
+
+TerminationKind = enum
+{
+    unknown,
+    exit,
+    signal,
+    stop,
+}
+
+Execution = struct
+{
+    streams: [2][]u8,
+    termination_kind: TerminationKind,
+    termination_code: u32,
+}
+
+StreamPolicy = enum
+{
+    inherit,
+    pipe,
+    ignore,
+}
+
+ExecutionOptions = struct
+{
+    policies: [2]StreamPolicy,
+    null_fd: s32,
+    null_fd_valid: u1,
+}
+
+os_execute = fn (arena: &Arena, arguments: []&u8, environment: &&u8, options: ExecutionOptions) Execution
+{
+    assert(arguments.pointer[arguments.length] == zero);
+
+    >result: Execution = zero;
+
+    >null_file_descriptor: s32 = -1;
+    if (options.null_fd_valid)
+    {
+        null_file_descriptor = options.null_fd;
+        assert(null_file_descriptor >= 0);
+    }
+    else if (options.policies[0] == .ignore or options.policies[1] == .ignore)
+    {
+        null_file_descriptor = open("/dev/null", { .access_mode = .write_only, zero });
+        assert(null_file_descriptor >= 0);
+    }
+
+    >pipes: [2][2]s32 = undefined;
+
+    for (i: 0..2)
+    {
+        if (options.policies[i] == .pipe)
+        {
+            if (pipe(&pipes[i]) == -1)
+            {
+                #trap();
+            }
+        }
+    }
+
+    >pid = fork();
+
+    switch (pid)
+    {
+        -1 =>
+        {
+            #trap();
+        },
+        0 =>
+        {
+            for (i: 0..2)
+            {
+                >fd: s32 = #truncate(i + 1);
+
+                switch (options.policies[i])
+                {
+                    .inherit => {},
+                    .pipe =>
+                    {
+                        close(pipes[i][0]);
+                        dup2(pipes[i][1], fd);
+                        close(pipes[i][1]);
+                    },
+                    .ignore =>
+                    {
+                        dup2(null_file_descriptor, fd);
+                        close(null_file_descriptor);
+                    },
+                }
+            }
+
+            >result = execve(arguments[0], arguments.pointer, environment);
+
+            if (result != -1)
+            {
+                unreachable;
+            }
+
+            #trap();
+        },
+        else =>
+        {
+            for (i: 0..2)
+            {
+                if (options.policies[i] == .pipe)
+                {
+                    close(pipes[i][1]);
+                }
+            }
+
+            // TODO: better allocation strategy
+            >allocation_size: u64 = 1024 * 1024;
+            >allocation: []u8 = zero;
+            >is_pipe0 = options.policies[0] == .pipe;
+            >is_pipe1 = options.policies[1] == .pipe;
+            if (is_pipe0 or is_pipe1)
+            {
+                allocation = arena_allocate_slice[u8](arena, allocation_size * (#extend(is_pipe0) + #extend(is_pipe1)));
+            }
+
+            >offset: u64 = 0;
+
+            for (i: 0..2)
+            {
+                if (options.policies[i] == .pipe)
+                {
+                    >buffer = allocation[offset..offset + allocation_size];
+                    >byte_count = read(pipes[i][0], buffer.pointer, buffer.length);
+                    assert(byte_count >= 0);
+                    result.streams[i] = buffer[..#extend(byte_count)];
+                    close(pipes[i][0]);
+
+                    offset += allocation_size;
+                }
+            }
+
+            >status: u32 = 0;
+            >waitpid_result = waitpid(pid, &status, 0);
+
+            if (waitpid_result == pid)
+            {
+                if (if_exited(status))
+                {
+                    result.termination_kind = .exit;
+                    result.termination_code = #extend(exit_status(status));
+                }
+                else if (if_signaled(status))
+                {
+                    result.termination_kind = .signal;
+                    result.termination_code = term_sig(status);
+                }
+                else if (if_stopped(status))
+                {
+                    result.termination_kind = .stop;
+                    result.termination_code = stop_sig(status);
+                }
+                else
+                {
+                    result.termination_kind = .unknown;
+                }
+
+                if (!options.null_fd_valid and null_file_descriptor > 0)
+                {
+                    close(null_file_descriptor);
+                }
+            }
+            else if (waitpid_result == -1)
+            {
+                #trap();
+            }
+            else
+            {
+                #trap();
+            }
+        },
+    }
+
+    return result;
 }
 
 file_read = fn (arena: &Arena, path: []u8) []u8
@@ -5420,7 +5638,7 @@ compile = fn (arena: &Arena, options: CompileOptions) void
     emit(&module);
 }
 
-compile_file = fn (arena: &Arena, compile_options: CompileFile) void
+compile_file = fn (arena: &Arena, compile_options: CompileFile) []u8
 {
     >relative_file_path = compile_options.relative_file_path;
     if (relative_file_path.length < 5)
@@ -5514,19 +5732,26 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile) void
     };
 
     compile(arena, options);
+
+    return output_executable_path;
 }
 
-[export] main = fn [cc(c)] (argument_count: u32, argv: &&u8) s32
+names: [_][]u8 = [
+    "minimal",
+];
+
+[export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
 {
     global_state_initialize();
     >arena = global_state.arena;
 
-    if (argument_count < 2)
+    >arguments = argv[..#extend(argument_count)];
+    if (arguments.length < 2)
     {
         return 1;
     }
 
-    >command_string = c_string_to_slice(argv[1]);
+    >command_string = c_string_to_slice(arguments[1]);
 
     >command_string_to_enum = #string_to_enum(CompilerCommand, command_string);
     if (!command_string_to_enum.is_valid)
@@ -5539,7 +5764,7 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile) void
     {
         .compile =>
         {
-            if (argument_count < 3)
+            if (arguments.length < 3)
             {
                 return 1;
             }
@@ -5549,7 +5774,7 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile) void
 
             if (argument_count >= 4)
             {
-                >build_mode_string_to_enum = #string_to_enum(BuildMode, c_string_to_slice(argv[3]));
+                >build_mode_string_to_enum = #string_to_enum(BuildMode, c_string_to_slice(arguments[3]));
                 if (!build_mode_string_to_enum.is_valid)
                 {
                     return 1;
@@ -5559,7 +5784,7 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile) void
 
             if (argument_count >= 5)
             {
-                >has_debug_info_string = c_string_to_slice(argv[4]);
+                >has_debug_info_string = c_string_to_slice(arguments[4]);
                 if (string_equal(has_debug_info_string, "true"))
                 {
                     has_debug_info = 1;
@@ -5574,7 +5799,7 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile) void
                 }
             }
 
-            >relative_file_path_pointer = argv[2];
+            >relative_file_path_pointer = arguments[2];
             if (!relative_file_path_pointer)
             {
                 return 1;
@@ -5591,8 +5816,47 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile) void
         },
         .test =>
         {
-            // TODO
-            #trap();
+            if (arguments.length != 2)
+            {
+                report_error();
+            }
+
+            >debug_info_array: [_]u1 = [1, 0];
+            for (name: names)
+            {
+                for (build_mode: #enum_values(BuildMode))
+                {
+                    for (has_debug_info: debug_info_array)
+                    {
+                        >position = arena.position;
+
+                        >relative_file_path = arena_join_string(arena, [ "tests/", name, ".bbb" ][..]);
+                        >compiler_path = compile_file(arena, {
+                            .relative_file_path = relative_file_path,
+                            .build_mode = build_mode,
+                            .has_debug_info = has_debug_info,
+                            .silent = 1,
+                        });
+
+                        >arguments: [_]&u8 = [
+                            compiler_path.pointer,
+                            "test",
+                            zero,
+                        ];
+                        >args = arguments[..arguments.length - 1];
+                        >execution = os_execute(arena, args, envp, zero);
+
+                        >success = execution.termination_kind == .exit and execution.termination_code == 0;
+
+                        if (!success)
+                        {
+                            #trap();
+                        }
+
+                        arena.position = position;
+                    }
+                }
+            }
         },
     }
 

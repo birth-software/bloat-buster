@@ -1215,6 +1215,7 @@ fn Type* resolve_type(Module* module, Type* type)
             } break;
         case TypeId::void_type:
         case TypeId::integer:
+        case TypeId::enumerator:
             {
                 result = type;
             } break;
@@ -3054,43 +3055,79 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, TypeAnal
                 value->unary_type.type = unary_type;
                 auto unary_type_id = value->unary_type.id;
 
-                if (expected_type)
+                if (unary_type_id == UnaryTypeId::enum_values)
                 {
-                    value_type = expected_type;
+                    auto element_type = unary_type;
+
+                    if (element_type->id != TypeId::enumerator)
+                    {
+                        report_error();
+                    }
+
+                    auto fields = unary_type->enumerator.fields;
+                    auto element_count = fields.length;
+                    if (element_count == 0)
+                    {
+                        report_error();
+                    }
+
+                    auto array_type = get_array_type(module, element_type, element_count);
+                    switch (value->kind)
+                    {
+                        case ValueKind::right:
+                            {
+                                value_type = array_type;
+                            } break;
+                        case ValueKind::left:
+                            {
+                                value_type = get_pointer_type(module, array_type);
+                            } break;
+                    }
                 }
                 else
                 {
-                    value_type = unary_type;
-                }
+                    if (expected_type)
+                    {
+                        value_type = expected_type;
+                    }
+                    else
+                    {
+                        value_type = unary_type;
+                    }
 
-                assert(value_type);
-                if (value_type->id != TypeId::integer)
-                {
-                    report_error();
-                }
+                    assert(value_type);
+                    if (value_type->id != TypeId::integer)
+                    {
+                        report_error();
+                    }
 
-                u64 value;
-                auto max_value = integer_max_value(value_type->integer.bit_count, value_type->integer.is_signed);
-                switch (unary_type_id)
-                {
-                    case UnaryTypeId::align_of:
-                        {
-                            value = get_byte_alignment(unary_type);
-                        } break;
-                    case UnaryTypeId::byte_size:
-                        {
+                    u64 value;
+                    auto max_value = integer_max_value(value_type->integer.bit_count, value_type->integer.is_signed);
+                    switch (unary_type_id)
+                    {
+                        case UnaryTypeId::align_of:
+                            {
+                                value = get_byte_alignment(unary_type);
+                            } break;
+                        case UnaryTypeId::byte_size:
+                            {
 
-                            value = get_byte_size(unary_type);
-                        } break;
-                    case UnaryTypeId::integer_max:
-                        {
-                            value = integer_max_value(unary_type->integer.bit_count, unary_type->integer.is_signed);
-                        } break;
-                }
+                                value = get_byte_size(unary_type);
+                            } break;
+                        case UnaryTypeId::integer_max:
+                            {
+                                value = integer_max_value(unary_type->integer.bit_count, unary_type->integer.is_signed);
+                            } break;
+                        case UnaryTypeId::enum_values:
+                            {
+                                unreachable();
+                            } break;
+                    }
 
-                if (value > max_value)
-                {
-                    report_error();
+                    if (value > max_value)
+                    {
+                        report_error();
+                    }
                 }
 
                 typecheck(module, expected_type, value_type);
@@ -4827,6 +4864,7 @@ fn void invalidate_analysis(Module* module, Value* value)
     {
         case ValueId::variable_reference:
         case ValueId::constant_integer:
+        case ValueId::unary_type:
             break;
         case ValueId::aggregate_initialization:
             {
@@ -6953,6 +6991,43 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind, bool expect
                             auto constant_integer = LLVMConstInt(resolved_value_type->llvm.abi, max_value, is_signed);
                             llvm_value = constant_integer;
                         } break;
+                    case UnaryTypeId::enum_values:
+                        {
+                            LLVMValueRef buffer[64];
+                            assert(type_kind == TypeKind::memory);
+                            assert(unary_type->id == TypeId::enumerator);
+                            auto fields = unary_type->enumerator.fields;
+                            auto llvm_enum_type = unary_type->llvm.memory;
+                            u64 i = 0;
+                            for (auto& field : fields)
+                            {
+                                auto v = field.value;
+                                buffer[i] = LLVMConstInt(llvm_enum_type, v, false);
+                                i += 1;
+                            }
+                            auto array_value = LLVMConstArray2(llvm_enum_type, buffer, i);
+
+                            switch (value->kind)
+                            {
+                                case ValueKind::right:
+                                    {
+                                        llvm_value = array_value;
+                                    } break;
+                                case ValueKind::left:
+                                    {
+                                        auto is_constant = true;
+                                        assert(resolved_value_type->id == TypeId::pointer);
+                                        auto array_type = resolved_value_type->pointer.element_type;
+                                        assert(array_type->id == TypeId::array);
+                                        resolve_type_in_place(module, array_type);
+                                        auto value_array_variable = llvm_module_create_global_variable(module->llvm.module, array_type->llvm.memory, is_constant, LLVMInternalLinkage, array_value, string_literal("enum.values"), 0, LLVMNotThreadLocal, 0, 0);
+                                        auto alignment = get_byte_alignment(resolved_value_type);
+                                        LLVMSetAlignment(value_array_variable, alignment);
+                                        LLVMSetUnnamedAddress(value_array_variable, LLVMGlobalUnnamedAddr);
+                                        llvm_value = value_array_variable;
+                                    } break;
+                            }
+                        } break;
                 }
             } break;
         case ValueId::binary:
@@ -7541,6 +7616,21 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind, bool expect
                                                     case ValueId::constant_integer:
                                                         {
                                                             field_value = value->constant_integer.value;
+                                                        } break;
+                                                    case ValueId::enum_literal:
+                                                        {
+                                                            auto enum_name = value->enum_literal;
+                                                            auto value_type = value->type;
+                                                            assert(value_type->id == TypeId::enumerator);
+                                                            
+                                                            for (auto& field: value_type->enumerator.fields)
+                                                            {
+                                                                if (enum_name.equal(field.name))
+                                                                {
+                                                                    field_value = field.value;
+                                                                    break;
+                                                                }
+                                                            }
                                                         } break;
                                                     default: unreachable();
                                                 }
@@ -8228,6 +8318,14 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
 
                                 analyze_type(module, right, 0, {});
 
+                                if (right->kind == ValueKind::right)
+                                {
+                                    if (!is_slice(right->type))
+                                    {
+                                        reanalyze_type_as_left_value(module, right);
+                                    }
+                                }
+
                                 Type* aggregate_type = 0;
 
                                 switch (right->kind)
@@ -8235,10 +8333,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                                     case ValueKind::right:
                                         {
                                             aggregate_type = right->type;
-                                            if (!is_slice(aggregate_type))
-                                            {
-                                                report_error();
-                                            }
+                                            assert(is_slice(aggregate_type));
                                         } break;
                                     case ValueKind::left:
                                         {
