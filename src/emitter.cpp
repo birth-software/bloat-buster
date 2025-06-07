@@ -4445,6 +4445,51 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, TypeAnal
                 value_type = uint1(module);
                 typecheck(module, expected_type, value_type);
             } break;
+        case ValueId::field_parent_pointer:
+            {
+                auto field_pointer = value->field_parent_pointer.pointer;
+                auto field_name = value->field_parent_pointer.name;
+
+                if (!expected_type)
+                {
+                    report_error();
+                }
+
+                value_type = expected_type;
+
+                if (value_type->id != TypeId::pointer)
+                {
+                    report_error();
+                }
+
+                auto aggregate_type = value_type->pointer.element_type;
+
+                Type* field_type = 0;
+                switch (aggregate_type->id)
+                {
+                    case TypeId::structure:
+                        {
+                            auto fields = aggregate_type->structure.fields;
+                            for (auto& field : fields)
+                            {
+                                if (field_name.equal(field.name))
+                                {
+                                    field_type = field.type;
+                                    break;
+                                }
+                            }
+                        } break;
+                    default: report_error();
+                }
+
+                if (!field_type)
+                {
+                    report_error();
+                }
+
+                auto pointer_to_field = get_pointer_type(module, field_type);
+                analyze_type(module, field_pointer, pointer_to_field, {});
+            } break;
         default: unreachable();
     }
 
@@ -7812,6 +7857,49 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind, bool expect
         case ValueId::has_debug_info:
             {
                 llvm_value = LLVMConstInt(get_llvm_type(resolved_value_type, type_kind), module->has_debug_info, false);
+            } break;
+        case ValueId::field_parent_pointer:
+            {
+                auto field_pointer = value->field_parent_pointer.pointer;
+                auto field_name = value->field_parent_pointer.name;
+
+                emit_value(module, field_pointer, TypeKind::memory, false);
+                auto llvm_field_pointer = field_pointer->llvm;
+                assert(llvm_field_pointer);
+
+                assert(resolved_value_type->id == TypeId::pointer);
+                auto aggregate_type = resolved_value_type->pointer.element_type;
+
+                switch (aggregate_type->id)
+                {
+                    case TypeId::structure:
+                        {
+                            auto fields = aggregate_type->structure.fields;
+                            Field* result_field = 0;
+                            for (auto& field: fields)
+                            {
+                                if (field_name.equal(field.name))
+                                {
+                                    result_field = &field;
+                                    break;
+                                }
+                            }
+
+                            assert(result_field);
+                            auto offset = result_field->offset;
+                            auto u64_type = uint64(module);
+                            resolve_type_in_place(module, u64_type);
+                            auto llvm_u64 = u64_type->llvm.abi;
+                            auto address_int = LLVMBuildPtrToInt(module->llvm.builder, llvm_field_pointer, llvm_u64, "");
+
+                            address_int = LLVMBuildSub(module->llvm.builder, address_int, LLVMConstInt(llvm_u64, offset, false), "");
+
+                            auto address_pointer = LLVMBuildIntToPtr(module->llvm.builder, address_int, resolved_value_type->llvm.abi, "");
+                            llvm_value = address_pointer;
+                        } break;
+                    default:
+                        report_error();
+                }
             } break;
         default: unreachable();
     }

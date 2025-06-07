@@ -1,3 +1,8 @@
+report_error = fn () noreturn
+{
+    #trap();
+}
+
 mode_t = typealias u64;
 int = typealias s32;
 usize = typealias u64;
@@ -802,6 +807,7 @@ LLVMAttribute = opaque;
 
 LLVMMetadata = opaque;
 LLVMDIBuilder = opaque;
+LLVMDebugRecord = opaque;
 
 LLVMTarget = opaque;
 LLVMTargetDataLayout = opaque;
@@ -1418,6 +1424,21 @@ get_byte_size = fn (type: &Type) u64
     }
 }
 
+get_bit_size = fn (type: &Type) u64
+{
+    switch (type.id)
+    {
+        .integer =>
+        {
+            return type.content.integer.bit_count;
+        },
+        else =>
+        {
+            #trap();
+        },
+    }
+}
+
 get_byte_alignment = fn (type: &Type) u32
 {
     switch (type.id)
@@ -1490,6 +1511,9 @@ ValueId = enum
     unary,
     binary,
     string_literal,
+    variable,
+    local,
+    unary_type,
 }
 
 ValueConstantInteger = struct
@@ -1552,6 +1576,20 @@ ValueUnary = struct
 {
     value: &Value,
     id: UnaryId,
+}
+
+UnaryTypeId = enum
+{
+    align_of,
+    byte_size,
+    enum_values,
+    integer_max,
+}
+
+ValueUnaryType = struct
+{
+    type: &Type,
+    id: UnaryTypeId,
 }
 
 BinaryId = enum
@@ -1641,6 +1679,8 @@ ValueContent = union
     function: ValueFunction,
     unary: ValueUnary,
     binary: ValueBinary,
+    variable: &Variable,
+    unary_type: ValueUnaryType,
 }
 
 ValueKind = enum
@@ -1669,6 +1709,11 @@ value_is_constant = fn (value: &Value) u1
         .unary =>
         {
             return 0;
+        },
+        .variable =>
+        {
+            >variable = value.content.variable;
+            return value.kind == .left and variable.scope.kind == .global;
         },
         else =>
         {
@@ -1993,6 +2038,10 @@ LLVMICmpPredicate = enum u32
 
 [extern] LLVMDIBuilderCreateLexicalBlock = fn [cc(c)] (di_builder: &LLVMDIBuilder, scope: &LLVMMetadata, file: &LLVMMetadata, line: u32, column: u32) &LLVMMetadata;
 [extern] LLVMDIBuilderCreateDebugLocation = fn [cc(c)] (context: &LLVMContext, line: u32, column: u32, scope: &LLVMMetadata, inlined_at: &LLVMMetadata) &LLVMMetadata;
+[extern] LLVMDIBuilderCreateAutoVariable = fn [cc(c)] (di_builder: &LLVMDIBuilder, scope: &LLVMMetadata, name_pointer: &u8, name_length: u64, file: &LLVMMetadata, line: u32, type: &LLVMMetadata, always_preserve: s32, flags: LLVMDIFlags, bit_alignment: u32) &LLVMMetadata;
+[extern] LLVMDIBuilderInsertDeclareRecordAtEnd = fn [cc(c)] (di_builder: &LLVMDIBuilder, storage: &LLVMValue, local_variable: &LLVMMetadata, expression: &LLVMMetadata, debug_location: &LLVMMetadata, basic_block: &LLVMBasicBlock) &LLVMDebugRecord;
+
+[extern] LLVMDIBuilderCreateExpression = fn [cc(c)] (di_builder: &LLVMDIBuilder, address: &u64, length: u64) &LLVMMetadata;
 [extern] LLVMDIBuilderFinalize = fn [cc(c)] (di_builder: &LLVMDIBuilder) void;
 
 [extern] LLVMSetSubprogram = fn [cc(c)] (function: &LLVMValue, subprogram: &LLVMMetadata) void;
@@ -2015,14 +2064,19 @@ LLVMICmpPredicate = enum u32
 [extern] LLVMSetCurrentDebugLocation2 = fn [cc(c)] (builder: &LLVMBuilder, debug_location: &LLVMMetadata) void;
 
 [extern] llvm_builder_create_alloca = fn [cc(c)] (builder: &LLVMBuilder, type: &LLVMType, address_space: u32, alignment: u32, name: []u8) &LLVMValue;
-
 [extern] LLVMBuildStore = fn [cc(c)] (builder: &LLVMBuilder, source: &LLVMValue, destination: &LLVMValue) &LLVMValue;
 [extern] LLVMBuildLoad2 = fn [cc(c)] (builder: &LLVMBuilder, type: &LLVMType, pointer: &LLVMValue, name: &u8) &LLVMValue;
+
 [extern] LLVMBuildRet = fn [cc(c)] (builder: &LLVMBuilder, value: &LLVMValue) &LLVMValue;
 [extern] LLVMBuildRetVoid = fn [cc(c)] (builder: &LLVMBuilder) &LLVMValue;
+
 [extern] LLVMBuildBr = fn [cc(c)] (builder: &LLVMBuilder, target_block: &LLVMBasicBlock) &LLVMValue;
+
 [extern] LLVMBuildIntCast2 = fn [cc(c)] (builder: &LLVMBuilder, value: &LLVMValue, type: &LLVMType, signed: s32, name: &u8) &LLVMValue;
 [extern] LLVMBuildNeg = fn [cc(c)] (builder: &LLVMBuilder, value: &LLVMValue, name: &u8) &LLVMValue;
+[extern] LLVMBuildSExt = fn [cc(c)] (builder: &LLVMBuilder, value: &LLVMValue, type: &LLVMType, name: &u8) &LLVMValue;
+[extern] LLVMBuildZExt = fn [cc(c)] (builder: &LLVMBuilder, value: &LLVMValue, type: &LLVMType, name: &u8) &LLVMValue;
+[extern] LLVMBuildTrunc = fn [cc(c)] (builder: &LLVMBuilder, value: &LLVMValue, type: &LLVMType, name: &u8) &LLVMValue;
 
 [extern] LLVMBuildICmp = fn [cc(c)] (builder: &LLVMBuilder, predicate: LLVMICmpPredicate, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
 
@@ -2264,6 +2318,47 @@ Statement = struct
     id: StatementId,
 }
 
+scope_to_block = fn (scope: &Scope) &Block
+{
+    assert(scope.kind == .local);
+    >result: &Block = #field_parent_pointer(scope, "scope");
+    return result;
+}
+
+new_local = fn (module: &Module, scope: &Scope) &Local
+{
+    >result = arena_allocate[Local](module.arena, 1);
+    result.& = zero;
+
+    switch (scope.kind)
+    {
+        .local =>
+        {
+            >block = scope_to_block(scope);
+            if (block.last_local)
+            {
+                block.last_local.next = result;
+                block.last_local = result;
+            }
+            else
+            {
+                block.first_local = result;
+                block.last_local = result;
+            }
+        },
+        .for_each =>
+        {
+            #trap();
+        }
+        else =>
+        {
+            report_error();
+        }
+    }
+
+    return result;
+}
+
 new_global = fn (module: &Module) &Global
 {
     >result = arena_allocate[Global](module.arena, 1);
@@ -2435,11 +2530,6 @@ is_identifier_start = fn (ch: u8) u1
 is_identifier = fn (ch: u8) u1
 {
     return is_identifier_start(ch) or is_decimal(ch);
-}
-
-report_error = fn () noreturn
-{
-    #trap();
 }
 
 get_line = fn (module: &Module) u32
@@ -2952,12 +3042,19 @@ ValueKeyword = enum
 ValueIntrinsic = enum
 {
     align_of,
+    build_mode,
     byte_size,
+    enum_from_int,
     enum_name,
+    enum_values,
     extend,
+    field_parent_pointer,
+    has_debug_info,
     integer_max,
     int_from_enum,
     int_from_pointer,
+    max,
+    min,
     pointer_cast,
     pointer_from_int,
     select,
@@ -2987,6 +3084,7 @@ TokenContent = union
     identifier: []u8,
     string_literal: []u8,
 }
+
 Token = struct
 {
     content: TokenContent,
@@ -3048,7 +3146,32 @@ tokenize = fn (module: &Module) Token
         },
         '#' =>
         {
-            #trap();
+            module.offset += 1;
+
+            if (is_identifier_start(module.content[module.offset]))
+            {
+                >identifier = parse_identifier(module);
+
+                >value_intrinsic_s2e = #string_to_enum(ValueIntrinsic, identifier);
+                if (value_intrinsic_s2e.is_valid)
+                {
+                    >value_intrinsic = value_intrinsic_s2e.enum_value;
+                    token = {
+                        .content = {
+                            .value_intrinsic = value_intrinsic,
+                        },
+                        .id = .value_intrinsic,
+                    };
+                }
+                else
+                {
+                    report_error();
+                }
+            }
+            else
+            {
+                report_error();
+            }
         },
         '<' =>
         {
@@ -3216,7 +3339,50 @@ tokenize = fn (module: &Module) Token
         {
             if (is_identifier_start(start_character))
             {
-                #trap();
+                >identifier = parse_identifier(module);
+                >value_keyword_s2e = #string_to_enum(ValueKeyword, identifier);
+                if (value_keyword_s2e.is_valid)
+                {
+                    >value_keyword = value_keyword_s2e.enum_value;
+                    token = {
+                        .content = {
+                            .value_keyword = value_keyword,
+                        },
+                        .id = .value_keyword,
+                    };
+                }
+                else
+                {
+                    >advance = identifier.pointer[identifier.length] == '?';
+                    identifier.length += #extend(advance);
+                    module.offset += #extend(advance);
+
+                    >operator_keyword_s2e = #string_to_enum(OperatorKeyword, identifier);
+
+                    if (operator_keyword_s2e.is_valid)
+                    {
+                        >operator_keyword = operator_keyword_s2e.enum_value;
+
+                        token = {
+                            .content = {
+                                .operator_keyword = operator_keyword,
+                            },
+                            .id = .operator_keyword,
+                        };
+                    }
+                    else
+                    {
+                        identifier.length -= #extend(advance);
+                        module.offset -= #extend(advance);
+
+                        token = {
+                            .content = {
+                                .identifier = identifier,
+                            },
+                            .id = .identifier,
+                        };
+                    }
+                }
             }
             else
             {
@@ -3255,6 +3421,84 @@ ValueBuilder = struct
 }
 
 parse_precedence = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value;
+parse_value = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value;
+
+reference_identifier = fn (module: &Module, current_scope: &Scope, identifier: []u8, kind: ValueKind) &Value
+{
+    assert(!string_equal(identifier, ""));
+    assert(!string_equal(identifier, "_"));
+
+    >variable: &Variable = zero;
+    >scope = current_scope;
+
+    while (scope != zero and variable == zero)
+    {
+        switch (scope.kind)
+        {
+            .global =>
+            {
+                #trap();
+            },
+            .function =>
+            {
+                #trap();
+            },
+            .local =>
+            {
+                assert(scope.parent != zero);
+                assert(scope.parent.kind != .global);
+
+                >block = scope_to_block(scope);
+                >local = block.first_local;
+
+                while (local != zero)
+                {
+                    assert(local.next == zero or block.last_local != local);
+
+                    if (string_equal(identifier, local.variable.name))
+                    {
+                        variable = &local.variable;
+                        break;
+                    }
+
+                    local = local.next;
+                }
+            },
+            .for_each =>
+            {
+                #trap();
+            },
+            .macro_declaration =>
+            {
+                #trap();
+            },
+            .macro_instantiation =>
+            {
+                #trap();
+            },
+        }
+
+        scope = scope.parent;
+    }
+
+    if (variable != zero)
+    {
+        >result = new_value(module);
+        result.& = {
+            .content = {
+                .variable = variable,
+            },
+            .id = .variable,
+            .kind = kind,
+            zero,
+        };
+        return result;
+    }
+    else
+    {
+        report_error();
+    }
+}
 
 parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
 {
@@ -3315,11 +3559,133 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
         },
         .identifier =>
         {
-            #trap();
+            result = reference_identifier(module, scope, token.content.identifier, builder.kind);
         },
         .value_intrinsic =>
         {
-            #trap();
+            >intrinsic = token.content.value_intrinsic;
+            result = new_value(module);
+
+            switch (intrinsic)
+            {
+                .enum_from_int,
+                .enum_name,
+                .extend,
+                .int_from_enum,
+                .int_from_pointer,
+                .truncate,
+                .pointer_cast,
+                .pointer_from_int,
+                .va_end,
+                =>
+                {
+                    >id: UnaryId = undefined;
+
+                    switch (intrinsic)
+                    {
+                        .enum_from_int => { id = .enum_from_int; },
+                        .enum_name => { id = .enum_name; },
+                        .extend => { id = .extend; },
+                        .int_from_enum => { id = .int_from_enum; },
+                        .int_from_pointer => { id = .int_from_pointer; },
+                        .truncate => { id = .truncate; },
+                        .pointer_cast => { id = .pointer_cast; },
+                        .pointer_from_int => { id = .pointer_from_int; },
+                        .va_end => { id = .va_end; },
+                        else => { unreachable; },
+                    }
+
+                    skip_space(module);
+                    expect_character(module, left_parenthesis);
+                    skip_space(module);
+                    >argument = parse_value(module, scope, zero);
+                    expect_character(module, right_parenthesis);
+
+                    result.& = {
+                        .content = {
+                            .unary = {
+                                .value = argument,
+                                .id = id,
+                            },
+                        },
+                        .id = .unary,
+                        zero,
+                    };
+                },
+                .align_of,
+                .byte_size,
+                .enum_values,
+                .integer_max,
+                =>
+                {
+                    skip_space(module);
+                    expect_character(module, left_parenthesis);
+                    skip_space(module);
+
+                    >type = parse_type(module, scope);
+
+                    expect_character(module, right_parenthesis);
+
+                    >id: UnaryTypeId = undefined;
+                    switch (intrinsic)
+                    {
+                        .align_of => { id = .align_of; },
+                        .byte_size => { id = .byte_size; },
+                        .enum_values => { id = .enum_values; },
+                        .integer_max => { id = .integer_max; },
+                        else => { unreachable; },
+                    }
+
+                    result.& = {
+                        .content = {
+                            .unary_type = {
+                                .type = type,
+                                .id = id,
+                            },
+                        },
+                        .id = .unary_type,
+                        zero,
+                    };
+                },
+                .select =>
+                {
+                    #trap();
+                },
+                .string_to_enum =>
+                {
+                    #trap();
+                },
+                // No argument intrinsic call
+                .trap,
+                .va_start,
+                .has_debug_info,
+                =>
+                {
+                    #trap();
+                },
+                // (value, T)
+                .va_arg =>
+                {
+                    #trap();
+                },
+                // TODO
+                .va_copy =>
+                {
+                    #trap();
+                },
+                .max, .min =>
+                {
+                    #trap();
+                },
+                .build_mode =>
+                {
+                    #trap();
+                },
+                .field_parent_pointer =>
+                {
+                    #trap();
+                },
+            }
         },
         .left_bracket =>
         {
@@ -3632,7 +3998,43 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
     {
         '>' =>
         {
-            #trap();
+            module.offset += 1;
+            skip_space(module);
+
+            >local_name = parse_identifier(module);
+            skip_space(module);
+
+            >local_type: &Type = zero;
+
+            if (consume_character_if_match(module, ':'))
+            {
+                skip_space(module);
+                local_type = parse_type(module, scope);
+                skip_space(module);
+            }
+
+            expect_character(module, '=');
+
+            >initial_value = parse_value(module, scope, zero);
+
+            >local = new_local(module, scope);
+            local.& = {
+                .variable = {
+                    .type = local_type,
+                    .scope = scope,
+                    .name = local_name,
+                    .line = statement_line,
+                    .column = statement_column,
+                    zero,
+                },
+                .initial_value = initial_value,
+                zero,
+            };
+
+            statement.content = {
+                .local = local,
+            };
+            statement.id = .local;
         },
         '#' =>
         {
@@ -4951,7 +5353,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
     assert(!value.type);
     assert(!value.llvm);
 
-    if (expected_type != zero and expected_type.id == .unresolved)
+    if (expected_type != zero and? expected_type.id == .unresolved)
     {
         #trap();
     }
@@ -5041,11 +5443,48 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             {
                 .extend =>
                 {
-                    #trap();
+                    if (!expected_type)
+                    {
+                        report_error();
+                    }
+
+                    >extended_value = unary_value;
+                    analyze_type(module, extended_value, zero, { .must_be_constant = analysis.must_be_constant, zero });
+                    >source = extended_value.type;
+                    assert(source != zero);
+
+                    >source_bit_size = get_bit_size(source);
+                    >expected_bit_size = get_bit_size(expected_type);
+
+                    if (source_bit_size > expected_bit_size)
+                    {
+                        report_error();
+                    }
+                    else if (source_bit_size == expected_bit_size and type_is_signed(source) == type_is_signed(expected_type))
+                    {
+                        report_error();
+                    }
+
+                    value_type = expected_type;
                 },
                 .truncate =>
                 {
-                    #trap();
+                    if (!expected_type)
+                    {
+                        report_error();
+                    }
+
+                    analyze_type(module, unary_value, zero, { .must_be_constant = analysis.must_be_constant, zero });
+
+                    >expected_bit_size = get_bit_size(expected_type);
+                    >source_bit_size = get_bit_size(unary_value.type);
+
+                    if (expected_bit_size >= source_bit_size)
+                    {
+                        report_error();
+                    }
+
+                    value_type = expected_type;
                 },
                 .dereference =>
                 {
@@ -5100,6 +5539,73 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     #trap();
                 },
             }
+        },
+        .variable =>
+        {
+            switch (value.kind)
+            {
+                .left => { value_type = value.content.variable.storage.type; },
+                .right => { value_type = value.content.variable.type; },
+            }
+
+            assert(value_type != zero);
+            
+            typecheck(module, expected_type, value_type);
+        },
+        .unary_type =>
+        {
+            >unary_type_id = value.content.unary_type.id;
+            >unary_type = value.content.unary_type.type; // TODO: call resolve_type
+            value.content.unary_type.type = unary_type;
+
+            if (unary_type_id == .enum_values)
+            {
+                #trap();
+            }
+            else
+            {
+                if (expected_type != zero)
+                {
+                    value_type = expected_type;
+                }
+                else
+                {
+                    value_type = unary_type;
+                }
+
+                assert(value_type != zero);
+
+                if (value_type.id != .integer)
+                {
+                    report_error();
+                }
+
+                >value: u64 = undefined;
+                >max_value = integer_max_value(value_type.content.integer.bit_count, value_type.content.integer.signed);
+
+                switch (unary_type_id)
+                {
+                    .align_of => { value = #extend(get_byte_alignment(unary_type)); },
+                    .byte_size => { value = get_byte_size(unary_type); },
+                    .integer_max =>
+                    {
+                        if (unary_type.id != .integer)
+                        {
+                            report_error();
+                        }
+
+                        value = integer_max_value(unary_type.content.integer.bit_count, unary_type.content.integer.signed);
+                    },
+                    .enum_values => { unreachable; },
+                }
+
+                if (value > max_value)
+                {
+                    report_error();
+                }
+            }
+
+            typecheck(module, expected_type, value_type);
         },
         else =>
         {
@@ -5299,7 +5805,120 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                         llvm_value = LLVMBuildNeg(module.llvm.builder, llvm_unary_value, "");
                     }
                 },
+                .extend =>
+                {
+                    assert(resolved_unary_type.id == .integer);
+                    if (resolved_unary_type.content.integer.signed)
+                    {
+                        llvm_value = LLVMBuildSExt(module.llvm.builder, llvm_unary_value, destination_type, "");
+                    }
+                    else
+                    {
+                        llvm_value = LLVMBuildZExt(module.llvm.builder, llvm_unary_value, destination_type, "");
+                    }
+                },
+                .truncate =>
+                {
+                    if (type_kind != .abi)
+                    {
+                        assert(resolved_value_type.llvm.abi == resolved_value_type.llvm.memory);
+                    }
+
+                    llvm_value = LLVMBuildTrunc(module.llvm.builder, llvm_unary_value, destination_type, "");
+                },
                 else => { #trap(); },
+            }
+        },
+        .variable =>
+        {
+            >variable = value.content.variable;
+
+            >resolved_variable_value_type = resolve_alias(module, variable.type);
+            >resolved_variable_pointer_type = resolve_alias(module, variable.storage.type);
+
+            >llvm_storage = variable.storage.llvm;
+
+            switch (value.kind)
+            {
+                .left =>
+                {
+                    assert(resolved_variable_pointer_type == resolved_value_type);
+                    llvm_value = llvm_storage;
+                },
+                .right =>
+                {
+                    assert(resolved_variable_value_type == resolved_value_type);
+
+                    if (must_be_constant)
+                    {
+                        if (variable.scope.kind != .global)
+                        {
+                            report_error();
+                        }
+
+                        // TODO: field parent pointer
+                        #trap();
+                    }
+                    else
+                    {
+                        if (get_byte_size(resolved_value_type) <= 16)
+                        {
+                            >evaluation_kind = get_evaluation_kind(resolved_value_type);
+                            switch (evaluation_kind)
+                            {
+                                .scalar, .aggregate =>
+                                {
+                                    llvm_value = create_load(module, {
+                                        .type = resolved_value_type,
+                                        .pointer = llvm_storage,
+                                        .kind = type_kind,
+                                        zero,
+                                    });
+                                },
+                                .complex => { #trap(); },
+                            }
+                        }
+                        else
+                        {
+                            #trap();
+                        }
+                    }
+                },
+            }
+        },
+        .unary_type =>
+        {
+            >unary_type_id = value.content.unary_type.id;
+            >unary_type = value.content.unary_type.type;
+
+            resolve_type_in_place(module, unary_type);
+
+            >llvm_result_type = get_llvm_type(resolved_value_type, type_kind);
+
+            switch (unary_type_id)
+            {
+                .align_of =>
+                {
+                    assert(resolved_value_type.id == .integer);
+                    llvm_value = LLVMConstInt(llvm_result_type, #extend(get_byte_alignment(unary_type)), 0);
+                },
+                .byte_size =>
+                {
+                    assert(resolved_value_type.id == .integer);
+                    llvm_value = LLVMConstInt(llvm_result_type, get_byte_size(unary_type), 0);
+                },
+                .integer_max =>
+                {
+                    assert(resolved_value_type.id == .integer);
+                    assert(unary_type.id == .integer);
+                    >signed = unary_type.content.integer.signed;
+                    >max_value = integer_max_value(unary_type.content.integer.bit_count, signed);
+                    llvm_value = LLVMConstInt(llvm_result_type, max_value, #extend(signed));
+                },
+                .enum_values =>
+                {
+                    #trap();
+                },
             }
         },
         else =>
@@ -5353,6 +5972,68 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
         {
             #trap();
         },
+    }
+}
+
+emit_local_storage = fn (module: &Module, variable: &Variable) void
+{
+    assert(!variable.storage);
+    assert(variable.name.pointer != zero);
+    assert(variable.name.length != zero);
+
+    >value_type = variable.type;
+    resolve_type_in_place(module, value_type);
+    >pointer_type = get_pointer_type(module, value_type);
+
+    >alloca = create_alloca(module, {
+        .type = value_type,
+        .name = variable.name,
+        zero,
+    });
+
+    >storage = new_value(module);
+    storage.& = {
+        .type = pointer_type,
+        .id = .local,
+        .llvm = alloca,
+        zero,
+    };
+
+    variable.storage = storage;
+}
+
+null_expression = fn (module: &Module) &LLVMMetadata
+{
+    return LLVMDIBuilderCreateExpression(module.llvm.di_builder, zero, 0);
+}
+
+end_debug_local = fn (module: &Module, variable: &Variable, llvm_local: &LLVMMetadata) void
+{
+    >debug_location = LLVMDIBuilderCreateDebugLocation(module.llvm.context, variable.line, variable.column, variable.scope.llvm, module.llvm.inlined_at);
+    LLVMSetCurrentDebugLocation2(module.llvm.builder, debug_location);
+    >basic_block = LLVMGetInsertBlock(module.llvm.builder);
+    assert(basic_block != zero);
+    LLVMDIBuilderInsertDeclareRecordAtEnd(module.llvm.di_builder, variable.storage.llvm, llvm_local, null_expression(module), debug_location, basic_block);
+}
+
+emit_local = fn (module: &Module, local: &Local) void
+{
+    emit_local_storage(module, &local.variable);
+    assert(local.variable.storage != zero);
+
+    if (module.has_debug_info)
+    {
+        >debug_type = local.variable.type.llvm.debug;
+        assert(debug_type != zero);
+
+        >always_preserve: s32 = 1;
+        >flags: LLVMDIFlags = zero;
+        >scope = local.variable.scope.llvm;
+        >bit_alignment = get_byte_alignment(local.variable.type) * 8;
+        >name = local.variable.name;
+        >local_variable = LLVMDIBuilderCreateAutoVariable(module.llvm.di_builder, scope, name.pointer, name.length, module.llvm.file, local.variable.line, debug_type, always_preserve, flags, bit_alignment);
+
+        end_debug_local(module, &local.variable, local_variable);
     }
 }
 
@@ -5444,6 +6125,19 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
             {
                 report_error();
             }
+        },
+        .local =>
+        {
+            >local = statement.content.local;
+            >expected_type = local.variable.type;
+            assert(!local.variable.storage);
+
+            analyze_type(module, local.initial_value, expected_type, zero);
+            local.variable.type = #select(expected_type != zero, expected_type, local.initial_value.type);
+            assert(local.variable.type != zero);
+
+            emit_local(module, local);
+            emit_assignment(module, local.variable.storage.llvm, local.variable.storage.type, local.initial_value);
         },
         else =>
         {
@@ -6480,7 +7174,16 @@ names: [_][]u8 = [
     "constant_xor",
     "constant_shift_left",
     "constant_shift_right",
-
+    "minimal_stack",
+    "minimal_stack_arithmetic",
+    "minimal_stack_arithmetic2",
+    "minimal_stack_arithmetic3",
+    "stack_negation",
+    "stack_add",
+    "stack_sub",
+    "extend",
+    "integer_max",
+    "integer_hex",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32

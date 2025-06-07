@@ -439,6 +439,7 @@ global_variable String names[] =
     string_literal("return_array"),
     string_literal("bool_pair"),
     string_literal("min_max"),
+    string_literal("field_parent_pointer"),
 };
 
 void entry_point(Slice<char* const> arguments, Slice<char* const> envp)

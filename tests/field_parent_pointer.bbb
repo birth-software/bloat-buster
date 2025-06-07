@@ -1,0 +1,43 @@
+S = struct
+{
+    a: u8,
+    b: u32,
+    c: u8,
+}
+
+assert = fn (ok: u1) void
+{
+    if (!ok) #trap();
+}
+
+[export] main = fn [cc(c)] () s32
+{
+    >s: S = {
+        .a = 241,
+        .b = 12356,
+        .c = 128,
+    };
+
+    >p_a = &s.a;
+    >p_a_struct: &S = #field_parent_pointer(p_a, "a");
+    assert(p_a_struct == &s);
+    assert(p_a_struct.a == s.a);
+    assert(p_a_struct.b == s.b);
+    assert(p_a_struct.c == s.c);
+    
+    >p_b = &s.b;
+    >p_b_struct: &S = #field_parent_pointer(p_b, "b");
+    assert(p_b_struct == &s);
+    assert(p_b_struct.a == s.a);
+    assert(p_b_struct.b == s.b);
+    assert(p_b_struct.c == s.c);
+
+    >p_c = &s.c;
+    >p_c_struct: &S = #field_parent_pointer(p_c, "c");
+    assert(p_c_struct == &s);
+    assert(p_c_struct.a == s.a);
+    assert(p_c_struct.b == s.b);
+    assert(p_c_struct.c == s.c);
+
+    return 0;
+}

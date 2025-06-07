@@ -9,6 +9,7 @@ enum class ValueIntrinsic
     enum_name,
     enum_values,
     extend,
+    field_parent_pointer,
     has_debug_info,
     integer_max,
     int_from_enum,
@@ -1162,6 +1163,7 @@ fn Token tokenize(Module* module)
                         string_literal("enum_name"),
                         string_literal("enum_values"),
                         string_literal("extend"),
+                        string_literal("field_parent_pointer"),
                         string_literal("has_debug_info"),
                         string_literal("integer_max"),
                         string_literal("int_from_enum"),
@@ -1494,6 +1496,9 @@ fn Token tokenize(Module* module)
                         auto operator_keyword = (OperatorKeyword)i;
                         if (operator_keyword == OperatorKeyword::count)
                         {
+                            identifier.length -= advance;
+                            module->offset -= advance;
+                            
                             token = {
                                 .identifier = identifier,
                                 .id = TokenId::identifier,
@@ -1876,6 +1881,30 @@ fn Value* parse_left(Module* module, Scope* scope, ValueBuilder builder)
                         {
                             *result = {
                                 .id = ValueId::build_mode,
+                            };
+                        } break;
+                    case ValueIntrinsic::field_parent_pointer:
+                        {
+                            skip_space(module);
+                            expect_character(module, left_parenthesis);
+
+                            auto field_pointer = parse_value(module, scope, {});
+
+                            skip_space(module);
+                            expect_character(module, ',');
+                            skip_space(module);
+
+                            auto field_name = parse_string_literal(module);
+
+                            skip_space(module);
+                            expect_character(module, right_parenthesis);
+
+                            *result = {
+                                .field_parent_pointer = {
+                                    .pointer = field_pointer,
+                                    .name = field_name,
+                                },
+                                .id = ValueId::field_parent_pointer,
                             };
                         } break;
                     case ValueIntrinsic::count: unreachable();

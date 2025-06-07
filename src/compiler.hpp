@@ -842,6 +842,7 @@ enum class ValueId
     argument,
     build_mode,
     has_debug_info,
+    field_parent_pointer,
 };
 
 struct ValueConstantInteger
@@ -1055,6 +1056,12 @@ struct MacroInstantiation
     LLVMBasicBlockRef return_block;
 };
 
+struct FieldParentPointer
+{
+    Value* pointer;
+    String name;
+};
+
 fn bool variable_is_constant(Value* value);
 
 struct Value
@@ -1080,6 +1087,7 @@ struct Value
         ValueStringToEnum string_to_enum;
         MacroDeclaration* macro_reference;
         MacroInstantiation macro_instantiation;
+        FieldParentPointer field_parent_pointer;
     };
     Type* type;
     ValueId id;
@@ -1778,7 +1786,6 @@ fn Value* reference_identifier(Module* module, Scope* current_scope, String iden
                     for (Local* local = block->first_local; local; local = local->next)
                     {
                         assert(!local->next || block->last_local != local);
-                        assert((u64)local->next != 0x6e66203d206e6961);
                         if (identifier.equal(local->variable.name))
                         {
                             variable = &local->variable;
