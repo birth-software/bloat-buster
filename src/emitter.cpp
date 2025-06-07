@@ -3509,6 +3509,10 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, TypeAnal
                                     auto backing_type = enum_type->enumerator.backing_type;
                                     value_type = backing_type;
                                 }
+                                else if (resolved_aggregate_type->id == TypeId::array)
+                                {
+                                    value_type = uint64(module);
+                                }
                                 else
                                 {
                                     report_error();
@@ -5983,6 +5987,7 @@ fn LLVMValueRef emit_field_access(Module* module, Value* value, LLVMValueRef lef
                                             auto load = create_load(module, {
                                                 .type = field_access.type,
                                                 .pointer = gep,
+                                                .kind = type_kind,
                                             });
                                             return load;
                                         } break;
@@ -7704,6 +7709,7 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind, bool expect
                 auto condition = value->select.condition;
                 auto true_value = value->select.true_value;
                 auto false_value = value->select.false_value;
+
                 emit_value(module, condition, TypeKind::abi, must_be_constant);
                 LLVMValueRef llvm_condition = condition->llvm;
                 auto condition_type = condition->type;

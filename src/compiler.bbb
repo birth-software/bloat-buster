@@ -1487,6 +1487,9 @@ ValueId = enum
     function,
     constant_integer,
     global,
+    unary,
+    binary,
+    string_literal,
 }
 
 ValueConstantInteger = struct
@@ -1510,10 +1513,134 @@ ValueFunction = struct
     attributes: FunctionAttributes,
 }
 
+UnaryId = enum
+{
+    minus,
+    plus,
+    ampersand,
+    exclamation,
+    tilde,
+    enum_name,
+    extend,
+    truncate,
+    pointer_cast,
+    int_from_enum,
+    int_from_pointer,
+    va_end,
+    bitwise_not,
+    dereference,
+    pointer_from_int,
+    enum_from_int,
+}
+
+unary_is_boolean = fn (id: UnaryId) u1
+{
+    switch (id)
+    {
+        .exclamation =>
+        {
+            return 1;
+        },
+        else =>
+        {
+            return 0;
+        }
+    }
+}
+
+ValueUnary = struct
+{
+    value: &Value,
+    id: UnaryId,
+}
+
+BinaryId = enum
+{
+    add,
+    sub,
+    mul,
+    div,
+    rem,
+    bitwise_and,
+    bitwise_or,
+    bitwise_xor,
+    shift_left,
+    shift_right,
+    compare_equal,
+    compare_not_equal,
+    compare_greater,
+    compare_less,
+    compare_greater_equal,
+    compare_less_equal,
+    logical_and,
+    logical_or,
+    logical_and_shortcircuit,
+    logical_or_shortcircuit,
+    max,
+    min,
+}
+
+binary_is_boolean = fn (id: BinaryId) u1
+{
+    switch (id)
+    {
+        .add,
+        .sub,
+        .mul,
+        .div,
+        .rem,
+        .bitwise_and,
+        .bitwise_or,
+        .bitwise_xor,
+        .shift_left,
+        .shift_right,
+        .max,
+        .min,
+        =>
+        {
+            return 0;
+        },
+        .compare_equal,
+        .compare_not_equal,
+        .compare_less,
+        .compare_less_equal,
+        .compare_greater,
+        .compare_greater_equal,
+        .logical_and,
+        .logical_or,
+        .logical_and_shortcircuit,
+        .logical_or_shortcircuit,
+        =>
+        {
+            return 1;
+        },
+    }
+}
+
+binary_is_shortcircuiting = fn (id: BinaryId) u1
+{
+    switch (id)
+    {
+        .logical_and_shortcircuit,
+        .logical_or_shortcircuit,
+        => { return 1; },
+        else => { return 0; },
+    }
+}
+
+ValueBinary = struct
+{
+    left: &Value,
+    right: &Value,
+    id: BinaryId,
+}
+
 ValueContent = union
 {
     constant_integer: ValueConstantInteger,
     function: ValueFunction,
+    unary: ValueUnary,
+    binary: ValueBinary,
 }
 
 ValueKind = enum
@@ -1529,6 +1656,25 @@ Value = struct
     id: ValueId,
     kind: ValueKind,
     llvm: &LLVMValue,
+}
+
+value_is_constant = fn (value: &Value) u1
+{
+    switch (value.id)
+    {
+        .constant_integer =>
+        {
+            return 1;
+        },
+        .unary =>
+        {
+            return 0;
+        },
+        else =>
+        {
+            #trap();
+        }
+    }
 }
 
 i128_offset: u64 = 64 * 2;
@@ -1811,6 +1957,20 @@ LLVMCodeGenerationResult = enum u8
     failed_to_emit_passes = 2,
 }
 
+LLVMICmpPredicate = enum u32
+{
+    eq = 32,
+    ne = 33,
+    ugt = 34,
+    uge = 35,
+    ult = 36,
+    ule = 37,
+    sgt = 38,
+    sge = 39,
+    slt = 40,
+    sle = 41,
+}
+
 [extern] LLVMContextCreate = fn [cc(c)] () &LLVMContext;
 [extern] llvm_context_create_module = fn (context: &LLVMContext, name: []u8) &LLVMModule;
 [extern] LLVMCreateBuilderInContext = fn (context: &LLVMContext) &LLVMBuilder;
@@ -1819,8 +1979,6 @@ LLVMCodeGenerationResult = enum u8
 [extern] LLVMPointerTypeInContext = fn [cc(c)] (context: &LLVMContext, address_space: u32) &LLVMType;
 [extern] LLVMIntTypeInContext = fn [cc(c)] (context: &LLVMContext, bit_count: u32) &LLVMType;
 [extern] LLVMFunctionType = fn [cc(c)] (return_type: &LLVMType, argument_pointer: &&LLVMType, argument_count: u32, is_variable_argument: s32) &LLVMType;
-
-[extern] LLVMConstInt = fn [cc(c)] (type: &LLVMType, value: u64, is_signed: s32) &LLVMValue;
 
 [extern] LLVMCreateDIBuilder = fn (module: &LLVMModule) &LLVMDIBuilder;
 [extern] LLVMDIBuilderCreateFile = fn (di_builder: &LLVMDIBuilder, file_pointer: &u8, file_length: u64, directory_pointer: &u8, directory_length: u64) &LLVMMetadata;
@@ -1852,19 +2010,42 @@ LLVMCodeGenerationResult = enum u8
 [extern] LLVMGetParams = fn [cc(c)] (function: &LLVMValue, parameter_pointer: &&LLVMValue) void;
 
 [extern] llvm_context_create_basic_block = fn [cc(c)] (context: &LLVMContext, name: []u8, parent_function: &LLVMValue) &LLVMBasicBlock;
-[extern] llvm_builder_create_alloca = fn [cc(c)] (builder: &LLVMBuilder, type: &LLVMType, address_space: u32, alignment: u32, name: []u8) &LLVMValue;
-[extern] LLVMBuildStore = fn [cc(c)] (builder: &LLVMBuilder, source: &LLVMValue, destination: &LLVMValue) &LLVMValue;
-[extern] LLVMBuildLoad2 = fn [cc(c)] (builder: &LLVMBuilder, type: &LLVMType, pointer: &LLVMValue, name: &u8) &LLVMValue;
 [extern] LLVMPositionBuilderAtEnd = fn [cc(c)] (builder: &LLVMBuilder, basic_block: &LLVMBasicBlock) void;
 [extern] LLVMClearInsertionPosition = fn [cc(c)] (builder: &LLVMBuilder) void;
 [extern] LLVMSetCurrentDebugLocation2 = fn [cc(c)] (builder: &LLVMBuilder, debug_location: &LLVMMetadata) void;
+
+[extern] llvm_builder_create_alloca = fn [cc(c)] (builder: &LLVMBuilder, type: &LLVMType, address_space: u32, alignment: u32, name: []u8) &LLVMValue;
+
+[extern] LLVMBuildStore = fn [cc(c)] (builder: &LLVMBuilder, source: &LLVMValue, destination: &LLVMValue) &LLVMValue;
+[extern] LLVMBuildLoad2 = fn [cc(c)] (builder: &LLVMBuilder, type: &LLVMType, pointer: &LLVMValue, name: &u8) &LLVMValue;
 [extern] LLVMBuildRet = fn [cc(c)] (builder: &LLVMBuilder, value: &LLVMValue) &LLVMValue;
 [extern] LLVMBuildRetVoid = fn [cc(c)] (builder: &LLVMBuilder) &LLVMValue;
 [extern] LLVMBuildBr = fn [cc(c)] (builder: &LLVMBuilder, target_block: &LLVMBasicBlock) &LLVMValue;
 [extern] LLVMBuildIntCast2 = fn [cc(c)] (builder: &LLVMBuilder, value: &LLVMValue, type: &LLVMType, signed: s32, name: &u8) &LLVMValue;
+[extern] LLVMBuildNeg = fn [cc(c)] (builder: &LLVMBuilder, value: &LLVMValue, name: &u8) &LLVMValue;
+
+[extern] LLVMBuildICmp = fn [cc(c)] (builder: &LLVMBuilder, predicate: LLVMICmpPredicate, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
+
+[extern] LLVMBuildAdd = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
+[extern] LLVMBuildSub = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
+[extern] LLVMBuildMul = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
+[extern] LLVMBuildAnd = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
+[extern] LLVMBuildOr = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
+[extern] LLVMBuildXor = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
+[extern] LLVMBuildShl = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
+[extern] LLVMBuildAShr = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
+[extern] LLVMBuildLShr = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
+[extern] LLVMBuildSDiv = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
+[extern] LLVMBuildUDiv = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
+[extern] LLVMBuildSRem = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
+[extern] LLVMBuildURem = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
+
 [extern] LLVMGetInsertBlock = fn [cc(c)] (builder: &LLVMBuilder) &LLVMBasicBlock;
 [extern] LLVMGetBasicBlockTerminator = fn [cc(c)] (basic_block: &LLVMBasicBlock) &LLVMValue;
 [extern] LLVMGetBasicBlockParent = fn [cc(c)] (basic_block: &LLVMBasicBlock) &LLVMValue;
+
+[extern] LLVMConstInt = fn [cc(c)] (type: &LLVMType, value: u64, is_signed: s32) &LLVMValue;
+[extern] LLVMConstNeg = fn [cc(c)] (value: &LLVMValue) &LLVMValue;
 
 [extern] LLVMInstructionEraseFromParent = fn [cc(c)] (value: &LLVMValue) void;
 [extern] LLVMGetOperand = fn [cc(c)] (value: &LLVMValue, index: u32) &LLVMValue;
@@ -2137,6 +2318,11 @@ integer_type = fn (module: &Module, integer: TypeInteger) &Type
     assert(result.content.integer.bit_count == integer.bit_count);
     assert(result.content.integer.signed == integer.signed);
     return result;
+}
+
+uint1 = fn (module: &Module) &Type
+{
+    return integer_type(module, { .bit_count = 1, .signed = 0 });
 }
 
 uint64 = fn (module: &Module) &Type
@@ -2819,7 +3005,7 @@ tokenize = fn (module: &Module) Token
 
     >start_character = module.content[start_index];
     
-    >token: Token = undefined;
+    >token: Token = zero;
 
     switch (start_character)
     {
@@ -2866,11 +3052,57 @@ tokenize = fn (module: &Module) Token
         },
         '<' =>
         {
-            #trap();
+            >next_ch = module.content[start_index + 1];
+            >id: TokenId = undefined;
+            switch (next_ch)
+            {
+                '<' => { id = #select(module.content[start_index + 2] == '=', .assign_shift_left, .shift_left); },
+                '=' => { id = .compare_less_equal; },
+                else => { id = .compare_less; },
+            }
+
+            >add: u64 = undefined;
+            switch (id)
+            {
+                .assign_shift_left => { add = 3; },
+                .shift_left, .compare_less_equal => { add = 2; },
+                .compare_less => { add = 1; },
+                else => { unreachable; },
+            }
+
+            module.offset += add;
+
+            token = {
+                .id = id,
+                zero,
+            };
         },
         '>' =>
         {
-            #trap();
+            >next_ch = module.content[start_index + 1];
+            >id: TokenId = undefined;
+            switch (next_ch)
+            {
+                '>' => { id = #select(module.content[start_index + 2] == '=', .assign_shift_right, .shift_right); },
+                '=' => { id = .compare_greater_equal; },
+                else => { id = .compare_greater; },
+            }
+
+            >add: u64 = undefined;
+            switch (id)
+            {
+                .assign_shift_right => { add = 3; },
+                .shift_right, .compare_greater_equal => { add = 2; },
+                .compare_greater => { add = 1; },
+                else => { unreachable; },
+            }
+
+            module.offset += add;
+
+            token = {
+                .id = id,
+                zero,
+            };
         },
         '=' =>
         {
@@ -2940,7 +3172,45 @@ tokenize = fn (module: &Module) Token
         '!',
         =>
         {
-            #trap();
+            >next_ch = module.content[start_index + 1];
+            >id: TokenId = undefined;
+
+            if (next_ch == '=')
+            {
+                switch (start_character)
+                {
+                    '+' => { id = .assign_plus; },
+                    '-' => { id = .assign_dash; },
+                    '*' => { id = .assign_asterisk; },
+                    '/' => { id = .assign_forward_slash; },
+                    '%' => { id = .assign_percentage; },
+                    '&' => { id = .assign_ampersand; },
+                    '|' => { id = .assign_bar; },
+                    '^' => { id = .assign_caret; },
+                    '!' => { id = .compare_not_equal; },
+                    else => { unreachable; }
+                }
+            }
+            else
+            {
+                switch (start_character)
+                {
+                    '+' => { id = .plus; },
+                    '-' => { id = .dash; },
+                    '*' => { id = .asterisk; },
+                    '/' => { id = .forward_slash; },
+                    '%' => { id = .percentage; },
+                    '&' => { id = .ampersand; },
+                    '|' => { id = .bar; },
+                    '^' => { id = .caret; },
+                    '!' => { id = .exclamation; },
+                    else => { unreachable; }
+                }
+            }
+
+            token.id = id;
+
+            module.offset += #extend(next_ch == '=') + 1;
         },
         else =>
         {
@@ -2984,6 +3254,8 @@ ValueBuilder = struct
     allow_assignment_operators: u1,
 }
 
+parse_precedence = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value;
+
 parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
 {
     >token = builder.token;
@@ -3006,6 +3278,72 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                 .kind = .right,
                 zero,
             };
+        },
+        .dash, .ampersand, .exclamation, .tilde =>
+        {
+            assert(!builder.left);
+            >id: UnaryId = undefined;
+
+            switch (token.id)
+            {
+                .dash => { id = .minus; },
+                .ampersand => { id = .ampersand; },
+                .exclamation => { id = .exclamation; },
+                .tilde => { id = .bitwise_not; },
+                else => { unreachable; },
+            }
+
+            >unary_builder = builder;
+            unary_builder.precedence = .prefix;
+            unary_builder.token = zero;
+            unary_builder.kind = #select(token.id == .ampersand, .left, builder.kind);
+            
+            >unary_value = parse_precedence(module, scope, unary_builder);
+
+            result = new_value(module);
+            result.& = {
+                .content = {
+                    .unary = {
+                        .value = unary_value,
+                        .id = id,
+                    },
+                },
+                .id = .unary,
+                .kind = .right,
+                zero,
+            };
+        },
+        .identifier =>
+        {
+            #trap();
+        },
+        .value_intrinsic =>
+        {
+            #trap();
+        },
+        .left_bracket =>
+        {
+            #trap();
+        },
+        .dot =>
+        {
+            #trap();
+        },
+        .left_parenthesis =>
+        {
+            #trap();
+        },
+        .string_literal =>
+        {
+            #trap();
+        },
+        .left_brace =>
+        {
+            #trap();
+        },
+        .value_keyword =>
+        {
+            #trap();
         },
         else =>
         {
@@ -3102,7 +3440,109 @@ get_token_precedence = fn (token: Token) Precedence
 
 parse_right = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
 {
-    #trap();
+    >left = builder.left;
+    assert(left != zero);
+
+    >token = builder.token;
+
+    >result: &Value = zero;
+
+    switch (token.id)
+    {
+        .plus,
+        .dash,
+        .asterisk,
+        .forward_slash,
+        .percentage,
+        .ampersand,
+        .bar,
+        .caret,
+        .shift_left,
+        .shift_right,
+        .compare_equal,
+        .compare_not_equal,
+        .compare_less,
+        .compare_less_equal,
+        .compare_greater,
+        .compare_greater_equal,
+        .operator_keyword,
+        =>
+        {
+            >precedence = get_token_precedence(token);
+            assert(precedence != .assignment);
+
+            >id: BinaryId = undefined;
+
+            switch (token.id)
+            {
+                .operator_keyword =>
+                {
+                    #trap();
+                },
+                .plus => { id = .add; },
+                .dash => { id = .sub; },
+                .asterisk => { id = .mul; },
+                .forward_slash => { id = .div; },
+                .percentage => { id = .rem; },
+                .ampersand => { id = .bitwise_and; },
+                .bar => { id = .bitwise_or; },
+                .caret => { id = .bitwise_xor; },
+                .shift_left => { id = .shift_left; },
+                .shift_right => { id = .shift_right; },
+                .compare_equal => { id = .compare_equal; },
+                .compare_not_equal => { id = .compare_not_equal; },
+                .compare_less => { id = .compare_less; },
+                .compare_less_equal => { id = .compare_less_equal; },
+                .compare_greater => { id = .compare_greater; },
+                .compare_greater_equal => { id = .compare_greater_equal; },
+                else => { unreachable; },
+            }
+
+            >right_precedence: Precedence = #enum_from_int(#int_from_enum(precedence) + 1);
+            >right_builder = builder;
+            right_builder.precedence = right_precedence;
+            right_builder.token = zero;
+            right_builder.left = zero;
+            >right = parse_precedence(module, scope, right_builder);
+
+            result = new_value(module);
+            result.& = {
+                .content = {
+                    .binary = {
+                        .left = left,
+                        .right = right,
+                        .id = id,
+                    },
+                },
+                .id = .binary,
+                .kind = .right,
+                zero,
+            };
+        },
+        .pointer_dereference =>
+        {
+            #trap();
+        },
+        .left_parenthesis =>
+        {
+            #trap();
+        },
+        .left_bracket =>
+        {
+            #trap();
+        },
+        .dot =>
+        {
+            #trap();
+        },
+        else =>
+        {
+            report_error();
+        },
+    }
+
+    assert(result != zero);
+    return result;
 }
 
 parse_right_with_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
@@ -4452,6 +4892,59 @@ TypeAnalysis = struct
     indexing_type: &Type,
     must_be_constant: u1,
 }
+analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysis: TypeAnalysis) void;
+
+analyze_binary_type = fn (module: &Module, left: &Value, right: &Value, is_boolean: u1, expected_type: &Type, must_be_constant: u1) void
+{
+    >left_constant = value_is_constant(left);
+    >right_constant = value_is_constant(right);
+
+    if (!expected_type)
+    {
+        if (left_constant != zero and right_constant)
+        {
+            if (left.type == zero and right.type == zero)
+            {
+                >string_literal = left.id == .string_literal and right.id == .string_literal;
+
+                if (string_literal)
+                {
+                    #trap();
+                }
+                else
+                {
+                    report_error();
+                }
+            }
+        }
+    }
+
+    if (is_boolean or expected_type == zero)
+    {
+        if (left_constant)
+        {
+            analyze_type(module, right, zero, { .must_be_constant = must_be_constant, zero });
+            analyze_type(module, left, right.type, { .must_be_constant = must_be_constant, zero });
+        }
+        else
+        {
+            analyze_type(module, left, zero, { .must_be_constant = must_be_constant, zero });
+            analyze_type(module, right, left.type, { .must_be_constant = must_be_constant, zero });
+        }
+    }
+    else if (!is_boolean and expected_type != zero)
+    {
+        analyze_type(module, left, expected_type, { .must_be_constant = must_be_constant, zero });
+        analyze_type(module, right, expected_type, { .must_be_constant = must_be_constant, zero });
+    }
+    else
+    {
+        report_error();
+    }
+
+    assert(left.type != zero);
+    assert(right.type != zero);
+}
 
 analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysis: TypeAnalysis) void
 {
@@ -4527,6 +5020,87 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
             typecheck(module, expected_type, value_type);
         },
+        .binary =>
+        {
+            >left = value.content.binary.left;
+            >right = value.content.binary.right;
+            >id = value.content.binary.id;
+
+            >is_boolean = binary_is_boolean(id);
+            analyze_binary_type(module, left, right, is_boolean, expected_type, analysis.must_be_constant);
+            check_types(module, left.type, right.type);
+
+            value_type = #select(is_boolean, uint1(module), left.type);
+        },
+        .unary =>
+        {
+            >unary_id = value.content.unary.id;
+            >unary_value = value.content.unary.value;
+
+            switch (unary_id)
+            {
+                .extend =>
+                {
+                    #trap();
+                },
+                .truncate =>
+                {
+                    #trap();
+                },
+                .dereference =>
+                {
+                    #trap();
+                },
+                .int_from_enum =>
+                {
+                    #trap();
+                },
+                .int_from_pointer =>
+                {
+                    #trap();
+                },
+                .pointer_cast =>
+                {
+                    #trap();
+                },
+                .enum_name =>
+                {
+                    #trap();
+                },
+                .pointer_from_int =>
+                {
+                    #trap();
+                },
+                .enum_from_int =>
+                {
+                    #trap();
+                },
+                // Generic case
+                .minus,
+                =>
+                {
+                    >is_boolean = unary_is_boolean(unary_id);
+
+                    if (is_boolean)
+                    {
+                        analyze_type(module, unary_value, zero, { .must_be_constant = analysis.must_be_constant, zero });
+                        value_type = uint1(module);
+                    }
+                    else
+                    {
+                        analyze_type(module, unary_value, expected_type, { .must_be_constant = analysis.must_be_constant, zero });
+                        value_type = unary_value.type;
+                    }
+
+                    typecheck(module, expected_type, value_type);
+                },
+                else =>
+                {
+                    // TODO
+                    #trap();
+                },
+            }
+        },
         else =>
         {
             #trap();
@@ -4552,6 +5126,102 @@ get_llvm_type = fn (type: &Type, kind: TypeKind) &LLVMType
     }
 }
 
+emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &LLVMValue, right_type: &Type, id: BinaryId, resolved_value_type: &Type) &LLVMValue
+{
+    switch (resolved_value_type.id)
+    {
+        .integer =>
+        {
+            >is_boolean = binary_is_boolean(id);
+            >left_signed = type_is_signed(left_type);
+            >right_signed = type_is_signed(left_type);
+            assert(left_signed == right_signed);
+            >signed = #select(is_boolean, left_signed, resolved_value_type.content.integer.signed);
+
+            switch (id)
+            {
+                .max, .min =>
+                {
+                    #trap();
+                },
+                .shift_right =>
+                {
+                    if (signed)
+                    {
+                        return LLVMBuildAShr(module.llvm.builder, left, right, "");
+                    }
+                    else
+                    {
+                        return LLVMBuildLShr(module.llvm.builder, left, right, "");
+                    }
+                },
+                .div =>
+                {
+                    if (signed)
+                    {
+                        return LLVMBuildSDiv(module.llvm.builder, left, right, "");
+                    }
+                    else
+                    {
+                        return LLVMBuildUDiv(module.llvm.builder, left, right, "");
+                    }
+                },
+                .rem =>
+                {
+                    if (signed)
+                    {
+                        return LLVMBuildSRem(module.llvm.builder, left, right, "");
+                    }
+                    else
+                    {
+                        return LLVMBuildURem(module.llvm.builder, left, right, "");
+                    }
+                },
+                .compare_equal,
+                .compare_not_equal,
+                .compare_less,
+                .compare_less_equal,
+                .compare_greater,
+                .compare_greater_equal,
+                =>
+                {
+                    assert(left_type == right_type);
+
+                    >predicate: LLVMICmpPredicate = undefined;
+
+                    switch (id)
+                    {
+                        .compare_equal => { predicate = .eq; },
+                        .compare_not_equal => { predicate = .ne; },
+                        .compare_less => { predicate = #select(signed, .slt, .ult); },
+                        .compare_less_equal => { predicate = #select(signed, .sle, .ule); },
+                        .compare_greater => { predicate = #select(signed, .sgt, .ugt); },
+                        .compare_greater_equal => { predicate = #select(signed, .sge, .uge); },
+                    }
+
+                    return LLVMBuildICmp(module.llvm.builder, predicate, left, right, "");
+                },
+                .add => { return LLVMBuildAdd(module.llvm.builder, left, right, ""); },
+                .sub => { return LLVMBuildSub(module.llvm.builder, left, right, ""); },
+                .mul => { return LLVMBuildMul(module.llvm.builder, left, right, ""); },
+                .logical_and, .bitwise_and => { return LLVMBuildAnd(module.llvm.builder, left, right, ""); },
+                .logical_or, .bitwise_or => { return LLVMBuildOr(module.llvm.builder, left, right, ""); },
+                .bitwise_xor => { return LLVMBuildXor(module.llvm.builder, left, right, ""); },
+                .shift_left => { return LLVMBuildShl(module.llvm.builder, left, right, ""); },
+                else => { unreachable; },
+            }
+        },
+        .pointer =>
+        {
+            #trap();
+        }
+        else =>
+        {
+            report_error();
+        }
+    }
+}
+
 emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_constant: u1) void
 {
     assert(value.type != zero);
@@ -4570,6 +5240,67 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
         {
             >llvm_integer_type = get_llvm_type(resolved_value_type, type_kind);
             llvm_value = LLVMConstInt(llvm_integer_type, value.content.constant_integer.value, #extend(value.content.constant_integer.signed));
+        },
+        .binary =>
+        {
+            >binary_id = value.content.binary.id;
+            >is_shortcircuiting = binary_is_shortcircuiting(binary_id);
+            >left = value.content.binary.left;
+            >right = value.content.binary.right;
+            >values = [ left, right ];
+
+            if (is_shortcircuiting)
+            {
+                #trap();
+            }
+            else
+            {
+                >llvm_values: [2]&LLVMValue = undefined;
+
+                for (i: 0..llvm_values.length)
+                {
+                    >binary_value = values[i];
+                    emit_value(module, binary_value, .abi, must_be_constant);
+                    llvm_values[i] = binary_value.llvm;
+                }
+
+                llvm_value = emit_binary(module, llvm_values[0], values[0].type, llvm_values[1], values[1].type, binary_id, resolved_value_type);
+            }
+        },
+        .unary =>
+        {
+            >unary_id = value.content.unary.id;
+            >unary_value = value.content.unary.value;
+            assert(!unary_value.llvm);
+
+            >resolved_unary_type = resolve_alias(module, unary_value.type);
+
+            if (unary_id == .truncate or unary_id == .enum_name)
+            {
+                type_kind = .abi;
+            }
+
+            emit_value(module, unary_value, type_kind, must_be_constant);
+            >destination_type = get_llvm_type(resolved_value_type, type_kind);
+            assert(destination_type != zero);
+            >llvm_unary_value = unary_value.llvm;
+            assert(llvm_unary_value != zero);
+
+            switch (unary_id)
+            {
+                .minus =>
+                {
+                    if (value_is_constant(unary_value))
+                    {
+                        llvm_value = LLVMConstNeg(llvm_unary_value);
+                    }
+                    else
+                    {
+                        llvm_value = LLVMBuildNeg(module.llvm.builder, llvm_unary_value, "");
+                    }
+                },
+                else => { #trap(); },
+            }
         },
         else =>
         {
@@ -5738,6 +6469,18 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile) []u8
 
 names: [_][]u8 = [
     "minimal",
+    "comments",
+    "constant_add",
+    "constant_and",
+    "constant_div",
+    "constant_mul",
+    "constant_rem",
+    "constant_or",
+    "constant_sub",
+    "constant_xor",
+    "constant_shift_left",
+    "constant_shift_right",
+
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
