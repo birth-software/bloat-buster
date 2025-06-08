@@ -117,32 +117,11 @@ enum class DwarfType
     HP_VAX_complex_float_d = 0x90, // D floating complex.
 };
 
-
 fn bool llvm_initialized = false;
 
-extern "C" String llvm_default_target_triple();
-extern "C" String llvm_host_cpu_name();
-extern "C" String llvm_host_cpu_features();
-
-extern "C" LLVMModuleRef llvm_context_create_module(LLVMContextRef context, String name);
-
-extern "C" LLVMValueRef llvm_module_create_function(LLVMModuleRef module, LLVMTypeRef function_type, LLVMLinkage linkage_type, unsigned address_space, String name);
-
-extern "C" LLVMBasicBlockRef llvm_context_create_basic_block(LLVMContextRef context, String name, LLVMValueRef parent_function);
-
-extern "C" LLVMValueRef llvm_module_create_global_variable(LLVMModuleRef module, LLVMTypeRef type, bool is_constant, LLVMLinkage linkage_type, LLVMValueRef initial_value, String name, LLVMValueRef before, LLVMThreadLocalMode thread_local_mode, unsigned address_space, bool externally_initialized);
-
-extern "C" LLVMValueRef llvm_builder_create_alloca(LLVMBuilderRef builder, LLVMTypeRef type, unsigned address_space, u32 alignment, String name);
-extern "C" bool llvm_basic_block_is_empty(LLVMBasicBlockRef basic_block);
-
 extern "C" LLVMValueRef llvm_find_return_value_dominating_store(LLVMBuilderRef b, LLVMValueRef ra, LLVMTypeRef et);
-extern "C" bool llvm_value_use_empty(LLVMValueRef value);
-extern "C" bool llvm_function_verify(LLVMValueRef function_value, String* error_message);
-extern "C" bool llvm_module_verify(LLVMModuleRef m, String* error_message);
 
 extern "C" void llvm_subprogram_replace_type(LLVMMetadataRef subprogram, LLVMMetadataRef subroutine_type);
-
-extern "C" String llvm_module_to_string(LLVMModuleRef module);
 
 extern "C" void llvm_module_run_optimization_pipeline(LLVMModuleRef module, LLVMTargetMachineRef target_machine, BBLLVMOptimizationPipelineOptions options);
 extern "C" BBLLVMCodeGenerationPipelineResult llvm_module_run_code_generation_pipeline(LLVMModuleRef m, LLVMTargetMachineRef tm, const BBLLVMCodeGenerationPipelineOptions* options);

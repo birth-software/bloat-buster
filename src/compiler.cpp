@@ -440,6 +440,8 @@ global_variable String names[] =
     string_literal("bool_pair"),
     string_literal("min_max"),
     string_literal("field_parent_pointer"),
+    string_literal("leading_trailing_zeroes"),
+    string_literal("pointer_sub"),
 };
 
 void entry_point(Slice<char* const> arguments, Slice<char* const> envp)
@@ -612,7 +614,7 @@ void entry_point(Slice<char* const> arguments, Slice<char* const> envp)
                     auto success = execution.termination_kind == TerminationKind::exit && execution.termination_code == 0;
                     if (!success)
                     {
-                        print(string_literal("Self-hosted tests failed to compile: "));
+                        print(string_literal("Self-hosted tests failed: "));
                         print(build_mode_to_string(compiler_build_mode));
                         print(compiler_has_debug_info ? string_literal(" with debug info\n") : string_literal(" with no debug info\n"));
                         bb_fail();

@@ -1,0 +1,9 @@
+[export] main = fn [cc(c)] () s32
+{
+    >a: [_]s32 = [ 3, 1 ];
+    >p0 = &a[0];
+    >p1 = p0 + 1;
+    >sub: u32 = #truncate(p1 - p0);
+    if (sub != 1) #trap();
+    return 0;
+}

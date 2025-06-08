@@ -48,6 +48,6 @@ target_link_libraries(llvm_bindings PUBLIC
 
 target_link_libraries(bb PUBLIC llvm_bindings)
 
-add_compile_options(-Wall -Wextra -pedantic -Wpedantic -Werror -Wno-c99-extensions -Wno-unused-function -Wno-missing-designated-field-initializers -funsigned-char -fwrapv -fno-strict-aliasing)
+add_compile_options(-Wall -Wextra -pedantic -Wpedantic -Werror -Wno-c99-extensions -Wno-unused-function -Wno-missing-designated-field-initializers -fno-signed-char -fwrapv -fno-strict-aliasing)
 add_compile_definitions(CMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}")
 add_compile_definitions(BB_CI=${BB_CI})

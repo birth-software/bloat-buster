@@ -26,81 +26,10 @@
 
 #include "lld/Common/CommonLinkerContext.h"
 
-fn llvm::StringRef string_ref(String string)
-{
-    return llvm::StringRef((char*)string.pointer, string.length);
-}
-
-EXPORT LLVMModuleRef llvm_context_create_module(LLVMContextRef context, String name)
-{
-    auto module = new llvm::Module(string_ref(name), *llvm::unwrap(context));
-    return wrap(module);
-}
-
-EXPORT LLVMValueRef llvm_module_create_global_variable(LLVMModuleRef module, LLVMTypeRef type, bool is_constant, LLVMLinkage linkage_type, LLVMValueRef initial_value, String name, LLVMValueRef before, LLVMThreadLocalMode thread_local_mode, unsigned address_space, bool externally_initialized)
-{
-    llvm::GlobalValue::LinkageTypes linkage;
-    switch (linkage_type)
-    {
-        case LLVMExternalLinkage: linkage = llvm::GlobalValue::ExternalLinkage; break;
-        case LLVMInternalLinkage: linkage = llvm::GlobalValue::InternalLinkage; break;
-        default: trap();
-    }
-
-    llvm::GlobalValue::ThreadLocalMode tlm;
-    switch (thread_local_mode)
-    {
-        case LLVMNotThreadLocal: tlm = llvm::GlobalValue::NotThreadLocal; break;
-        default: trap();
-    }
-    auto* global = new llvm::GlobalVariable(*llvm::unwrap(module), llvm::unwrap(type), is_constant, linkage, llvm::unwrap<llvm::Constant>(initial_value), string_ref(name), before ? llvm::unwrap<llvm::GlobalVariable>(before) : 0, tlm, address_space, externally_initialized);
-    return wrap(global);
-}
-
 EXPORT void llvm_subprogram_replace_type(LLVMMetadataRef subprogram, LLVMMetadataRef subroutine_type)
 {
     auto sp = llvm::unwrap<llvm::DISubprogram>(subprogram);
     sp->replaceType(llvm::unwrap<llvm::DISubroutineType>(subroutine_type));
-}
-
-EXPORT LLVMValueRef llvm_module_create_function(LLVMModuleRef module, LLVMTypeRef function_type, LLVMLinkage linkage_type, unsigned address_space, String name)
-{
-    llvm::GlobalValue::LinkageTypes llvm_linkage_type;
-    switch (linkage_type)
-    {
-        case LLVMExternalLinkage:
-            llvm_linkage_type = llvm::GlobalValue::LinkageTypes::ExternalLinkage; break;
-        case LLVMAvailableExternallyLinkage:
-            llvm_linkage_type = llvm::GlobalValue::LinkageTypes::AvailableExternallyLinkage; break;
-        case LLVMLinkOnceAnyLinkage:
-            llvm_linkage_type = llvm::GlobalValue::LinkageTypes::LinkOnceAnyLinkage; break;
-        case LLVMLinkOnceODRLinkage:
-            llvm_linkage_type = llvm::GlobalValue::LinkageTypes::LinkOnceODRLinkage; break;
-        case LLVMWeakAnyLinkage:
-            llvm_linkage_type = llvm::GlobalValue::LinkageTypes::WeakAnyLinkage; break;
-        case LLVMWeakODRLinkage:
-            llvm_linkage_type = llvm::GlobalValue::LinkageTypes::WeakODRLinkage; break;
-        case LLVMAppendingLinkage:
-            llvm_linkage_type = llvm::GlobalValue::LinkageTypes::AppendingLinkage; break;
-        case LLVMInternalLinkage:
-            llvm_linkage_type = llvm::GlobalValue::LinkageTypes::InternalLinkage; break;
-        case LLVMPrivateLinkage:
-            llvm_linkage_type = llvm::GlobalValue::LinkageTypes::PrivateLinkage; break;
-        case LLVMExternalWeakLinkage:
-            llvm_linkage_type = llvm::GlobalValue::LinkageTypes::ExternalWeakLinkage; break;
-        case LLVMCommonLinkage:
-            llvm_linkage_type = llvm::GlobalValue::LinkageTypes::CommonLinkage; break;
-        default:
-            trap();
-    }
-    auto* function = llvm::Function::Create(llvm::unwrap<llvm::FunctionType>(function_type), llvm_linkage_type, address_space, string_ref(name), llvm::unwrap(module));
-    return wrap(function);
-}
-
-EXPORT LLVMBasicBlockRef llvm_context_create_basic_block(LLVMContextRef context, String name, LLVMValueRef parent_function)
-{
-    auto* basic_block = llvm::BasicBlock::Create(*llvm::unwrap(context), string_ref(name), parent_function ? llvm::unwrap<llvm::Function>(parent_function) : 0);
-    return wrap(basic_block);
 }
 
 // If there are multiple uses of the return-value slot, just check
@@ -167,142 +96,6 @@ EXPORT LLVMValueRef llvm_find_return_value_dominating_store(LLVMBuilderRef b, LL
     // Okay, the store's basic block dominates the insertion point; we
     // can do our thing.
     return wrap(store);
-}
-
-EXPORT bool llvm_value_use_empty(LLVMValueRef value)
-{
-    return llvm::unwrap(value)->use_empty();
-}
-
-EXPORT bool llvm_basic_block_is_empty(LLVMBasicBlockRef basic_block)
-{
-    return llvm::unwrap(basic_block)->empty();
-}
-
-EXPORT LLVMValueRef llvm_builder_create_alloca(LLVMBuilderRef b, LLVMTypeRef type, unsigned address_space, u32 alignment, String name)
-{   
-    auto& builder = *llvm::unwrap(b);
-    auto llvm_alignment = llvm::Align(alignment);
-    return wrap(builder.Insert(new llvm::AllocaInst(llvm::unwrap(type), address_space, 0, llvm_alignment), string_ref(name)));
-}
-
-fn String stream_to_string(llvm::raw_string_ostream& stream)
-{
-    // No need to call stream.flush(); because it's string-based
-    stream.flush();
-
-    auto string = stream.str();
-    auto length = string.length();
-
-    u8* result = 0;
-    if (length)
-    {
-        result = new u8[length + 1];
-        memcpy(result, string.c_str(), length);
-        result[length] = 0;
-    }
-
-    return String{ result, length };
-}
-
-EXPORT String llvm_function_to_string(llvm::Function& function)
-{
-    std::string buffer;
-    llvm::raw_string_ostream os(buffer);
-    function.print(os);
-    os.flush();
-    auto result = stream_to_string(os);
-    return result;
-}
-
-EXPORT bool llvm_function_verify(LLVMValueRef function_value, String* error_message)
-{
-    std::string message_buffer;
-    llvm::raw_string_ostream message_stream(message_buffer);
-
-    auto& function = *llvm::unwrap<llvm::Function>(function_value);
-    bool result = verifyFunction(function, &message_stream);
-    *error_message = stream_to_string(message_stream);
-
-    // We invert the condition because LLVM conventions are just stupid
-    return !result;
-}
-
-EXPORT bool llvm_module_verify(LLVMModuleRef m, String* error_message)
-{
-    std::string message_buffer;
-    llvm::raw_string_ostream message_stream(message_buffer);
-
-    const auto& module = *llvm::unwrap(m);
-    bool result = llvm::verifyModule(module, &message_stream);
-    *error_message = stream_to_string(message_stream);
-
-    // We invert the condition because LLVM conventions are just stupid
-    return !result;
-}
-
-EXPORT String llvm_module_to_string(LLVMModuleRef module)
-{
-    std::string buffer;
-    llvm::raw_string_ostream stream(buffer);
-    llvm::unwrap(module)->print(stream, 0);
-
-    return stream_to_string(stream);
-}
-
-EXPORT String llvm_default_target_triple()
-{
-    auto triple = llvm::sys::getDefaultTargetTriple();
-    auto length = triple.length();
-
-    u8* pointer = 0;
-    if (length)
-    {
-        pointer = new u8[length + 1];
-        memcpy(pointer, triple.c_str(), length);
-        pointer[length] = 0;
-    }
-
-    return { pointer, length };
-}
-
-EXPORT String llvm_host_cpu_name()
-{
-    auto cpu = llvm::sys::getHostCPUName();
-    auto result = String { (u8*)cpu.data(), cpu.size() };
-    assert(result.pointer[result.length] == 0);
-    return result;
-}
-
-EXPORT String llvm_host_cpu_features()
-{
-    llvm::SubtargetFeatures Features;
-#if LLVM_VERSION_MAJOR >= 19
-    auto host_cpu_features = llvm::sys::getHostCPUFeatures();
-#else
-    StringMap<bool> host_cpu_features;
-    if (!sys::getHostCPUFeatures(host_cpu_features)) {
-        return {};
-    }
-#endif
-
-    for (const auto &[Feature, IsEnabled] : host_cpu_features)
-    {
-        Features.AddFeature(Feature, IsEnabled);
-    }
-
-    auto feature_string = Features.getString();
-    auto length = feature_string.length();
-
-    u8* result = 0;
-    if (length)
-    {
-        result = new u8[length + 1];
-        memcpy(result, feature_string.c_str(), length + 1);
-        result[length] = 0;
-    }
-
-    return { result, length };
 }
 
 EXPORT void llvm_module_run_optimization_pipeline(LLVMModuleRef m, LLVMTargetMachineRef tm, BBLLVMOptimizationPipelineOptions options)
@@ -423,7 +216,7 @@ EXPORT BBLLVMCodeGenerationPipelineResult llvm_module_run_code_generation_pipeli
     {
         std::error_code error_code;
         
-        stream = std::make_unique<llvm::raw_fd_ostream>(string_ref(options->output_file_path), error_code, llvm::sys::fs::OF_None);
+        stream = std::make_unique<llvm::raw_fd_ostream>(llvm::StringRef((char*)options->output_file_path.pointer, options->output_file_path.length), error_code, llvm::sys::fs::OF_None);
 
         if (error_code)
         {

@@ -14,12 +14,14 @@ enum class ValueIntrinsic
     integer_max,
     int_from_enum,
     int_from_pointer,
+    leading_zeroes,
     max,
     min,
     pointer_cast,
     pointer_from_int,
     select,
     string_to_enum,
+    trailing_zeroes,
     trap,
     truncate,
     va_start,
@@ -399,6 +401,77 @@ fn String parse_identifier(Module* module)
     return module->content(start, end);
 }
 
+fn u8 escape_character(u8 ch)
+{
+    switch (ch)
+    {
+        case 'n': return '\n';
+        case 't': return '\t';
+        case 'r': return '\r';
+        case '\'': return '\'';
+        case '\\': return '\\';
+        default: report_error();
+    }
+}
+
+fn String parse_string_literal(Module* module)
+{
+    expect_character(module, '"');
+
+    auto start = module->offset;
+    u64 escape_character_count = 0;
+
+    while (1)
+    {
+        auto ch = module->content[module->offset];
+        if (ch == '"')
+        {
+            break;
+        }
+        escape_character_count += ch == '\\';
+        module->offset += 1;
+    }
+
+    auto end = module->offset;
+    auto length = end - start - escape_character_count;
+    auto pointer = (u8*)arena_allocate_bytes(module->arena, length + 1, 1);
+    auto string_literal = String{ .pointer = pointer, .length = length };
+
+    for (u64 source_i = start, i = 0; source_i < end; source_i += 1, i += 1)
+    {
+        auto ch = module->content[source_i];
+        if (ch == '\\')
+        {
+            source_i += 1;
+            ch = module->content[source_i];
+            string_literal[i] = escape_character(ch);
+        }
+        else
+        {
+            string_literal[i] = ch;
+        }
+    }
+
+    expect_character(module, '"');
+
+    return string_literal;
+}
+
+fn String parse_name(Module* module)
+{
+    String result;
+    if (module->content[module->offset] == '"')
+    {
+        result = parse_string_literal(module);
+    }
+    else
+    {
+        result = parse_identifier(module);
+    }
+    return result;
+}
+
+
 fn u64 accumulate_hexadecimal(u64 accumulator, u8 ch)
 {
     u64 value;
@@ -670,7 +743,7 @@ fn FunctionHeaderParsing parse_function_header(Module* module, Scope* scope, boo
 
         if (mandate_argument_names)
         {
-            argument_name = parse_identifier(module);
+            argument_name = arena_duplicate_string(module->arena, parse_identifier(module));
 
             skip_space(module);
 
@@ -1048,61 +1121,6 @@ fn u64 parse_binary(Module* module)
     return value;
 }
 
-fn u8 escape_character(u8 ch)
-{
-    switch (ch)
-    {
-        case 'n': return '\n';
-        case 't': return '\t';
-        case 'r': return '\r';
-        case '\'': return '\'';
-        default: report_error();
-    }
-}
-
-fn String parse_string_literal(Module* module)
-{
-    expect_character(module, '"');
-
-    auto start = module->offset;
-    u64 escape_character_count = 0;
-
-    while (1)
-    {
-        auto ch = module->content[module->offset];
-        if (ch == '"')
-        {
-            break;
-        }
-        escape_character_count += ch == '\\';
-        module->offset += 1;
-    }
-
-    auto end = module->offset;
-    auto length = end - start - escape_character_count;
-    auto pointer = (u8*)arena_allocate_bytes(module->arena, length + 1, 1);
-    auto string_literal = String{ .pointer = pointer, .length = length };
-
-    for (u64 source_i = start, i = 0; source_i < end; source_i += 1, i += 1)
-    {
-        auto ch = module->content[source_i];
-        if (ch == '\\')
-        {
-            source_i += 1;
-            ch = module->content[source_i];
-            string_literal[i] = escape_character(ch);
-        }
-        else
-        {
-            string_literal[i] = ch;
-        }
-    }
-
-    expect_character(module, '"');
-
-    return string_literal;
-}
-
 fn Token tokenize(Module* module)
 {
     skip_space(module);
@@ -1168,12 +1186,14 @@ fn Token tokenize(Module* module)
                         string_literal("integer_max"),
                         string_literal("int_from_enum"),
                         string_literal("int_from_pointer"),
+                        string_literal("leading_zeroes"),
                         string_literal("max"),
                         string_literal("min"),
                         string_literal("pointer_cast"),
                         string_literal("pointer_from_int"),
                         string_literal("select"),
                         string_literal("string_to_enum"),
+                        string_literal("trailing_zeroes"),
                         string_literal("trap"),
                         string_literal("truncate"),
                         string_literal("va_start"),
@@ -1682,9 +1702,11 @@ fn Value* parse_left(Module* module, Scope* scope, ValueBuilder builder)
                     case ValueIntrinsic::extend:
                     case ValueIntrinsic::int_from_enum:
                     case ValueIntrinsic::int_from_pointer:
+                    case ValueIntrinsic::leading_zeroes:
                     case ValueIntrinsic::truncate:
                     case ValueIntrinsic::pointer_cast:
                     case ValueIntrinsic::pointer_from_int:
+                    case ValueIntrinsic::trailing_zeroes:
                     case ValueIntrinsic::va_end:
                         {
                             UnaryId id;
@@ -1695,9 +1717,11 @@ fn Value* parse_left(Module* module, Scope* scope, ValueBuilder builder)
                                 case ValueIntrinsic::extend: id = UnaryId::extend; break;
                                 case ValueIntrinsic::int_from_enum: id = UnaryId::int_from_enum; break;
                                 case ValueIntrinsic::int_from_pointer: id = UnaryId::int_from_pointer; break;
+                                case ValueIntrinsic::leading_zeroes: id = UnaryId::leading_zeroes; break;
                                 case ValueIntrinsic::truncate: id = UnaryId::truncate; break;
                                 case ValueIntrinsic::pointer_cast: id = UnaryId::pointer_cast; break;
                                 case ValueIntrinsic::pointer_from_int: id = UnaryId::pointer_from_int; break;
+                                case ValueIntrinsic::trailing_zeroes: id = UnaryId::trailing_zeroes; break;
                                 case ValueIntrinsic::va_end: id = UnaryId::va_end; break;
                                 default: unreachable();
                             }
@@ -1973,7 +1997,7 @@ fn Value* parse_left(Module* module, Scope* scope, ValueBuilder builder)
             } break;
         case TokenId::dot:
             {
-                auto identifier = parse_identifier(module);
+                auto identifier = parse_name(module);
                 result = new_value(module);
 
                 *result = {
@@ -2573,7 +2597,7 @@ fn Statement* parse_statement(Module* module, Scope* scope)
                 module->offset += 1;
                 skip_space(module);
 
-                auto local_name = parse_identifier(module);
+                auto local_name = arena_duplicate_string(module->arena, parse_identifier(module));
                 skip_space(module);
 
                 Type* local_type = 0;
@@ -2761,7 +2785,7 @@ fn Statement* parse_statement(Module* module, Scope* scope)
 
                                     if (is_identifier_start(module->content[module->offset]))
                                     {
-                                        auto local_name = parse_identifier(module);
+                                        auto local_name = arena_duplicate_string(module->arena, parse_identifier(module));
                                         auto local = new_local(module, scope);
                                         *local = {
                                             .variable = {
@@ -3128,20 +3152,6 @@ fn Block* parse_block(Module* module, Scope* parent_scope)
     return block;
 }
 
-fn String parse_name(Module* module)
-{
-    String result;
-    if (module->content[module->offset] == '"')
-    {
-        result = parse_string_literal(module);
-    }
-    else
-    {
-        result = parse_identifier(module);
-    }
-    return result;
-}
-
 void parse(Module* module)
 {
     auto scope = &module->scope;
@@ -3217,7 +3227,7 @@ void parse(Module* module)
             skip_space(module);
         }
 
-        auto global_name = parse_identifier(module);
+        auto global_name = arena_duplicate_string(module->arena, parse_identifier(module));
 
         Global* global_forward_declaration = 0;
         Global* last_global = module->first_global;
@@ -3444,8 +3454,6 @@ void parse(Module* module)
                         u64 int_value_buffer[64];
 
                         bool is_resolved = true;
-                        bool implicit_value = false;
-                        unused(implicit_value);
 
                         while (1)
                         {
@@ -3674,7 +3682,7 @@ void parse(Module* module)
                                     break;
                                 }
 
-                                auto argument_name = parse_identifier(module);
+                                auto argument_name = arena_duplicate_string(module->arena, parse_identifier(module));
 
                                 skip_space(module);
 
@@ -3757,7 +3765,7 @@ void parse(Module* module)
                             auto argument_line = get_line(module);
                             auto argument_column = get_column(module);
 
-                            auto argument_name = parse_identifier(module);
+                            auto argument_name = arena_duplicate_string(module->arena, parse_identifier(module));
 
                             skip_space(module);
                             expect_character(module, ':');

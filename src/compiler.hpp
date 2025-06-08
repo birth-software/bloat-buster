@@ -872,7 +872,6 @@ enum class UnaryId
     plus,
     ampersand,
     exclamation,
-    tilde,
     enum_name,
     extend,
     truncate,
@@ -884,6 +883,8 @@ enum class UnaryId
     dereference,
     pointer_from_int,
     enum_from_int,
+    leading_zeroes,
+    trailing_zeroes,
 };
 
 struct ValueUnary
@@ -1105,7 +1106,9 @@ struct Value
             case ValueId::zero:
                 return true;
             case ValueId::unary:
+                return unary.value->is_constant();
             case ValueId::binary:
+                return binary.left->is_constant() && binary.right->is_constant();
             case ValueId::field_access:
             case ValueId::array_expression:
             case ValueId::call:
@@ -1197,6 +1200,8 @@ struct LLVMIntrinsicId
 
 enum class IntrinsicIndex
 {
+    clz,
+    ctz,
     smax,
     smin,
     trap,
@@ -1209,6 +1214,8 @@ enum class IntrinsicIndex
 };
 
 global_variable String intrinsic_names[] = {
+    string_literal("llvm.ctlz"),
+    string_literal("llvm.cttz"),
     string_literal("llvm.smax"),
     string_literal("llvm.smin"),
     string_literal("llvm.trap"),
@@ -1387,6 +1394,11 @@ fn Type* uint64(Module* module)
 fn Type* sint32(Module* module)
 {
     return integer_type(module, { .bit_count = 32, .is_signed = true });
+}
+
+fn Type* sint64(Module* module)
+{
+    return integer_type(module, { .bit_count = 64, .is_signed = true });
 }
 
 struct Options
