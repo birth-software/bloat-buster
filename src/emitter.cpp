@@ -9461,7 +9461,6 @@ void emit(Module* module)
                     }
 
                     LLVMThreadLocalMode thread_local_mode = LLVMNotThreadLocal;
-                    unsigned address_space = 0;
                     bool externally_initialized = false;
 
                     auto alignment = get_byte_alignment(global_type);
