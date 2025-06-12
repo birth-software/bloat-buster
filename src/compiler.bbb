@@ -11861,6 +11861,7 @@ names: [_][]u8 = [
     "global",
     "function_pointer",
     "extern",
+    "byte_size",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
