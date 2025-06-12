@@ -7905,7 +7905,31 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 },
                 .pointer_cast =>
                 {
-                    #trap();
+                    if (!expected_type)
+                    {
+                        report_error();
+                    }
+
+                    if (expected_type.id != .pointer)
+                    {
+                        report_error();
+                    }
+
+                    analyze_type(module, unary_value, zero, { .must_be_constant = analysis.must_be_constant, zero });
+
+                    >value_pointer_type = unary_value.type;
+
+                    if (value_pointer_type == expected_type)
+                    {
+                        report_error();
+                    }
+
+                    if (value_pointer_type.id != .pointer)
+                    {
+                        report_error();
+                    }
+
+                    value_type = expected_type;
                 },
                 .enum_name =>
                 {
@@ -9650,6 +9674,14 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                 .int_from_pointer =>
                 {
                     llvm_value = LLVMBuildPtrToInt(module.llvm.builder, llvm_unary_value, resolved_value_type.llvm.abi, "");
+                },
+                .pointer_from_int =>
+                {
+                    llvm_value = LLVMBuildIntToPtr(module.llvm.builder, llvm_unary_value, resolved_value_type.llvm.abi, "");
+                },
+                .pointer_cast =>
+                {
+                    llvm_value = llvm_unary_value;
                 },
                 else => { #trap(); },
             }
@@ -11739,6 +11771,8 @@ names: [_][]u8 = [
     "basic_string",
     "basic_varargs",
     "basic_while",
+    "pointer",
+    "pointer_cast",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
