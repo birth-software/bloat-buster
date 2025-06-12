@@ -7011,7 +7011,11 @@ abi_system_v_classify_return_type = fn (module: &Module, semantic_return_type: &
             {
                 if (is_integral_or_enumeration_type(semantic_return_type) and? is_promotable_integer_type_for_abi(semantic_return_type))
                 {
-                    #trap();
+                    return abi_system_v_get_extend({
+                        .semantic_type = semantic_return_type,
+                        .sign = type_is_signed(semantic_return_type),
+                        zero,
+                    });
                 }
             }
         },
@@ -11773,6 +11777,7 @@ names: [_][]u8 = [
     "basic_while",
     "pointer",
     "pointer_cast",
+    "u1_return",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
