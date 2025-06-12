@@ -11860,6 +11860,7 @@ names: [_][]u8 = [
     "local_type_inference",
     "global",
     "function_pointer",
+    "extern",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
