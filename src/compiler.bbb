@@ -9895,7 +9895,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                             .field_access,
                                             =>
                                             {
-                                                #trap();
+                                                reanalyze_type_as_left_value(module, src);
                                             },
                                             else =>
                                             {
@@ -9915,7 +9915,15 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
 
                                 if (source_size < destination_size)
                                 {
-                                    #trap();
+                                    >alloca = create_alloca(module, {
+                                        .type = argument_abi.semantic_type,
+                                        .name = "coerce",
+                                        .alignment = alignment,
+                                    });
+                                    >u64_type = uint64(module);
+                                    resolve_type_in_place(module, u64_type);
+                                    LLVMBuildMemCpy(module.llvm.builder, alloca, alignment, source, alignment, LLVMConstInt(u64_type.llvm.abi, source_size, 0));
+                                    source = alloca;
                                 }
 
                                 assert(coerce_to_type.id == .struct);
@@ -9928,7 +9936,26 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                 {
                                     .left =>
                                     {
-                                        #trap();
+                                        for (i: 0..coerce_fields.length)
+                                        {
+                                            >field = &coerce_fields[i];
+                                            >gep = LLVMBuildStructGEP2(module.llvm.builder, coerce_to_type.llvm.memory, source, #truncate(i), "");
+                                            >maybe_undef: u1 = 0;
+                                            if (maybe_undef)
+                                            {
+                                                #trap();
+                                            }
+
+                                            >load = create_load(module, {
+                                                .type = field.type,
+                                                .pointer = gep,
+                                                .alignment = alignment,
+                                                zero,
+                                            });
+
+                                            llvm_abi_argument_value_buffer[abi_argument_count] = load;
+                                            abi_argument_count += 1;
+                                        }
                                     },
                                     .right =>
                                     {
@@ -13647,6 +13674,7 @@ names: [_][]u8 =
     "slice",
     "small_struct_ints",
     "struct_assignment",
+    "struct",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
