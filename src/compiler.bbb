@@ -2505,6 +2505,7 @@ llvm_create_global_variable = fn (module: &LLVMModule, type: &LLVMType, is_const
 [extern] LLVMBuildCall2 = fn [cc(c)] (builder: &LLVMBuilder, function_type: &LLVMType, function_value: &LLVMValue, argument_pointer: &&LLVMValue, argument_count: u32, name: &u8) &LLVMValue;
 
 [extern] LLVMBuildMemCpy = fn [cc(c)] (builder: &LLVMBuilder, destination: &LLVMValue, destination_alignment: u32, source: &LLVMValue, source_alignment: u32, size: &LLVMValue) &LLVMValue;
+[extern] LLVMBuildMemSet = fn [cc(c)] (builder: &LLVMBuilder, pointer: &LLVMValue, value: &LLVMValue, byte_count: &LLVMValue, alignment: u32) &LLVMValue;
 
 [extern] LLVMGetInsertBlock = fn [cc(c)] (builder: &LLVMBuilder) &LLVMBasicBlock;
 [extern] LLVMGetBasicBlockTerminator = fn [cc(c)] (basic_block: &LLVMBasicBlock) &LLVMValue;
@@ -11744,16 +11745,80 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                     if (is_constant)
                     {
                         emit_value(module, right, .memory, 1);
+
                         >linkage: LLVMLinkage = .internal;
                         >thread_local_mode: LLVMThreadLocalMode = .none;
                         >externally_initialized: u1 = 0;
                         >unnamed_address: LLVMUnnamedAddress = .global;
+
                         >global = llvm_create_global_variable(module.llvm.module, value_type.llvm.memory, is_constant, linkage, right.llvm, "const.aggregate", thread_local_mode, externally_initialized, alignment, unnamed_address);
+
                         LLVMBuildMemCpy(module.llvm.builder, left_llvm, alignment, global, alignment, byte_size_value);
                     }
                     else
                     {
-                        #trap();
+                        switch (resolved_value_type.id)
+                        {
+                            .struct =>
+                            {
+                                >max_field_index: u64 = 0;
+                                >field_mask: u64 = 0;
+                                >fields = resolved_value_type.content.struct.fields;
+                                assert(fields.length <= 64);
+
+                                if (is_zero)
+                                {
+                                    >u8_type = uint8(module);
+                                    resolve_type_in_place(module, u8_type);
+                                    LLVMBuildMemSet(module.llvm.builder, left_llvm, LLVMConstNull(u8_type.llvm.memory), byte_size_value, alignment);
+                                }
+
+                                for (&element: elements)
+                                {
+                                    >name = element.name;
+                                    >value = element.value;
+
+                                    >declaration_index: u64 = 0;
+
+                                    while (declaration_index < fields.length)
+                                    {
+                                        >field = &fields[declaration_index];
+
+                                        if (string_equal(name, field.name))
+                                        {
+                                            break;
+                                        }
+
+                                        declaration_index += 1;
+                                    }
+
+                                    assert(declaration_index < fields.length);
+
+                                    if (module.has_debug_info)
+                                    {
+                                        >debug_location = LLVMDIBuilderCreateDebugLocation(module.llvm.context, element.line, element.column, scope.llvm, module.llvm.inlined_at);
+                                        LLVMSetCurrentDebugLocation2(module.llvm.builder, debug_location);
+                                    }
+
+                                    field_mask |= 1 << declaration_index;
+                                    max_field_index = #max(max_field_index, declaration_index);
+
+                                    >field = &fields[declaration_index];
+
+                                    >destination_pointer = LLVMBuildStructGEP2(module.llvm.builder, resolved_value_type.llvm.memory, left_llvm, #truncate(declaration_index), "");
+
+                                    emit_assignment(module, destination_pointer, get_pointer_type(module, field.type), value);
+                                }
+                            },
+                            .union =>
+                            {
+                                #trap();
+                            },
+                            else =>
+                            {
+                                #trap();
+                            },
+                        }
                     }
                 },
                 .call =>
@@ -13581,6 +13646,7 @@ names: [_][]u8 =
     "select",
     "slice",
     "small_struct_ints",
+    "struct_assignment",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
