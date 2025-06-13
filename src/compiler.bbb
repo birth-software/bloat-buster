@@ -1392,6 +1392,14 @@ TypeStruct = struct
     next: &Type,
 }
 
+TypeBits = struct
+{
+    fields: []Field,
+    backing_type: &Type,
+    line: u32,
+    is_implicit_backing_type: u1,
+}
+
 TypeContent = union
 {
     integer: TypeInteger,
@@ -1401,6 +1409,7 @@ TypeContent = union
     enum_array: TypeEnumArray,
     enum: TypeEnum,
     struct: TypeStruct,
+    bits: TypeBits,
 }
 
 TypeLLVM = struct
@@ -1577,6 +1586,11 @@ get_byte_size = fn (type: &Type) u64
         {
             return type.content.struct.byte_size;
         },
+        .bits =>
+        {
+            >result = get_byte_size(type.content.bits.backing_type);
+            return result;
+        },
         else =>
         {
             #trap();
@@ -1608,6 +1622,12 @@ get_byte_alignment = fn (type: &Type) u32
         .struct =>
         {
             >alignment = type.content.struct.byte_alignment;
+            return alignment;
+        },
+        .bits =>
+        {
+            >backing_type = type.content.bits.backing_type;
+            >alignment = get_byte_alignment(backing_type);
             return alignment;
         },
         else =>
@@ -1926,6 +1946,22 @@ ValueVaArg = struct
     type: &Type,
 }
 
+AggregateInitializationElement = struct
+{
+    name: []u8,
+    value: &Value,
+    line: u32,
+    column: u32,
+}
+
+ValueAggregateInitialization = struct
+{
+    elements: []AggregateInitializationElement,
+    scope: &Scope,
+    is_constant: u1,
+    is_zero: u1,
+}
+
 ValueContent = union
 {
     constant_integer: ValueConstantInteger,
@@ -1942,6 +1978,7 @@ ValueContent = union
     field_access: ValueFieldAccess,
     string_literal: []u8,
     va_arg: ValueVaArg,
+    aggregate_initialization: ValueAggregateInitialization,
 }
 
 ValueKind = enum
@@ -2325,6 +2362,7 @@ LLVMICmpPredicate = enum u32
 [extern] LLVMDIBuilderCreateEnumerationType = fn [cc(c)] (di_builder: &LLVMDIBuilder, scope: &LLVMMetadata, name_pointer: &u8, name_length: u64, file: &LLVMMetadata, line: u32, bit_size: u64, bit_alignment: u32, field_pointer: &&LLVMMetadata, field_count: u64, backing_type: &LLVMMetadata) &LLVMMetadata;
 [extern] LLVMDIBuilderCreateReplaceableCompositeType = fn [cc(c)] (di_builder: &LLVMDIBuilder, tag: u32, name_pointer: &u8, name_length: u64, scope: &LLVMMetadata, file: &LLVMMetadata, line: u32, runtime_language: u32, bit_size: u64, bit_alignment: u32, flags: LLVMDIFlags, unique_identifier_pointer: &u8, unique_identifier_length: u64) &LLVMMetadata;
 [extern] LLVMDIBuilderCreateMemberType = fn [cc(c)] (di_builder: &LLVMDIBuilder, scope: &LLVMMetadata, name_pointer: &u8, name_length: u64, file: &LLVMMetadata, line: u32, bit_size: u64, bit_alignment: u32, bit_offset: u64, flags: LLVMDIFlags, type: &LLVMMetadata) &LLVMMetadata;
+[extern] LLVMDIBuilderCreateBitFieldMemberType = fn [cc(c)] (di_builder: &LLVMDIBuilder, scope: &LLVMMetadata, name_pointer: &u8, name_length: u64, file: &LLVMMetadata, line: u32, bit_size: u64, bit_offset: u64, storage_bit_offset: u64, flags: LLVMDIFlags, type: &LLVMMetadata) &LLVMMetadata;
 [extern] LLVMDIBuilderCreateStructType = fn [cc(c)] (di_builder: &LLVMDIBuilder, scope: &LLVMMetadata, name_pointer: &u8, name_length: u64, file: &LLVMMetadata, line: u32, bit_size: u64, bit_alignment: u32, flags: LLVMDIFlags, derived_from: &LLVMMetadata, element_pointer: &&LLVMMetadata, element_count: u32, runtime_language: u32, vtable_holder: &LLVMMetadata, unique_identifier_pointer: &u8, unique_identifier_length: u64) &LLVMMetadata;
 
 [extern] LLVMDIBuilderCreateFunction = fn [cc(c)] (di_builder: &LLVMDIBuilder, scope: &LLVMMetadata, name_pointer: &u8, name_length: u64, linkage_name_pointer: &u8, linkage_name_length: u64, file: &LLVMMetadata, line: u32, type: &LLVMMetadata, is_local_to_unit: s32, is_definition: s32, scope_line: u32, flags: LLVMDIFlags, is_optimized: s32) &LLVMMetadata;
@@ -4769,6 +4807,94 @@ reference_identifier = fn (module: &Module, current_scope: &Scope, identifier: [
     }
 }
 
+parse_aggregate_initialization = fn (module: &Module, scope: &Scope, builder: ValueBuilder, end_ch: u8) &Value
+{
+    skip_space(module);
+
+    >element_buffer: [64]AggregateInitializationElement = undefined;
+    >field_count: u64 = 0;
+    >is_zero: u1 = 0;
+
+    while (1)
+    {
+        skip_space(module);
+
+        if (consume_character_if_match(module, end_ch))
+        {
+            break;
+        }
+
+        >field_index = field_count;
+        >checkpoint = get_checkpoint(module);
+
+        if (consume_character_if_match(module, '.'))
+        {
+            >name = parse_identifier(module);
+            skip_space(module);
+            expect_character(module, '=');
+            skip_space(module);
+
+            >line = get_line(module);
+            >column = get_column(module);
+
+            >value = parse_value(module, scope, zero);
+            skip_space(module);
+            consume_character_if_match(module, ',');
+
+            element_buffer[field_index] = {
+                .name = name,
+                .value = value,
+                .line = line,
+                .column = column,
+            };
+        }
+        else
+        {
+            >token = tokenize(module);
+            is_zero = token.id == .value_keyword and token.content.value_keyword == .zero;
+
+            if (is_zero)
+            {
+                skip_space(module);
+
+                if (consume_character_if_match(module, ','))
+                {
+                    skip_space(module);
+                }
+
+                expect_character(module, right_brace);
+                break;
+            }
+            else
+            {
+                report_error();
+            }
+        }
+
+        field_count += 1;
+    }
+
+    >elements = arena_allocate_slice[AggregateInitializationElement](module.arena, field_count);
+    memcpy(#pointer_cast(elements.pointer), #pointer_cast(&element_buffer), field_count * #byte_size(AggregateInitializationElement));
+
+    >result = new_value(module);
+    result.& = {
+        .content = {
+            .aggregate_initialization = {
+                .elements = elements,
+                .scope = scope,
+                .is_constant = 0,
+                .is_zero = is_zero,
+            },
+        },
+        .id = .aggregate_initialization,
+        .kind = builder.kind,
+        zero,
+    };
+
+    return result;
+}
+
 parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
 {
     >token = builder.token;
@@ -5090,7 +5216,7 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
         },
         .left_brace =>
         {
-            #trap();
+            result = parse_aggregate_initialization(module, scope, builder, right_brace);
         },
         .value_keyword =>
         {
@@ -5994,7 +6120,100 @@ parse = fn (module: &Module) void
                 {
                     .bits =>
                     {
-                        #trap();
+                        >is_implicit_type = module.content[module.offset] == left_brace;
+
+                        >backing_type: &Type = zero;
+
+                        if (!is_implicit_type)
+                        {
+                            backing_type = parse_type(module, scope);
+                        }
+
+                        skip_space(module);
+                        expect_character(module, left_brace);
+
+                        >field_buffer: [64]Field = undefined;
+                        >field_bit_offset: u64 = 0;
+                        >field_count: u64 = 0;
+
+                        while (1)
+                        {
+                            skip_space(module);
+
+                            if (consume_character_if_match(module, right_brace))
+                            {
+                                break;
+                            }
+
+                            >field_line = get_line(module);
+                            >field_name = parse_identifier(module);
+
+                            skip_space(module);
+                            expect_character(module, ':');
+                            skip_space(module);
+
+                            >field_type = parse_type(module, scope);
+
+                            >field_bit_count = get_bit_size(field_type);
+
+                            skip_space(module);
+
+                            consume_character_if_match(module, ',');
+
+                            field_buffer[field_count] = {
+                                .name = field_name,
+                                .type = field_type,
+                                .offset = field_bit_offset,
+                                .line = field_line,
+                            };
+
+                            field_bit_offset += field_bit_count;
+                            field_count += 1;
+                        }
+
+                        consume_character_if_match(module, ';');
+
+                        >fields = arena_allocate_slice[Field](module.arena, field_count);
+                        memcpy(#pointer_cast(fields.pointer), #pointer_cast(&field_buffer), field_count * #byte_size(Field));
+
+                        >needed_bit_count = #max(next_power_of_two(field_bit_offset), 8);
+                        if (needed_bit_count > #integer_max(u32))
+                        {
+                            report_error();
+                        }
+
+                        >bit_count = needed_bit_count;
+
+                        if (!backing_type)
+                        {
+                            backing_type = integer_type(module, { .bit_count = bit_count, .signed = 0 });
+                        }
+
+                        if (backing_type.id != .integer)
+                        {
+                            report_error();
+                        }
+
+                        >backing_type_bit_size = get_bit_size(backing_type);
+                        if (backing_type_bit_size > 64)
+                        {
+                            report_error();
+                        }
+
+                        new_type(module, {
+                            .content = {
+                                .bits = {
+                                    .fields = fields,
+                                    .backing_type = backing_type,
+                                    .line = global_line,
+                                    .is_implicit_backing_type = is_implicit_type,
+                                },
+                            },
+                            .id = .bits,
+                            .name = global_name,
+                            .scope = &module.scope,
+                            zero,
+                        });
                     },
                     .enum =>
                     {
@@ -6331,6 +6550,16 @@ resolve_type_in_place_abi = fn (module: &Module, type: &Type) void
                 >size = get_byte_size(type);
                 assert(llvm_size == size);
             },
+            .bits =>
+            {
+                >backing_type = type.content.bits.backing_type;
+                resolve_type_in_place_abi(module, backing_type);
+                result = backing_type.llvm.abi;
+
+                >llvm_size = LLVMStoreSizeOfType(module.llvm.target_data_layout, result);
+                >size = get_byte_size(type);
+                assert(llvm_size == size);
+            },
             else =>
             {
                 #trap();
@@ -6372,6 +6601,12 @@ resolve_type_in_place_memory = fn (module: &Module, type: &Type) void
             .enum =>
             {
                 >backing_type = type.content.enum.backing_type;
+                resolve_type_in_place_memory(module, backing_type);
+                result = backing_type.llvm.memory;
+            },
+            .bits =>
+            {
+                >backing_type = type.content.bits.backing_type;
                 resolve_type_in_place_memory(module, backing_type);
                 result = backing_type.llvm.memory;
             },
@@ -6498,6 +6733,32 @@ resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
 
                     >struct_type = LLVMDIBuilderCreateStructType(module.llvm.di_builder, module.scope.llvm, name.pointer, name.length, module.llvm.file, type.content.struct.line, byte_size * 8, alignment * 8, flags, derived_from, &llvm_type_buffer[0], #truncate(fields.length), runtime_language, vtable_holder, name.pointer, name.length);
                     LLVMMetadataReplaceAllUsesWith(forward_declaration, struct_type);
+                    result = struct_type;
+                },
+                .bits =>
+                {
+                    >llvm_type_buffer: [64]&LLVMMetadata = undefined;
+
+                    >fields = type.content.bits.fields;
+                    >backing_type = type.content.bits.backing_type;
+                    >flags: LLVMDIFlags = zero;
+
+                    for (i: 0..fields.length)
+                    {
+                        >field = &fields[i];
+                        >field_type = field.type;
+                        resolve_type_in_place_debug(module, field_type);
+                        >bit_offset: u64 = 0;
+                        >member_type = LLVMDIBuilderCreateBitFieldMemberType(module.llvm.di_builder, module.scope.llvm, field.name.pointer, field.name.length, module.llvm.file, field.line, get_bit_size(field_type), bit_offset, field.offset, flags, backing_type.llvm.debug);
+                        llvm_type_buffer[i] = member_type;
+                    }
+
+                    >size = get_byte_size(type) * 8;
+                    >alignment = get_byte_alignment(type) * 8;
+                    >derived_from: &LLVMMetadata = zero;
+                    >runtime_language: u32 = 0;
+                    >vtable_holder: &LLVMMetadata = zero;
+                    >struct_type = LLVMDIBuilderCreateStructType(module.llvm.di_builder, module.scope.llvm, type.name.pointer, type.name.length, module.llvm.file, type.content.bits.line, size, alignment, flags, zero, &llvm_type_buffer[0], #truncate(fields.length), runtime_language, vtable_holder, type.name.pointer, type.name.length);
                     result = struct_type;
                 },
                 else =>
@@ -7664,6 +7925,7 @@ TypeAnalysis = struct
 
 analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysis: TypeAnalysis) void;
 emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_constant: u1) void;
+emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, right: &Value) void;
 
 analyze_value = fn (module: &Module, value: &Value, expected_type: &Type, type_kind: TypeKind, must_be_constant: u1) void
 {
@@ -8370,7 +8632,30 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 },
                 .bits =>
                 {
-                    #trap();
+                    if (value.kind == .left)
+                    {
+                        report_error();
+                    }
+
+                    >fields = resolved_aggregate_type.content.bits.fields;
+                    >result_field: &Field = zero;
+
+                    for (&field: fields)
+                    {
+                        if (string_equal(field_name, field.name))
+                        {
+                            result_field = field;
+                            break;
+                        }
+                    }
+
+                    if (!result_field)
+                    {
+                        report_error();
+                    }
+
+                    assert(value.kind == .right);
+                    value_type = result_field.type;
                 },
                 .enum_array, .array =>
                 {
@@ -8493,6 +8778,128 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             analyze_type(module, value.content.va_arg.va_list, get_pointer_type(module, get_va_list_type(module)), { .must_be_constant = analysis.must_be_constant, zero });
             value_type = value.content.va_arg.type;
             typecheck(module, expected_type, value_type);
+        },
+        .aggregate_initialization =>
+        {
+            if (!expected_type)
+            {
+                report_error();
+            }
+
+            >resolved_type = resolve_alias(module, expected_type);
+            value_type = resolved_type;
+
+            assert(!value.content.aggregate_initialization.is_constant);
+            >is_constant: u1 = 1;
+            >elements = value.content.aggregate_initialization.elements;
+            >is_zero = value.content.aggregate_initialization.is_zero;
+            >field_mask: u64 = 0;
+
+            // TODO: make consecutive initialization with `zero` constant
+            // ie:
+            // Right now 0, 1, 2, 3 => constant values, rest zeroed is constant because `declaration_index == initialization_index`
+            // With constant initialization values 2, 3, 4 and rest zeroed, the aggregate initialization because `declaration_index != initialization_index`, that is, the first initialization index (0) does not match the declaration index (2). The same case can be applied for cases (1, 3) and (2, 4)
+
+            >aggregate_type: &Type = zero;
+            
+            switch (value.kind)
+            {
+                .left =>
+                {
+                    if (resolved_type.id != .pointer)
+                    {
+                        report_error();
+                    }
+
+                    aggregate_type = resolved_type.content.pointer.element_type;
+                },
+                .right =>
+                {
+                    aggregate_type = resolved_type;
+                },
+            }
+
+            switch (aggregate_type.id)
+            {
+                .struct =>
+                {
+                    #trap();
+                },
+                .bits =>
+                {
+                    >fields = aggregate_type.content.bits.fields;
+                    assert(fields.length <= 64);
+
+                    >same_values_as_field = fields.length == elements.length;
+                    >is_properly_initialized = same_values_as_field or is_zero;
+
+                    if (is_zero and same_values_as_field)
+                    {
+                        report_error();
+                    }
+
+                    if (!is_properly_initialized)
+                    {
+                        report_error();
+                    }
+
+                    assert(elements.length <= fields.length);
+
+                    for (&initialization_element: elements)
+                    {
+                        >value = initialization_element.value;
+                        >name = initialization_element.name;
+                        
+                        >declaration_index: u64 = 0;
+
+                        while (declaration_index < fields.length)
+                        {
+                            >field = &fields[declaration_index];
+
+                            if (string_equal(name, field.name))
+                            {
+                                break;
+                            }
+
+                            declaration_index += 1;
+                        }
+
+                        if (declaration_index == fields.length)
+                        {
+                            report_error();
+                        }
+
+                        >mask = 1 << declaration_index;
+                        >current_mask = field_mask;
+
+                        if (current_mask & mask)
+                        {
+                            // Repeated field
+                            report_error();
+                        }
+
+                        field_mask = current_mask | mask;
+
+                        >field = &fields[declaration_index];
+                        >declaration_type = field.type;
+
+                        analyze_type(module, value, declaration_type, { .must_be_constant = analysis.must_be_constant, zero });
+
+                        is_constant = is_constant and value_is_constant(value);
+                    }
+
+                    value.content.aggregate_initialization.is_constant = is_constant;
+                },
+                .union =>
+                {
+                    #trap();
+                },
+                .enum_array =>
+                {
+                    #trap();
+                },
+                else => { report_error(); },
+            }
         },
         else =>
         {
@@ -9147,7 +9554,36 @@ emit_field_access = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, l
         },
         .bits =>
         {
-            #trap();
+            >fields = resolved_aggregate_type.content.bits.fields;
+            >result_field: &Field = zero;
+            for (&field: fields)
+            {
+                if (string_equal(field_name, field.name))
+                {
+                    result_field = field;
+                    break;
+                }
+            }
+
+            assert(result_field != zero);
+            >field_type = result_field.type;
+            resolve_type_in_place(module, field_type);
+
+            >load = create_load(module, {
+                .type = resolved_aggregate_type,
+                .pointer = v,
+                zero,
+            });
+
+            >shift = LLVMBuildLShr(module.llvm.builder, load, LLVMConstInt(resolved_aggregate_type.llvm.abi, result_field.offset, 0), "");
+            >trunc = LLVMBuildTrunc(module.llvm.builder, shift, field_type.llvm.abi, "");
+
+            if (left_llvm)
+            {
+                #trap();
+            }
+
+            return trunc;
         },
         .enum_array, .array =>
         {
@@ -10021,6 +10457,131 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
         .va_arg =>
         {
             llvm_value = emit_va_arg(module, value, zero, zero, llvm_function);
+        },
+        .aggregate_initialization =>
+        {
+            >elements = value.content.aggregate_initialization.elements;
+            >is_constant = value.content.aggregate_initialization.is_constant;
+            >is_zero = value.content.aggregate_initialization.is_zero;
+
+            switch (value.kind)
+            {
+                .left =>
+                {
+                    if (resolved_value_type.id != .pointer)
+                    {
+                        report_error();
+                    }
+
+                    >aggregate_type = resolved_value_type.content.pointer.element_type;
+
+                    >alloca = create_alloca(module, {
+                        .type = aggregate_type,
+                        zero,
+                    });
+
+                    >resolved_pointer_type = resolved_value_type;
+                    >old_type = value.type;
+                    
+                    // Overwrite type so asserts are not triggered
+                    value.type = aggregate_type;
+                    emit_assignment(module, alloca, resolved_pointer_type, value);
+                    value.type = old_type;
+                    llvm_value = alloca;
+                },
+                .right =>
+                {
+                    switch (resolved_value_type.id)
+                    {
+                        .struct =>
+                        {
+                            #trap();
+                        },
+                        .union =>
+                        {
+                            #trap();
+                        },
+                        .bits =>
+                        {
+                            >fields = resolved_value_type.content.bits.fields;
+                            >backing_type = resolved_value_type.content.bits.backing_type;
+                            resolve_type_in_place(module, backing_type);
+                            >abi_type = get_llvm_type(backing_type, type_kind);
+                            >bitfield_type = get_llvm_type(resolved_value_type, type_kind);
+                            assert(abi_type == bitfield_type);
+
+                            if (is_constant)
+                            {
+                                >bits_value: u64 = 0;
+
+                                for (&initialization_element: elements)
+                                {
+                                    >value = initialization_element.value;
+                                    >name = initialization_element.name;
+
+                                    >result_field: &Field = zero;
+                                    for (&field: fields)
+                                    {
+                                        if (string_equal(name, field.name))
+                                        {
+                                            result_field = field;
+                                            break;
+                                        }
+                                    }
+
+                                    assert(result_field != zero);
+
+                                    >field_value: u64 = 0;
+
+                                    switch (value.id)
+                                    {
+                                        .constant_integer =>
+                                        {
+                                            field_value = value.content.constant_integer.value;
+                                        },
+                                        .enum_literal =>
+                                        {
+                                            >enum_name = value.content.enum_literal;
+                                            >value_type = value.type;
+                                            assert(value_type.id == .enum);
+
+                                            >enum_fields = value_type.content.enum.fields;
+                                            >result_enum_field: &EnumField = zero;
+
+                                            for (&enum_field : enum_fields)
+                                            {
+                                                if (string_equal(enum_name, enum_field.name))
+                                                {
+                                                    result_enum_field = enum_field;
+                                                    break;
+                                                }
+                                            }
+
+                                            assert(result_enum_field != zero);
+
+                                            field_value = result_enum_field.value;
+                                        },
+                                        else => { report_error(); },
+                                    }
+
+                                    bits_value |= field_value << result_field.offset;
+                                }
+
+                                llvm_value = LLVMConstInt(abi_type, bits_value, 0);
+                            }
+                            else
+                            {
+                                #trap();
+                            }
+                        },
+                        .enum_array =>
+                        {
+                            #trap();
+                        },
+                        else => { unreachable; },
+                    }
+                },
+            }
         },
         else =>
         {
@@ -11869,6 +12430,7 @@ names: [_][]u8 = [
     "argv",
     "assignment_operators",
     "not_pointer",
+    "bits",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32

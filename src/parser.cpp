@@ -3365,7 +3365,8 @@ void parse(Module* module)
                         {
                             skip_space(module);
 
-                            if (consume_character_if_match(module, right_brace)) {
+                            if (consume_character_if_match(module, right_brace))
+                            {
                                 break;
                             }
 
