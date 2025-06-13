@@ -7172,7 +7172,26 @@ contains_no_user_data = fn (type: &Type, start: u64, end: u64) u1
             .struct =>
             {
                 result = 1;
-                #trap();
+
+                >fields = type.content.struct.fields;
+
+                for (&field: fields)
+                {
+                    >field_offset = field.offset;
+
+                    if (field_offset >= end)
+                    {
+                        break;
+                    }
+
+                    >field_start = #select(field_offset < start, start - field_offset, 0);
+
+                    if (!contains_no_user_data(field.type, field_start, end - field_offset))
+                    {
+                        result = 0;
+                        break;
+                    }
+                }
             },
             .array, .enum_array =>
             {
@@ -9425,7 +9444,50 @@ reanalyze_type_as_left_value = fn (module: &Module, value: &Value) void
 
 type_is_integer_backing = fn (type: &Type) u1
 {
-    #trap();
+    switch (type.id)
+    {
+        .integer,
+        .enum,
+        .bits,
+        .pointer,
+        =>
+        {
+            return 1;
+        },
+        else => { return 0; },
+    }
+}
+
+ValueTypePair = struct
+{
+    value: &LLVMValue,
+    type: &Type,
+}
+
+enter_struct_pointer_for_coerced_access = fn (module: &Module, source_value: &LLVMValue, source_type: &Type, destination_size: u64) ValueTypePair
+{
+    >fields = source_type.content.struct.fields;
+    assert(source_type.id == .struct and fields.length > 0);
+    >first_field_type = fields[0].type;
+    >first_field_size = get_byte_size(first_field_type);
+    >source_size = get_byte_size(source_type);
+
+    if (!(first_field_size < destination_size and first_field_size < source_size))
+    {
+        >gep = LLVMBuildStructGEP2(module.llvm.builder, source_type.llvm.abi, source_value, 0, "coerce.dive");
+        if (first_field_type.id == .struct)
+        {
+            #trap();
+        }
+        else
+        {
+            return { .value = gep, .type = first_field_type };
+        }
+    }
+    else
+    {
+        return { .value = source_value, .type = source_type };
+    }
 }
 
 create_coerced_store = fn (module: &Module, source_value: &LLVMValue, source_type: &Type, destination_value: &LLVMValue, destination_type: &Type, destination_size: u64, destination_volatile: u1) void
@@ -9434,9 +9496,11 @@ create_coerced_store = fn (module: &Module, source_value: &LLVMValue, source_typ
 
     // TODO: this smells badly
     // destination_type != uint1(module)
-    if (!type_is_abi_equal(module, source_type, destination_type) and destination_type.id == .struct)
+    if (destination_type.id == .struct and !type_is_abi_equal(module, source_type, destination_type))
     {
-        #trap();
+        >r = enter_struct_pointer_for_coerced_access(module, destination_value, destination_type, source_size);
+        destination_value = r.value;
+        destination_type = r.type;
     }
 
     >is_scalable: u1 = 0;
@@ -9470,7 +9534,12 @@ create_coerced_store = fn (module: &Module, source_value: &LLVMValue, source_typ
         }
         else
         {
-            #trap();
+            create_store(module, {
+                .source = source_value,
+                .destination = destination_value,
+                .type = destination_type,
+                .alignment = destination_alignment,
+            });
         }
     }
     else if (type_is_integer_backing(source_type))
@@ -9482,6 +9551,95 @@ create_coerced_store = fn (module: &Module, source_value: &LLVMValue, source_typ
         // Coercion through memory
         #trap();
     }
+}
+
+coerce_integer_or_pointer_to_integer_or_pointer = fn (module: &Module, source: &LLVMValue, source_type: &Type, destination_type: &Type) &LLVMValue
+{
+    #trap();
+}
+
+create_coerced_load = fn (module: &Module, source: &LLVMValue, source_type: &Type, destination_type: &Type) &LLVMValue
+{
+    >result: &LLVMValue = zero;
+
+    if (type_is_abi_equal(module, source_type, destination_type))
+    {
+        #trap();
+    }
+    else
+    {
+        >destination_size = get_byte_size(destination_type);
+
+        if (source_type.id == .struct)
+        {
+            >src = enter_struct_pointer_for_coerced_access(module, source, source_type, destination_size);
+            source = src.value;
+            source_type = src.type;
+        }
+
+        if (type_is_integer_backing(source_type) and type_is_integer_backing(destination_type))
+        {
+            >load = create_load(module, {
+                .type = source_type,
+                .pointer = source,
+                zero,
+            });
+            >result = coerce_integer_or_pointer_to_integer_or_pointer(module, load, source_type, destination_type);
+            return result;
+        }
+        else
+        {
+            >source_size = get_byte_size(source_type);
+
+            >is_source_type_scalable: u1 = 0;
+            >is_destination_type_scalable: u1 = 0;
+
+            if (!is_source_type_scalable and? !is_source_type_scalable and? source_size >= destination_size)
+            {
+                result = create_load(module, {
+                    .type = destination_type,
+                    .pointer = source,
+                    zero,
+                });
+            }
+            else
+            {
+                >scalable_vector_type: u1 = 0;
+                if (scalable_vector_type)
+                {
+                    #trap();
+                }
+                else
+                {
+                    // Coercion through memory
+                    >original_destination_alignment = get_byte_alignment(destination_type);
+                    >source_alignment = get_byte_alignment(source_type);
+                    >destination_alignment = #max(original_destination_alignment, source_alignment);
+                    >destination_alloca = create_alloca(module, {
+                        .type = destination_type,
+                        .name = "coerce",
+                        .alignment = destination_alignment,
+                    });
+
+                    >u64_type = uint64(module);
+                    resolve_type_in_place(module, u64_type);
+
+                    LLVMBuildMemCpy(module.llvm.builder, destination_alloca, destination_alignment, source, source_alignment, LLVMConstInt(u64_type.llvm.abi, source_size, 0));
+
+                    >load = create_load(module, {
+                        .type = destination_type,
+                        .pointer = destination_alloca,
+                        .alignment = destination_alignment,
+                        zero,
+                    });
+                    result = load;
+                }
+            }
+        }
+    }
+
+    assert(result != zero);
+    return result;
 }
 
 emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type: &Type) &LLVMValue
@@ -9805,7 +9963,85 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                         }
                         else
                         {
-                            #trap();
+                            assert(argument_abi.abi_count == 1);
+                            >destination_type = coerce_to_type;
+
+                            >v: &LLVMValue = zero;
+
+                            switch (src.id)
+                            {
+                                .zero =>
+                                {
+                                    v = LLVMConstNull(coerce_to_type.llvm.abi);
+                                },
+                                else =>
+                                {
+                                    >pointer: &LLVMValue = zero;
+                                    >pointer_type: &Type = zero;
+
+                                    if (src.type.id != .pointer)
+                                    {
+                                        >type = src.type;
+                                        pointer_type = get_pointer_type(module, type);
+
+                                        if (src.id != .variable)
+                                        {
+                                            pointer = create_alloca(module, {
+                                                .type = type,
+                                                .name = "my.coerce",
+                                                zero,
+                                            });
+
+                                            emit_assignment(module, pointer, pointer_type, src);
+                                        }
+                                        else
+                                        {
+                                            assert(src.id == .variable);
+                                            assert(src.kind == .right);
+                                            reanalyze_type_as_left_value(module, src);
+                                        }
+                                    }
+                                    else
+                                    {
+                                        #trap();
+                                    }
+
+                                    assert(pointer_type != zero);
+                                    assert(pointer_type.id == .pointer);
+                                    >element_type = pointer_type.content.pointer.element_type;
+
+                                    if (!pointer)
+                                    {
+                                        assert(src.type.id == .pointer);
+                                        assert(src.type.llvm.abi == module.llvm.pointer_type);
+                                        emit_value(module, src, .memory, 0);
+                                        pointer = src.llvm;
+                                    }
+
+                                    >source_type = element_type;
+                                    assert(source_type == argument_abi.semantic_type);
+                                    >load = create_coerced_load(module, pointer, source_type, destination_type);
+
+                                    >is_cmse_ns_call: u1 = 0;
+                                    if (is_cmse_ns_call)
+                                    {
+                                        #trap();
+                                    }
+
+                                    >maybe_undef: u1 = 0;
+                                    if (maybe_undef)
+                                    {
+                                        #trap();
+                                    }
+
+                                    v = load;
+                                },
+                            }
+
+                            assert(v != zero);
+
+                            llvm_abi_argument_value_buffer[abi_argument_count] = v;
+                            abi_argument_count += 1;
                         }
                     }
                 }
@@ -12945,15 +13181,30 @@ emit = fn (module: &Module) void
                             else
                             {
                                 return_value = create_load(module, {
-                                        .type = semantic_return_type,
-                                        .pointer = return_alloca,
-                                        zero,
-                                        });
+                                    .type = semantic_return_type,
+                                    .pointer = return_alloca,
+                                    zero,
+                                });
                             }
                         }
                         else
                         {
-                            #trap();
+                            >source: &LLVMValue = zero;
+                            if (function_type.abi.return_abi.attributes.direct.offset == 0)
+                            {
+                                source = return_alloca;
+                            }
+                            else
+                            {
+                                #trap();
+                            }
+
+                            assert(source != zero);
+
+                            >source_type = function_type.abi.return_abi.semantic_type;
+                            >destination_type = coerce_to_type;
+                            >result = create_coerced_load(module, source, source_type, destination_type);
+                            return_value = result;
                         }
                     },
                     .indirect =>
@@ -13329,6 +13580,7 @@ names: [_][]u8 =
     "return_u64_u64",
     "select",
     "slice",
+    "small_struct_ints",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32

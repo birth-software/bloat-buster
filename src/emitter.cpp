@@ -609,21 +609,19 @@ fn bool contains_no_user_data(Type* type, u64 start, u64 end)
         {
             case TypeId::structure:
                 {
-                    u64 offset = 0;
-
                     for (auto& field: type->structure.fields)
                     {
-                        if (offset >= end)
+                        auto field_offset = field.offset;
+                        if (field_offset >= end)
                         {
                             break;
                         }
 
-                        auto field_start = offset < start ? start - offset : 0;
-                        if (!contains_no_user_data(field.type, field_start, end - offset))
+                        auto field_start = field_offset < start ? start - field_offset : 0;
+                        if (!contains_no_user_data(field.type, field_start, end - field_offset))
                         {
                             return false;
                         }
-                        offset += get_byte_size(field.type);
                     }
 
                     return true;
