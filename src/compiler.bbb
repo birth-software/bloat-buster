@@ -3937,6 +3937,11 @@ parse_function_header = fn (module: &Module, scope: &Scope, mandate_argument_nam
     };
 }
 
+TypeIntrinsic = enum
+{
+    ReturnType,
+}
+
 parse_type = fn (module: &Module, scope: &Scope) &Type
 {
     >start_character = module.content[module.offset];
@@ -4112,13 +4117,28 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
 
                 #trap();
             }
-            #trap();
         }
-        #trap();
     }
     else if (start_character == '#')
     {
-        #trap();
+        module.offset += 1;
+
+        >identifier = parse_identifier(module);
+        >intrinsic_s2e = #string_to_enum(TypeIntrinsic, identifier);
+        if (!intrinsic_s2e.is_valid)
+        {
+            report_error();
+        }
+
+        >intrinsic = intrinsic_s2e.enum_value;
+        switch (intrinsic)
+        {
+            .ReturnType =>
+            {
+                >return_type = module.current_function.variable.type.content.function.base.semantic_return_type;
+                return return_type;
+            },
+        }
     }
     else
     {
@@ -12984,6 +13004,8 @@ names: [_][]u8 =
     "indirect",
     "indirect_struct",
     "indirect_varargs",
+    "ret_c_bool",
+    "return_type_builtin",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
