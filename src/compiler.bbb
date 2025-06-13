@@ -2501,6 +2501,7 @@ llvm_create_global_variable = fn (module: &LLVMModule, type: &LLVMType, is_const
 [extern] LLVMConstNeg = fn [cc(c)] (value: &LLVMValue) &LLVMValue;
 [extern] LLVMConstArray2 = fn [cc(c)] (element_type: &LLVMType, value_pointer: &&LLVMValue, value_count: u64) &LLVMValue;
 [extern] LLVMConstStringInContext2 = fn [cc(c)] (context: &LLVMContext, pointer: &u8, length: u64, dont_null_terminate: s32) &LLVMValue;
+[extern] LLVMConstNamedStruct = fn [cc(c)] (type: &LLVMType, constant_pointer: &&LLVMValue, constant_count: u32) &LLVMValue;
 
 [extern] LLVMInstructionEraseFromParent = fn [cc(c)] (value: &LLVMValue) void;
 [extern] LLVMGetOperand = fn [cc(c)] (value: &LLVMValue, index: u32) &LLVMValue;
@@ -2515,6 +2516,7 @@ llvm_create_global_variable = fn (module: &LLVMModule, type: &LLVMType, is_const
 [extern] LLVMDeleteBasicBlock = fn [cc(c)] (basic_block: &LLVMBasicBlock) void;
 
 [extern] LLVMIsABranchInst = fn [cc(c)] (value: &LLVMValue) &LLVMValue;
+[extern] LLVMIsAConstant = fn [cc(c)] (value: &LLVMValue) s32;
 [extern] LLVMIsConditional = fn [cc(c)] (value: &LLVMValue) s32;
 [extern] LLVMGetSuccessor = fn [cc(c)] (value: &LLVMValue, index: u32) &LLVMBasicBlock;
 
@@ -6070,7 +6072,7 @@ parse = fn (module: &Module) void
         }
 
         >type_it = module.scope.types.first;
-        >forward_declaration: &Type = zero;
+        >type_forward_declaration: &Type = zero;
 
         while (type_it)
         {
@@ -6078,7 +6080,7 @@ parse = fn (module: &Module) void
             {
                 if (type_it.id == .forward_declaration)
                 {
-                    forward_declaration = type_it;
+                    type_forward_declaration = type_it;
                     break;
                 }
                 else
@@ -6461,7 +6463,102 @@ parse = fn (module: &Module) void
                     },
                     .struct =>
                     {
-                        #trap();
+                        skip_space(module);
+
+                        >struct_type: &Type = undefined;
+                        if (type_forward_declaration)
+                        {
+                            struct_type = type_forward_declaration;
+                        }
+                        else
+                        {
+                            struct_type = new_type(module, {
+                                .id = .forward_declaration,
+                                .name = global_name,
+                                .scope = &module.scope,
+                                zero,
+                            });
+                        }
+
+                        if (consume_character_if_match(module, left_brace))
+                        {
+                            >field_buffer: [256]Field = undefined;
+
+                            >byte_size: u64 = 0;
+                            >byte_alignment: u32 = 1;
+                            >field_count: u64 = 0;
+
+                            while (1)
+                            {
+                                skip_space(module);
+
+                                if (consume_character_if_match(module, right_brace))
+                                {
+                                    break;
+                                }
+
+                                >field_index = field_count;
+                                >field_line = get_line(module);
+                                >field_name = parse_identifier(module);
+
+                                skip_space(module);
+                                expect_character(module, ':');
+                                skip_space(module);
+
+                                >field_type = parse_type(module, scope);
+
+                                >field_byte_size = get_byte_size(field_type);
+                                >field_byte_alignment = get_byte_alignment(field_type);
+                                // Align struct size by field alignment
+                                >field_byte_offset = align_forward(byte_size, #extend(field_byte_alignment));
+
+                                field_buffer[field_index] = {
+                                    .name = field_name,
+                                    .type = field_type,
+                                    .offset = field_byte_offset,
+                                    .line = field_line,
+                                };
+
+                                byte_size = field_byte_offset + field_byte_size;
+                                byte_alignment = #max(byte_alignment, field_byte_alignment);
+
+                                skip_space(module);
+
+                                consume_character_if_match(module, ',');
+
+                                field_count += 1;
+                            }
+
+                            byte_size = align_forward(byte_size, #extend(byte_alignment));
+                            assert(byte_size % #extend(byte_alignment) == 0);
+
+                            skip_space(module);
+                            consume_character_if_match(module, ';');
+
+                            >fields = arena_allocate_slice[Field](module.arena, field_count);
+                            memcpy(#pointer_cast(fields.pointer), #pointer_cast(&field_buffer), field_count * #byte_size(Field));
+
+                            struct_type.content = {
+                                .struct = {
+                                    .fields = fields,
+                                    .byte_size = byte_size,
+                                    .byte_alignment = byte_alignment,
+                                    .line = global_line,
+                                    .is_slice = 0,
+                                    .next = zero,
+                                },
+                            };
+                            struct_type.id = .struct;
+                        }
+                        else
+                        {
+                            if (type_forward_declaration)
+                            {
+                                report_error();
+                            }
+
+                            expect_character(module, ';');
+                        }
                     },
                     .typealias =>
                     {
@@ -8840,7 +8937,69 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             {
                 .struct =>
                 {
-                    #trap();
+                    >fields = aggregate_type.content.struct.fields;
+                    assert(fields.length <= 64);
+                    >is_ordered: u1 = 1;
+
+                    >same_values_as_field = fields.length == elements.length;
+                    >is_properly_initialized = same_values_as_field or zero;
+
+                    if (zero and same_values_as_field)
+                    {
+                        report_error();
+                    }
+
+                    if (!is_properly_initialized)
+                    {
+                        report_error();
+                    }
+
+                    assert(elements.length <= fields.length);
+
+                    for (initialization_index: 0..elements.length)
+                    {
+                        >element = &elements[initialization_index];
+                        >name = element.name;
+                        >value = element.value;
+
+                        >declaration_index: u64 = 0;
+
+                        while (declaration_index < fields.length)
+                        {
+                            >field = &fields[declaration_index];
+
+                            if (string_equal(name, field.name))
+                            {
+                                break;
+                            }
+
+                            declaration_index += 1;
+                        }
+
+                        if (declaration_index == fields.length)
+                        {
+                            report_error();
+                        }
+
+                        >mask = 1 << declaration_index;
+                        >current_mask = field_mask;
+                        if (current_mask & mask)
+                        {
+                            // Repeated field
+                            report_error();
+                        }
+
+                        field_mask = current_mask | mask;
+
+                        is_ordered = is_ordered and declaration_index == initialization_index;
+                        >field = &fields[declaration_index];
+                        >declaration_type = field.type;
+
+                        analyze_type(module, value, declaration_type, { .must_be_constant = analysis.must_be_constant, zero });
+                        is_constant = is_constant and value_is_constant(value);
+                    }
+
+                    value.content.aggregate_initialization.is_constant = is_constant and is_ordered;
                 },
                 .bits =>
                 {
@@ -10526,7 +10685,39 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                     {
                         .struct =>
                         {
-                            #trap();
+                            >fields = resolved_value_type.content.struct.fields;
+                            assert(fields.length <= 64);
+                            assert(elements.length <= 64);
+
+                            if (is_constant)
+                            {
+                                >constant_buffer: [64]&LLVMValue = undefined;
+                                for (i: 0..elements.length)
+                                {
+                                    >value = elements[i].value;
+                                    emit_value(module, value, .memory, must_be_constant);
+                                    >llvm_value = value.llvm;
+                                    assert(llvm_value != zero);
+                                    assert(LLVMIsAConstant(llvm_value) != 0);
+                                    constant_buffer[i] = llvm_value;
+                                }
+
+                                >constant_count = elements.length;
+
+                                if (is_zero)
+                                {
+                                    #trap();
+                                }
+
+                                assert(constant_count == fields.length);
+
+                                llvm_value = LLVMConstNamedStruct(get_llvm_type(resolved_value_type, type_kind), &constant_buffer[0], #truncate(constant_count));
+                            }
+                            else
+                            {
+                                // TODO: shouldn't this be a left value?
+                                report_error();
+                            }
                         },
                         .union =>
                         {
@@ -12469,6 +12660,8 @@ names: [_][]u8 = [
     "bits_no_backing_type",
     "bits_return_u1",
     "bits_zero",
+    "comparison",
+    "global_struct",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32

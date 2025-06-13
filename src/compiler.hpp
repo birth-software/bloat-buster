@@ -853,6 +853,7 @@ struct ValueConstantInteger
 
 struct FunctionLLVM
 {
+    LLVMValueRef alloca_insertion_point;
     LLVMBasicBlockRef return_block;
     LLVMValueRef return_alloca;
 };

@@ -1949,6 +1949,25 @@ struct AllocaOptions
     u32 alignment;
 };
 
+fn Global* get_current_function(Module* module)
+{
+    Global* parent_function_global;
+    if (module->current_function)
+    {
+        parent_function_global = module->current_function;
+    }
+    else if (module->current_macro_instantiation)
+    {
+        parent_function_global = module->current_macro_instantiation->instantiation_function;
+    }
+    else
+    {
+        report_error();
+    }
+
+    return parent_function_global;
+}
+
 fn LLVMValueRef create_alloca(Module* module, AllocaOptions options)
 {
     auto abi_type = options.type;
@@ -1964,7 +1983,15 @@ fn LLVMValueRef create_alloca(Module* module, AllocaOptions options)
         alignment = get_byte_alignment(abi_type);
     }
 
+    auto original_block = LLVMGetInsertBlock(module->llvm.builder);
+    auto function = get_current_function(module);
+    auto debug_location = LLVMGetCurrentDebugLocation2(module->llvm.builder);
+    LLVMPositionBuilderBefore(module->llvm.builder, function->variable.storage->function.llvm.alloca_insertion_point);
+    LLVMSetCurrentDebugLocation2(module->llvm.builder, 0);
+
     auto alloca = llvm_builder_create_alloca(module->llvm.builder, abi_type->llvm.memory, alignment, options.name);
+    LLVMPositionBuilderAtEnd(module->llvm.builder, original_block);
+    LLVMSetCurrentDebugLocation2(module->llvm.builder, debug_location);
     return alloca;
 }
 
@@ -3070,6 +3097,12 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, TypeAnal
                                 auto* entry_block = LLVMAppendBasicBlockInContext(module->llvm.context, llvm_function, "entry");
                                 LLVMPositionBuilderAtEnd(module->llvm.builder, entry_block);
 
+                                auto u32_type = uint32(module);
+                                resolve_type_in_place(module, u32_type);
+                                auto current_function = get_current_function(module);
+                                auto old_alloca_insertion_point = current_function->variable.storage->function.llvm.alloca_insertion_point;
+                                current_function->variable.storage->function.llvm.alloca_insertion_point = LLVMBuildAlloca(module->llvm.builder, u32_type->llvm.abi, "alloca_insert_point");
+
                                 auto alloca = create_alloca(module, {
                                     .type = string_type,
                                     .name = string_literal("retval"),
@@ -3137,6 +3170,8 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, TypeAnal
 
                                 enum_to_string = llvm_function;
                                 enum_type->enumerator.enum_to_string_function = enum_to_string;
+
+                                current_function->variable.storage->function.llvm.alloca_insertion_point = old_alloca_insertion_point;
                             }
 
                             assert(enum_to_string);
@@ -4260,6 +4295,12 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, TypeAnal
 
                     LLVMPositionBuilderAtEnd(module->llvm.builder, entry_block);
 
+                    auto current_function = get_current_function(module);
+                    auto old_alloca_insertion_point = current_function->variable.storage->function.llvm.alloca_insertion_point;
+                    auto u32_type = uint32(module);
+                    resolve_type_in_place(module, u32_type);
+                    current_function->variable.storage->function.llvm.alloca_insertion_point = LLVMBuildAlloca(module->llvm.builder, u32_type->llvm.abi, "alloca_insert_point");
+
                     LLVMValueRef arguments[2];
                     LLVMGetParams(llvm_function, arguments);
 
@@ -4468,6 +4509,8 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, TypeAnal
 
                     enum_type->enumerator.string_to_enum_function = llvm_function;
                     enum_type->enumerator.string_to_enum_struct_type = struct_type;
+
+                    current_function->variable.storage->function.llvm.alloca_insertion_point = old_alloca_insertion_point;
                 }
 
                 auto struct_type = enum_type->enumerator.string_to_enum_struct_type;
@@ -9507,6 +9550,10 @@ void emit(Module* module)
             LLVMPositionBuilderAtEnd(module->llvm.builder, entry_block);
             LLVMSetCurrentDebugLocation2(module->llvm.builder, 0);
 
+            auto u32_type = uint32(module);
+            resolve_type_in_place(module, u32_type);
+            global->variable.storage->function.llvm.alloca_insertion_point = LLVMBuildAlloca(module->llvm.builder, u32_type->llvm.abi, "alloca_insert_point");
+
             auto return_abi_kind = function_type->abi.return_abi.flags.kind;
             switch (return_abi_kind)
             {
@@ -9892,6 +9939,8 @@ void emit(Module* module)
 
                 LLVMBuildRet(module->llvm.builder, return_value);
             }
+
+            LLVMInstructionEraseFromParent(global->variable.storage->function.llvm.alloca_insertion_point);
 
             // END OF SCOPE
             module->current_function = 0;
