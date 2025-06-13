@@ -7523,7 +7523,7 @@ abi_system_v_classify_return_type = fn (module: &Module, semantic_return_type: &
 
     if (high_type)
     {
-        #trap();
+        low_type = get_by_value_argument_pair(module, low_type, high_type);
     }
 
     >result = abi_system_v_get_direct(module, {
@@ -9361,6 +9361,67 @@ reanalyze_type_as_left_value = fn (module: &Module, value: &Value) void
     analyze_type(module, value, expected_type, zero);
 }
 
+type_is_integer_backing = fn (type: &Type) u1
+{
+    #trap();
+}
+
+create_coerced_store = fn (module: &Module, source_value: &LLVMValue, source_type: &Type, destination_value: &LLVMValue, destination_type: &Type, destination_size: u64, destination_volatile: u1) void
+{
+    >source_size = get_byte_size(source_type);
+
+    // TODO: this smells badly
+    // destination_type != uint1(module)
+    if (!type_is_abi_equal(module, source_type, destination_type) and destination_type.id == .struct)
+    {
+        #trap();
+    }
+
+    >is_scalable: u1 = 0;
+
+    if (is_scalable or source_size <= destination_size)
+    {
+        >destination_alignment = get_byte_alignment(destination_type);
+
+        if (source_type.id == .integer and destination_type.id == .pointer and source_size == align_forward(destination_size, #extend(destination_alignment)))
+        {
+            #trap();
+        }
+        else if (source_type.id == .struct)
+        {
+            >fields = source_type.content.struct.fields;
+
+            for (i: 0..fields.length)
+            {
+                >field = &fields[i];
+
+                >gep = LLVMBuildStructGEP2(module.llvm.builder, source_type.llvm.abi, destination_value, #truncate(i), "");
+                >field_value = LLVMBuildExtractValue(module.llvm.builder, source_value, #truncate(i), "");
+
+                create_store(module, {
+                    .source = field_value,
+                    .destination = gep,
+                    .type = field.type,
+                    .alignment = destination_alignment,
+                });
+            }
+        }
+        else
+        {
+            #trap();
+        }
+    }
+    else if (type_is_integer_backing(source_type))
+    {
+        #trap();
+    }
+    else
+    {
+        // Coercion through memory
+        #trap();
+    }
+}
+
 emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type: &Type) &LLVMValue
 {
     assert(value.id == .call);
@@ -9834,14 +9895,98 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                 switch (evaluation_kind)
                 {
                     .scalar => { return llvm_call; },
-                    .aggregate => {},
-                    .complex => { unreachable; },
+                        .aggregate => {},
+                        .complex => { unreachable; },
                 }
+            }
 
+            // TODO: if
+            >fixed_vector_type: u1 = 0;
+            if (fixed_vector_type)
+            {
                 #trap();
             }
 
-            #trap();
+            >coerce_alloca: &LLVMValue = zero;
+
+            if (left_llvm)
+            {
+                assert(left_type.id == .pointer);
+                assert(left_type.content.pointer.element_type == return_abi.semantic_type);
+                coerce_alloca = left_llvm;
+            }
+            else
+            {
+                coerce_alloca = create_alloca(module, {
+                    .type = return_abi.semantic_type,
+                    .name = "coerce",
+                    zero,
+                });
+            }
+
+            >destination_pointer = coerce_alloca;
+
+            if (return_abi.attributes.direct.offset != 0)
+            {
+                #trap();
+            }
+
+            >destination_type = return_abi.semantic_type;
+
+            >source_value = llvm_call;
+            >source_type = raw_function_type.content.function.abi.abi_return_type;
+            >destination_size = get_byte_size(destination_type);
+            >left_destination_size = destination_size - #extend(return_abi.attributes.direct.offset);
+            >is_destination_volatile: u1 = 0;
+
+            switch (return_abi.semantic_type.id)
+            {
+                .struct =>
+                {
+                    >fields = return_abi.semantic_type.content.struct.fields;
+                    if (fields.length > 0)
+                    {
+                        create_coerced_store(module, source_value, source_type, destination_pointer, destination_type, left_destination_size, is_destination_volatile);
+                    }
+                    else
+                    {
+                        #trap();
+                    }
+                },
+                .array =>
+                {
+                    if (get_byte_size(return_abi.semantic_type) <= 8)
+                    {
+                        create_store(module, {
+                            .source = source_value,
+                            .destination = destination_pointer,
+                            .type = source_type,
+                            zero,
+                        });
+                    }
+                    else
+                    {
+                        create_coerced_store(module, source_value, source_type, destination_pointer, destination_type, left_destination_size, is_destination_volatile);
+                    }
+                },
+                else => { unreachable; },
+            }
+
+            assert(coerce_alloca != zero);
+
+            if (left_llvm)
+            {
+                assert(destination_pointer == left_llvm);
+                return destination_pointer;
+            }
+            else
+            {
+                switch (value.kind)
+                {
+                    .right => { #trap(); },
+                    .left => { #trap(); },
+                }
+            }
         },
         .indirect =>
         {
@@ -11797,11 +11942,6 @@ emit_debug_argument = fn (module: &Module, argument: &Argument, basic_block: &LL
     LLVMDIBuilderInsertDeclareRecordAtEnd(module.llvm.di_builder, argument.variable.storage.llvm, parameter_variable, null_expression(module), debug_location, basic_block);
 }
 
-create_coerced_store = fn (module: &Module, source_value: &LLVMValue, source_type: &Type, destination_value: &LLVMValue, destination_type: &Type, destination_size: u64, destination_volatile: u1) void
-{
-    #trap();
-}
-
 emit = fn (module: &Module) void
 {
     assert(!module.current_function);
@@ -13006,6 +13146,7 @@ names: [_][]u8 =
     "indirect_varargs",
     "ret_c_bool",
     "return_type_builtin",
+    "return_u64_u64",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32

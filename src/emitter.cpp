@@ -5840,7 +5840,6 @@ fn LLVMValueRef emit_call(Module* module, Value* value, LLVMValueRef left_llvm, 
 
                             auto destination_type = return_abi.semantic_type;
 
-
                             auto source_value = llvm_call;
                             auto source_type = raw_function_type->function.abi.abi_return_type;
                             auto destination_size = get_byte_size(destination_type);
