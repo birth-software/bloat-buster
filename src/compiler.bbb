@@ -9244,6 +9244,10 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
             value_type = result_type;
         },
+        .unreachable =>
+        {
+            value_type = noreturn_type(module);
+        },
         else =>
         {
             #trap();
@@ -11619,6 +11623,16 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
             
             llvm_value = LLVMBuildSelect(module.llvm.builder, llvm_condition, true_value.llvm, false_value.llvm, "");
         },
+        .unreachable =>
+        {
+            if (module.has_debug_info and !build_mode_is_optimized(module.build_mode))
+            {
+                emit_intrinsic_call(module, ."llvm.trap", zero, zero);
+            }
+
+            llvm_value = LLVMBuildUnreachable(module.llvm.builder);
+            LLVMClearInsertionPosition(module.llvm.builder);
+        },
         else =>
         {
             #trap();
@@ -13702,6 +13716,7 @@ names: [_][]u8 =
     "struct_u64_u64",
     "struct_varargs",
     "struct_zero",
+    "unreachable",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
