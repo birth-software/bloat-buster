@@ -10273,11 +10273,74 @@ emit_slice_expresion = fn (module: &Module, value: &Value) [2]&LLVMValue
     {
         .pointer =>
         {
-            #trap();
+            >element_type = sliceable_type.content.pointer.element_type;
+            >pointer_load = create_load(module, {
+                .type = sliceable_type,
+                .pointer = array_like.llvm,
+                zero,
+            });
+
+            >slice_pointer = pointer_load;
+            if (has_start)
+            {
+                slice_pointer = create_gep(module, {
+                    .type = element_type.llvm.memory,
+                    .pointer = pointer_load,
+                    .indices = [ start.llvm ][..],
+                    zero,
+                });
+            }
+
+            >slice_length = end.llvm;
+
+            if (has_start)
+            {
+                slice_length = LLVMBuildSub(module.llvm.builder, slice_length, start.llvm, "");
+            }
+
+            return [ slice_pointer, slice_length ];
         },
         .struct =>
         {
-            #trap();
+            assert(type_is_slice(sliceable_type));
+
+            >slice_load = create_load(module, {
+                .type = sliceable_type,
+                .pointer = array_like.llvm,
+                zero,
+            });
+
+            >old_slice_pointer = LLVMBuildExtractValue(module.llvm.builder, slice_load, 0, "");
+            >slice_pointer = old_slice_pointer;
+
+            if (has_start)
+            {
+                slice_pointer = create_gep(module, {
+                    .type = slice_element_type.llvm.memory,
+                    .pointer = old_slice_pointer,
+                    .indices = [ start.llvm ][..],
+                    zero,
+                });
+            }
+
+            >slice_end: &LLVMValue = undefined;
+
+            if (end)
+            {
+                slice_end = end.llvm;
+            }
+            else
+            {
+                slice_end = LLVMBuildExtractValue(module.llvm.builder, slice_load, 1, "");
+            }
+
+            >slice_length = slice_end;
+            if (has_start)
+            {
+                slice_length = LLVMBuildSub(module.llvm.builder, slice_end, start.llvm, "");
+            }
+
+            return [ slice_pointer, slice_length ];
         },
         .array =>
         {
@@ -10314,6 +10377,7 @@ emit_slice_expresion = fn (module: &Module, value: &Value) [2]&LLVMValue
 
             return [ slice_pointer, slice_length ];
         },
+        else => { unreachable; },
     }
 }
 
@@ -11424,6 +11488,11 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
 
                     emit_intrinsic_call(module, ."llvm.va_start", argument_types[..], argument_values[..]);
                 },
+                .va_arg =>
+                {
+                    >result = emit_va_arg(module, right, left_llvm, left_type, llvm_function);
+                    assert(result == left_llvm);
+                },
                 .aggregate_initialization =>
                 {
                     >elements = right.content.aggregate_initialization.elements;
@@ -11456,10 +11525,30 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                     >result = emit_call(module, right, left_llvm, left_type);
                     assert(result == left_llvm);
                 },
+                .slice_expression =>
+                {
+                    >slice_values = emit_slice_expresion(module, right);
+                    assert(type_is_slice(resolved_value_type));
+                    >slice_pointer_type = resolved_value_type.content.struct.fields[0].type;
+                    assert(slice_pointer_type.id == .pointer);
+                    create_store(module, {
+                        .source = slice_values[0],
+                        .destination = left_llvm,
+                        .type = slice_pointer_type,
+                        zero,
+                    });
+
+                    >slice_length_destination = LLVMBuildStructGEP2(module.llvm.builder, resolved_value_type.llvm.abi, left_llvm, 1, "");
+                    create_store(module, {
+                        .source = slice_values[1],
+                        .destination = slice_length_destination,
+                        .type = uint64(module),
+                        zero,
+                    });
+                },
                 else =>
                 {
-                    >result = emit_va_arg(module, right, left_llvm, left_type, llvm_function);
-                    assert(result == left_llvm);
+                    #trap();
                 },
             }
         },
@@ -13239,6 +13328,7 @@ names: [_][]u8 =
     "return_type_builtin",
     "return_u64_u64",
     "select",
+    "slice",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
