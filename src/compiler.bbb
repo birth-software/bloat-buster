@@ -1751,6 +1751,7 @@ ValueId = enum
     va_arg,
     unreachable,
     undefined,
+    select,
 }
 
 ValueConstantInteger = struct
@@ -1964,6 +1965,13 @@ ValueAggregateInitialization = struct
     is_zero: u1,
 }
 
+ValueSelect = struct
+{
+    condition: &Value,
+    true_value: &Value,
+    false_value: &Value,
+}
+
 ValueContent = union
 {
     constant_integer: ValueConstantInteger,
@@ -1981,6 +1989,7 @@ ValueContent = union
     string_literal: []u8,
     va_arg: ValueVaArg,
     aggregate_initialization: ValueAggregateInitialization,
+    select: ValueSelect,
 }
 
 ValueKind = enum
@@ -2465,6 +2474,8 @@ llvm_create_global_variable = fn (module: &LLVMModule, type: &LLVMType, is_const
 
 [extern] LLVMBuildPhi = fn [cc(c)] (builder: &LLVMBuilder, type: &LLVMType, name: &u8) &LLVMValue;
 [extern] LLVMAddIncoming = fn [cc(c)] (phi: &LLVMValue, values: &&LLVMValue, blocks: &&LLVMBasicBlock, count: u32) void;
+
+[extern] LLVMBuildSelect = fn [cc(c)] (builder: &LLVMBuilder, condition: &LLVMValue, true_value: &LLVMValue, false_value: &LLVMValue, name: &u8) &LLVMValue;
 
 [extern] LLVMBuildIntToPtr = fn [cc(c)] (builder: &LLVMBuilder, value: &LLVMValue, type: &LLVMType, name: &u8) &LLVMValue;
 [extern] LLVMBuildPtrToInt = fn [cc(c)] (builder: &LLVMBuilder, value: &LLVMValue, type: &LLVMType, name: &u8) &LLVMValue;
@@ -5073,7 +5084,36 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                 },
                 .select =>
                 {
-                    #trap();
+                    skip_space(module);
+                    expect_character(module, left_parenthesis);
+                    skip_space(module);
+
+                    >condition = parse_value(module, scope, zero);
+
+                    expect_character(module, ',');
+                    skip_space(module);
+
+                    >true_value = parse_value(module, scope, zero);
+
+                    expect_character(module, ',');
+                    skip_space(module);
+
+                    >false_value = parse_value(module, scope, zero);
+
+                    skip_space(module);
+                    expect_character(module, right_parenthesis);
+
+                    result.& = {
+                        .content = {
+                            .select = {
+                                .condition = condition,
+                                .true_value = true_value,
+                                .false_value = false_value,
+                            },
+                        },
+                        .id = .select,
+                        zero,
+                    };
                 },
                 .string_to_enum =>
                 {
@@ -9162,6 +9202,28 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
             value_type = expected_type;
         },
+        .select =>
+        {
+            >condition = value.content.select.condition;
+            >true_value = value.content.select.true_value;
+            >false_value = value.content.select.false_value;
+
+            analyze_type(module, condition, zero, { .must_be_constant = analysis.must_be_constant, zero });
+            >is_boolean: u1 = 0;
+
+            analyze_binary_type(module, true_value, false_value, is_boolean, expected_type, analysis.must_be_constant);
+
+            >true_type = true_value.type;
+            >false_type = false_value.type;
+            check_types(module, true_type, false_type);
+
+            assert(true_type == false_type);
+
+            >result_type = true_type;
+            typecheck(module, expected_type, result_type);
+
+            value_type = result_type;
+        },
         else =>
         {
             #trap();
@@ -11188,6 +11250,35 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
         {
             llvm_value = LLVMConstNull(get_llvm_type(resolved_value_type, type_kind));
         },
+        .select =>
+        {
+            >condition = value.content.select.condition;
+            >true_value = value.content.select.true_value;
+            >false_value = value.content.select.false_value;
+
+            emit_value(module, condition, .abi, must_be_constant);
+
+            >llvm_condition = condition.llvm;
+            >condition_type = condition.type;
+
+            switch (condition_type.id)
+            {
+                .integer =>
+                {
+                    >bit_count = condition_type.content.integer.bit_count;
+                    if (bit_count != 1)
+                    {
+                        #trap();
+                    }
+                },
+                else => { #trap(); },
+            }
+
+            emit_value(module, true_value, type_kind, must_be_constant);
+            emit_value(module, false_value, type_kind, must_be_constant);
+            
+            llvm_value = LLVMBuildSelect(module.llvm.builder, llvm_condition, true_value.llvm, false_value.llvm, "");
+        },
         else =>
         {
             #trap();
@@ -13147,6 +13238,7 @@ names: [_][]u8 =
     "ret_c_bool",
     "return_type_builtin",
     "return_u64_u64",
+    "select",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
