@@ -1432,6 +1432,10 @@ type_is_signed = fn (type: &Type) u1
         {
             return type_is_signed(type.content.enum.backing_type);
         },
+        .pointer =>
+        {
+            return 0;
+        },
         else =>
         {
             #trap();
@@ -11862,6 +11866,7 @@ names: [_][]u8 = [
     "function_pointer",
     "extern",
     "byte_size",
+    "argv",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
@@ -11955,7 +11960,7 @@ names: [_][]u8 = [
                         >position = arena.position;
 
                         >relative_file_path = arena_join_string(arena, [ "tests/", name, ".bbb" ][..]);
-                        >compiler_path = compile_file(arena, {
+                        >executable_path = compile_file(arena, {
                             .relative_file_path = relative_file_path,
                             .build_mode = build_mode,
                             .has_debug_info = has_debug_info,
@@ -11963,8 +11968,7 @@ names: [_][]u8 = [
                         });
 
                         >arguments: [_]&u8 = [
-                            compiler_path.pointer,
-                            "test",
+                            executable_path.pointer,
                             zero,
                         ];
                         >args = arguments[..arguments.length - 1];
