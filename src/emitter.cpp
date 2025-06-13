@@ -5704,11 +5704,10 @@ fn LLVMValueRef emit_call(Module* module, Value* value, LLVMValueRef left_llvm, 
                                             bool is_constant = true;
                                             LLVMLinkage linkage_type = LLVMInternalLinkage;
                                             LLVMThreadLocalMode thread_local_mode = {};
-                                            u32 address_space = 0;
                                             bool externally_initialized = false;
                                             auto alignment = get_byte_alignment(semantic_argument_type);
 
-                                            auto global = llvm_module_create_global_variable(module->llvm.module, semantic_argument_type->llvm.memory, is_constant, linkage_type, semantic_call_argument_value->llvm, string_literal("conststruct"), thread_local_mode, externally_initialized, alignment, LLVMGlobalUnnamedAddr);
+                                            auto global = llvm_module_create_global_variable(module->llvm.module, semantic_argument_type->llvm.memory, is_constant, linkage_type, semantic_call_argument_value->llvm, string_literal("indirect.const.aggregate"), thread_local_mode, externally_initialized, alignment, LLVMGlobalUnnamedAddr);
 
                                             llvm_abi_argument_value_buffer[abi_argument_count] = global;
                                             abi_argument_count += 1;
@@ -5753,7 +5752,6 @@ fn LLVMValueRef emit_call(Module* module, Value* value, LLVMValueRef left_llvm, 
                                 {
                                     trap();
                                 }
-
                             } break;
                         case AbiKind::ignore: unreachable();
                         default: unreachable();
@@ -6526,10 +6524,9 @@ fn void emit_assignment(Module* module, LLVMValueRef left_llvm, Type* left_type,
                                 emit_value(module, right, TypeKind::memory, true);
 
                                 LLVMLinkage linkage_type = LLVMInternalLinkage;
-                                unsigned address_space = 0;
                                 LLVMThreadLocalMode thread_local_mode = LLVMNotThreadLocal;
                                 bool externally_initialized = false;
-                                auto global = llvm_module_create_global_variable(module->llvm.module, value_type->llvm.memory, is_constant, linkage_type, right->llvm, string_literal("constarray"), thread_local_mode, externally_initialized, alignment, LLVMGlobalUnnamedAddr);
+                                auto global = llvm_module_create_global_variable(module->llvm.module, value_type->llvm.memory, is_constant, linkage_type, right->llvm, string_literal("const.aggregate"), thread_local_mode, externally_initialized, alignment, LLVMGlobalUnnamedAddr);
                                 LLVMBuildMemCpy(module->llvm.builder, left_llvm, alignment, global, alignment, byte_size_value);
                             }
                             else
