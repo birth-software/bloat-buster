@@ -1749,6 +1749,8 @@ ValueId = enum
     aggregate_initialization,
     zero,
     va_arg,
+    unreachable,
+    undefined,
 }
 
 ValueConstantInteger = struct
@@ -5220,7 +5222,22 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
         },
         .value_keyword =>
         {
-            #trap();
+            result = new_value(module);
+
+            >value_keyword = token.content.value_keyword;
+            >id: ValueId = undefined;
+
+            switch (value_keyword)
+            {
+                .undefined => { id = .undefined; },
+                .unreachable => { id = .unreachable; },
+                .zero => { id = .zero; },
+            }
+
+            result.& = {
+                .id = id,
+                zero,
+            };
         },
         else =>
         {
@@ -8901,6 +8918,20 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 else => { report_error(); },
             }
         },
+        .zero =>
+        {
+            if (!expected_type)
+            {
+                report_error();
+            }
+
+            if (expected_type.id == .void or expected_type.id == .noreturn)
+            {
+                report_error();
+            }
+
+            value_type = expected_type;
+        },
         else =>
         {
             #trap();
@@ -10582,6 +10613,10 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                     }
                 },
             }
+        },
+        .zero =>
+        {
+            llvm_value = LLVMConstNull(get_llvm_type(resolved_value_type, type_kind));
         },
         else =>
         {
@@ -12431,6 +12466,9 @@ names: [_][]u8 = [
     "assignment_operators",
     "not_pointer",
     "bits",
+    "bits_no_backing_type",
+    "bits_return_u1",
+    "bits_zero",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
