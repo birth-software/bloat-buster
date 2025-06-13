@@ -9073,7 +9073,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     >is_ordered: u1 = 1;
 
                     >same_values_as_field = fields.length == elements.length;
-                    >is_properly_initialized = same_values_as_field or zero;
+                    >is_properly_initialized = same_values_as_field or is_zero;
 
                     if (zero and same_values_as_field)
                     {
@@ -11475,7 +11475,19 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
 
                                 if (is_zero)
                                 {
-                                    #trap();
+                                    if (elements.length == fields.length)
+                                    {
+                                        unreachable;
+                                    }
+
+                                    for (i: elements.length..fields.length)
+                                    {
+                                        >field = &fields[i];
+                                        >field_type = field.type;
+                                        resolve_type_in_place(module, field_type);
+                                        constant_buffer[i] = LLVMConstNull(field_type.llvm.memory);
+                                        constant_count += 1;
+                                    }
                                 }
 
                                 assert(constant_count == fields.length);
@@ -11873,6 +11885,18 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                         .type = uint64(module),
                         zero,
                     });
+                },
+                .zero =>
+                {
+                    >u8_type = uint8(module);
+                    >u64_type = uint64(module);
+                    resolve_type_in_place(module, u8_type);
+                    resolve_type_in_place(module, u64_type);
+
+                    >size = get_byte_size(resolved_value_type);
+                    >alignment = get_byte_alignment(resolved_value_type);
+                    // TODO: should we just have typed memset instead: `LLVMConstNull(the_type)`, 1?
+                    LLVMBuildMemSet(module.llvm.builder, left_llvm, LLVMConstNull(u8_type.llvm.memory), LLVMConstInt(u64_type.llvm.memory, size, 0), alignment);
                 },
                 else =>
                 {
@@ -13675,6 +13699,9 @@ names: [_][]u8 =
     "small_struct_ints",
     "struct_assignment",
     "struct",
+    "struct_u64_u64",
+    "struct_varargs",
+    "struct_zero",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
