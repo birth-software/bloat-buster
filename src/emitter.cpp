@@ -853,7 +853,7 @@ fn AbiSystemVClassifyResult abi_system_v_classify_type(Type* type, AbiSystemVCla
 
                         u64 vector_size = 16;
 
-                        if (byte_size > 16 && (byte_size != get_byte_size(element_type) || byte_size > vector_size))
+                        if (byte_size > 16 && (byte_size != element_size || byte_size > vector_size))
                         {
                             unreachable();
                         }
@@ -5554,7 +5554,7 @@ fn LLVMValueRef emit_call(Module* module, Value* value, LLVMValueRef left_llvm, 
                                                                                 bool externally_initialized = false;
                                                                                 auto alignment = get_byte_alignment(semantic_argument_type);
 
-                                                                                auto global = llvm_module_create_global_variable(module->llvm.module, semantic_argument_type->llvm.memory, is_constant, linkage_type, semantic_call_argument_value->llvm, string_literal("conststruct"), thread_local_mode, externally_initialized, alignment, LLVMGlobalUnnamedAddr);
+                                                                                auto global = llvm_module_create_global_variable(module->llvm.module, semantic_argument_type->llvm.memory, is_constant, linkage_type, semantic_call_argument_value->llvm, string_literal("const.struct"), thread_local_mode, externally_initialized, alignment, LLVMGlobalUnnamedAddr);
 
                                                                                 for (u32 i = 0; i < coerce_fields.length; i += 1)
                                                                                 {

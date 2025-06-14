@@ -10122,7 +10122,44 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                             {
                                                 .aggregate_initialization =>
                                                 {
-                                                    #trap();
+                                                    >is_constant = semantic_call_argument_value.content.aggregate_initialization.is_constant;
+
+                                                    if (is_constant)
+                                                    {
+                                                        >linkage: LLVMLinkage = .internal;
+                                                        >thread_local_mode: LLVMThreadLocalMode = .none;
+                                                        >externally_initialized: u1 = 0;
+                                                        >alignment = get_byte_alignment(semantic_argument_type);
+                                                        >unnamed_address: LLVMUnnamedAddress = .global;
+
+                                                        >global = llvm_create_global_variable(module.llvm.module, semantic_argument_type.llvm.memory, is_constant, linkage, semantic_call_argument_value.llvm, "const.struct", thread_local_mode, externally_initialized, alignment, unnamed_address);
+
+                                                        for (i: 0..coerce_fields.length)
+                                                        {
+                                                            >gep = LLVMBuildStructGEP2(module.llvm.builder, coerce_to_type.llvm.abi, global, #truncate(i), "");
+                                                            >field = &coerce_fields[i];
+
+                                                            >maybe_undef: u1 = 0;
+                                                            if (maybe_undef)
+                                                            {
+                                                                #trap();
+                                                            }
+
+                                                            >load = create_load(module, {
+                                                                .type = field.type,
+                                                                .pointer = gep,
+                                                                .alignment = alignment,
+                                                                zero,
+                                                            });
+
+                                                            llvm_abi_argument_value_buffer[abi_argument_count] = load;
+                                                            abi_argument_count += 1;
+                                                        }
+                                                    }
+                                                    else
+                                                    {
+                                                        #trap();
+                                                    }
                                                 }
                                                 .zero =>
                                                 {
@@ -13871,6 +13908,10 @@ names: [_][]u8 =
     "c_abi1",
     "c_med_struct_ints",
     "c_ret_struct_array",
+    "c_split_struct_ints",
+    "c_string_to_slice",
+    "c_struct_with_array",
+    "c_function_pointer",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
