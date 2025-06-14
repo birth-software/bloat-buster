@@ -14455,6 +14455,8 @@ names: [_][]u8 =
     "return_small_struct",
     "c_abi",
     "string_to_enum",
+    "empty_if",
+    "else_if",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
