@@ -7065,7 +7065,8 @@ fn void analyze_block(Module* module, Block* block)
 
 fn LLVMValueRef emit_constant_array(Module* module, Slice<Value*> elements, Type* element_type)
 {
-    LLVMValueRef value_buffer[64];
+    LLVMValueRef value_buffer[128];
+    assert(elements.length <= array_length(value_buffer));
 
     resolve_type_in_place(module, element_type);
 

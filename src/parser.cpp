@@ -1937,7 +1937,7 @@ fn Value* parse_left(Module* module, Scope* scope, ValueBuilder builder)
         case TokenId::left_bracket:
             {
                 u64 element_count = 0;
-                Value* value_buffer[64];
+                Value* value_buffer[128];
 
                 skip_space(module);
 
@@ -1976,6 +1976,7 @@ fn Value* parse_left(Module* module, Scope* scope, ValueBuilder builder)
                         }
 
                         auto value = parse_value(module, scope, {});
+                        assert(element_count < array_length(value_buffer));
                         value_buffer[element_count] = value;
                         element_count += 1;
 

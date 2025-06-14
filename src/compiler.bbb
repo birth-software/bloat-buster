@@ -8510,6 +8510,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 // TODO: this is the default case
                 .ampersand,
                 .exclamation,
+                .va_end,
                 =>
                 {
                     >is_boolean = unary_is_boolean(unary_id);
@@ -11120,6 +11121,10 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                 {
                     llvm_value = llvm_unary_value;
                 },
+                .va_end =>
+                {
+                    llvm_value = emit_intrinsic_call(module, ."llvm.va_end", [ module.llvm.pointer_type ][..], [ llvm_unary_value ][..]);
+                },
                 else => { #trap(); },
             }
         },
@@ -13717,6 +13722,7 @@ names: [_][]u8 =
     "struct_varargs",
     "struct_zero",
     "unreachable",
+    "varargs",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
