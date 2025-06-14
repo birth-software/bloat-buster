@@ -9555,7 +9555,26 @@ create_coerced_store = fn (module: &Module, source_value: &LLVMValue, source_typ
     else
     {
         // Coercion through memory
-        #trap();
+
+        >original_destination_alignment = get_byte_alignment(destination_type);
+        >source_alloca_alignment = #max(original_destination_alignment, get_byte_alignment(source_type));
+        >source_alloca = create_alloca(module, {
+            .type = source_type,
+            .name = "coerce",
+            .alignment = source_alloca_alignment,
+        });
+
+        create_store(module, {
+            .source = source_value,
+            .destination = source_alloca,
+            .type = source_type,
+            .alignment = source_alloca_alignment,
+        });
+
+        >u64_type = uint64(module);
+        resolve_type_in_place(module, u64_type);
+
+        LLVMBuildMemCpy(module.llvm.builder, destination_value, original_destination_alignment, source_alloca, source_alloca_alignment, LLVMConstInt(u64_type.llvm.abi, destination_size, 0));
     }
 }
 
@@ -13723,6 +13742,9 @@ names: [_][]u8 =
     "struct_zero",
     "unreachable",
     "varargs",
+    "c_abi0",
+    "c_abi1",
+    "c_med_struct_ints",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
