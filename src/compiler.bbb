@@ -1762,6 +1762,7 @@ ValueId = enum
     unreachable,
     undefined,
     select,
+    string_to_enum,
 }
 
 ValueConstantInteger = struct
@@ -1982,6 +1983,12 @@ ValueSelect = struct
     false_value: &Value,
 }
 
+ValueStringToEnum = struct
+{
+    type: &Type,
+    string: &Value,
+}
+
 ValueContent = union
 {
     constant_integer: ValueConstantInteger,
@@ -2000,6 +2007,7 @@ ValueContent = union
     va_arg: ValueVaArg,
     aggregate_initialization: ValueAggregateInitialization,
     select: ValueSelect,
+    string_to_enum: ValueStringToEnum,
 }
 
 ValueKind = enum
@@ -2373,6 +2381,7 @@ LLVMICmpPredicate = enum u32
 [extern] LLVMCreateBuilderInContext = fn (context: &LLVMContext) &LLVMBuilder;
 
 [extern] LLVMTypeOf = fn (value: &LLVMValue) &LLVMType;
+[extern] LLVMGlobalGetValueType = fn (value: &LLVMValue) &LLVMType;
 
 [extern] LLVMVoidTypeInContext = fn [cc(c)] (context: &LLVMContext) &LLVMType;
 [extern] LLVMPointerTypeInContext = fn [cc(c)] (context: &LLVMContext, address_space: u32) &LLVMType;
@@ -2536,6 +2545,7 @@ llvm_create_global_variable = fn (module: &LLVMModule, type: &LLVMType, is_const
 [extern] LLVMConstArray2 = fn [cc(c)] (element_type: &LLVMType, value_pointer: &&LLVMValue, value_count: u64) &LLVMValue;
 [extern] LLVMConstStringInContext2 = fn [cc(c)] (context: &LLVMContext, pointer: &u8, length: u64, dont_null_terminate: s32) &LLVMValue;
 [extern] LLVMConstNamedStruct = fn [cc(c)] (type: &LLVMType, constant_pointer: &&LLVMValue, constant_count: u32) &LLVMValue;
+[extern] LLVMConstStructInContext = fn [cc(c)] (context: &LLVMContext, constant_pointer: &&LLVMValue, constant_count: u32, packed: s32) &LLVMValue;
 
 [extern] LLVMInstructionEraseFromParent = fn [cc(c)] (value: &LLVMValue) void;
 [extern] LLVMGetOperand = fn [cc(c)] (value: &LLVMValue, index: u32) &LLVMValue;
@@ -2576,6 +2586,7 @@ llvm_module_to_string = fn (module: &LLVMModule) []u8
 [extern] LLVMSetTarget = fn [cc(c)] (module: &LLVMModule, target_triple: &u8) void;
 
 [extern] LLVMAddFunction = fn [cc(c)] (module: &LLVMModule, name: &u8, function_type: &LLVMType) &LLVMValue;
+[extern] LLVMGetNamedFunction = fn [cc(c)] (module: &LLVMModule, name: &u8) &LLVMValue;
 
 llvm_module_create_function = fn (module: &LLVMModule, function_type: &LLVMType, linkage_type: LLVMLinkage, name: []u8) &LLVMValue
 {
@@ -2904,6 +2915,11 @@ uint32 = fn (module: &Module) &Type
 uint64 = fn (module: &Module) &Type
 {
     return integer_type(module, { .bit_count = 64, .signed = 0 });
+}
+
+sint32 = fn (module: &Module) &Type
+{
+    return integer_type(module, { .bit_count = 32, .signed = 1 });
 }
 
 void_type = fn (module: &Module) &Type
@@ -5184,7 +5200,31 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                 },
                 .string_to_enum =>
                 {
-                    #trap();
+                    skip_space(module);
+                    expect_character(module, left_parenthesis);
+                    skip_space(module);
+
+                    >type = parse_type(module, scope);
+
+                    skip_space(module);
+                    expect_character(module, ',');
+                    skip_space(module);
+
+                    >string_value = parse_value(module, scope, zero);
+
+                    skip_space(module);
+                    expect_character(module, right_parenthesis);
+
+                    result.& = {
+                        .content = {
+                            .string_to_enum = {
+                                .type = type,
+                                .string = string_value,
+                            },
+                        },
+                        .id = .string_to_enum,
+                        zero,
+                    };
                 },
                 // No argument intrinsic call
                 .trap,
@@ -8425,6 +8465,82 @@ get_va_list_type = fn (module: &Module) &Type
     return va_list_type;
 }
 
+get_enum_name_array_global = fn (module: &Module, enum_type: &Type) &Global
+{
+    assert(enum_type.id == .enum);
+
+    if (!enum_type.content.enum.name_array)
+    {
+        >fields = enum_type.content.enum.fields;
+        >u8_type = uint8(module);
+        >u64_type = uint64(module);
+        resolve_type_in_place(module, u8_type);
+        resolve_type_in_place(module, u64_type);
+        
+        >name_constant_buffer: [64]&LLVMValue = undefined;
+
+        for (i: 0..fields.length)
+        {
+            >field = &fields[i];
+
+            >is_constant: u1 = 1;
+            >null_terminate: u1 = 1;
+            >initial_value = LLVMConstStringInContext2(module.llvm.context, field.name.pointer, field.name.length, #extend(!null_terminate));
+            >alignment: u32 = 1;
+
+            >name_global = llvm_create_global_variable(module.llvm.module, LLVMArrayType2(u8_type.llvm.abi, field.name.length + #extend(null_terminate)), is_constant, .internal, initial_value, arena_join_string(module.arena, [ "string.", enum_type.name, ".", field.name ][..]), .none, 0, alignment, .global);
+
+            >constants: [_]&LLVMValue = [
+                name_global,
+                LLVMConstInt(u64_type.llvm.abi, field.name.length, 0),
+            ];
+            >slice_constant = LLVMConstStructInContext(module.llvm.context, &constants[0], constants.length, 0);
+            name_constant_buffer[i] = slice_constant;
+        }
+
+        >slice_type = get_slice_type(module, u8_type);
+        >array_element_count = fields.length;
+        >name_array = LLVMConstArray2(slice_type.llvm.abi, &name_constant_buffer[0], array_element_count);
+        >name_array_type = LLVMArrayType2(slice_type.llvm.abi, array_element_count);
+        >is_constant: u1 = 1;
+        >name_array_variable = llvm_create_global_variable(module.llvm.module, name_array_type, is_constant, .internal, name_array, "name.array.enum", .none, 0, get_byte_alignment(slice_type), .global);
+
+        >global_type = get_array_type(module, slice_type, array_element_count);
+        resolve_type_in_place(module, global_type);
+
+        >storage_type = get_pointer_type(module, global_type);
+        resolve_type_in_place(module, storage_type);
+
+        >global_storage = new_value(module);
+        global_storage.& = {
+            .type = storage_type,
+            .id = .global,
+            .kind = .left,
+            .llvm = name_array_variable,
+            zero,
+        };
+
+        >global = new_global(module);
+        global.& = {
+            .variable = {
+                .storage = global_storage,
+                .type = global_type,
+                .scope = &module.scope,
+                .name = arena_join_string(module.arena, [ "name.array.enum.", enum_type.name ][..]),
+                zero,
+            },
+            .linkage = .internal,
+            zero,
+        };
+
+        global.emitted = 1;
+
+        enum_type.content.enum.name_array = global;
+    }
+
+    return enum_type.content.enum.name_array;
+}
+
 analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysis: TypeAnalysis) void
 {
     assert(!value.type);
@@ -9406,6 +9522,337 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
         .unreachable =>
         {
             value_type = noreturn_type(module);
+        },
+        .string_to_enum =>
+        {
+            >enum_type = value.content.string_to_enum.type;
+            >enum_string_value = value.content.string_to_enum.string;
+
+            if (enum_type.id != .enum)
+            {
+                report_error();
+            }
+
+            if (!enum_type.content.enum.string_to_enum_function)
+            {
+                resolve_type_in_place(module, enum_type);
+
+                >fields = enum_type.content.enum.fields;
+                >array_element_count = fields.length;
+
+                >insert_block = LLVMGetInsertBlock(module.llvm.builder);
+
+                >u1_type = uint1(module);
+                >u8_type = uint8(module);
+                >u64_type = uint64(module);
+                resolve_type_in_place(module, u1_type);
+                resolve_type_in_place(module, u8_type);
+                resolve_type_in_place(module, u64_type);
+
+                >u64_zero = LLVMConstNull(u64_type.llvm.abi);
+
+                >enum_alignment = get_byte_alignment(enum_type);
+                >enum_size = get_byte_size(enum_type);
+                >byte_size = align_forward(enum_size + 1, #extend(enum_alignment));
+
+                >struct_fields = arena_allocate_slice[Field](module.arena, 2);
+
+                struct_fields[0] = {
+                    .name = "enum_value",
+                    .type = enum_type,
+                    zero,
+                };
+
+                struct_fields[1] = {
+                    .name = "is_valid",
+                    .type = u1_type,
+                    .offset = enum_size,
+                    zero,
+                };
+
+                >struct_type = new_type(module, {
+                    .content = {
+                        .struct = {
+                            .fields = struct_fields,
+                            .byte_size = byte_size,
+                            .byte_alignment = enum_alignment,
+                            zero,
+                        },
+                    },
+                    .id = .struct,
+                    .name = "string_to_enum",
+                    .scope = enum_type.scope,
+                    zero,
+                });
+                resolve_type_in_place(module, struct_type);
+
+                >argument_types: [_]&LLVMType = [ module.llvm.pointer_type, u64_type.llvm.abi ];
+                >llvm_function_type = LLVMFunctionType(struct_type.llvm.abi, &argument_types[0], argument_types.length, 0);
+                >slice_struct_type = get_slice_type(module, u8_type);
+
+                >function_name = arena_join_string(module.arena, [ "string_to_enum.", enum_type.name ][..]);
+                >llvm_function = llvm_module_create_function(module.llvm.module, llvm_function_type, .internal, function_name);
+                LLVMSetFunctionCallConv(llvm_function, .fast);
+
+                >name_array_global = get_enum_name_array_global(module, enum_type);
+
+                >enum_value_type = enum_type.llvm.memory;
+
+                >value_constant_buffer: [64]&LLVMValue = undefined;
+                for (i: 0..fields.length)
+                {
+                    >field = &fields[i];
+                    >global_value = LLVMConstInt(enum_value_type, field.value, 0);
+                    value_constant_buffer[i] = global_value;
+                }
+
+                >value_array = LLVMConstArray2(enum_value_type, &value_constant_buffer[0], array_element_count);
+                >value_array_variable_type = LLVMArrayType2(enum_value_type, array_element_count);
+                >is_constant: u1 = 1;
+                >thread_local_mode: LLVMThreadLocalMode = .none;
+                >externally_initialized: u1 = 0;
+                >value_array_variable = llvm_create_global_variable(module.llvm.module, value_array_variable_type, is_constant, .internal, value_array, "value.array.enum", thread_local_mode, externally_initialized, enum_alignment, .global);
+
+                >entry_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "entry");
+                >return_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "return_block");
+                >loop_entry_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "loop.entry");
+                >loop_body_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "loop.body");
+                >loop_exit_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "loop.exit");
+
+                LLVMPositionBuilderAtEnd(module.llvm.builder, entry_block);
+
+                >arguments: [2]&LLVMValue = undefined;
+                LLVMGetParams(llvm_function, &arguments[0]);
+
+                >return_value_alloca = create_alloca(module, {
+                    .type = enum_type,
+                    .name = "retval",
+                    zero,
+                });
+
+                >return_boolean_alloca = create_alloca(module, {
+                    .type = u8_type,
+                    .name = "retbool",
+                    zero,
+                });
+
+                >index_alloca = create_alloca(module, {
+                    .type = u64_type,
+                    .name = "index",
+                    zero,
+                });
+
+                create_store(module, {
+                    .source = u64_zero,
+                    .destination = index_alloca,
+                    .type = u64_type,
+                    zero,
+                });
+
+                >slice_pointer = arguments[0];
+                >slice_length = arguments[1];
+                LLVMBuildBr(module.llvm.builder, loop_entry_block);
+
+                LLVMPositionBuilderAtEnd(module.llvm.builder, loop_entry_block);
+                >index_load = create_load(module, {
+                    .type = u64_type,
+                    .pointer = index_alloca,
+                    zero,
+                });
+                >loop_compare = LLVMBuildICmp(module.llvm.builder, .ult, index_load, LLVMConstInt(u64_type.llvm.abi, array_element_count, 0), "");
+                LLVMBuildCondBr(module.llvm.builder, loop_compare, loop_body_block, loop_exit_block);
+
+                LLVMPositionBuilderAtEnd(module.llvm.builder, loop_body_block);
+                >body_index_load = create_load(module, {
+                    .type = u64_type,
+                    .pointer = index_alloca,
+                    zero,
+                });
+
+                >array_element_pointer = create_gep(module, {
+                    .type = name_array_global.variable.type.llvm.memory,
+                    .pointer = name_array_global.variable.storage.llvm,
+                    .indices = [ u64_zero, body_index_load ][..],
+                    zero,
+                });
+
+                >element_length_pointer = LLVMBuildStructGEP2(module.llvm.builder, slice_struct_type.llvm.abi, array_element_pointer, 1, "");
+                >element_length = create_load(module, {
+                    .type = u64_type,
+                    .pointer = element_length_pointer,
+                    zero,
+                });
+
+                >length_comparison = LLVMBuildICmp(module.llvm.builder, .eq, slice_length, element_length, "");
+
+                >length_match_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "length.match");
+                >length_mismatch_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "length.mismatch");
+                LLVMBuildCondBr(module.llvm.builder, length_comparison, length_match_block, length_mismatch_block);
+
+                LLVMPositionBuilderAtEnd(module.llvm.builder, length_match_block);
+
+                >s32_type = sint32(module);
+                resolve_type_in_place(module, s32_type);
+
+                >memcmp = module.llvm.memcmp;
+                if (!memcmp)
+                {
+                    memcmp = LLVMGetNamedFunction(module.llvm.module, "memcmp");
+                    if (!memcmp)
+                    {
+                        >arguments: [_]&LLVMType = [
+                            module.llvm.pointer_type,
+                            module.llvm.pointer_type,
+                            u64_type.llvm.abi,
+                        ];
+                        >llvm_function_type = LLVMFunctionType(s32_type.llvm.abi, &arguments[0], arguments.length, 0);
+                        >llvm_function = llvm_module_create_function(module.llvm.module, llvm_function_type, .external, "memcmp");
+                        memcmp = llvm_function;
+                    }
+
+                    module.llvm.memcmp = memcmp;
+                }
+
+                assert(memcmp != zero);
+                assert(module.llvm.memcmp != zero);
+
+                >length_index_load = create_load(module, {
+                    .type = u64_type,
+                    .pointer = index_alloca,
+                    zero,
+                });
+
+                >length_array_element_pointer = create_gep(module, {
+                    .type = name_array_global.variable.type.llvm.memory,
+                    .pointer = name_array_global.variable.storage.llvm,
+                    .indices = [ u64_zero, length_index_load ][..],
+                    zero,
+                });
+
+                >element_pointer_pointer = LLVMBuildStructGEP2(module.llvm.builder, slice_struct_type.llvm.abi, length_array_element_pointer, 0, "");
+                >element_pointer = create_load(module, {
+                    .type = get_pointer_type(module, u8_type),
+                    .pointer = element_pointer_pointer,
+                    zero,
+                });
+
+                >memcmp_arguments: [_]&LLVMValue = [
+                    slice_pointer,
+                    element_pointer,
+                    slice_length,
+                ];
+                >memcmp_return_result = LLVMBuildCall2(module.llvm.builder, LLVMGlobalGetValueType(memcmp), memcmp, &memcmp_arguments[0], memcmp_arguments.length, "");
+                >content_comparison = LLVMBuildICmp(module.llvm.builder, .eq, memcmp_return_result, LLVMConstNull(s32_type.llvm.abi), "");
+                >content_match_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "content.match");
+                LLVMBuildCondBr(module.llvm.builder, content_comparison, content_match_block, length_mismatch_block);
+
+                LLVMPositionBuilderAtEnd(module.llvm.builder, content_match_block);
+
+                >content_index_load = create_load(module, {
+                    .type = u64_type,
+                    .pointer = index_alloca,
+                    zero,
+                });
+
+                >value_array_element_pointer = create_gep(module, {
+                    .type = value_array_variable_type,
+                    .pointer = value_array_variable,
+                    .indices = [ u64_zero, content_index_load ][..],
+                    zero,
+                });
+
+                >enum_value_load = create_load(module, {
+                    .type = enum_type,
+                    .pointer = value_array_element_pointer,
+                    zero,
+                });
+
+                create_store(module, {
+                    .source = enum_value_load,
+                    .destination = return_value_alloca,
+                    .type = enum_type,
+                    zero,
+                });
+
+                create_store(module, {
+                    .source = LLVMConstInt(u8_type.llvm.abi, 1, 0),
+                    .destination = return_boolean_alloca,
+                    .type = u8_type,
+                    zero,
+                });
+
+                LLVMBuildBr(module.llvm.builder, return_block);
+
+                LLVMPositionBuilderAtEnd(module.llvm.builder, length_mismatch_block);
+
+                >inc_index_load = create_load(module, {
+                    .type = u64_type,
+                    .pointer = index_alloca,
+                    zero,
+                });
+
+                >inc = LLVMBuildAdd(module.llvm.builder, inc_index_load, LLVMConstInt(u64_type.llvm.abi, 1, 0), "");
+
+                create_store(module, {
+                    .source = inc,
+                    .destination = index_alloca,
+                    .type = u64_type,
+                    zero,
+                });
+
+                LLVMBuildBr(module.llvm.builder, loop_entry_block);
+
+                LLVMPositionBuilderAtEnd(module.llvm.builder, loop_exit_block);
+
+                create_store(module, {
+                    .source = LLVMConstNull(enum_type.llvm.memory),
+                    .destination = return_value_alloca,
+                    .type = enum_type,
+                    zero,
+                });
+                create_store(module, {
+                    .source = LLVMConstNull(u8_type.llvm.abi),
+                    .destination = return_boolean_alloca,
+                    .type = u8_type,
+                    zero,
+                });
+                LLVMBuildBr(module.llvm.builder, return_block);
+
+                LLVMPositionBuilderAtEnd(module.llvm.builder, return_block);
+                >value_load = create_load(module, {
+                    .type = enum_type,
+                    .pointer = return_value_alloca,
+                    .kind = .memory,
+                    zero,
+                });
+
+                >return_value = LLVMBuildInsertValue(module.llvm.builder, LLVMGetPoison(struct_type.llvm.memory), value_load, 0, "");
+                >bool_load = create_load(module, {
+                    .type = u8_type,
+                    .pointer = return_boolean_alloca,
+                    zero,
+                });
+
+                return_value = LLVMBuildInsertValue(module.llvm.builder, return_value, bool_load, 1, "");
+
+                LLVMBuildRet(module.llvm.builder, return_value);
+
+                // End of scope
+                LLVMPositionBuilderAtEnd(module.llvm.builder, insert_block);
+
+                enum_type.content.enum.string_to_enum_function = llvm_function;
+                enum_type.content.enum.string_to_enum_struct_type = struct_type;
+            }
+
+            >struct_type = enum_type.content.enum.string_to_enum_struct_type;
+            assert(struct_type != zero);
+
+            typecheck(module, expected_type, struct_type);
+
+            >string_type = get_slice_type(module, uint8(module));
+
+            analyze_type(module, enum_string_value, string_type, { .must_be_constant = analysis.must_be_constant, zero });
+            value_type = struct_type;
         },
         else =>
         {
@@ -11852,6 +12299,26 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
             llvm_value = LLVMBuildUnreachable(module.llvm.builder);
             LLVMClearInsertionPosition(module.llvm.builder);
         },
+        .string_to_enum =>
+        {
+            >enum_type = value.content.string_to_enum.type;
+            >string_value = value.content.string_to_enum.string;
+
+            emit_value(module, string_value, .memory, must_be_constant);
+
+            >llvm_string_value = string_value.llvm;
+
+            >s2e = enum_type.content.enum.string_to_enum_function;
+            >first_field = LLVMBuildExtractValue(module.llvm.builder, llvm_string_value, 0, "");
+            >second_field = LLVMBuildExtractValue(module.llvm.builder, llvm_string_value, 1, "");
+            >fields: [_]&LLVMValue = [
+                first_field,
+                second_field,
+            ];
+            >call = LLVMBuildCall2(module.llvm.builder, LLVMGlobalGetValueType(s2e), s2e, &fields[0], fields.length, "");
+            LLVMSetInstructionCallConv(call, .fast);
+            llvm_value = call;
+        },
         else =>
         {
             #trap();
@@ -12150,6 +12617,20 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                             LLVMBuildMemCpy(module.llvm.builder, left_llvm, alignment, variable.storage.llvm, alignment, LLVMConstInt(u64_type.llvm.abi, memcpy_size, 0));
                         },
                     }
+                },
+                .string_to_enum =>
+                {
+                    emit_value(module, right, .memory, 0);
+
+                    >enum_type = right.content.string_to_enum.type;
+                    >s2e_struct_type = enum_type.content.enum.string_to_enum_struct_type;
+
+                    create_store(module, {
+                        .source = right.llvm,
+                        .destination = left_llvm,
+                        .type = s2e_struct_type,
+                        zero,
+                    });
                 },
                 else =>
                 {
@@ -12850,286 +13331,284 @@ emit = fn (module: &Module) void
         assert(!module.current_macro_instantiation);
         assert(!module.current_macro_declaration);
 
-        if (global.emitted)
+        if (!global.emitted)
         {
-            continue;
-        }
-
-        switch (global.variable.storage.id)
-        {
-            .function, .forward_declared_function =>
+            switch (global.variable.storage.id)
             {
-                >global_pointer_type = global.variable.storage.type;
-                assert(global_pointer_type.id == .pointer);
-                >global_value_type = global_pointer_type.content.pointer.element_type;
-
-                >function_type = &global_value_type.content.function;
-                >semantic_argument_types = function_type.base.semantic_argument_types;
-                >semantic_return_type = function_type.base.semantic_return_type;
-                function_type.abi.argument_abis = arena_allocate_slice[AbiInformation](module.arena, semantic_argument_types.length);
-                >llvm_abi_argument_type_buffer: [64]&LLVMType = undefined;
-
-                >resolved_calling_convention: ResolvedCallingConvention = undefined;
-                >calling_convention = function_type.base.calling_convention;
-                switch (calling_convention)
+                .function, .forward_declared_function =>
                 {
-                    .c =>
+                    >global_pointer_type = global.variable.storage.type;
+                    assert(global_pointer_type.id == .pointer);
+                    >global_value_type = global_pointer_type.content.pointer.element_type;
+
+                    >function_type = &global_value_type.content.function;
+                    >semantic_argument_types = function_type.base.semantic_argument_types;
+                    >semantic_return_type = function_type.base.semantic_return_type;
+                    function_type.abi.argument_abis = arena_allocate_slice[AbiInformation](module.arena, semantic_argument_types.length);
+                    >llvm_abi_argument_type_buffer: [64]&LLVMType = undefined;
+
+                    >resolved_calling_convention: ResolvedCallingConvention = undefined;
+                    >calling_convention = function_type.base.calling_convention;
+                    switch (calling_convention)
                     {
-                        // TODO: switch on platform
-                        resolved_calling_convention = .system_v;
-                    },
-                }
+                        .c =>
+                        {
+                            // TODO: switch on platform
+                            resolved_calling_convention = .system_v;
+                        },
+                    }
 
-                >register_call = resolved_calling_convention == .system_v and 0; // TODO: regcall calling convention
+                    >register_call = resolved_calling_convention == .system_v and 0; // TODO: regcall calling convention
 
-                switch (resolved_calling_convention)
-                {
-                    .system_v =>
+                    switch (resolved_calling_convention)
                     {
-                        >abi_argument_type_buffer: [64]&Type = undefined;
-                        >abi_argument_type_count: u16 = 0;
-
-                        function_type.abi.available_registers = {
-                            .system_v = {
-                                .gpr = #select(register_call, 11, 6),
-                                .sse = #select(register_call, 16, 8),
-                            },
-                        };
-
-                        function_type.abi.return_abi = abi_system_v_classify_return_type(module, resolve_alias(module, semantic_return_type));
-
-                        >return_abi_kind = function_type.abi.return_abi.flags.kind;
-
-                        >abi_return_type: &Type = undefined;
-                        
-                        switch (return_abi_kind)
+                        .system_v =>
                         {
-                            .direct,
-                            .extend,
-                            =>
+                            >abi_argument_type_buffer: [64]&Type = undefined;
+                            >abi_argument_type_count: u16 = 0;
+
+                            function_type.abi.available_registers = {
+                                .system_v = {
+                                    .gpr = #select(register_call, 11, 6),
+                                    .sse = #select(register_call, 16, 8),
+                                },
+                            };
+
+                            function_type.abi.return_abi = abi_system_v_classify_return_type(module, resolve_alias(module, semantic_return_type));
+
+                            >return_abi_kind = function_type.abi.return_abi.flags.kind;
+
+                            >abi_return_type: &Type = undefined;
+
+                            switch (return_abi_kind)
                             {
-                                abi_return_type = function_type.abi.return_abi.coerce_to_type;
-                            },
-                            .ignore,
-                            .indirect,
-                            =>
-                            {
-                                abi_return_type = void_type(module);
-                            },
-                            else =>
-                            {
-                                unreachable; // TODO
-                            },
-                        }
-
-                        assert(abi_return_type != zero);
-                        function_type.abi.abi_return_type = abi_return_type;
-                        resolve_type_in_place(module, abi_return_type);
-
-                        if (return_abi_kind == .indirect)
-                        {
-                            assert(!function_type.abi.return_abi.flags.sret_after_this);
-                            function_type.abi.available_registers.system_v.gpr -= 1;
-                            >indirect_type = get_pointer_type(module, function_type.abi.return_abi.semantic_type);
-                            resolve_type_in_place(module, indirect_type);
-
-                            >abi_index = abi_argument_type_count;
-                            abi_argument_type_buffer[abi_index] = indirect_type;
-                            llvm_abi_argument_type_buffer[abi_index] = indirect_type.llvm.abi;
-
-                            abi_argument_type_count += 1;
-                        }
-
-                        if (semantic_argument_types.length != 0)
-                        {
-                            for (i: 0..semantic_argument_types.length)
-                            {
-                                >abi = &function_type.abi.argument_abis[i];
-                                >semantic_argument_type = function_type.base.semantic_argument_types[i];
-                                >is_named_argument = i < semantic_argument_types.length;
-                                assert(is_named_argument);
-
-                                abi.& = abi_system_v_classify_argument(module, &function_type.abi.available_registers.system_v, llvm_abi_argument_type_buffer[..], abi_argument_type_buffer[..], {
-                                    .type = semantic_argument_type,
-                                    .abi_start = abi_argument_type_count,
-                                    .is_named_argument = is_named_argument,
-                                    zero,
-                                });
-
-                                abi_argument_type_count += abi.abi_count;
+                                .direct,
+                                    .extend,
+                                    =>
+                                    {
+                                        abi_return_type = function_type.abi.return_abi.coerce_to_type;
+                                    },
+                                    .ignore,
+                                    .indirect,
+                                    =>
+                                    {
+                                        abi_return_type = void_type(module);
+                                    },
+                                    else =>
+                                    {
+                                        unreachable; // TODO
+                                    },
                             }
 
+                            assert(abi_return_type != zero);
+                            function_type.abi.abi_return_type = abi_return_type;
+                            resolve_type_in_place(module, abi_return_type);
+
+                            if (return_abi_kind == .indirect)
+                            {
+                                assert(!function_type.abi.return_abi.flags.sret_after_this);
+                                function_type.abi.available_registers.system_v.gpr -= 1;
+                                >indirect_type = get_pointer_type(module, function_type.abi.return_abi.semantic_type);
+                                resolve_type_in_place(module, indirect_type);
+
+                                >abi_index = abi_argument_type_count;
+                                abi_argument_type_buffer[abi_index] = indirect_type;
+                                llvm_abi_argument_type_buffer[abi_index] = indirect_type.llvm.abi;
+
+                                abi_argument_type_count += 1;
+                            }
+
+                            if (semantic_argument_types.length != 0)
+                            {
+                                for (i: 0..semantic_argument_types.length)
+                                {
+                                    >abi = &function_type.abi.argument_abis[i];
+                                    >semantic_argument_type = function_type.base.semantic_argument_types[i];
+                                    >is_named_argument = i < semantic_argument_types.length;
+                                    assert(is_named_argument);
+
+                                    abi.& = abi_system_v_classify_argument(module, &function_type.abi.available_registers.system_v, llvm_abi_argument_type_buffer[..], abi_argument_type_buffer[..], {
+                                            .type = semantic_argument_type,
+                                            .abi_start = abi_argument_type_count,
+                                            .is_named_argument = is_named_argument,
+                                            zero,
+                                            });
+
+                                    abi_argument_type_count += abi.abi_count;
+                                }
+
+                            }
+
+                            >abi_argument_types = arena_allocate_slice[&Type](module.arena, #extend(abi_argument_type_count));
+                            memcpy(#pointer_cast(abi_argument_types.pointer), #pointer_cast(&abi_argument_type_buffer), #extend(#byte_size(&Type) * abi_argument_type_count));
+                            function_type.abi.abi_argument_types = abi_argument_types;
+                        },
+                            .win64 =>
+                            {
+#trap();
+                            },
+                    }
+
+                    >llvm_function_type = LLVMFunctionType(function_type.abi.abi_return_type.llvm.abi, &llvm_abi_argument_type_buffer[0], #truncate(function_type.abi.abi_argument_types.length), #extend(function_type.base.is_variable_argument));
+
+                    >subroutine_type: &LLVMMetadata = zero;
+
+                    if (module.has_debug_info)
+                    {
+                        >debug_argument_type_buffer: [64]&LLVMMetadata = undefined;
+                        >debug_argument_types = debug_argument_type_buffer[..function_type.abi.argument_abis.length + 1 + #extend(function_type.base.is_variable_argument)];
+                        debug_argument_types[0] = function_type.abi.return_abi.semantic_type.llvm.debug;
+                        assert(debug_argument_types[0] != zero);
+
+                        // TODO: support double slicing: sliceable_value[1..][0..length] -- 2 slicing expressions
+                        >debug_argument_type_slice = debug_argument_types[1..];
+                        debug_argument_type_slice = debug_argument_type_slice[0..function_type.abi.argument_abis.length];
+
+                        for (i: 0..function_type.abi.argument_abis.length)
+                        {
+                            >abi = &function_type.abi.argument_abis[i];
+                            >debug_argument_type = &debug_argument_type_slice[i];
+                            debug_argument_type.& = abi.semantic_type.llvm.debug;
+                            assert(debug_argument_type.& != zero);
                         }
 
-                        >abi_argument_types = arena_allocate_slice[&Type](module.arena, #extend(abi_argument_type_count));
-                        memcpy(#pointer_cast(abi_argument_types.pointer), #pointer_cast(&abi_argument_type_buffer), #extend(#byte_size(&Type) * abi_argument_type_count));
-                        function_type.abi.abi_argument_types = abi_argument_types;
-                    },
-                    .win64 =>
-                    {
-                        #trap();
-                    },
-                }
+                        if (function_type.base.is_variable_argument)
+                        {
+                            >void_ty = void_type(module);
+                            assert(void_ty.llvm.debug != zero);
+                            debug_argument_types[function_type.abi.argument_abis.length + 1] = void_ty.llvm.debug;
+                        }
 
-                >llvm_function_type = LLVMFunctionType(function_type.abi.abi_return_type.llvm.abi, &llvm_abi_argument_type_buffer[0], #truncate(function_type.abi.abi_argument_types.length), #extend(function_type.base.is_variable_argument));
-
-                >subroutine_type: &LLVMMetadata = zero;
-
-                if (module.has_debug_info)
-                {
-                    >debug_argument_type_buffer: [64]&LLVMMetadata = undefined;
-                    >debug_argument_types = debug_argument_type_buffer[..function_type.abi.argument_abis.length + 1 + #extend(function_type.base.is_variable_argument)];
-                    debug_argument_types[0] = function_type.abi.return_abi.semantic_type.llvm.debug;
-                    assert(debug_argument_types[0] != zero);
-
-                    // TODO: support double slicing: sliceable_value[1..][0..length] -- 2 slicing expressions
-                    >debug_argument_type_slice = debug_argument_types[1..];
-                    debug_argument_type_slice = debug_argument_type_slice[0..function_type.abi.argument_abis.length];
-
-                    for (i: 0..function_type.abi.argument_abis.length)
-                    {
-                        >abi = &function_type.abi.argument_abis[i];
-                        >debug_argument_type = &debug_argument_type_slice[i];
-                        debug_argument_type.& = abi.semantic_type.llvm.debug;
-                        assert(debug_argument_type.& != zero);
+                        >flags: LLVMDIFlags = zero;
+                        subroutine_type = LLVMDIBuilderCreateSubroutineType(module.llvm.di_builder, module.llvm.file, debug_argument_types.pointer, #truncate(debug_argument_types.length), flags);
                     }
 
-                    if (function_type.base.is_variable_argument)
+                    assert(global.variable.storage.type.id == .pointer);
+                    >value_type = global.variable.storage.type.content.pointer.element_type;
+                    value_type.llvm.abi = llvm_function_type;
+                    value_type.llvm.debug = subroutine_type;
+
+                    >llvm_linkage: LLVMLinkage = undefined;
+
+                    switch (global.linkage)
                     {
-                        >void_ty = void_type(module);
-                        assert(void_ty.llvm.debug != zero);
-                        debug_argument_types[function_type.abi.argument_abis.length + 1] = void_ty.llvm.debug;
+                        .internal =>
+                        {
+                            llvm_linkage = .internal;
+                        },
+                            .external =>
+                            {
+                                llvm_linkage = .external;
+                            },
                     }
 
-                    >flags: LLVMDIFlags = zero;
-                    subroutine_type = LLVMDIBuilderCreateSubroutineType(module.llvm.di_builder, module.llvm.file, debug_argument_types.pointer, #truncate(debug_argument_types.length), flags);
-                }
-
-                assert(global.variable.storage.type.id == .pointer);
-                >value_type = global.variable.storage.type.content.pointer.element_type;
-                value_type.llvm.abi = llvm_function_type;
-                value_type.llvm.debug = subroutine_type;
-
-                >llvm_linkage: LLVMLinkage = undefined;
-
-                switch (global.linkage)
-                {
-                    .internal =>
+                    >llvm_function = llvm_module_create_function(module.llvm.module, llvm_function_type, llvm_linkage, global.variable.name);
+                    global.variable.storage.llvm = llvm_function;
+                    >llvm_calling_convention: LLVMCallingConvention = undefined;
+                    switch (calling_convention)
                     {
-                        llvm_linkage = .internal;
-                    },
-                    .external =>
+                        .c =>
+                        {
+                            llvm_calling_convention = .c;
+                        },
+                    }
+
+                    LLVMSetFunctionCallConv(llvm_function, llvm_calling_convention);
+
+                    emit_attributes(module, llvm_function, &LLVMAddAttributeAtIndex, {
+                            .return_abi = &function_type.abi.return_abi,
+                            .argument_abis = function_type.abi.argument_abis,
+                            .abi_argument_types = function_type.abi.abi_argument_types,
+                            .abi_return_type = function_type.abi.abi_return_type,
+                            .attributes = global.variable.storage.content.function.attributes,
+                            });
+
+                    >subprogram: &LLVMMetadata = zero;
+
+                    if (module.has_debug_info)
                     {
-                        llvm_linkage = .external;
-                    },
-                }
+                        >name = global.variable.name;
+                        >linkage_name = name;
+                        >line = global.variable.line;
+                        >is_local_to_unit = global.linkage == .internal;
+                        >is_definition = global.variable.storage.id == .function;
+                        >scope_line = line + 1;
+                        >flags: LLVMDIFlags = zero;
+                        >is_optimized = build_mode_is_optimized(module.build_mode);
+                        subprogram = LLVMDIBuilderCreateFunction(module.llvm.di_builder, module.scope.llvm, name.pointer, name.length, linkage_name.pointer, linkage_name.length, module.llvm.file, line, subroutine_type, #extend(is_local_to_unit), #extend(is_definition), scope_line, flags, #extend(is_optimized));
+                        LLVMSetSubprogram(llvm_function, subprogram);
+                    }
 
-                >llvm_function = llvm_module_create_function(module.llvm.module, llvm_function_type, llvm_linkage, global.variable.name);
-                global.variable.storage.llvm = llvm_function;
-                >llvm_calling_convention: LLVMCallingConvention = undefined;
-                switch (calling_convention)
-                {
-                    .c =>
+                    switch (global.variable.storage.id)
                     {
-                        llvm_calling_convention = .c;
-                    },
-                }
-
-                LLVMSetFunctionCallConv(llvm_function, llvm_calling_convention);
-
-                emit_attributes(module, llvm_function, &LLVMAddAttributeAtIndex, {
-                    .return_abi = &function_type.abi.return_abi,
-                    .argument_abis = function_type.abi.argument_abis,
-                    .abi_argument_types = function_type.abi.abi_argument_types,
-                    .abi_return_type = function_type.abi.abi_return_type,
-                    .attributes = global.variable.storage.content.function.attributes,
-                });
-
-                >subprogram: &LLVMMetadata = zero;
-
-                if (module.has_debug_info)
-                {
-                    >name = global.variable.name;
-                    >linkage_name = name;
-                    >line = global.variable.line;
-                    >is_local_to_unit = global.linkage == .internal;
-                    >is_definition = global.variable.storage.id == .function;
-                    >scope_line = line + 1;
-                    >flags: LLVMDIFlags = zero;
-                    >is_optimized = build_mode_is_optimized(module.build_mode);
-                    subprogram = LLVMDIBuilderCreateFunction(module.llvm.di_builder, module.scope.llvm, name.pointer, name.length, linkage_name.pointer, linkage_name.length, module.llvm.file, line, subroutine_type, #extend(is_local_to_unit), #extend(is_definition), scope_line, flags, #extend(is_optimized));
-                    LLVMSetSubprogram(llvm_function, subprogram);
-                }
-
-                switch (global.variable.storage.id)
-                {
-                    .function =>
+                        .function =>
+                        {
+                            global.variable.storage.content.function.scope.llvm = subprogram;
+                        },
+                            .forward_declared_function =>
+                            {
+                                assert(global.linkage == .external);
+                                if (module.has_debug_info)
+                                {
+                                    LLVMDIBuilderFinalizeSubprogram(module.llvm.di_builder, subprogram);
+                                }
+                            },
+                            else => { unreachable; },
+                    }
+                },
+                    .global =>
                     {
-                        global.variable.storage.content.function.scope.llvm = subprogram;
-                    },
-                    .forward_declared_function =>
-                    {
-                        assert(global.linkage == .external);
+                        assert(!module.current_function);
+                        >initial_value = global.initial_value;
+                        analyze_value(module, initial_value, global.variable.type, .memory, 1);
+
+                        >initial_value_type = initial_value.type;
+
+                        if (!global.variable.type)
+                        {
+                            global.variable.type = initial_value_type;
+                        }
+
+                        >global_type = global.variable.type;
+
+                        if (global_type != initial_value_type)
+                        {
+                            report_error();
+                        }
+
+                        resolve_type_in_place(module, global_type);
+
+                        >is_constant: u1 = 0;
+                        >linkage: LLVMLinkage = undefined;
+                        switch (global.linkage)
+                        {
+                            .internal => { linkage = .internal; },
+                                .external => { linkage = .external; },
+                        }
+
+                        >thread_local_mode: LLVMThreadLocalMode = .none;
+                        >externally_initialized: u1 = 0;
+                        >alignment = get_byte_alignment(global_type);
+                        >unnamed_address: LLVMUnnamedAddress = .none;
+
+                        >llvm_global = llvm_create_global_variable(module.llvm.module, global_type.llvm.memory, is_constant, linkage, initial_value.llvm, global.variable.name, thread_local_mode, externally_initialized, alignment, unnamed_address);
+                        global.variable.storage.llvm = llvm_global;
+                        global.variable.storage.type = get_pointer_type(module, global_type);
+
                         if (module.has_debug_info)
                         {
-                            LLVMDIBuilderFinalizeSubprogram(module.llvm.di_builder, subprogram);
+                            >name = global.variable.name;
+                            >linkage_name = name;
+                            >local_to_unit = global.linkage == .internal;
+                            >global_debug = LLVMDIBuilderCreateGlobalVariableExpression(module.llvm.di_builder, module.scope.llvm, name.pointer, name.length, linkage_name.pointer, linkage_name.length, module.llvm.file, global.variable.line, global_type.llvm.debug, #extend(local_to_unit), null_expression(module), zero, alignment * 8);
+                            LLVMGlobalSetMetadata(llvm_global, 0, global_debug);
                         }
                     },
-                    else => { unreachable; },
-                }
-            },
-            .global =>
-            {
-                assert(!module.current_function);
-                >initial_value = global.initial_value;
-                analyze_value(module, initial_value, global.variable.type, .memory, 1);
-
-                >initial_value_type = initial_value.type;
-
-                if (!global.variable.type)
-                {
-                    global.variable.type = initial_value_type;
-                }
-
-                >global_type = global.variable.type;
-
-                if (global_type != initial_value_type)
-                {
-                    report_error();
-                }
-
-                resolve_type_in_place(module, global_type);
-
-                >is_constant: u1 = 0;
-                >linkage: LLVMLinkage = undefined;
-                switch (global.linkage)
-                {
-                    .internal => { linkage = .internal; },
-                    .external => { linkage = .external; },
-                }
-
-                >thread_local_mode: LLVMThreadLocalMode = .none;
-                >externally_initialized: u1 = 0;
-                >alignment = get_byte_alignment(global_type);
-                >unnamed_address: LLVMUnnamedAddress = .none;
-
-                >llvm_global = llvm_create_global_variable(module.llvm.module, global_type.llvm.memory, is_constant, linkage, initial_value.llvm, global.variable.name, thread_local_mode, externally_initialized, alignment, unnamed_address);
-                global.variable.storage.llvm = llvm_global;
-                global.variable.storage.type = get_pointer_type(module, global_type);
-
-                if (module.has_debug_info)
-                {
-                    >name = global.variable.name;
-                    >linkage_name = name;
-                    >local_to_unit = global.linkage == .internal;
-                    >global_debug = LLVMDIBuilderCreateGlobalVariableExpression(module.llvm.di_builder, module.scope.llvm, name.pointer, name.length, linkage_name.pointer, linkage_name.length, module.llvm.file, global.variable.line, global_type.llvm.debug, #extend(local_to_unit), null_expression(module), zero, alignment * 8);
-                    LLVMGlobalSetMetadata(llvm_global, 0, global_debug);
-                }
-            },
-            else =>
-            {
-                report_error();
-            },
+                    else =>
+                    {
+                        report_error();
+                    },
+            }
         }
 
         global = global.next;
@@ -13143,456 +13622,454 @@ emit = fn (module: &Module) void
         assert(!module.current_macro_instantiation);
         assert(!module.current_macro_declaration);
 
-        if (global.emitted)
+        if (!global.emitted)
         {
-            continue;
-        }
-
-        if (global.variable.storage.id == .function)
-        {
-            module.current_function = global;
-
-            >function = global.variable.storage;
-            assert(function.id == .function);
-            >pointer_type = function.type;
-            assert(pointer_type.id == .pointer);
-            >value_type = pointer_type.content.pointer.element_type;
-            assert(value_type == global.variable.type);
-            assert(value_type.id == .function);
-            >function_type = &value_type.content.function;
-            >semantic_argument_types = function_type.base.semantic_argument_types;
-            >llvm_function = function.llvm;
-            assert(llvm_function != zero);
-
-            >llvm_abi_argument_buffer: [64]&LLVMValue = undefined;
-            >llvm_abi_arguments = llvm_abi_argument_buffer[..function_type.abi.abi_argument_types.length];
-            LLVMGetParams(llvm_function, &llvm_abi_argument_buffer[0]);
-
-            >entry_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "entry");
-            >return_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "return_block");
-            function.content.function.llvm.return_block = return_block;
-
-            LLVMPositionBuilderAtEnd(module.llvm.builder, entry_block);
-            LLVMSetCurrentDebugLocation2(module.llvm.builder, zero);
-
-            >return_abi = &function_type.abi.return_abi;
-            switch (return_abi.flags.kind)
+            if (global.variable.storage.id == .function)
             {
-                .ignore => {},
-                .indirect =>
+                module.current_function = global;
+
+                >function = global.variable.storage;
+                assert(function.id == .function);
+                >pointer_type = function.type;
+                assert(pointer_type.id == .pointer);
+                >value_type = pointer_type.content.pointer.element_type;
+                assert(value_type == global.variable.type);
+                assert(value_type.id == .function);
+                >function_type = &value_type.content.function;
+                >semantic_argument_types = function_type.base.semantic_argument_types;
+                >llvm_function = function.llvm;
+                assert(llvm_function != zero);
+
+                >llvm_abi_argument_buffer: [64]&LLVMValue = undefined;
+                >llvm_abi_arguments = llvm_abi_argument_buffer[..function_type.abi.abi_argument_types.length];
+                LLVMGetParams(llvm_function, &llvm_abi_argument_buffer[0]);
+
+                >entry_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "entry");
+                >return_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "return_block");
+                function.content.function.llvm.return_block = return_block;
+
+                LLVMPositionBuilderAtEnd(module.llvm.builder, entry_block);
+                LLVMSetCurrentDebugLocation2(module.llvm.builder, zero);
+
+                >return_abi = &function_type.abi.return_abi;
+                switch (return_abi.flags.kind)
                 {
-                    >indirect_argument_index = function_type.abi.return_abi.flags.sret_after_this;
-                    if (function_type.abi.return_abi.flags.sret_after_this)
-                    {
-                        #trap();
-                    }
-
-                    global.variable.storage.content.function.llvm.return_alloca = llvm_abi_arguments[indirect_argument_index];
-
-                    if (!function_type.abi.return_abi.flags.indirect_by_value)
-                    {
-                        #trap();
-                    }
-                },
-                .in_alloca =>
-                {
-                    #trap();
-                },
-                else =>
-                {
-                    >alloca = create_alloca(module, {
-                        .type = return_abi.semantic_type,
-                        .name = "return_value",
-                        zero,
-                    });
-                    function.content.function.llvm.return_alloca = alloca;
-                },
-            }
-
-            >arguments = function.content.function.arguments;
-            >argument_abis = function_type.abi.argument_abis;
-            assert(arguments.length == argument_abis.length);
-
-            for (i: 0..semantic_argument_types.length)
-            {
-                >argument = &arguments[i];
-                >argument_abi = &argument_abis[i];
-                // TODO: double slice
-                >argument_abi_arguments = llvm_abi_arguments[#extend(argument_abi.abi_start)..];
-                argument_abi_arguments = argument_abi_arguments[..#extend(argument_abi.abi_count)];
-
-                >semantic_argument_storage: &LLVMValue = zero;
-
-                switch (argument_abi.flags.kind)
-                {
-                    .direct, .extend =>
-                    {
-                        >first_argument = argument_abi_arguments[0];
-                        >coerce_to_type = abi_get_coerce_to_type(argument_abi);
-
-                        if (coerce_to_type.id != .struct and argument_abi.attributes.direct.offset == 0 and type_is_abi_equal(module, coerce_to_type, argument_abi.semantic_type))
+                    .ignore => {},
+                        .indirect =>
                         {
-                            assert(argument_abi.abi_count == 1);
-                            >is_promoted: u1 = 0;
-                            >v = first_argument;
-
-                            if (coerce_to_type.llvm.abi != LLVMTypeOf(v))
+                            >indirect_argument_index = function_type.abi.return_abi.flags.sret_after_this;
+                            if (function_type.abi.return_abi.flags.sret_after_this)
                             {
-                                #trap();
+#trap();
                             }
 
-                            if (is_promoted)
-                            {
-                                #trap();
-                            }
+                            global.variable.storage.content.function.llvm.return_alloca = llvm_abi_arguments[indirect_argument_index];
 
-                            // TODO: this we can get rid of because we handle all of this inside `create_alloca`, load, stores, etc
-                            if (is_arbitrary_bit_integer(argument_abi.semantic_type))
+                            if (!function_type.abi.return_abi.flags.indirect_by_value)
                             {
-                                >bit_count = get_bit_size(argument_abi.semantic_type);
-                                >abi_bit_count = align_bit_count(bit_count);
-                                >is_signed = type_is_signed(argument_abi.semantic_type);
-                                >destination_type = integer_type(module, { .bit_count = abi_bit_count, .signed = is_signed });
+#trap();
+                            }
+                        },
+                        .in_alloca =>
+                        {
+#trap();
+                        },
+                        else =>
+                        {
+                            >alloca = create_alloca(module, {
+                                    .type = return_abi.semantic_type,
+                                    .name = "return_value",
+                                    zero,
+                                    });
+                            function.content.function.llvm.return_alloca = alloca;
+                        },
+                }
+
+                >arguments = function.content.function.arguments;
+                >argument_abis = function_type.abi.argument_abis;
+                assert(arguments.length == argument_abis.length);
+
+                for (i: 0..semantic_argument_types.length)
+                {
+                    >argument = &arguments[i];
+                    >argument_abi = &argument_abis[i];
+                    // TODO: double slice
+                    >argument_abi_arguments = llvm_abi_arguments[#extend(argument_abi.abi_start)..];
+                    argument_abi_arguments = argument_abi_arguments[..#extend(argument_abi.abi_count)];
+
+                    >semantic_argument_storage: &LLVMValue = zero;
+
+                    switch (argument_abi.flags.kind)
+                    {
+                        .direct, .extend =>
+                        {
+                            >first_argument = argument_abi_arguments[0];
+                            >coerce_to_type = abi_get_coerce_to_type(argument_abi);
+
+                            if (coerce_to_type.id != .struct and argument_abi.attributes.direct.offset == 0 and type_is_abi_equal(module, coerce_to_type, argument_abi.semantic_type))
+                            {
+                                assert(argument_abi.abi_count == 1);
+                                >is_promoted: u1 = 0;
+                                >v = first_argument;
+
+                                if (coerce_to_type.llvm.abi != LLVMTypeOf(v))
+                                {
+#trap();
+                                }
+
+                                if (is_promoted)
+                                {
+#trap();
+                                }
+
+                                // TODO: this we can get rid of because we handle all of this inside `create_alloca`, load, stores, etc
+                                if (is_arbitrary_bit_integer(argument_abi.semantic_type))
+                                {
+                                    >bit_count = get_bit_size(argument_abi.semantic_type);
+                                    >abi_bit_count = align_bit_count(bit_count);
+                                    >is_signed = type_is_signed(argument_abi.semantic_type);
+                                    >destination_type = integer_type(module, { .bit_count = abi_bit_count, .signed = is_signed });
+                                    >alloca = create_alloca(module, {
+                                            .type = destination_type,
+                                            .name = argument.variable.name,
+                                            zero,
+                                            });
+
+                                    >result: &LLVMValue = undefined;
+
+                                    if (bit_count < abi_bit_count)
+                                    {
+                                        >llvm_type = destination_type.llvm.memory;
+                                        if (is_signed)
+                                        {
+                                            result = LLVMBuildSExt(module.llvm.builder, first_argument, llvm_type, "");
+                                        }
+                                        else
+                                        {
+                                            result = LLVMBuildZExt(module.llvm.builder, first_argument, llvm_type, "");
+                                        }
+                                    }
+                                    else
+                                    {
+#trap();
+                                    }
+
+                                    create_store(module, {
+                                            .source = result,
+                                            .destination = alloca,
+                                            .type = destination_type,
+                                            zero,
+                                            });
+
+                                    semantic_argument_storage = alloca;
+                                }
+                                else
+                                {
+                                    >alloca = create_alloca(module, {
+                                            .type = argument_abi.semantic_type,
+                                            .name = argument.variable.name,
+                                            zero,
+                                            });
+
+                                    create_store(module, {
+                                            .source = first_argument,
+                                            .destination = alloca,
+                                            .type = argument_abi.semantic_type,
+                                            zero,
+                                            });
+
+                                    semantic_argument_storage = alloca;
+                                }
+                            }
+                            else
+                            {
+                                >is_fixed_vector_type: u1 = 0;
+                                if (is_fixed_vector_type)
+                                {
+#trap();
+                                }
+
+                                if (coerce_to_type.id == .struct and coerce_to_type.content.struct.fields.length > 1 and argument_abi.flags.kind == .direct and !argument_abi.flags.can_be_flattened)
+                                {
+                                    >contains_homogeneous_scalable_vector_types: u1 = 0;
+                                    if (contains_homogeneous_scalable_vector_types)
+                                    {
+#trap();
+                                    }
+                                }
+
                                 >alloca = create_alloca(module, {
-                                        .type = destination_type,
+                                        .type = argument_abi.semantic_type,
                                         .name = argument.variable.name,
                                         zero,
                                         });
 
-                                >result: &LLVMValue = undefined;
+                                >pointer: &LLVMValue = undefined;
+                                >pointer_type: &Type = undefined;
 
-                                if (bit_count < abi_bit_count)
+                                if (argument_abi.attributes.direct.offset > 0)
                                 {
-                                    >llvm_type = destination_type.llvm.memory;
-                                    if (is_signed)
+#trap();
+                                }
+                                else
+                                {
+                                    pointer = alloca;
+                                    pointer_type = argument_abi.semantic_type;
+                                }
+
+                                if (coerce_to_type.id == .struct and coerce_to_type.content.struct.fields.length > 1 and argument_abi.flags.kind == .direct and argument_abi.flags.can_be_flattened)
+                                {
+                                    >struct_size = get_byte_size(coerce_to_type);
+                                    >pointer_element_size = get_byte_size(pointer_type);
+                                    >is_scalable: u1 = 0;
+
+                                    if (is_scalable)
                                     {
-                                        result = LLVMBuildSExt(module.llvm.builder, first_argument, llvm_type, "");
+#trap();
                                     }
                                     else
                                     {
-                                        result = LLVMBuildZExt(module.llvm.builder, first_argument, llvm_type, "");
+                                        >source_size = struct_size;
+                                        >destination_size = pointer_element_size;
+                                        >address_alignment = get_byte_alignment(argument_abi.semantic_type);
+
+                                        >address: &LLVMValue = undefined;
+
+                                        if (source_size <= destination_size)
+                                        {
+                                            address = alloca;
+                                        }
+                                        else
+                                        {
+                                            address = create_alloca(module, {
+                                                    .type = coerce_to_type, 
+                                                    .name = "coerce",
+                                                    .alignment = address_alignment,
+                                                    });
+                                        }
+
+                                        >fields = coerce_to_type.content.struct.fields;
+                                        assert(fields.length == #extend(argument_abi.abi_count));
+
+                                        resolve_type_in_place(module, coerce_to_type);
+
+                                        for (i: 0..fields.length)
+                                        {
+                                            >field = &fields[i];
+                                            >gep = LLVMBuildStructGEP2(module.llvm.builder, coerce_to_type.llvm.abi, address, #truncate(i), "");
+                                            create_store(module, {
+                                                    .source = argument_abi_arguments[i],
+                                                    .destination = gep,
+                                                    .type = fields[i].type,
+                                                    zero,
+                                                    });
+                                        }
+
+                                        if (source_size > destination_size)
+                                        {
+                                            >u64_type = uint64(module);
+                                            resolve_type_in_place(module, u64_type);
+
+                                            >memcpy_size = LLVMConstInt(u64_type.llvm.abi, destination_size, 0);
+                                            LLVMBuildMemCpy(module.llvm.builder, pointer, address_alignment, address, address_alignment, memcpy_size);
+                                        }
                                     }
+                                }
+                                else
+                                {
+                                    assert(argument_abi.abi_count == 1);
+                                    >abi_argument_type = function_type.abi.abi_argument_types[argument_abi.abi_start];
+                                    >destination_size: u64 = get_byte_size(pointer_type) - #extend(argument_abi.attributes.direct.offset);
+                                    >is_volatile: u1 = 0;
+                                    create_coerced_store(module, argument_abi_arguments[0], abi_argument_type, pointer, pointer_type, destination_size, is_volatile);
+                                }
+
+                                semantic_argument_storage = alloca;
+                            }
+                        },
+                            .indirect =>
+                            {
+                                assert(argument_abi.abi_count == 1);
+                                >evaluation_kind = get_evaluation_kind(argument_abi.semantic_type);
+
+                                switch (evaluation_kind)
+                                {
+                                    else =>
+                                    {
+                                        if (argument_abi.flags.indirect_realign or argument_abi.flags.kind == .indirect_aliased)
+                                        {
+#trap();
+                                        }
+
+                                        >use_indirect_debug_address = !argument_abi.flags.indirect_by_value;
+                                        if (use_indirect_debug_address)
+                                        {
+#trap();
+                                        }
+
+                                        >llvm_argument = argument_abi_arguments[0];
+                                        semantic_argument_storage = llvm_argument;
+                                    },
+                                        .scalar =>
+                                        {
+#trap();
+                                        },
+                                }
+                            },
+                            else =>
+                            {
+                                unreachable;
+                            },
+                    }
+
+                    assert(semantic_argument_storage != zero);
+
+                    >storage = new_value(module);
+                    >value_type = argument.variable.type;
+                    storage.& = {
+                        .type = get_pointer_type(module, value_type),
+                        .id = .argument,
+                        .llvm = semantic_argument_storage,
+                        zero,
+                    };
+                    argument.variable.storage = storage;
+
+                    if (module.has_debug_info)
+                    {
+                        emit_debug_argument(module, argument, entry_block);
+                    }
+                }
+
+                analyze_block(module, function.content.function.block);
+
+                >current_basic_block = LLVMGetInsertBlock(module.llvm.builder);
+
+                if (current_basic_block)
+                {
+                    assert(!LLVMGetBasicBlockTerminator(current_basic_block));
+                    if (!LLVMGetFirstInstruction(current_basic_block) or !LLVMGetFirstUse(#pointer_cast(current_basic_block)))
+                    {
+                        LLVMReplaceAllUsesWith(#pointer_cast(return_block), #pointer_cast(current_basic_block));
+                        LLVMDeleteBasicBlock(return_block);
+                    }
+                    else
+                    {
+                        emit_block(module, return_block);
+                    }
+                }
+                else
+                {
+                    >has_single_jump_to_return_block: u1 = 0;
+
+                    >first_use = LLVMGetFirstUse(#pointer_cast(return_block));
+                    >user: &LLVMValue = zero;
+
+                    if (first_use)
+                    {
+                        >second_use = LLVMGetNextUse(first_use);
+                        >has_one_use = first_use != zero and first_use == zero;
+
+                        if (has_one_use)
+                        {
+                            user = LLVMGetUser(first_use);
+                            has_single_jump_to_return_block = LLVMIsABranchInst(user) != zero and? LLVMIsConditional(user) != 0 and? LLVMGetSuccessor(user, 0) == return_block;
+                        }
+                    }
+
+                    if (has_single_jump_to_return_block)
+                    {
+#trap();
+                    }
+                    else
+                    {
+                        emit_block(module, return_block);
+                    }
+                }
+
+                if (module.has_debug_info)
+                {
+                    LLVMSetCurrentDebugLocation2(module.llvm.builder, zero);
+                    >subprogram = LLVMGetSubprogram(llvm_function);
+                    LLVMDIBuilderFinalizeSubprogram(module.llvm.di_builder, subprogram);
+                }
+
+                >semantic_return_type = return_abi.semantic_type;
+                if (semantic_return_type == noreturn_type(module) or function.content.function.attributes.naked)
+                {
+#trap();
+                }
+                else if (semantic_return_type == void_type(module))
+                {
+                    LLVMBuildRetVoid(module.llvm.builder);
+                }
+                else
+                {
+                    >return_value: &LLVMValue = zero;
+
+                    switch (return_abi.flags.kind)
+                    {
+                        .direct, .extend =>
+                        {
+                            >return_alloca = function.content.function.llvm.return_alloca;
+                            >coerce_to_type = abi_get_coerce_to_type(return_abi);
+                            if (type_is_abi_equal(module, coerce_to_type, semantic_return_type) and? return_abi.attributes.direct.offset == 0)
+                            {
+                                >store = llvm_find_return_value_dominating_store(module.llvm.builder, return_alloca, semantic_return_type.llvm.abi);
+                                if (store)
+                                {
+                                    return_value = LLVMGetOperand(store, 0);
+                                    >alloca = LLVMGetOperand(store, 1);
+                                    assert(alloca == return_alloca);
+                                    LLVMInstructionEraseFromParent(store);
+                                    LLVMInstructionEraseFromParent(alloca);
+                                }
+                                else
+                                {
+                                    return_value = create_load(module, {
+                                            .type = semantic_return_type,
+                                            .pointer = return_alloca,
+                                            zero,
+                                            });
+                                }
+                            }
+                            else
+                            {
+                                >source: &LLVMValue = zero;
+                                if (function_type.abi.return_abi.attributes.direct.offset == 0)
+                                {
+                                    source = return_alloca;
                                 }
                                 else
                                 {
 #trap();
                                 }
 
-                                create_store(module, {
-                                        .source = result,
-                                        .destination = alloca,
-                                        .type = destination_type,
-                                        zero,
-                                        });
+                                assert(source != zero);
 
-                                semantic_argument_storage = alloca;
+                                >source_type = function_type.abi.return_abi.semantic_type;
+                                >destination_type = coerce_to_type;
+                                >result = create_coerced_load(module, source, source_type, destination_type);
+                                return_value = result;
                             }
-                            else
+                        },
+                            .indirect =>
                             {
-                                >alloca = create_alloca(module, {
-                                        .type = argument_abi.semantic_type,
-                                        .name = argument.variable.name,
-                                        zero,
-                                        });
-
-                                create_store(module, {
-                                        .source = first_argument,
-                                        .destination = alloca,
-                                        .type = argument_abi.semantic_type,
-                                        zero,
-                                        });
-
-                                semantic_argument_storage = alloca;
-                            }
-                        }
-                        else
-                        {
-                            >is_fixed_vector_type: u1 = 0;
-                            if (is_fixed_vector_type)
-                            {
-                                #trap();
-                            }
-
-                            if (coerce_to_type.id == .struct and coerce_to_type.content.struct.fields.length > 1 and argument_abi.flags.kind == .direct and !argument_abi.flags.can_be_flattened)
-                            {
-                                >contains_homogeneous_scalable_vector_types: u1 = 0;
-                                if (contains_homogeneous_scalable_vector_types)
+                                >evaluation_kind = get_evaluation_kind(function_type.abi.return_abi.semantic_type);
+                                switch (evaluation_kind)
                                 {
-                                    #trap();
+                                    .scalar => { #trap(); },
+                                        .aggregate => {},
+                                        .complex => { #trap(); },
                                 }
-                            }
-
-                            >alloca = create_alloca(module, {
-                                    .type = argument_abi.semantic_type,
-                                    .name = argument.variable.name,
-                                    zero,
-                                    });
-
-                            >pointer: &LLVMValue = undefined;
-                            >pointer_type: &Type = undefined;
-
-                            if (argument_abi.attributes.direct.offset > 0)
-                            {
-                                #trap();
-                            }
-                            else
-                            {
-                                pointer = alloca;
-                                pointer_type = argument_abi.semantic_type;
-                            }
-
-                            if (coerce_to_type.id == .struct and coerce_to_type.content.struct.fields.length > 1 and argument_abi.flags.kind == .direct and argument_abi.flags.can_be_flattened)
-                            {
-                                >struct_size = get_byte_size(coerce_to_type);
-                                >pointer_element_size = get_byte_size(pointer_type);
-                                >is_scalable: u1 = 0;
-
-                                if (is_scalable)
-                                {
-                                    #trap();
-                                }
-                                else
-                                {
-                                    >source_size = struct_size;
-                                    >destination_size = pointer_element_size;
-                                    >address_alignment = get_byte_alignment(argument_abi.semantic_type);
-
-                                    >address: &LLVMValue = undefined;
-
-                                    if (source_size <= destination_size)
-                                    {
-                                        address = alloca;
-                                    }
-                                    else
-                                    {
-                                        address = create_alloca(module, {
-                                                .type = coerce_to_type, 
-                                                .name = "coerce",
-                                                .alignment = address_alignment,
-                                                });
-                                    }
-
-                                    >fields = coerce_to_type.content.struct.fields;
-                                    assert(fields.length == #extend(argument_abi.abi_count));
-
-                                    resolve_type_in_place(module, coerce_to_type);
-
-                                    for (i: 0..fields.length)
-                                    {
-                                        >field = &fields[i];
-                                        >gep = LLVMBuildStructGEP2(module.llvm.builder, coerce_to_type.llvm.abi, address, #truncate(i), "");
-                                        create_store(module, {
-                                                .source = argument_abi_arguments[i],
-                                                .destination = gep,
-                                                .type = fields[i].type,
-                                                zero,
-                                                });
-                                    }
-
-                                    if (source_size > destination_size)
-                                    {
-                                        >u64_type = uint64(module);
-                                        resolve_type_in_place(module, u64_type);
-
-                                        >memcpy_size = LLVMConstInt(u64_type.llvm.abi, destination_size, 0);
-                                        LLVMBuildMemCpy(module.llvm.builder, pointer, address_alignment, address, address_alignment, memcpy_size);
-                                    }
-                                }
-                            }
-                            else
-                            {
-                                assert(argument_abi.abi_count == 1);
-                                >abi_argument_type = function_type.abi.abi_argument_types[argument_abi.abi_start];
-                                >destination_size: u64 = get_byte_size(pointer_type) - #extend(argument_abi.attributes.direct.offset);
-                                >is_volatile: u1 = 0;
-                                create_coerced_store(module, argument_abi_arguments[0], abi_argument_type, pointer, pointer_type, destination_size, is_volatile);
-                            }
-
-                            semantic_argument_storage = alloca;
-                        }
-                    },
-                    .indirect =>
-                    {
-                        assert(argument_abi.abi_count == 1);
-                        >evaluation_kind = get_evaluation_kind(argument_abi.semantic_type);
-
-                        switch (evaluation_kind)
-                        {
-                            else =>
-                            {
-                                if (argument_abi.flags.indirect_realign or argument_abi.flags.kind == .indirect_aliased)
-                                {
-                                    #trap();
-                                }
-
-                                >use_indirect_debug_address = !argument_abi.flags.indirect_by_value;
-                                if (use_indirect_debug_address)
-                                {
-                                    #trap();
-                                }
-
-                                >llvm_argument = argument_abi_arguments[0];
-                                semantic_argument_storage = llvm_argument;
                             },
-                            .scalar =>
-                            {
-                                #trap();
-                            },
-                        }
-                    },
-                    else =>
-                    {
-                        unreachable;
-                    },
-                }
-
-                assert(semantic_argument_storage != zero);
-
-                >storage = new_value(module);
-                >value_type = argument.variable.type;
-                storage.& = {
-                    .type = get_pointer_type(module, value_type),
-                    .id = .argument,
-                    .llvm = semantic_argument_storage,
-                    zero,
-                };
-                argument.variable.storage = storage;
-
-                if (module.has_debug_info)
-                {
-                    emit_debug_argument(module, argument, entry_block);
-                }
-            }
-
-            analyze_block(module, function.content.function.block);
-
-            >current_basic_block = LLVMGetInsertBlock(module.llvm.builder);
-
-            if (current_basic_block)
-            {
-                assert(!LLVMGetBasicBlockTerminator(current_basic_block));
-                if (!LLVMGetFirstInstruction(current_basic_block) or !LLVMGetFirstUse(#pointer_cast(current_basic_block)))
-                {
-                    LLVMReplaceAllUsesWith(#pointer_cast(return_block), #pointer_cast(current_basic_block));
-                    LLVMDeleteBasicBlock(return_block);
-                }
-                else
-                {
-                    emit_block(module, return_block);
-                }
-            }
-            else
-            {
-                >has_single_jump_to_return_block: u1 = 0;
-
-                >first_use = LLVMGetFirstUse(#pointer_cast(return_block));
-                >user: &LLVMValue = zero;
-
-                if (first_use)
-                {
-                    >second_use = LLVMGetNextUse(first_use);
-                    >has_one_use = first_use != zero and first_use == zero;
-
-                    if (has_one_use)
-                    {
-                        user = LLVMGetUser(first_use);
-                        has_single_jump_to_return_block = LLVMIsABranchInst(user) != zero and? LLVMIsConditional(user) != 0 and? LLVMGetSuccessor(user, 0) == return_block;
                     }
+
+                    LLVMBuildRet(module.llvm.builder, return_value);
                 }
 
-                if (has_single_jump_to_return_block)
-                {
-                    #trap();
-                }
-                else
-                {
-                    emit_block(module, return_block);
-                }
+                // END OF SCOPE
+                module.current_function = zero;
             }
-
-            if (module.has_debug_info)
-            {
-                LLVMSetCurrentDebugLocation2(module.llvm.builder, zero);
-                >subprogram = LLVMGetSubprogram(llvm_function);
-                LLVMDIBuilderFinalizeSubprogram(module.llvm.di_builder, subprogram);
-            }
-
-            >semantic_return_type = return_abi.semantic_type;
-            if (semantic_return_type == noreturn_type(module) or function.content.function.attributes.naked)
-            {
-                #trap();
-            }
-            else if (semantic_return_type == void_type(module))
-            {
-                LLVMBuildRetVoid(module.llvm.builder);
-            }
-            else
-            {
-                >return_value: &LLVMValue = zero;
-
-                switch (return_abi.flags.kind)
-                {
-                    .direct, .extend =>
-                    {
-                        >return_alloca = function.content.function.llvm.return_alloca;
-                        >coerce_to_type = abi_get_coerce_to_type(return_abi);
-                        if (type_is_abi_equal(module, coerce_to_type, semantic_return_type) and? return_abi.attributes.direct.offset == 0)
-                        {
-                            >store = llvm_find_return_value_dominating_store(module.llvm.builder, return_alloca, semantic_return_type.llvm.abi);
-                            if (store)
-                            {
-                                return_value = LLVMGetOperand(store, 0);
-                                >alloca = LLVMGetOperand(store, 1);
-                                assert(alloca == return_alloca);
-                                LLVMInstructionEraseFromParent(store);
-                                LLVMInstructionEraseFromParent(alloca);
-                            }
-                            else
-                            {
-                                return_value = create_load(module, {
-                                    .type = semantic_return_type,
-                                    .pointer = return_alloca,
-                                    zero,
-                                });
-                            }
-                        }
-                        else
-                        {
-                            >source: &LLVMValue = zero;
-                            if (function_type.abi.return_abi.attributes.direct.offset == 0)
-                            {
-                                source = return_alloca;
-                            }
-                            else
-                            {
-                                #trap();
-                            }
-
-                            assert(source != zero);
-
-                            >source_type = function_type.abi.return_abi.semantic_type;
-                            >destination_type = coerce_to_type;
-                            >result = create_coerced_load(module, source, source_type, destination_type);
-                            return_value = result;
-                        }
-                    },
-                    .indirect =>
-                    {
-                        >evaluation_kind = get_evaluation_kind(function_type.abi.return_abi.semantic_type);
-                        switch (evaluation_kind)
-                        {
-                            .scalar => { #trap(); },
-                            .aggregate => {},
-                            .complex => { #trap(); },
-                        }
-                    },
-                }
-
-                LLVMBuildRet(module.llvm.builder, return_value);
-            }
-
-            // END OF SCOPE
-            module.current_function = zero;
         }
 
         global = global.next;
@@ -13977,6 +14454,7 @@ names: [_][]u8 =
     "abi_enum_bool",
     "return_small_struct",
     "c_abi",
+    "string_to_enum",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32

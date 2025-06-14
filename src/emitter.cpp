@@ -9,7 +9,7 @@ fn LLVMValueRef llvm_module_create_function(Arena* arena, LLVMModuleRef module, 
     return function;
 }
 
-fn LLVMValueRef llvm_module_create_global_variable(LLVMModuleRef module, LLVMTypeRef type, bool is_constant, LLVMLinkage linkage_type, LLVMValueRef initial_value, String name, LLVMThreadLocalMode thread_local_mode, bool externally_initialized, u32 alignment, LLVMUnnamedAddr unnamed_address)
+fn LLVMValueRef llvm_create_global_variable(LLVMModuleRef module, LLVMTypeRef type, bool is_constant, LLVMLinkage linkage_type, LLVMValueRef initial_value, String name, LLVMThreadLocalMode thread_local_mode, bool externally_initialized, u32 alignment, LLVMUnnamedAddr unnamed_address)
 {
     assert(name.pointer[name.length] == 0);
     auto global = LLVMAddGlobal(module, type, (char*)name.pointer);
@@ -2539,7 +2539,6 @@ fn Global* get_enum_name_array_global(Module* module, Type* enum_type)
         auto u64_type = uint64(module);
         resolve_type_in_place(module, u8_type);
         resolve_type_in_place(module, u64_type);
-        LLVMValueRef name_before = 0;
         LLVMValueRef name_constant_buffer[64];
 
         for (u32 i = 0; i < fields.length; i += 1)
@@ -2553,11 +2552,9 @@ fn Global* get_enum_name_array_global(Module* module, Type* enum_type)
                 string_literal("."),
                 field.name,
             };
-            unsigned address_space = 0;
             auto initial_value = LLVMConstStringInContext2(module->llvm.context, (char*)field.name.pointer, field.name.length, false);
             u32 alignment = 1;
-            auto name_global = llvm_module_create_global_variable(module->llvm.module, LLVMArrayType2(u8_type->llvm.abi, field.name.length + null_terminate), is_constant, LLVMInternalLinkage, initial_value, arena_join_string(module->arena, array_to_slice(name_parts)), LLVMNotThreadLocal, false, alignment, LLVMGlobalUnnamedAddr);
-            name_before = name_global;
+            auto name_global = llvm_create_global_variable(module->llvm.module, LLVMArrayType2(u8_type->llvm.abi, field.name.length + null_terminate), is_constant, LLVMInternalLinkage, initial_value, arena_join_string(module->arena, array_to_slice(name_parts)), LLVMNotThreadLocal, false, alignment, LLVMGlobalUnnamedAddr);
             LLVMValueRef constants[] = {
                 name_global,
                 LLVMConstInt(u64_type->llvm.abi, field.name.length, false),
@@ -2571,8 +2568,7 @@ fn Global* get_enum_name_array_global(Module* module, Type* enum_type)
         auto name_array = LLVMConstArray2(slice_type->llvm.abi, name_constant_buffer, array_element_count);
         auto name_array_type = LLVMArrayType2(slice_type->llvm.abi, array_element_count);
         auto is_constant = true;
-        unsigned address_space = 0;
-        auto name_array_variable = llvm_module_create_global_variable(module->llvm.module, name_array_type, is_constant, LLVMInternalLinkage, name_array, string_literal("name.array.enum"), LLVMNotThreadLocal, false, get_byte_alignment(slice_type), LLVMGlobalUnnamedAddr);
+        auto name_array_variable = llvm_create_global_variable(module->llvm.module, name_array_type, is_constant, LLVMInternalLinkage, name_array, string_literal("name.array.enum"), LLVMNotThreadLocal, false, get_byte_alignment(slice_type), LLVMGlobalUnnamedAddr);
 
         auto global_type = get_array_type(module, slice_type, array_element_count);
         resolve_type_in_place(module, global_type);
@@ -4281,9 +4277,8 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, TypeAnal
                     auto value_array_variable_type = LLVMArrayType2(enum_value_type, array_element_count);
                     auto is_constant = true;
                     LLVMThreadLocalMode thread_local_mode = LLVMNotThreadLocal;
-                    unsigned address_space = 0;
                     auto externally_initialized = false;
-                    auto value_array_variable = llvm_module_create_global_variable(module->llvm.module, value_array_variable_type, is_constant, LLVMInternalLinkage, value_array, string_literal("value.array.enum"), thread_local_mode, externally_initialized, enum_alignment, LLVMGlobalUnnamedAddr);
+                    auto value_array_variable = llvm_create_global_variable(module->llvm.module, value_array_variable_type, is_constant, LLVMInternalLinkage, value_array, string_literal("value.array.enum"), thread_local_mode, externally_initialized, enum_alignment, LLVMGlobalUnnamedAddr);
 
                     auto* entry_block = LLVMAppendBasicBlockInContext(module->llvm.context, llvm_function, "entry");
                     auto* return_block = LLVMAppendBasicBlockInContext(module->llvm.context, llvm_function, "return_block");
@@ -5177,7 +5172,7 @@ fn SliceEmitResult emit_string_literal(Module* module, Value* value)
                 LLVMThreadLocalMode tlm = LLVMNotThreadLocal;
                 bool externally_initialized = false;
                 u32 alignment = 1;
-                auto global = llvm_module_create_global_variable(module->llvm.module, string_type, is_constant, LLVMInternalLinkage, constant_string, string_literal("conststring"), tlm, externally_initialized, alignment, LLVMGlobalUnnamedAddr);
+                auto global = llvm_create_global_variable(module->llvm.module, string_type, is_constant, LLVMInternalLinkage, constant_string, string_literal("conststring"), tlm, externally_initialized, alignment, LLVMGlobalUnnamedAddr);
 
                 return { global, LLVMConstInt(uint64(module)->llvm.abi, length, false) };
             } break;
@@ -5550,11 +5545,10 @@ fn LLVMValueRef emit_call(Module* module, Value* value, LLVMValueRef left_llvm, 
                                                                                 bool is_constant = true;
                                                                                 LLVMLinkage linkage_type = LLVMInternalLinkage;
                                                                                 LLVMThreadLocalMode thread_local_mode = {};
-                                                                                u32 address_space = 0;
                                                                                 bool externally_initialized = false;
                                                                                 auto alignment = get_byte_alignment(semantic_argument_type);
 
-                                                                                auto global = llvm_module_create_global_variable(module->llvm.module, semantic_argument_type->llvm.memory, is_constant, linkage_type, semantic_call_argument_value->llvm, string_literal("const.struct"), thread_local_mode, externally_initialized, alignment, LLVMGlobalUnnamedAddr);
+                                                                                auto global = llvm_create_global_variable(module->llvm.module, semantic_argument_type->llvm.memory, is_constant, linkage_type, semantic_call_argument_value->llvm, string_literal("const.struct"), thread_local_mode, externally_initialized, alignment, LLVMGlobalUnnamedAddr);
 
                                                                                 for (u32 i = 0; i < coerce_fields.length; i += 1)
                                                                                 {
@@ -5705,7 +5699,7 @@ fn LLVMValueRef emit_call(Module* module, Value* value, LLVMValueRef left_llvm, 
                                             bool externally_initialized = false;
                                             auto alignment = get_byte_alignment(semantic_argument_type);
 
-                                            auto global = llvm_module_create_global_variable(module->llvm.module, semantic_argument_type->llvm.memory, is_constant, linkage_type, semantic_call_argument_value->llvm, string_literal("indirect.const.aggregate"), thread_local_mode, externally_initialized, alignment, LLVMGlobalUnnamedAddr);
+                                            auto global = llvm_create_global_variable(module->llvm.module, semantic_argument_type->llvm.memory, is_constant, linkage_type, semantic_call_argument_value->llvm, string_literal("indirect.const.aggregate"), thread_local_mode, externally_initialized, alignment, LLVMGlobalUnnamedAddr);
 
                                             llvm_abi_argument_value_buffer[abi_argument_count] = global;
                                             abi_argument_count += 1;
@@ -6446,11 +6440,10 @@ fn void emit_assignment(Module* module, LLVMValueRef left_llvm, Type* left_type,
                                 bool is_constant = true;
                                 LLVMLinkage linkage_type = LLVMInternalLinkage;
                                 LLVMThreadLocalMode thread_local_mode = {};
-                                u32 address_space = 0;
                                 bool externally_initialized = false;
                                 auto alignment = get_byte_alignment(resolved_value_type);
 
-                                auto global = llvm_module_create_global_variable(module->llvm.module, value_type->llvm.memory, is_constant, linkage_type, right->llvm, string_literal("array.init"), thread_local_mode, externally_initialized, alignment, LLVMGlobalUnnamedAddr);
+                                auto global = llvm_create_global_variable(module->llvm.module, value_type->llvm.memory, is_constant, linkage_type, right->llvm, string_literal("array.init"), thread_local_mode, externally_initialized, alignment, LLVMGlobalUnnamedAddr);
 
                                 u64 memcpy_size = get_byte_size(resolved_value_type);
                                 LLVMBuildMemCpy(module->llvm.builder, left_llvm, alignment, global, alignment, LLVMConstInt(uint64_type->llvm.abi, memcpy_size, false));
@@ -6523,7 +6516,7 @@ fn void emit_assignment(Module* module, LLVMValueRef left_llvm, Type* left_type,
                                 LLVMLinkage linkage_type = LLVMInternalLinkage;
                                 LLVMThreadLocalMode thread_local_mode = LLVMNotThreadLocal;
                                 bool externally_initialized = false;
-                                auto global = llvm_module_create_global_variable(module->llvm.module, value_type->llvm.memory, is_constant, linkage_type, right->llvm, string_literal("const.aggregate"), thread_local_mode, externally_initialized, alignment, LLVMGlobalUnnamedAddr);
+                                auto global = llvm_create_global_variable(module->llvm.module, value_type->llvm.memory, is_constant, linkage_type, right->llvm, string_literal("const.aggregate"), thread_local_mode, externally_initialized, alignment, LLVMGlobalUnnamedAddr);
                                 LLVMBuildMemCpy(module->llvm.builder, left_llvm, alignment, global, alignment, byte_size_value);
                             }
                             else
@@ -7327,7 +7320,7 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind, bool expect
                                         assert(array_type->id == TypeId::array);
                                         resolve_type_in_place(module, array_type);
                                         auto alignment = get_byte_alignment(resolved_value_type);
-                                        auto value_array_variable = llvm_module_create_global_variable(module->llvm.module, array_type->llvm.memory, is_constant, LLVMInternalLinkage, array_value, string_literal("enum.values"), LLVMNotThreadLocal, 0, alignment, LLVMGlobalUnnamedAddr);
+                                        auto value_array_variable = llvm_create_global_variable(module->llvm.module, array_type->llvm.memory, is_constant, LLVMInternalLinkage, array_value, string_literal("enum.values"), LLVMNotThreadLocal, 0, alignment, LLVMGlobalUnnamedAddr);
                                         llvm_value = value_array_variable;
                                     } break;
                             }
@@ -9502,7 +9495,7 @@ void emit(Module* module)
                     bool externally_initialized = false;
 
                     auto alignment = get_byte_alignment(global_type);
-                    auto global_llvm = llvm_module_create_global_variable(module->llvm.module, global_type->llvm.memory, is_constant, linkage, global->variable.initial_value->llvm, global->variable.name, thread_local_mode, externally_initialized, alignment, LLVMNoUnnamedAddr);
+                    auto global_llvm = llvm_create_global_variable(module->llvm.module, global_type->llvm.memory, is_constant, linkage, global->variable.initial_value->llvm, global->variable.name, thread_local_mode, externally_initialized, alignment, LLVMNoUnnamedAddr);
                     global->variable.storage->llvm = global_llvm;
                     global->variable.storage->type = get_pointer_type(module, global_type);
 
