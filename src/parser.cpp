@@ -2823,7 +2823,7 @@ fn Statement* parse_statement(Module* module, Scope* scope)
                                 Value* right_value_buffer[64];
                                 u64 right_value_count = 0;
 
-                                right_value_buffer[right_value_count] = parse_value(module, scope, { .kind = ValueKind::left });
+                                right_value_buffer[right_value_count] = parse_value(module, scope, {});
                                 right_value_count += 1;
 
                                 skip_space(module);
@@ -2840,15 +2840,17 @@ fn Statement* parse_statement(Module* module, Scope* scope)
                                                 report_error();
                                             }
 
-                                            right_value_buffer[0]->kind = ValueKind::right;
-
                                             right_value_buffer[right_value_count] = parse_value(module, scope, {});
                                             right_value_count += 1;
 
                                             expect_character(module, right_parenthesis);
                                             kind = ForEachKind::range;
                                         } break;
-                                    case TokenId::right_parenthesis: kind = ForEachKind::slice; break;
+                                    case TokenId::right_parenthesis:
+                                        {
+                                            right_value_buffer[0]->kind = ValueKind::left;
+                                            kind = ForEachKind::slice;
+                                        } break;
                                     default: report_error();
                                 }
 

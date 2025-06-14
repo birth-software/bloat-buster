@@ -5209,6 +5209,22 @@ fn void invalidate_analysis(Module* module, Value* value)
             {
                 invalidate_analysis(module, value->unary.value);
             } break;
+        case ValueId::slice_expression:
+            {
+                invalidate_analysis(module, value->slice_expression.array_like);
+                auto start = value->slice_expression.start;
+                auto end = value->slice_expression.end;
+
+                if (start)
+                {
+                    invalidate_analysis(module, start);
+                }
+
+                if (end)
+                {
+                    invalidate_analysis(module, end);
+                }
+            } break;
         default: trap();
     }
 
@@ -8606,6 +8622,10 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                 if (else_clause_index == invalid_clause_index)
                 {
                     LLVMPositionBuilderAtEnd(module->llvm.builder, else_block);
+                    if (module->has_debug_info && !build_mode_is_optimized(module->build_mode))
+                    {
+                        emit_intrinsic_call(module, IntrinsicIndex::trap, {}, {});
+                    }
                     LLVMBuildUnreachable(module->llvm.builder);
                     LLVMClearInsertionPosition(module->llvm.builder);
                 }
@@ -8668,6 +8688,16 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                                 }
 
                                 Type* aggregate_type = 0;
+
+                                if (right->kind == ValueKind::left && right->type->id != TypeId::pointer)
+                                {
+                                    if (!type_is_slice(right->type))
+                                    {
+                                        report_error();
+                                    }
+
+                                    right->kind = ValueKind::right;
+                                }
 
                                 switch (right->kind)
                                 {
