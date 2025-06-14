@@ -1445,6 +1445,11 @@ type_is_signed = fn (type: &Type) u1
         {
             return 0;
         },
+        .bits =>
+        {
+            >backing_type = type.content.bits.backing_type;
+            return type_is_signed(backing_type);
+        },
         else =>
         {
             #trap();
@@ -1522,11 +1527,11 @@ is_arbitrary_bit_integer = fn (type: &Type) u1
         .unresolved => { unreachable; },
         .bits =>
         {
-            #trap();
+            return is_arbitrary_bit_integer(type.content.bits.backing_type);
         },
         .enum =>
         {
-            #trap();
+            return is_arbitrary_bit_integer(type.content.enum.backing_type);
         },
         else =>
         {
@@ -1703,6 +1708,11 @@ is_promotable_integer_type_for_abi = fn (type: &Type) u1
         .integer =>
         {
             return type.content.integer.bit_count < 32;
+        },
+        .bits =>
+        {
+            >backing_type = type.content.bits.backing_type;
+            return is_promotable_integer_type_for_abi(backing_type);
         },
         else =>
         {
@@ -2011,7 +2021,9 @@ value_is_constant = fn (value: &Value) u1
 {
     switch (value.id)
     {
-        .constant_integer =>
+        .constant_integer,
+        .enum_literal,
+        =>
         {
             return 1;
         },
@@ -3023,9 +3035,25 @@ get_array_type = fn (module: &Module, element_type: &Type, element_count: u64) &
 
     >array_type = module.first_array_type;
 
-    if (array_type != zero)
+    while (array_type)
     {
-        #trap();
+        assert(array_type.id == .array);
+        >candidate_element_type = array_type.content.array.element_type;
+        >candidate_element_count = array_type.content.array.element_count;
+
+        if (candidate_element_type == element_type and candidate_element_count == element_count)
+        {
+            return array_type;
+        }
+
+        >next = array_type.content.array.next;
+
+        if (!next)
+        {
+            break;
+        }
+
+        array_type = next;
     }
 
     >last_array_type = array_type;
@@ -7238,6 +7266,10 @@ abi_system_v_classify_type = fn (type: &Type, options: AbiSystemVClassifyArgumen
                 }
             }
         },
+        .bits =>
+        {
+            return abi_system_v_classify_type(type.content.bits.backing_type, options);
+        },
         else =>
         {
             #trap();
@@ -7425,7 +7457,8 @@ abi_system_v_get_integer_type_at_offset = fn (module: &Module, type: &Type, offs
         },
         .bits =>
         {
-            #trap();
+            >backing_type = type.content.bits.backing_type;
+            return abi_system_v_get_integer_type_at_offset(module, backing_type, offset, #select(source_type == type, backing_type, source_type), source_offset);
         },
         .enum =>
         {
@@ -12098,6 +12131,26 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                     // TODO: should we just have typed memset instead: `LLVMConstNull(the_type)`, 1?
                     LLVMBuildMemSet(module.llvm.builder, left_llvm, LLVMConstNull(u8_type.llvm.memory), LLVMConstInt(u64_type.llvm.memory, size, 0), alignment);
                 },
+                .variable =>
+                {
+                    >variable = right.content.variable;
+                    switch (right.kind)
+                    {
+                        .left =>
+                        {
+                            #trap();
+                        },
+                        .right =>
+                        {
+                            >u64_type = uint64(module);
+                            resolve_type_in_place(module, u64_type);
+                            >memcpy_size = get_byte_size(resolved_value_type);
+                            >alignment = get_byte_alignment(resolved_value_type);
+
+                            LLVMBuildMemCpy(module.llvm.builder, left_llvm, alignment, variable.storage.llvm, alignment, LLVMConstInt(u64_type.llvm.abi, memcpy_size, 0));
+                        },
+                    }
+                },
                 else =>
                 {
                     #trap();
@@ -13802,8 +13855,12 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile) []u8
     >file_path = path_absolute(arena, relative_file_path.pointer);
     >c_abi_object_path = ""; // TODO
 
-    >objects: [][]u8 = undefined;
-    objects = [ output_object_path ][..];
+    >objects = [ output_object_path ][..];
+    >c_abi_library = "build/libc_abi.a";
+    >llvm_bindings_library = "build/libllvm_bindings.a";
+
+    >library_buffer: [256][]u8 = undefined;
+    >library_directory: []u8 = zero;
 
     >library_directories: [][]u8 = zero;
     >library_names: [][]u8 = zero;
@@ -13812,6 +13869,10 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile) []u8
     if (is_compiler)
     {
         #trap();
+    }
+    else if (string_equal(base_name, "c_abi"))
+    {
+        library_paths = { .pointer = &c_abi_library, .length = 1 };
     }
 
     >options: CompileOptions = {
@@ -13912,6 +13973,10 @@ names: [_][]u8 =
     "c_string_to_slice",
     "c_struct_with_array",
     "c_function_pointer",
+    "basic_bool_call",
+    "abi_enum_bool",
+    "return_small_struct",
+    "c_abi",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
