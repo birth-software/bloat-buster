@@ -2050,6 +2050,11 @@ value_is_constant = fn (value: &Value) u1
             assert(value.type != zero);
             return value.content.aggregate_initialization.is_constant;
         },
+        .array_initialization =>
+        {
+            assert(value.type != zero);
+            return value.content.array_initialization.is_constant;
+        },
         else =>
         {
             #trap();
@@ -3615,6 +3620,166 @@ get_by_value_argument_pair = fn (module: &Module, low: &Type, high: &Type) &Type
     return result;
 }
 
+TokenId = enum
+{
+    none,
+    comma,
+    end_of_statement,
+    integer,
+    left_brace,
+    left_bracket,
+    left_parenthesis,
+    right_brace,
+    right_bracket,
+    right_parenthesis,
+
+    plus,
+    dash,
+    asterisk,
+    forward_slash,
+    percentage,
+    caret,
+    bar,
+    ampersand,
+    exclamation,
+
+    assign_plus,
+    assign_dash,
+    assign_asterisk,
+    assign_forward_slash,
+    assign_percentage,
+    assign_caret,
+    assign_bar,
+    assign_ampersand,
+
+    value_keyword,
+    operator_keyword,
+    identifier,
+    string_literal,
+    value_intrinsic,
+
+    shift_left,
+    shift_right,
+    assign_shift_left,
+    assign_shift_right,
+
+    compare_less,
+    compare_less_equal,
+    compare_greater,
+    compare_greater_equal,
+    compare_equal,
+    compare_not_equal,
+
+    dot,
+    double_dot,
+    triple_dot,
+
+    pointer_dereference,
+
+    assign,
+    tilde,
+}
+
+TokenIntegerKind = enum
+{
+    hexadecimal,
+    decimal,
+    octal,
+    binary,
+    character_literal,
+}
+
+TokenInteger = struct
+{
+    value: u64,
+    kind: TokenIntegerKind,
+};
+
+ValueKeyword = enum
+{
+    undefined,
+    unreachable,
+    zero,
+}
+
+ValueIntrinsic = enum
+{
+    align_of,
+    build_mode,
+    byte_size,
+    enum_from_int,
+    enum_name,
+    enum_values,
+    extend,
+    field_parent_pointer,
+    has_debug_info,
+    integer_max,
+    int_from_enum,
+    int_from_pointer,
+    max,
+    min,
+    pointer_cast,
+    pointer_from_int,
+    select,
+    string_to_enum,
+    trap,
+    truncate,
+    va_start,
+    va_end,
+    va_arg,
+    va_copy,
+}
+
+OperatorKeyword = enum
+{
+    and,
+    or,
+    "and?",
+    "or?",
+}
+
+TokenContent = union
+{
+    integer: TokenInteger,
+    value_keyword: ValueKeyword,
+    value_intrinsic: ValueIntrinsic,
+    operator_keyword: OperatorKeyword,
+    identifier: []u8,
+    string_literal: []u8,
+}
+
+Token = struct
+{
+    content: TokenContent,
+    id: TokenId,
+}
+
+Precedence = enum
+{
+    none,
+    assignment,
+    boolean_or,
+    boolean_and,
+    comparison,
+    bitwise,
+    shifting,
+    add_like,
+    div_like,
+    prefix,
+    aggregate_initialization,
+    postfix,
+}
+
+ValueBuilder = struct
+{
+    token: Token,
+    left: &Value,
+    precedence: Precedence,
+    kind: ValueKind,
+    allow_assignment_operators: u1,
+}
+
+parse_value = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value;
 parse_type = fn (module: &Module, scope: &Scope) &Type;
 
 FunctionHeaderArgument = struct
@@ -4095,7 +4260,37 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
 
             if (!length_inferred)
             {
-                #trap();
+                set_checkpoint(module, checkpoint);
+
+                length_value = parse_value(module, scope, zero);
+                assert(length_value != zero);
+
+                if (!value_is_constant(length_value))
+                {
+                    report_error();
+                }
+
+                switch (length_value.id)
+                {
+                    .constant_integer =>
+                    {
+                        element_count = length_value.content.constant_integer.value;
+
+                        if (element_count == 0)
+                        {
+                            report_error();
+                        }
+
+                        resolved = 1;
+                    },
+                    else =>
+                    {
+                        report_error();
+                    },
+                }
+
+                skip_space(module);
+                expect_character(module, right_bracket);
             }
 
             skip_space(module);
@@ -4127,7 +4322,10 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
                     report_error();
                 }
 
-                #trap();
+                assert(element_count != 0);
+
+                >array_type = get_array_type(module, element_type, element_count);
+                return array_type;
             }
         }
     }
@@ -4200,140 +4398,6 @@ parse_hexadecimal = fn (module: &Module) u64
     }
 
     return value;
-}
-
-TokenId = enum
-{
-    none,
-    comma,
-    end_of_statement,
-    integer,
-    left_brace,
-    left_bracket,
-    left_parenthesis,
-    right_brace,
-    right_bracket,
-    right_parenthesis,
-
-    plus,
-    dash,
-    asterisk,
-    forward_slash,
-    percentage,
-    caret,
-    bar,
-    ampersand,
-    exclamation,
-
-    assign_plus,
-    assign_dash,
-    assign_asterisk,
-    assign_forward_slash,
-    assign_percentage,
-    assign_caret,
-    assign_bar,
-    assign_ampersand,
-
-    value_keyword,
-    operator_keyword,
-    identifier,
-    string_literal,
-    value_intrinsic,
-
-    shift_left,
-    shift_right,
-    assign_shift_left,
-    assign_shift_right,
-
-    compare_less,
-    compare_less_equal,
-    compare_greater,
-    compare_greater_equal,
-    compare_equal,
-    compare_not_equal,
-
-    dot,
-    double_dot,
-    triple_dot,
-
-    pointer_dereference,
-
-    assign,
-    tilde,
-}
-
-TokenIntegerKind = enum
-{
-    hexadecimal,
-    decimal,
-    octal,
-    binary,
-    character_literal,
-}
-
-TokenInteger = struct
-{
-    value: u64,
-    kind: TokenIntegerKind,
-};
-
-ValueKeyword = enum
-{
-    undefined,
-    unreachable,
-    zero,
-}
-
-ValueIntrinsic = enum
-{
-    align_of,
-    build_mode,
-    byte_size,
-    enum_from_int,
-    enum_name,
-    enum_values,
-    extend,
-    field_parent_pointer,
-    has_debug_info,
-    integer_max,
-    int_from_enum,
-    int_from_pointer,
-    max,
-    min,
-    pointer_cast,
-    pointer_from_int,
-    select,
-    string_to_enum,
-    trap,
-    truncate,
-    va_start,
-    va_end,
-    va_arg,
-    va_copy,
-}
-
-OperatorKeyword = enum
-{
-    and,
-    or,
-    "and?",
-    "or?",
-}
-
-TokenContent = union
-{
-    integer: TokenInteger,
-    value_keyword: ValueKeyword,
-    value_intrinsic: ValueIntrinsic,
-    operator_keyword: OperatorKeyword,
-    identifier: []u8,
-    string_literal: []u8,
-}
-
-Token = struct
-{
-    content: TokenContent,
-    id: TokenId,
 }
 
 tokenize = fn (module: &Module) Token
@@ -4713,33 +4777,7 @@ tokenize = fn (module: &Module) Token
     return token;
 }
 
-Precedence = enum
-{
-    none,
-    assignment,
-    boolean_or,
-    boolean_and,
-    comparison,
-    bitwise,
-    shifting,
-    add_like,
-    div_like,
-    prefix,
-    aggregate_initialization,
-    postfix,
-}
-
-ValueBuilder = struct
-{
-    token: Token,
-    left: &Value,
-    precedence: Precedence,
-    kind: ValueKind,
-    allow_assignment_operators: u1,
-}
-
 parse_precedence = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value;
-parse_value = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value;
 
 reference_identifier = fn (module: &Module, current_scope: &Scope, identifier: []u8, kind: ValueKind) &Value
 {
@@ -7152,6 +7190,54 @@ abi_system_v_classify_type = fn (type: &Type, options: AbiSystemVClassifyArgumen
                 }
             }
         },
+        .array =>
+        {
+            >byte_size = get_byte_size(type);
+
+            if (byte_size <= 64)
+            {
+                if (options.base_offset % #extend(get_byte_alignment(type)) == 0)
+                {
+                    >element_type = type.content.array.element_type;
+                    >element_size = get_byte_size(element_type);
+
+                    result[current_index] = .none;
+
+                    >vector_size: u64 = 16;
+
+                    if (byte_size > 16 and (byte_size != get_byte_size(element_type) or byte_size > vector_size))
+                    {
+                        unreachable;
+                    }
+                    else
+                    {
+                        >offset = options.base_offset;
+                        >element_count = type.content.array.element_count;
+
+                        for (i: 0..element_count)
+                        {
+                            >element_classes = abi_system_v_classify_type(element_type, {
+                                .base_offset = offset,
+                                .is_variable_argument = options.is_variable_argument,
+                                zero,
+                            });
+                            offset += element_size;
+
+                            result[0] = abi_system_v_merge_class(result[0], element_classes[0]);
+                            result[1] = abi_system_v_merge_class(result[1], element_classes[1]);
+
+                            if (result[0] == .memory or result[1] == .memory)
+                            {
+                                break;
+                            }
+                        }
+
+                        result = abi_system_v_classify_post_merge(byte_size, result);
+                        assert(result[1] != .sse or result[0] != .sse);
+                    }
+                }
+            }
+        },
         else =>
         {
             #trap();
@@ -7197,7 +7283,46 @@ contains_no_user_data = fn (type: &Type, start: u64, end: u64) u1
             .array, .enum_array =>
             {
                 result = 1;
-                #trap();
+
+                >element_type: &Type = zero;
+                >element_count: u64 = 0;
+
+                switch (type.id)
+                {
+                    .array =>
+                    {
+                        element_type = type.content.array.element_type;
+                        element_count = type.content.array.element_count;
+                    },
+                    .enum_array =>
+                    {
+                        #trap();
+                    },
+                    else => { unreachable; },
+                }
+
+                assert(element_type != zero);
+                assert(element_count != 0);
+
+                >element_size = get_byte_size(element_type);
+
+                for (i: 0..element_count)
+                {
+                    >offset = i * element_size;
+
+                    if (offset >= end)
+                    {
+                        break;
+                    }
+
+                    >element_start = #select(offset < start, start - offset, 0);
+
+                    if (!contains_no_user_data(element_type, element_start, end - offset))
+                    {
+                        result = 0;
+                        break;
+                    }
+                }
             },
             else => {},
         }
@@ -13745,6 +13870,7 @@ names: [_][]u8 =
     "c_abi0",
     "c_abi1",
     "c_med_struct_ints",
+    "c_ret_struct_array",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
