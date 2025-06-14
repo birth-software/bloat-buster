@@ -5478,7 +5478,22 @@ get_token_precedence = fn (token: Token) Precedence
         },
         .operator_keyword =>
         {
-            #trap();
+            >operator_keyword = token.content.operator_keyword;
+            switch (operator_keyword)
+            {
+                .and,
+                ."and?",
+                =>
+                {
+                    return .boolean_and;
+                },
+                .or,
+                ."or?",
+                =>
+                {
+                    return .boolean_or;
+                },
+            }
         },
         .compare_equal,
         .compare_not_equal,
@@ -5603,7 +5618,14 @@ parse_right = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
             {
                 .operator_keyword =>
                 {
-                    #trap();
+                    >operator_keyword = token.content.operator_keyword;
+                    switch (operator_keyword)
+                    {
+                        .and => { id = .logical_and; },
+                        .or => { id = .logical_or; },
+                        ."and?" => { id = .logical_and_shortcircuit; },
+                        ."or?" => { id = .logical_or_shortcircuit; },
+                    }
                 },
                 .plus => { id = .add; },
                 .dash => { id = .sub; },
@@ -11761,6 +11783,31 @@ emit_va_arg = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_ty
     }
 }
 
+emit_condition = fn (module: &Module, condition: &Value) &LLVMValue
+{
+    >llvm_condition = condition.llvm;
+    >condition_type = condition.type;
+    assert(llvm_condition != zero);
+    assert(condition_type != zero);
+
+    assert(condition_type.id == .integer or condition_type.id == .pointer);
+
+    if (!(condition_type.id == .integer and condition_type.content.integer.bit_count == 1))
+    {
+        llvm_condition = LLVMBuildICmp(module.llvm.builder, .ne, llvm_condition, LLVMConstNull(condition_type.llvm.abi), "");
+    }
+
+    assert(llvm_condition != zero);
+
+    return llvm_condition;
+}
+
+ShortcircuitingOperation = enum
+{
+    and,
+    or,
+}
+
 emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_constant: u1) void
 {
     >must_be_constant = expect_constant or (!module.current_function and !module.current_macro_instantiation);
@@ -11811,7 +11858,106 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
 
             if (is_shortcircuiting)
             {
-                #trap();
+                if (must_be_constant)
+                {
+                    report_error();
+                }
+
+                >op: ShortcircuitingOperation = undefined;
+                switch (binary_id)
+                {
+                    .logical_and_shortcircuit => { op = .and; },
+                    .logical_or_shortcircuit => { op = .or; },
+                    else => { unreachable; },
+                }
+
+                >left = value.content.binary.left;
+                >right = value.content.binary.right;
+
+                >right_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "shorcircuit.right");
+                >end_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "shorcircuit.end");
+
+                >true_block: &LLVMBasicBlock = undefined;
+                >false_block: &LLVMBasicBlock = undefined;
+
+                switch (op)
+                {
+                    .and =>
+                    {
+                        true_block = right_block;
+                        false_block = end_block;
+                    },
+                    .or =>
+                    {
+                        true_block = end_block;
+                        false_block = right_block;
+                    },
+                }
+
+
+                emit_value(module, left, .abi, 0);
+                >llvm_condition = emit_condition(module, left);
+                >current_basic_block = LLVMGetInsertBlock(module.llvm.builder);
+
+                LLVMBuildCondBr(module.llvm.builder, llvm_condition, true_block, false_block);
+                LLVMPositionBuilderAtEnd(module.llvm.builder, right_block);
+
+                assert(!right.llvm);
+                emit_value(module, right, .abi, 0);
+
+                >right_llvm = right.llvm;
+
+                >right_condition: &LLVMValue = zero;
+                switch (right.type.id)
+                {
+                    .integer =>
+                    {
+                        switch (right.type.content.integer.bit_count)
+                        {
+                            1 =>
+                            {
+                                right_condition = right_llvm;
+                            },
+                            else => { #trap(); },
+                        }
+                    },
+                    else => { #trap(); },
+                }
+
+                assert(right_condition != zero);
+
+                LLVMBuildBr(module.llvm.builder, end_block);
+                LLVMPositionBuilderAtEnd(module.llvm.builder, end_block);
+
+                >boolean_type = uint1(module);
+                resolve_type_in_place(module, boolean_type);
+                >boolean = boolean_type.llvm.abi;
+
+                >incoming_left: &LLVMValue = zero;
+
+                switch (op)
+                {
+                    .and => { incoming_left = LLVMConstNull(boolean); },
+                    .or => { incoming_left = LLVMConstInt(boolean, 1, 0); },
+                }
+
+                >phi = LLVMBuildPhi(module.llvm.builder, boolean, "");
+                >values: [_]&LLVMValue = [
+                    incoming_left,
+                    right_condition,
+                ];
+                >blocks: [_]&LLVMBasicBlock = [
+                    current_basic_block,
+                    right_block,
+                ];
+                LLVMAddIncoming(phi, &values[0], &blocks[0], blocks.length);
+
+                llvm_value = phi;
+
+                if (type_kind == .memory)
+                {
+                    #trap();
+                }
             }
             else
             {
@@ -12869,25 +13015,6 @@ emit_local = fn (module: &Module, local: &Local) void
 
         end_debug_local(module, &local.variable, local_variable);
     }
-}
-
-emit_condition = fn (module: &Module, condition: &Value) &LLVMValue
-{
-    >llvm_condition = condition.llvm;
-    >condition_type = condition.type;
-    assert(llvm_condition != zero);
-    assert(condition_type != zero);
-
-    assert(condition_type.id == .integer or condition_type.id == .pointer);
-
-    if (!(condition_type.id == .integer and condition_type.content.integer.bit_count == 1))
-    {
-        llvm_condition = LLVMBuildICmp(module.llvm.builder, .ne, llvm_condition, LLVMConstNull(condition_type.llvm.abi), "");
-    }
-
-    assert(llvm_condition != zero);
-
-    return llvm_condition;
 }
 
 analyze_block = fn (module: &Module, block: &Block) void;
@@ -14789,6 +14916,8 @@ names: [_][]u8 =
     "empty_if",
     "else_if",
     "else_if_complicated",
+    "basic_shortcircuiting_if",
+    "shortcircuiting_if",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32

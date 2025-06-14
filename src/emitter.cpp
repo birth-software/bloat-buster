@@ -7372,9 +7372,6 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind, bool expect
 
                     auto* left = value->binary.left;
 
-                    auto llvm_function = module->current_function->variable.storage->llvm;
-                    assert(llvm_function);
-
                     auto* right_block = LLVMAppendBasicBlockInContext(module->llvm.context, llvm_function, "shortcircuit.right");
                     auto* end_block = LLVMAppendBasicBlockInContext(module->llvm.context, llvm_function, "shortcircuit.end");
 
@@ -7439,7 +7436,6 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind, bool expect
                     auto boolean_type = uint1(module);
                     resolve_type_in_place(module, boolean_type);
                     auto boolean = boolean_type->llvm.abi;
-                    
 
                     LLVMValueRef incoming_left = 0;
 
