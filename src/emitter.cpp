@@ -5172,7 +5172,7 @@ fn SliceEmitResult emit_string_literal(Module* module, Value* value)
                 LLVMThreadLocalMode tlm = LLVMNotThreadLocal;
                 bool externally_initialized = false;
                 u32 alignment = 1;
-                auto global = llvm_create_global_variable(module->llvm.module, string_type, is_constant, LLVMInternalLinkage, constant_string, string_literal("conststring"), tlm, externally_initialized, alignment, LLVMGlobalUnnamedAddr);
+                auto global = llvm_create_global_variable(module->llvm.module, string_type, is_constant, LLVMInternalLinkage, constant_string, string_literal("const.string"), tlm, externally_initialized, alignment, LLVMGlobalUnnamedAddr);
 
                 return { global, LLVMConstInt(uint64(module)->llvm.abi, length, false) };
             } break;
@@ -8943,6 +8943,8 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                                         } break;
                                 }
                             }
+
+                            assert(!local);
 
                             analyze_statement(module, &statement->for_each.scope, statement->for_each.predicate, last_line, last_column, last_debug_location);
 

@@ -2031,6 +2031,7 @@ value_is_constant = fn (value: &Value) u1
     {
         .constant_integer,
         .enum_literal,
+        .string_literal,
         =>
         {
             return 1;
@@ -2782,8 +2783,8 @@ StatementFor = struct
 {
     first_local: &Local,
     last_local: &Local,
-    kinds: ValueKind,
-    iteratables: &Value,
+    kinds: []ValueKind,
+    iteratables: []&Value,
     predicate: &Statement,
     scope: Scope,
     kind: StatementForKind,
@@ -2809,6 +2810,12 @@ Statement = struct
     line: u32,
     column: u32,
     id: StatementId,
+}
+
+scope_to_for = fn (scope: &Scope) &StatementFor
+{
+    assert(scope.kind == .for_each);
+    return #field_parent_pointer(scope, "scope");
 }
 
 scope_to_block = fn (scope: &Scope) &Block
@@ -2852,7 +2859,17 @@ new_local = fn (module: &Module, scope: &Scope) &Local
         },
         .for_each =>
         {
-            #trap();
+            >for_each = scope_to_for(scope);
+            if (for_each.last_local)
+            {
+                for_each.last_local.next = result;
+            }
+            else
+            {
+                for_each.first_local = result;
+            }
+
+            for_each.last_local = result;
         }
         else =>
         {
@@ -4918,7 +4935,20 @@ reference_identifier = fn (module: &Module, current_scope: &Scope, identifier: [
             },
             .for_each =>
             {
-                #trap();
+                assert(scope.parent != zero);
+                >for_each = scope_to_for(scope);
+
+                >local = for_each.first_local;
+                while (local)
+                {
+                    if (string_equal(identifier, local.variable.name))
+                    {
+                        variable = &local.variable;
+                        break;
+                    }
+
+                    local = local.next;
+                }
             },
             .macro_declaration =>
             {
@@ -6030,7 +6060,137 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                         },
                         .for =>
                         {
-                            #trap();
+                            skip_space(module);
+                            expect_character(module, left_parenthesis);
+                            skip_space(module);
+
+                            >parent_scope = scope;
+
+                            statement.content = {
+                                .for = {
+                                    .scope = {
+                                        .parent = parent_scope,
+                                        .line = statement_line,
+                                        .column = statement_column,
+                                        .kind = .for_each,
+                                        zero,
+                                    },
+                                    zero,
+                                },
+                            };
+                            statement.id = .for;
+
+                            >scope = &statement.content.for.scope;
+                            >left_value_buffer: [64]ValueKind = undefined;
+                            >left_value_count: u64 = 0;
+
+                            while (1)
+                            {
+                                skip_space(module);
+
+                                >is_left = module.content[module.offset] == '&';
+                                module.offset += #extend(is_left);
+
+                                >for_local_line = get_line(module);
+                                >for_local_column = get_column(module);
+
+                                if (is_identifier_start(module.content[module.offset]))
+                                {
+                                    >local_name = arena_duplicate_string(module.arena, parse_identifier(module));
+                                    >local = new_local(module, scope);
+                                    local.& = {
+                                        .variable = {
+                                            .scope = scope,
+                                            .name = local_name,
+                                            .line = for_local_line,
+                                            .column = for_local_column,
+                                            zero,
+                                        },
+                                        zero,
+                                    };
+
+                                    >kind: ValueKind = #select(is_left, .left, .right);
+
+                                    left_value_buffer[left_value_count] = kind;
+                                    left_value_count += 1;
+                                }
+                                else
+                                {
+                                    #trap();
+                                }
+
+                                skip_space(module);
+
+                                if (!consume_character_if_match(module, ','))
+                                {
+                                    expect_character(module, ':');
+                                    break;
+                                }
+                            }
+
+                            skip_space(module);
+
+                            >right_value_buffer: [64]&Value = undefined;
+                            >right_value_count: u64 = 0;
+
+                            skip_space(module);
+
+                            right_value_buffer[right_value_count] = parse_value(module, scope, zero);
+                            right_value_count += 1;
+
+                            skip_space(module);
+
+                            >token = tokenize(module);
+
+                            >for_kind: StatementForKind = undefined;
+
+                            switch (token.id)
+                            {
+                                .double_dot =>
+                                {
+                                    if (left_value_count != 1)
+                                    {
+                                        report_error();
+                                    }
+
+                                    right_value_buffer[right_value_count] = parse_value(module, scope, zero);
+                                    right_value_count += 1;
+
+                                    expect_character(module, right_parenthesis);
+                                    for_kind = .range;
+                                },
+                                .right_parenthesis =>
+                                {
+                                    right_value_buffer[0].kind = .left;
+                                    for_kind = .slice;
+                                },
+                                else => { report_error(); },
+                            }
+
+                            statement.content.for.kind = for_kind;
+
+                            if (for_kind == .slice and left_value_count != right_value_count)
+                            {
+                                report_error();
+                            }
+
+                            >left_values = arena_allocate_slice[ValueKind](module.arena, left_value_count);
+                            memcpy(#pointer_cast(left_values.pointer), #pointer_cast(&left_value_buffer), left_value_count * #byte_size(ValueKind));
+
+                            >right_values = arena_allocate_slice[&Value](module.arena, right_value_count);
+                            memcpy(#pointer_cast(right_values.pointer), #pointer_cast(&right_value_buffer), right_value_count * #byte_size(&Value));
+
+                            statement.content.for.kinds = left_values;
+                            statement.content.for.iteratables = right_values;
+
+                            skip_space(module);
+
+                            >predicate = parse_statement(module, scope);
+                            statement.content.for.predicate = predicate;
+                            
+                            skip_space(module);
+
+                            require_semicolon = 0;
                         },
                         .while =>
                         {
@@ -6680,7 +6840,7 @@ parse = fn (module: &Module) void
                             for (i: 0..field_count)
                             {
                                 >value = int_value_buffer[i];
-                                >highest_value = #max(highest_value, value);
+                                highest_value = #max(highest_value, value);
                                 fields[i] = {
                                     .name = name_buffer[i],
                                     .value = value,
@@ -8938,7 +9098,120 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 },
                 .enum_name =>
                 {
-                    #trap();
+                    >string_type = get_slice_type(module, uint8(module));
+                    typecheck(module, expected_type, string_type);
+                    analyze_type(module, unary_value, zero, { .must_be_constant = analysis.must_be_constant, zero });
+
+                    >enum_type = unary_value.type;
+
+                    if (enum_type.id != .enum)
+                    {
+                        report_error();
+                    }
+
+                    resolve_type_in_place(module, enum_type);
+
+                    >enum_to_string_function = enum_type.content.enum.enum_to_string_function;
+
+                    if (!enum_to_string_function)
+                    {
+                        >current_block = LLVMGetInsertBlock(module.llvm.builder);
+                        >enum_name_array_global = get_enum_name_array_global(module, enum_type);
+                        >argument_types: [_]&LLVMType = [ enum_type.llvm.abi ];
+                        >llvm_function_type = LLVMFunctionType(string_type.llvm.memory, &argument_types[0], argument_types.length, 0);
+                        >function_name = arena_join_string(module.arena, [ "enum_to_string.", enum_type.name ][..]);
+                        >llvm_function = llvm_module_create_function(module.llvm.module, llvm_function_type, .internal, function_name);
+                        LLVMSetFunctionCallConv(llvm_function, .fast);
+
+                        >llvm_argument: &LLVMValue = zero;
+                        //assert(argument_types.length == 1); TODO: constant evaluation
+                        LLVMGetParams(llvm_function, &llvm_argument);
+
+                        >entry_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "entry");
+                        LLVMPositionBuilderAtEnd(module.llvm.builder, entry_block);
+
+                        >u32_type = uint32(module);
+                        resolve_type_in_place(module, u32_type);
+
+                        // TODO: alloca insert point
+
+                        >alloca = create_alloca(module, {
+                            .type = string_type,
+                            .name = "return_value",
+                            zero,
+                        });
+
+                        >return_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "return_block");
+                        >else_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "else_block");
+
+                        >enum_fields = enum_type.content.enum.fields;
+
+                        >switch_instruction = LLVMBuildSwitch(module.llvm.builder, llvm_argument, else_block, #truncate(enum_fields.length));
+                        >backing_type = enum_type.llvm.abi;
+                        assert(backing_type != zero);
+                        
+                        >u64_type = uint64(module).llvm.abi;
+                        assert(u64_type != zero);
+
+                        for (i: 0..enum_fields.length)
+                        {
+                            >field = &enum_fields[i];
+                            >case_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "case_block");
+                            >case_value = LLVMConstInt(backing_type, field.value, 0);
+
+                            LLVMAddCase(switch_instruction, case_value, case_block);
+                            LLVMPositionBuilderAtEnd(module.llvm.builder, case_block);
+
+                            >case_value_result_pointer = create_gep(module, {
+                                .type = enum_name_array_global.variable.type.llvm.memory,
+                                .pointer = enum_name_array_global.variable.storage.llvm,
+                                .indices = [ LLVMConstNull(u64_type), LLVMConstInt(u64_type, i, 0) ][..],
+                                zero,
+                            });
+
+                            >case_value_result = create_load(module, {
+                                .type = string_type,
+                                .pointer = case_value_result_pointer,
+                                zero,
+                            });
+
+                            create_store(module, {
+                                .source = case_value_result,
+                                .destination = alloca,
+                                .type = string_type,
+                                zero,
+                            });
+
+                            LLVMBuildBr(module.llvm.builder, return_block);
+                        }
+
+                        LLVMPositionBuilderAtEnd(module.llvm.builder, else_block);
+                        LLVMBuildUnreachable(module.llvm.builder);
+
+                        LLVMPositionBuilderAtEnd(module.llvm.builder, return_block);
+
+                        >function_result = create_load(module, {
+                            .type = string_type,
+                            .pointer = alloca,
+                            zero,
+                        });
+
+                        LLVMBuildRet(module.llvm.builder, function_result);
+
+                        if (current_block)
+                        {
+                            LLVMPositionBuilderAtEnd(module.llvm.builder, current_block);
+                        }
+
+                        enum_to_string_function = llvm_function;
+                        enum_type.content.enum.enum_to_string_function = enum_to_string_function;
+
+                        // TODO: alloca insertion point restoration
+                    }
+
+                    assert(enum_to_string_function != zero);
+
+                    value_type = string_type;
                 },
                 .pointer_from_int =>
                 {
@@ -9365,7 +9638,39 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 },
                 .enum_array, .array =>
                 {
-                    #trap();
+                    if (!string_equal(field_name, "length"))
+                    {
+                        report_error();
+                    }
+
+                    if (expected_type)
+                    {
+                        if (expected_type.id != .integer)
+                        {
+                            report_error();
+                        }
+
+                        value_type = expected_type;
+                    }
+                    else
+                    {
+                        if (resolved_aggregate_type.id == .enum_array)
+                        {
+                            >enum_type = resolved_aggregate_type.content.enum_array.enum_type;
+                            >backing_type = enum_type.content.enum.backing_type;
+                            value_type = backing_type;
+                        }
+                        else if (resolved_aggregate_type.id == .array)
+                        {
+                            value_type = uint64(module);
+                        }
+                        else
+                        {
+                            unreachable;
+                        }
+                    }
+
+                    // TODO: see if it fits
                 },
                 .pointer =>
                 {
@@ -11334,7 +11639,29 @@ emit_field_access = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, l
         },
         .enum_array, .array =>
         {
-            #trap();
+            assert(string_equal(value.content.field_access.field_name, "length"));
+            >array_length_type = get_llvm_type(value.type, type_kind);
+            >array_element_count: u64 = 0;
+
+            switch (resolved_aggregate_type.id)
+            {
+                .enum_array =>
+                {
+                    >enum_type = resolved_aggregate_type.content.enum_array.enum_type;
+                    assert(enum_type.id == .enum);
+                    array_element_count = enum_type.content.enum.fields.length;
+                },
+                .array =>
+                {
+                    array_element_count = resolved_aggregate_type.content.array.element_count;
+                },
+                else => { unreachable; },
+            }
+
+            assert(array_element_count != 0);
+
+            >result = LLVMConstInt(array_length_type, array_element_count, 0);
+            return result;
         },
         else => { unreachable; },
     }
@@ -11802,6 +12129,29 @@ emit_condition = fn (module: &Module, condition: &Value) &LLVMValue
     return llvm_condition;
 }
 
+emit_string_literal = fn (module: &Module, value: &Value) [2]&LLVMValue
+{
+    assert(value.id == .string_literal);
+    >resolved_value_type = resolve_alias(module, value.type);
+
+    >null_terminate: u1 = 1;
+    >pointer = value.content.string_literal.pointer;
+    >length = value.content.string_literal.length;
+
+    >constant_string = LLVMConstStringInContext2(module.llvm.context, pointer, length, #extend(!null_terminate));
+
+    >u8_type = uint8(module);
+    resolve_type_in_place(module, u8_type);
+
+    >string_type = LLVMArrayType2(u8_type.llvm.abi, length + #extend(null_terminate));
+    >is_constant: u1 = 1;
+    >thread_local_mode: LLVMThreadLocalMode = .none;
+    >externally_initialized: u1 = 0;
+    >alignment: u32 = 1;
+    >global = llvm_create_global_variable(module.llvm.module, string_type, is_constant, .internal, constant_string, "conststring", thread_local_mode, externally_initialized, alignment, .global);
+    return [ global, LLVMConstInt(uint64(module).llvm.abi, length, 0) ];
+}
+
 ShortcircuitingOperation = enum
 {
     and,
@@ -12095,6 +12445,17 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                 .va_end =>
                 {
                     llvm_value = emit_intrinsic_call(module, ."llvm.va_end", [ module.llvm.pointer_type ][..], [ llvm_unary_value ][..]);
+                },
+                .enum_name =>
+                {
+                    assert(type_kind == .abi);
+                    >enum_type = resolved_unary_type;
+                    assert(enum_type.id == .enum);
+                    >enum_to_string_function = enum_type.content.enum.enum_to_string_function;
+                    assert(enum_to_string_function != zero);
+                    >call = LLVMBuildCall2(module.llvm.builder, LLVMGlobalGetValueType(enum_to_string_function), enum_to_string_function, &llvm_unary_value, 1, "");
+                    LLVMSetInstructionCallConv(call, .fast);
+                    llvm_value = call;
                 },
                 else => { #trap(); },
             }
@@ -12629,6 +12990,23 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
             LLVMSetInstructionCallConv(call, .fast);
             llvm_value = call;
         },
+        .string_literal =>
+        {
+            >string_literal = emit_string_literal(module, value);
+            switch (resolved_value_type.id)
+            {
+                .struct =>
+                {
+                    assert(type_is_slice(resolved_value_type));
+                    llvm_value = emit_slice_result(module, string_literal, resolved_value_type.llvm.abi);
+                },
+                .pointer =>
+                {
+                    llvm_value = string_literal[0];
+                },
+                else => { unreachable; },
+            }
+        },
         else =>
         {
             #trap();
@@ -12637,29 +13015,6 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
 
     assert(llvm_value != zero);
     value.llvm = llvm_value;
-}
-
-emit_string_literal = fn (module: &Module, value: &Value) [2]&LLVMValue
-{
-    assert(value.id == .string_literal);
-    >resolved_value_type = resolve_alias(module, value.type);
-
-    >null_terminate: u1 = 1;
-    >pointer = value.content.string_literal.pointer;
-    >length = value.content.string_literal.length;
-
-    >constant_string = LLVMConstStringInContext2(module.llvm.context, pointer, length, #extend(!null_terminate));
-
-    >u8_type = uint8(module);
-    resolve_type_in_place(module, u8_type);
-
-    >string_type = LLVMArrayType2(u8_type.llvm.abi, length + #extend(null_terminate));
-    >is_constant: u1 = 1;
-    >thread_local_mode: LLVMThreadLocalMode = .none;
-    >externally_initialized: u1 = 0;
-    >alignment: u32 = 1;
-    >global = llvm_create_global_variable(module.llvm.module, string_type, is_constant, .internal, constant_string, "conststring", thread_local_mode, externally_initialized, alignment, .global);
-    return [ global, LLVMConstInt(uint64(module).llvm.abi, length, 0) ];
 }
 
 emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, right: &Value) void
@@ -13470,6 +13825,441 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                 LLVMBuildUnreachable(module.llvm.builder);
                 LLVMClearInsertionPosition(module.llvm.builder);
             }
+        },
+        .for =>
+        {
+            if (module.has_debug_info)
+            {
+                >lexical_block = LLVMDIBuilderCreateLexicalBlock(module.llvm.di_builder, statement.content.for.scope.parent.llvm, module.llvm.file, statement.content.for.scope.line, statement.content.for.scope.column);
+                statement.content.for.scope.llvm = lexical_block;
+            }
+
+            >index_type = uint64(module);
+            resolve_type_in_place(module, index_type);
+            >index_zero = LLVMConstNull(index_type.llvm.abi);
+
+            >entry_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "for_each.entry");
+            >body_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "for_each.body");
+            >continue_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "for_each.continue");
+            >exit_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "for_each.exit");
+
+            >previous_continue_block = module.llvm.continue_block;
+            >previous_exit_block = module.llvm.exit_block;
+
+            module.llvm.continue_block = continue_block;
+            module.llvm.exit_block = exit_block;
+
+            >kinds = statement.content.for.kinds;
+            >iteratables = statement.content.for.iteratables;
+
+            switch (statement.content.for.kind)
+            {
+                .slice =>
+                {
+                    // Construct loop pre-initialization
+
+                    assert(kinds.length == iteratables.length);
+                    >local = statement.content.for.first_local;
+
+                    for (i: 0..iteratables.length)
+                    {
+                        >kind = kinds[i];
+                        >iteratable = iteratables[i];
+
+                        analyze_type(module, iteratable, zero, zero);
+
+                        if (iteratable.kind == .right)
+                        {
+                            if (!type_is_slice(iteratable.type))
+                            {
+                                reanalyze_type_as_left_value(module, iteratable);
+                            }
+                        }
+
+                        >aggregate_type: &Type = zero;
+
+                        if (iteratable.kind == .left and iteratable.type.id != .pointer)
+                        {
+                            if (!type_is_slice(iteratable.type))
+                            {
+                                report_error();
+                            }
+
+                            iteratable.kind = .right;
+                        }
+
+                        switch (iteratable.kind)
+                        {
+                            .left =>
+                            {
+                                >pointer_type = iteratable.type;
+
+                                if (pointer_type.id != .pointer)
+                                {
+                                    report_error();
+                                }
+
+                                aggregate_type = pointer_type.content.pointer.element_type;
+                            },
+                            .right =>
+                            {
+                                aggregate_type = iteratable.type;
+                                assert(type_is_slice(aggregate_type));
+                            },
+                        }
+
+                        >child_type: &Type = zero;
+
+                        switch (aggregate_type.id)
+                        {
+                            .array =>
+                            {
+                                child_type = aggregate_type.content.array.element_type;
+                            },
+                            .struct =>
+                            {
+                                if (!type_is_slice(aggregate_type))
+                                {
+                                    report_error();
+                                }
+
+                                >pointer_type = aggregate_type.content.struct.fields[0].type;
+                                assert(pointer_type.id == .pointer);
+                                child_type = pointer_type.content.pointer.element_type;
+                            },
+                            else => { unreachable; },
+                        }
+
+                        assert(child_type != zero);
+                        assert(!local.variable.type);
+
+                        >local_type = child_type;
+
+                        if (kind == .left)
+                        {
+                            local_type = get_pointer_type(module, child_type);
+                        }
+
+                        assert(local_type != zero);
+                        local.variable.type = local_type;
+
+                        emit_local(module, local);
+                        emit_value(module, iteratable, .memory, 0);
+
+                        local = local.next;
+                    }
+
+                    assert(!local);
+
+                    >length_value: &LLVMValue = zero;
+
+                    // TODO: we are only taking the first length in order to operate
+                    for (value: iteratables)
+                    {
+                        >value_type = value.type;
+                        >aggregate_type = value_type;
+
+                        if (value.kind == .left)
+                        {
+                            assert(value_type.id == .pointer);
+                            aggregate_type = value_type.content.pointer.element_type;
+                        }
+
+                        assert(aggregate_type != zero);
+
+                        >llvm_value = value.llvm;
+
+                        switch (aggregate_type.id)
+                        {
+                            .array =>
+                            {
+                                assert(value.kind == .left);
+                                >element_count = aggregate_type.content.array.element_count;
+                                length_value = LLVMConstInt(index_type.llvm.abi, element_count, 0);
+                            },
+                            .struct =>
+                            {
+                                assert(type_is_slice(aggregate_type));
+
+                                switch (value.kind)
+                                {
+                                    .right =>
+                                    {
+                                        length_value = LLVMBuildExtractValue(module.llvm.builder, llvm_value, 1, "slice.length");
+                                    },
+                                    .left =>
+                                    {
+                                        >gep = LLVMBuildStructGEP2(module.llvm.builder, aggregate_type.llvm.abi, llvm_value, 1, "slice.length.pointer");
+                                        >load = create_load(module, {
+                                            .type = index_type,
+                                            .pointer = gep,
+                                            zero,
+                                        });
+                                        length_value = load;
+                                    },
+                                }
+                            },
+                            else => { unreachable; },
+                        }
+
+                        break;
+                    }
+
+                    >index_alloca = create_alloca(module, {
+                        .type = index_type,
+                        .name = "for_each.index",
+                        zero,
+                    });
+                    create_store(module, {
+                        .source = index_zero,
+                        .destination = index_alloca,
+                        .type = index_type,
+                        zero,
+                    });
+
+                    assert(length_value != zero);
+
+                    // Construct loop header
+
+                    LLVMBuildBr(module.llvm.builder, entry_block);
+                    LLVMPositionBuilderAtEnd(module.llvm.builder, entry_block);
+
+                    >header_index_load = create_load(module, {
+                        .type = index_type,
+                        .pointer = index_alloca,
+                        zero,
+                    });
+                    >index_compare = LLVMBuildICmp(module.llvm.builder, .ult, header_index_load, length_value, "");
+                    LLVMBuildCondBr(module.llvm.builder, index_compare, body_block, exit_block);
+
+                    // Construct loop body
+
+                    LLVMPositionBuilderAtEnd(module.llvm.builder, body_block);
+                    >body_index_load = create_load(module, {
+                        .type = index_type,
+                        .pointer = index_alloca,
+                        zero,
+                    });
+
+                    local = statement.content.for.first_local;
+
+                    for (i: 0..iteratables.length)
+                    {
+                        >kind = kinds[i];
+                        >iteratable = iteratables[i];
+
+                        >iteratable_type = iteratable.type;
+                        >iteratable_kind = iteratable.kind;
+                        >iteratable_llvm = iteratable.llvm;
+
+                        >aggregate_type: &Type = iteratable_type;
+
+                        if (iteratable_kind == .left)
+                        {
+                            assert(iteratable_type.id == .pointer);
+                            aggregate_type = iteratable_type.content.pointer.element_type;
+                        }
+
+                        assert(aggregate_type != zero);
+                        >element_pointer_value: &LLVMValue = zero;
+
+                        switch (aggregate_type.id)
+                        {
+                            .array =>
+                            {
+                                assert(iteratable_kind == .left);
+                                element_pointer_value = create_gep(module, {
+                                    .type = aggregate_type.llvm.memory,
+                                    .pointer = iteratable_llvm,
+                                    .indices = [ index_zero, body_index_load ][..],
+                                    zero,
+                                });
+                            },
+                            .struct =>
+                            {
+                                #trap();
+                            },
+                            else => { unreachable; },
+                        }
+
+                        assert(element_pointer_value != zero);
+
+                        >local_type = local.variable.type;
+
+                        switch (kind)
+                        {
+                            .right =>
+                            {
+                                >evaluation_kind = get_evaluation_kind(local_type);
+                                if (evaluation_kind == .scalar or type_is_slice(aggregate_type) or type_is_slice(local_type))
+                                {
+                                    >load = create_load(module, {
+                                        .type = local_type,
+                                        .pointer = element_pointer_value,
+                                        zero,
+                                    });
+
+                                    create_store(module, {
+                                        .source = load,
+                                        .destination = local.variable.storage.llvm,
+                                        .type = local_type,
+                                        zero,
+                                    });
+                                }
+                                else
+                                {
+                                    #trap();
+                                }
+                            },
+                            .left =>
+                            {
+                                create_store(module, {
+                                    .source = element_pointer_value,
+                                    .destination = local.variable.storage.llvm,
+                                    .type = local_type,
+                                    zero,
+                                });
+                            },
+                        }
+
+                        local = local.next;
+                    }
+
+                    assert(!local);
+
+                    analyze_statement(module, &statement.content.for.scope, statement.content.for.predicate);
+
+                    if (LLVMGetInsertBlock(module.llvm.builder))
+                    {
+                        LLVMBuildBr(module.llvm.builder, continue_block);
+                    }
+
+                    LLVMPositionBuilderAtEnd(module.llvm.builder, continue_block);
+
+                    >continue_index_load = create_load(module, {
+                        .type = index_type,
+                        .pointer = index_alloca,
+                        zero,
+                    });
+
+                    >inc = LLVMBuildAdd(module.llvm.builder, continue_index_load, LLVMConstInt(index_type.llvm.abi, 1, 0), "");
+
+                    create_store(module, {
+                        .source = inc,
+                        .destination = index_alloca,
+                        .type = index_type,
+                        zero,
+                    });
+
+                    LLVMBuildBr(module.llvm.builder, entry_block);
+
+                    LLVMPositionBuilderAtEnd(module.llvm.builder, exit_block);
+                },
+                .range =>
+                {
+                    >local = statement.content.for.first_local;
+                    assert(local != zero);
+                    assert(!local.next);
+                    assert(!local.variable.type);
+
+                    assert(kinds.length == 1);
+
+                    if (iteratables.length == 2)
+                    {
+                        >start = iteratables[0];
+                        >end = iteratables[1];
+
+                        >local_type: &Type = zero;
+
+                        if (value_is_constant(start))
+                        {
+                            #trap();
+                        }
+                        else
+                        {
+                            analyze_binary_type(module, start, end, 0, zero, 0);
+                            assert(start.type == end.type);
+                            local_type = start.type;
+                        }
+
+                        assert(local_type != zero);
+
+                        for (iteratable: iteratables)
+                        {
+                            if (!iteratable.type)
+                            {
+                                analyze_type(module, iteratable, local_type, zero);
+                            }
+                        }
+
+                        local.variable.type = local_type;
+                        emit_local(module, local);
+                        emit_value(module, start, .memory, 0);
+
+                        >index_alloca = local.variable.storage.llvm;
+
+                        create_store(module, {
+                            .source = start.llvm,
+                            .destination = index_alloca,
+                            .type = local_type,
+                            zero,
+                        });
+
+                        LLVMBuildBr(module.llvm.builder, entry_block);
+                        LLVMPositionBuilderAtEnd(module.llvm.builder, entry_block);
+
+                        >header_index_load = create_load(module, {
+                            .type = local_type,
+                            .pointer = index_alloca,
+                            zero,
+                        });
+
+                        emit_value(module, end, .abi, 0);
+
+                        >length_value = end.llvm;
+                        >index_compare = LLVMBuildICmp(module.llvm.builder, .ult, header_index_load, length_value, "");
+                        LLVMBuildCondBr(module.llvm.builder, index_compare, body_block, exit_block);
+
+                        LLVMPositionBuilderAtEnd(module.llvm.builder, body_block);
+                        analyze_statement(module, &statement.content.for.scope, statement.content.for.predicate);
+
+                        if (LLVMGetInsertBlock(module.llvm.builder))
+                        {
+                            LLVMBuildBr(module.llvm.builder, continue_block);
+                        }
+
+                        LLVMPositionBuilderAtEnd(module.llvm.builder, continue_block);
+
+                        >continue_index_load = create_load(module, {
+                            .type = local_type,
+                            .pointer = index_alloca,
+                            zero,
+                        });
+
+                        >inc = LLVMBuildAdd(module.llvm.builder, continue_index_load, LLVMConstInt(local_type.llvm.abi, 1, 0), "");
+                        
+                        create_store(module, {
+                            .source = inc,
+                            .destination = index_alloca,
+                            .type = local_type,
+                            zero,
+                        });
+
+                        LLVMBuildBr(module.llvm.builder, entry_block);
+
+                        LLVMPositionBuilderAtEnd(module.llvm.builder, exit_block);
+                    }
+                    else
+                    {
+                        // TODO: case for reverse range
+                        #trap();
+                    }
+                },
+            }
+
+            // END OF SCOPE
+            module.llvm.continue_block = previous_continue_block;
+            module.llvm.exit_block = previous_exit_block;
         },
         else =>
         {
@@ -14918,6 +15708,10 @@ names: [_][]u8 =
     "else_if_complicated",
     "basic_shortcircuiting_if",
     "shortcircuiting_if",
+    "field_access_left_assign",
+    "for_each",
+    "pointer_decay",
+    "enum_name",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
