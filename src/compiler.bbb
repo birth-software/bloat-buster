@@ -1400,6 +1400,13 @@ TypeBits = struct
     is_implicit_backing_type: u1,
 }
 
+TypeAlias = struct
+{
+    type: &Type,
+    scope: &Scope,
+    line: u32,
+}
+
 TypeContent = union
 {
     integer: TypeInteger,
@@ -1410,6 +1417,7 @@ TypeContent = union
     enum: TypeEnum,
     struct: TypeStruct,
     bits: TypeBits,
+    alias: TypeAlias,
 }
 
 TypeLLVM = struct
@@ -3950,6 +3958,10 @@ resolve_alias = fn (module: &Module, type: &Type) &Type
             {
                 result = type;
             }
+        },
+        .alias =>
+        {
+            result = resolve_alias(module, type.content.alias.type);
         },
         else =>
         {
@@ -7080,7 +7092,26 @@ parse = fn (module: &Module) void
                     },
                     .typealias =>
                     {
-                        #trap();
+                        >aliased_type = parse_type(module, scope);
+
+                        if (!consume_character_if_match(module, ';'))
+                        {
+                            report_error();
+                        }
+
+                        >alias_type = new_type(module, {
+                            .content = {
+                                .alias = {
+                                    .type = aliased_type,
+                                    .scope = scope,
+                                    .line = global_line,
+                                },
+                            },
+                            .id = .alias,
+                            .name = global_name,
+                            .scope = scope,
+                            zero,
+                        });
                     },
                     .union =>
                     {
@@ -15844,6 +15875,7 @@ names: [_][]u8 =
     "pointer_decay",
     "enum_name",
     "slice_of_slices",
+    "type_alias",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
