@@ -14335,7 +14335,31 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
 
                         if (value_is_constant(start))
                         {
-                            #trap();
+                            switch (start.id)
+                            {
+                                .constant_integer =>
+                                {
+                                    switch (end.id)
+                                    {
+                                        .constant_integer =>
+                                        {
+                                            >start_signed = start.content.constant_integer.signed;
+                                            >end_signed = end.content.constant_integer.signed;
+                                            >is_signed = !(!start_signed and !end_signed);
+                                            local_type = integer_type(module, { .bit_count = 64, .signed = is_signed });
+                                        },
+                                        else =>
+                                        {
+                                            analyze_type(module, end, zero, zero);
+                                            >end_type = end.type;
+                                            assert(end_type != zero);
+                                            start.type = end_type;
+                                            local_type = end_type;
+                                        },
+                                    }
+                                },
+                                else => { unreachable; },
+                            }
                         }
                         else
                         {
@@ -15876,6 +15900,9 @@ names: [_][]u8 =
     "enum_name",
     "slice_of_slices",
     "type_alias",
+    "integer_formats",
+    "for_each_int",
+    "bool_array",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
