@@ -9469,7 +9469,50 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             }
             else
             {
-                #trap();
+                if (values.length == 0)
+                {
+                    report_error();
+                }
+
+                >expected_type: &Type = zero;
+                >is_constant: u1 = 1;
+
+                for (value: values)
+                {
+                    analyze_type(module, value, expected_type, { .must_be_constant = analysis.must_be_constant, zero });
+
+                    is_constant = is_constant and value_is_constant(value);
+
+                    >value_type = value.type;
+                    if (expected_type)
+                    {
+                        if (expected_type != value_type)
+                        {
+                            report_error();
+                        }
+                    }
+                    else
+                    {
+                        assert(value_type != zero);
+                        expected_type = value_type;
+                    }
+                }
+
+                if (!expected_type)
+                {
+                    report_error();
+                }
+
+                >element_type = expected_type;
+                >element_count = values.length;
+
+                >array_type = get_array_type(module, element_type, element_count);
+                value_type = array_type;
+
+                if (value.kind == .left)
+                {
+                    value_type = get_pointer_type(module, array_type);
+                }
             }
         },
         .array_expression =>
@@ -10344,6 +10387,20 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
             analyze_type(module, enum_string_value, string_type, { .must_be_constant = analysis.must_be_constant, zero });
             value_type = struct_type;
+        },
+        .undefined =>
+        {
+            if (!expected_type)
+            {
+                report_error();
+            }
+
+            if (expected_type.id == .void or expected_type.id == .noreturn)
+            {
+                report_error();
+            }
+
+            value_type = expected_type;
         },
         else =>
         {
@@ -12569,7 +12626,51 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
             }
             else
             {
-                #trap();
+                switch (value.kind)
+                {
+                    .right =>
+                    {
+                        #trap();
+                    },
+                    .left =>
+                    {
+                        assert(resolved_value_type.id == .pointer);
+                        >array_type = resolved_value_type.content.pointer.element_type;
+                        assert(array_type.id == .array);
+
+                        >alloca = create_alloca(module, {
+                            .type = array_type,
+                            .name = "array.init",
+                            zero,
+                        });
+
+                        >element_type = array_type.content.array.element_type;
+                        >pointer_to_element_type = get_pointer_type(module, element_type);
+
+                        >u64_type = uint64(module);
+                        resolve_type_in_place(module, u64_type);
+
+                        >llvm_u64_type = u64_type.llvm.abi;
+                        >u64_zero = LLVMConstNull(llvm_u64_type);
+
+                        >llvm_array_type = array_type.llvm.memory;
+
+                        for (i: 0..values.length)
+                        {
+                            >alloca_gep = create_gep(module, {
+                                .type = llvm_array_type,
+                                .pointer = alloca,
+                                .indices = [ u64_zero, LLVMConstInt(llvm_u64_type, i, 0) ][..],
+                                zero,
+                            });
+
+                            >value = values[i];
+                            emit_assignment(module, alloca_gep, pointer_to_element_type, value);
+                        }
+
+                        llvm_value = alloca;
+                    },
+                }
             }
         },
         .array_expression =>
@@ -13296,6 +13397,10 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                         .type = s2e_struct_type,
                         zero,
                     });
+                },
+                .undefined =>
+                {
+                    // TODO: something
                 },
                 else =>
                 {
@@ -14077,7 +14182,33 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                             },
                             .struct =>
                             {
-                                #trap();
+                                assert(type_is_slice(aggregate_type));
+
+                                if (iteratable_kind == .left)
+                                {
+                                    iteratable_llvm = create_load(module, {
+                                        .type = aggregate_type,
+                                        .pointer = iteratable_llvm,
+                                        zero,
+                                    });
+                                }
+
+                                >extract_pointer = LLVMBuildExtractValue(module.llvm.builder, iteratable_llvm, 0, "");
+
+                                >fields = aggregate_type.content.struct.fields;
+                                >pointer_type = fields[0].type;
+                                assert(pointer_type.id == .pointer);
+                                >gep_type = pointer_type.content.pointer.element_type;
+                                resolve_type_in_place(module, gep_type);
+
+                                >gep = create_gep(module, {
+                                    .type = gep_type.llvm.memory,
+                                    .pointer = extract_pointer,
+                                    .indices = [ body_index_load ][..],
+                                    zero,
+                                });
+
+                                element_pointer_value = gep;
                             },
                             else => { unreachable; },
                         }
@@ -15712,6 +15843,7 @@ names: [_][]u8 =
     "for_each",
     "pointer_decay",
     "enum_name",
+    "slice_of_slices",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32

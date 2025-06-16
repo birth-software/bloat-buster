@@ -7587,6 +7587,7 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind, bool expect
                                 assert(array_type->id == TypeId::array);
                                 auto alloca = create_alloca(module, {
                                     .type = array_type,
+                                    .name = string_literal("array.init"),
                                 });
 
                                 auto pointer_to_element_type = get_pointer_type(module, array_type->array.element_type);
