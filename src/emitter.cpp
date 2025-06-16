@@ -6591,7 +6591,7 @@ fn void emit_assignment(Module* module, LLVMValueRef left_llvm, Type* left_type,
                                             auto fields = resolved_value_type->union_type.fields;
                                             auto biggest_field_index = resolved_value_type->union_type.biggest_field;
                                             auto& biggest_field = fields[biggest_field_index];
-                                            auto biggest_field_type = fields[biggest_field_index].type;
+                                            auto biggest_field_type = biggest_field.type;
                                             auto value = elements[0].value;
                                             auto field_value_type = value->type;
                                             auto field_type_size = get_byte_size(field_value_type);
@@ -6621,7 +6621,7 @@ fn void emit_assignment(Module* module, LLVMValueRef left_llvm, Type* left_type,
 
                                             auto destination_pointer = LLVMBuildStructGEP2(module->llvm.builder, struct_type, left_llvm, 0, "");
                                             auto field_pointer_type = get_pointer_type(module, field_value_type);
-                                            unused(biggest_field);
+
                                             emit_assignment(module, destination_pointer, field_pointer_type, value);
                                         } break;
                                     default: unreachable();
