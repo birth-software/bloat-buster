@@ -6403,11 +6403,11 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                         },
                         .break =>
                         {
-                            #trap();
+                            statement.id = .break;
                         },
                         .continue =>
                         {
-                            #trap();
+                            statement.id = .continue;
                         },
                     }
                 }
@@ -14717,6 +14717,28 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
             module.llvm.continue_block = previous_continue_block;
             module.llvm.exit_block = previous_exit_block;
         },
+        .break =>
+        {
+            >exit_block = module.llvm.exit_block;
+            if (!exit_block)
+            {
+                report_error();
+            }
+
+            LLVMBuildBr(module.llvm.builder, exit_block);
+            LLVMClearInsertionPosition(module.llvm.builder);
+        },
+        .continue =>
+        {
+            >continue_block = module.llvm.continue_block;
+            if (!continue_block)
+            {
+                report_error();
+            }
+
+            LLVMBuildBr(module.llvm.builder, continue_block);
+            LLVMClearInsertionPosition(module.llvm.builder);
+        },
         else =>
         {
             #trap();
@@ -16174,6 +16196,7 @@ names: [_][]u8 =
     "for_each_int",
     "bool_array",
     "basic_union",
+    "break_continue",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
