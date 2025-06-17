@@ -12807,8 +12807,8 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                             report_error();
                         }
 
-                        // TODO: field parent pointer
-                        #trap();
+                        >global: &Global = #field_parent_pointer(variable, "variable");
+                        llvm_value = global.initial_value.llvm;
                     }
                     else
                     {
@@ -16197,6 +16197,7 @@ names: [_][]u8 =
     "bool_array",
     "basic_union",
     "break_continue",
+    "constant_global_reference",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
