@@ -1477,6 +1477,10 @@ type_is_signed = fn (type: &Type) u1
             >backing_type = type.content.bits.backing_type;
             return type_is_signed(backing_type);
         },
+        .alias =>
+        {
+            return type_is_signed(type.content.alias.type);
+        },
         else =>
         {
             #trap();
@@ -1671,6 +1675,10 @@ get_byte_alignment = fn (type: &Type) u32
         {
             return type.content.union.byte_alignment;
         },
+        .alias =>
+        {
+            return get_byte_alignment(type.content.alias.type);
+        },
         else =>
         {
             #trap();
@@ -1702,6 +1710,11 @@ get_bit_size = fn (type: &Type) u64
         {
             >byte_size = get_byte_size(type);
             return byte_size * 8;
+        },
+        .alias =>
+        {
+            >bit_size = get_bit_size(type.content.alias.type);
+            return bit_size;
         },
         else =>
         {
@@ -2492,6 +2505,7 @@ LLVMICmpPredicate = enum u32
 [extern] LLVMDIBuilderCreateBitFieldMemberType = fn [cc(c)] (di_builder: &LLVMDIBuilder, scope: &LLVMMetadata, name_pointer: &u8, name_length: u64, file: &LLVMMetadata, line: u32, bit_size: u64, bit_offset: u64, storage_bit_offset: u64, flags: LLVMDIFlags, type: &LLVMMetadata) &LLVMMetadata;
 [extern] LLVMDIBuilderCreateStructType = fn [cc(c)] (di_builder: &LLVMDIBuilder, scope: &LLVMMetadata, name_pointer: &u8, name_length: u64, file: &LLVMMetadata, line: u32, bit_size: u64, bit_alignment: u32, flags: LLVMDIFlags, derived_from: &LLVMMetadata, element_pointer: &&LLVMMetadata, element_count: u32, runtime_language: u32, vtable_holder: &LLVMMetadata, unique_identifier_pointer: &u8, unique_identifier_length: u64) &LLVMMetadata;
 [extern] LLVMDIBuilderCreateUnionType = fn [cc(c)] (di_builder: &LLVMDIBuilder, scope: &LLVMMetadata, name_pointer: &u8, name_length: u64, file: &LLVMMetadata, line: u32, bit_size: u64, bit_alignment: u32, flags: LLVMDIFlags, element_pointer: &&LLVMMetadata, element_count: u32, runtime_language: u32, unique_identifier_pointer: &u8, unique_identifier_length: u64) &LLVMMetadata;
+[extern] LLVMDIBuilderCreateTypedef = fn [cc(c)] (di_builder: &LLVMDIBuilder, type: &LLVMMetadata, name_pointer: &u8, name_length: u64, file: &LLVMMetadata, line: u32, scope: &LLVMMetadata, alignment: u32) &LLVMMetadata;
 
 [extern] LLVMDIBuilderCreateFunction = fn [cc(c)] (di_builder: &LLVMDIBuilder, scope: &LLVMMetadata, name_pointer: &u8, name_length: u64, linkage_name_pointer: &u8, linkage_name_length: u64, file: &LLVMMetadata, line: u32, type: &LLVMMetadata, is_local_to_unit: s32, is_definition: s32, scope_line: u32, flags: LLVMDIFlags, is_optimized: s32) &LLVMMetadata;
 [extern] LLVMDIBuilderFinalizeSubprogram = fn [cc(c)] (di_builder: &LLVMDIBuilder, subprogram: &LLVMMetadata) void;
@@ -5926,7 +5940,96 @@ parse_right = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
 
             if (left.id == .macro)
             {
-                #trap();
+                >declaration = left.content.macro;
+
+                if (!macro_declaration_is_generic(declaration))
+                {
+                    report_error();
+                }
+
+                >instantiation_line = get_line(module);
+                >instantiation_column = get_column(module);
+                >original_constant_argument_count = declaration.constant_arguments.length;
+                >constant_arguments = arena_allocate_slice[ConstantArgument](module.arena, original_constant_argument_count);
+                >constant_argument_count: u64 = 0;
+
+                while (1)
+                {
+                    skip_space(module);
+
+                    if (consume_character_if_match(module, right_bracket))
+                    {
+                        break;
+                    }
+
+                    >constant_argument_index = constant_argument_count;
+                    if (constant_argument_index == original_constant_argument_count)
+                    {
+                        report_error();
+                    }
+
+                    >constant_argument = declaration.constant_arguments[constant_argument_index];
+
+                    switch (constant_argument.id)
+                    {
+                        .value =>
+                        {
+                            #trap();
+                        },
+                        .type =>
+                        {
+                            >argument_type = parse_type(module, scope);
+                            constant_arguments[constant_argument_index] = {
+                                .name = constant_argument.name,
+                                .content = {
+                                    .type = argument_type,
+                                },
+                                .id = .type,
+                            };
+                        },
+                    }
+
+                    constant_argument_count += 1;
+
+                    skip_space(module);
+                    consume_character_if_match(module, ',');
+                }
+
+                skip_space(module);
+
+                expect_character(module, left_parenthesis);
+
+                if (original_constant_argument_count != constant_argument_count)
+                {
+                    report_error();
+                }
+
+                >instantiation_arguments = parse_call_arguments(module, scope);
+
+                result.& = {
+                    .content = {
+                        .macro_instantiation = {
+                            .declaration = declaration,
+                            .instantiation_function = module.current_function,
+                            .declaration_arguments = zero,
+                            .instantiation_arguments = instantiation_arguments,
+                            .constant_arguments = constant_arguments,
+                            .return_type = declaration.return_type,
+                            .scope = {
+                                .parent = scope,
+                                .line = declaration.scope.line,
+                                .column = declaration.scope.column,
+                                .kind = .macro_instantiation,
+                                zero,
+                            },
+                            .line = instantiation_line,
+                            .column = instantiation_column,
+                            zero,
+                        },
+                    },
+                    .id = .macro_instantiation,
+                    zero,
+                };
             }
             else
             {
@@ -7170,12 +7273,55 @@ parse = fn (module: &Module) void
 
                         if (is_generic)
                         {
+                            while (1)
+                            {
+                                skip_space(module);
+
+                                if (consume_character_if_match(module, right_bracket))
+                                {
+                                    break;
+                                }
+
+                                >argument_name = arena_duplicate_string(module.arena, parse_identifier(module));
+
+                                skip_space(module);
+                                
+                                >has_value = consume_character_if_match(module, ':');
+
+                                >constant_argument_index = constant_argument_count;
+
+                                if (has_value)
+                                {
+                                    #trap();
+                                }
+                                else
+                                {
+                                    >ty = new_type(module, {
+                                        .id = .unresolved,
+                                        .name = argument_name,
+                                        .scope = &macro_declaration.scope,
+                                        zero,
+                                    });
+
+                                    constant_argument_buffer[constant_argument_index] = {
+                                        .name = argument_name,
+                                        .content = {
+                                            .type = ty,
+                                        },
+                                        .id = .type,
+                                    };
+                                }
+
+                                constant_argument_count += 1;
+                            }
+
+                            skip_space(module);
+
                             // END OF SCOPE
                             if (constant_argument_count == 0)
                             {
                                 report_error();
                             }
-                            #trap();
                         }
                         else
                         {
@@ -7591,6 +7737,12 @@ resolve_type_in_place_abi = fn (module: &Module, type: &Type) void
                 >size = get_byte_size(type);
                 assert(llvm_size == size);
             },
+            .alias =>
+            {
+                >aliased = type.content.alias.type;
+                resolve_type_in_place_abi(module, aliased);
+                result = aliased.llvm.abi;
+            },
             else =>
             {
                 #trap();
@@ -7650,6 +7802,12 @@ resolve_type_in_place_memory = fn (module: &Module, type: &Type) void
                 >llvm_size = LLVMStoreSizeOfType(module.llvm.target_data_layout, result);
                 >size = get_byte_size(type);
                 assert(llvm_size == size);
+            },
+            .alias =>
+            {
+                >aliased = type.content.alias.type;
+                resolve_type_in_place_memory(module, aliased);
+                result = aliased.llvm.memory;
             },
             else =>
             {
@@ -7835,6 +7993,14 @@ resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
                     LLVMMetadataReplaceAllUsesWith(forward_declaration, union_type);
 
                     result = union_type;
+                },
+                .alias =>
+                {
+                    >aliased = type.content.alias.type;
+                    resolve_type_in_place_debug(module, aliased);
+                    
+                    >alignment = get_byte_alignment(aliased);
+                    result = LLVMDIBuilderCreateTypedef(module.llvm.di_builder, aliased.llvm.debug, type.name.pointer, type.name.length, module.llvm.file, type.content.alias.line, type.content.alias.scope.llvm, alignment * 8);
                 },
                 else =>
                 {
@@ -9339,7 +9505,37 @@ resolve_type = fn (module: &Module, type: &Type) &Type
     {
         .unresolved =>
         {
-            #trap();
+            assert(!module.current_macro_declaration);
+
+            >instantiation = module.current_macro_instantiation;
+            if (!instantiation)
+            {
+                report_error();
+            }
+
+            >declaration = instantiation.declaration;
+            >declaration_arguments = declaration.constant_arguments;
+            >instantiation_arguments = instantiation.constant_arguments;
+            assert(declaration_arguments.length == instantiation_arguments.length);
+
+            for (i: 0..declaration_arguments.length)
+            {
+                >declaration_argument = &declaration_arguments[i];
+                >instantiation_argument = &instantiation_arguments[i];
+                assert(instantiation_argument.id == declaration_argument.id);
+
+                if (declaration_argument.id == .type and type == declaration_argument.content.type)
+                {
+                    assert(string_equal(declaration_argument.name, instantiation_argument.name));
+                    result = instantiation_argument.content.type;
+                    break;
+                }
+            }
+
+            if (!result)
+            {
+                report_error();
+            }
         },
         .integer =>
         {
@@ -11113,7 +11309,28 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     },
                     .type =>
                     {
-                        #trap();
+                        >declaration_type = declaration_constant_argument.content.type;
+                        assert(declaration_type.id == .unresolved);
+
+                        >old_instantiation_type = instantiation_constant_argument.content.type;
+
+                        >instantiation_type = new_type(module, {
+                            .content = {
+                                .alias = {
+                                    .type = old_instantiation_type,
+                                    .scope = &macro_instantiation.scope,
+                                    .line = macro_instantiation.line,
+                                },
+                            },
+                            .id = .alias,
+                            .name = declaration_constant_argument.name,
+                            .scope = &macro_instantiation.scope,
+                            zero,
+                        });
+
+                        instantiation_constant_argument.content = {
+                            .type = instantiation_type,
+                        };
                     },
                 }
             }
@@ -16929,6 +17146,7 @@ names: [_][]u8 =
     "slice_array_literal",
     "slice_only_start",
     "basic_macro",
+    "generic_macro",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
