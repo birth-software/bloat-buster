@@ -2110,6 +2110,10 @@ value_is_constant = fn (value: &Value) u1
             assert(value.type != zero);
             return value.content.array_initialization.is_constant;
         },
+        .select =>
+        {
+            return 0;
+        },
         else =>
         {
             #trap();
@@ -13703,6 +13707,22 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                 {
                     // TODO: something
                 },
+                .select =>
+                {
+                    if (!type_is_slice(resolved_value_type))
+                    {
+                        report_error();
+                    }
+
+                    emit_value(module, right, .memory, 0);
+
+                    create_store(module, {
+                        .source = right.llvm,
+                        .destination = left_llvm,
+                        .type = resolved_value_type,
+                        zero,
+                    });
+                },
                 else =>
                 {
                     #trap();
@@ -16198,6 +16218,11 @@ names: [_][]u8 =
     "basic_union",
     "break_continue",
     "constant_global_reference",
+    "concat_logical_or",
+    "strict_array_type",
+    "pointer_struct_initialization",
+    "slice_array_literal",
+    "slice_only_start",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
