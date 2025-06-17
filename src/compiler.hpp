@@ -1029,7 +1029,6 @@ struct MacroDeclaration
 {
     Slice<Argument> arguments;
     Slice<ConstantArgument> constant_arguments;
-    TypeList types;
     Type* return_type;
     Block* block;
     String name;

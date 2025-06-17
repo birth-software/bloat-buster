@@ -1045,6 +1045,8 @@ Value = struct;
 Local = struct;
 Block = struct;
 Module = struct;
+MacroDeclaration = struct;
+MacroInstantiation = struct;
 
 ScopeKind = enum
 {
@@ -1779,7 +1781,7 @@ ValueId = enum
     variable,
     local,
     unary_type,
-    macro_reference,
+    macro,
     call,
     array_initialization,
     array_expression,
@@ -1797,6 +1799,7 @@ ValueId = enum
     undefined,
     select,
     string_to_enum,
+    macro_instantiation,
 }
 
 ValueConstantInteger = struct
@@ -2023,6 +2026,41 @@ ValueStringToEnum = struct
     string: &Value,
 }
 
+ConstantArgumentId = enum
+{
+    value,
+    type,
+}
+
+ConstantArgumentContent = union
+{
+    value: &Value,
+    type: &Type,
+}
+
+ConstantArgument = struct
+{
+    name: []u8,
+    content: ConstantArgumentContent,
+    id: ConstantArgumentId,
+}
+
+MacroInstantiation = struct
+{
+    declaration: &MacroDeclaration,
+    instantiation_function: &Global,
+    declaration_arguments: []Argument,
+    instantiation_arguments: []&Value,
+    constant_arguments: []ConstantArgument,
+    return_type: &Type,
+    block: &Block,
+    scope: Scope,
+    line: u32,
+    column: u32,
+    return_alloca: &LLVMValue,
+    return_block: &LLVMBasicBlock,
+}
+
 ValueContent = union
 {
     constant_integer: ValueConstantInteger,
@@ -2042,6 +2080,8 @@ ValueContent = union
     aggregate_initialization: ValueAggregateInitialization,
     select: ValueSelect,
     string_to_enum: ValueStringToEnum,
+    macro: &MacroDeclaration,
+    macro_instantiation: MacroInstantiation,
 }
 
 ValueKind = enum
@@ -2126,12 +2166,18 @@ void_offset: u64 = i128_offset + 2;
 
 MacroDeclaration = struct
 {
-    foo: u32,
+    arguments: []Argument,
+    constant_arguments: []ConstantArgument,
+    return_type: &Type,
+    block: &Block,
+    name: []u8,
+    scope: Scope,
+    next: &MacroDeclaration,
 }
 
-MacroInstantiation = struct
+macro_declaration_is_generic = fn (declaration: &MacroDeclaration) u1
 {
-    foo: u32,
+    return declaration.constant_arguments.length != 0;
 }
 
 [extern] LLVMInitializeX86TargetInfo = fn [cc(c)] () void;
@@ -2464,6 +2510,7 @@ LLVMICmpPredicate = enum u32
 
 [extern] LLVMSetSubprogram = fn [cc(c)] (function: &LLVMValue, subprogram: &LLVMMetadata) void;
 [extern] LLVMGetSubprogram = fn [cc(c)] (function: &LLVMValue) &LLVMMetadata;
+[extern] llvm_subprogram_replace_type = fn [cc(c)] (subprogram: &LLVMMetadata, subroutine_type: &LLVMMetadata) void;
 
 [extern] LLVMLookupIntrinsicID = fn [cc(c)] (name_pointer: &u8, name_length: u64) LLVMIntrinsicId;
 [extern] LLVMGetIntrinsicDeclaration = fn [cc(c)] (module: &LLVMModule, intrinsic_id: LLVMIntrinsicId, argument_type_pointer: &&LLVMType, argument_type_count: u64) &LLVMValue;
@@ -4905,6 +4952,18 @@ tokenize = fn (module: &Module) Token
 
 parse_precedence = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value;
 
+scope_to_macro_declaration = fn (scope: &Scope) &MacroDeclaration
+{
+    assert(scope.kind == .macro_declaration);
+    return #field_parent_pointer(scope, "scope");
+}
+
+scope_to_macro_instantiation = fn (scope: &Scope) &MacroInstantiation
+{
+    assert(scope.kind == .macro_instantiation);
+    return #field_parent_pointer(scope, "scope");
+}
+
 reference_identifier = fn (module: &Module, current_scope: &Scope, identifier: []u8, kind: ValueKind) &Value
 {
     assert(!string_equal(identifier, ""));
@@ -4936,9 +4995,22 @@ reference_identifier = fn (module: &Module, current_scope: &Scope, identifier: [
 
                 >macro_declaration = module.first_macro_declaration;
 
-                while (macro_declaration != zero)
+                while (macro_declaration)
                 {
-                    #trap();
+                    if (string_equal(identifier, macro_declaration.name))
+                    {
+                        >result = new_value(module);
+                        result.& = {
+                            .content = {
+                                .macro = macro_declaration,
+                            },
+                            .id = .macro,
+                            zero,
+                        };
+                        return result;
+                    }
+
+                    macro_declaration = macro_declaration.next;
                 }
             },
             .function =>
@@ -4995,11 +5067,39 @@ reference_identifier = fn (module: &Module, current_scope: &Scope, identifier: [
             },
             .macro_declaration =>
             {
-                #trap();
+                assert(scope.parent != zero);
+                >macro_declaration = scope_to_macro_declaration(scope);
+
+                for (&constant_argument: macro_declaration.constant_arguments)
+                {
+                    if (string_equal(identifier, constant_argument.name))
+                    {
+                        #trap();
+                    }
+                }
+
+                for (&argument: macro_declaration.arguments)
+                {
+                    if (string_equal(identifier, argument.variable.name))
+                    {
+                        variable = &argument.variable;
+                        break;
+                    }
+                }
             },
             .macro_instantiation =>
             {
-                #trap();
+                assert(scope.parent != zero);
+                >macro_instantiation = scope_to_macro_instantiation(scope);
+
+                for (&argument: macro_instantiation.declaration_arguments)
+                {
+                    if (string_equal(identifier, argument.variable.name))
+                    {
+                        variable = &argument.variable;
+                        break;
+                    }
+                }
             },
         }
 
@@ -5761,9 +5861,44 @@ parse_right = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
 
             switch (left.id)
             {
-                .macro_reference =>
+                .macro =>
                 {
-                    #trap();
+                    >declaration = left.content.macro;
+
+                    if (macro_declaration_is_generic(declaration))
+                    {
+                        report_error();
+                    }
+
+                    >instantiation_line = get_line(module);
+                    >instantiation_column = get_column(module);
+
+                    >arguments = parse_call_arguments(module, scope);
+
+                    result.& = {
+                        .content = {
+                            .macro_instantiation = {
+                                .declaration = declaration,
+                                .instantiation_function = module.current_function,
+                                .declaration_arguments = zero,
+                                .instantiation_arguments = arguments,
+                                .constant_arguments = zero,
+                                .return_type = declaration.return_type,
+                                .scope = {
+                                    .parent = scope,
+                                    .line = declaration.scope.line,
+                                    .column = declaration.scope.column,
+                                    .kind = .macro_instantiation,
+                                    zero,
+                                },
+                                .line = instantiation_line,
+                                .column = instantiation_column,
+                                zero,
+                            },
+                        },
+                        .id = .macro_instantiation,
+                        zero,
+                    };
                 },
                 else =>
                 {
@@ -5789,7 +5924,7 @@ parse_right = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
 
             result = new_value(module);
 
-            if (left.id == .macro_reference)
+            if (left.id == .macro)
             {
                 #trap();
             }
@@ -7016,7 +7151,118 @@ parse = fn (module: &Module) void
                     },
                     .macro =>
                     {
-                        #trap();
+                        >constant_argument_buffer: [64]ConstantArgument = undefined;
+                        >constant_argument_count: u64 = 0;
+
+                        >is_generic = consume_character_if_match(module, left_bracket);
+                        >macro_declaration = arena_allocate[MacroDeclaration](module.arena, 1);
+                        macro_declaration.& = {
+                            .name = global_name,
+                            .scope = {
+                                .parent = scope,
+                                .line = global_line,
+                                .column = global_column,
+                                .kind = .macro_declaration,
+                                zero,
+                            },
+                            zero,
+                        };
+
+                        if (is_generic)
+                        {
+                            // END OF SCOPE
+                            if (constant_argument_count == 0)
+                            {
+                                report_error();
+                            }
+                            #trap();
+                        }
+                        else
+                        {
+                            assert(constant_argument_count == 0);
+                        }
+
+                        expect_character(module, left_parenthesis);
+
+                        macro_declaration.constant_arguments = arena_allocate_slice[ConstantArgument](module.arena, constant_argument_count);
+                        memcpy(#pointer_cast(macro_declaration.constant_arguments.pointer), #pointer_cast(&constant_argument_buffer), constant_argument_count * #byte_size(ConstantArgument));
+
+                        if (module.first_macro_declaration)
+                        {
+                            assert(module.first_macro_declaration != zero);
+                            module.last_macro_declaration.next = macro_declaration;
+                        }
+                        else
+                        {
+                            assert(!module.first_macro_declaration);
+                            module.first_macro_declaration = macro_declaration;
+                        }
+
+                        module.last_macro_declaration = macro_declaration;
+                        module.current_macro_declaration = macro_declaration;
+
+                        >scope = &macro_declaration.scope;
+
+                        >argument_buffer: [64]Argument = undefined;
+                        >argument_count: u64 = 0;
+
+                        while (1)
+                        {
+                            skip_space(module);
+
+                            if (consume_character_if_match(module, right_parenthesis))
+                            {
+                                break;
+                            }
+
+                            >argument_index = argument_count;
+
+                            >argument_line = get_line(module);
+                            >argument_column = get_column(module);
+
+                            >argument_name = arena_duplicate_string(module.arena, parse_identifier(module));
+
+                            skip_space(module);
+                            expect_character(module, ':');
+                            skip_space(module);
+
+                            >argument_type = parse_type(module, scope);
+
+                            >argument = &argument_buffer[argument_index];
+                            argument.& = {
+                                .variable = {
+                                    .type = argument_type,
+                                    .scope = scope,
+                                    .name = argument_name,
+                                    .line = argument_line,
+                                    .column = argument_column,
+                                    zero,
+                                },
+                                .index = #truncate(argument_index + 1),
+                            };
+
+                            argument_count += 1;
+
+                            skip_space(module);
+                            consume_character_if_match(module, ',');
+                        }
+
+                        skip_space(module);
+
+                        >return_type = parse_type(module, scope);
+                        macro_declaration.return_type = return_type;
+
+                        >arguments = arena_allocate_slice[Argument](module.arena, argument_count);
+                        memcpy(#pointer_cast(arguments.pointer), #pointer_cast(&argument_buffer), argument_count * #byte_size(Argument));
+                        macro_declaration.arguments = arguments;
+
+                        skip_space(module);
+
+                        >block = parse_block(module, scope);
+                        macro_declaration.block = block;
+
+                        // END OF SCOPE
+                        module.current_macro_declaration = zero;
                     },
                     .opaque =>
                     {
@@ -8909,6 +9155,7 @@ TypeAnalysis = struct
     must_be_constant: u1,
 }
 
+analyze_block = fn (module: &Module, block: &Block) void;
 analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysis: TypeAnalysis) void;
 emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_constant: u1) void;
 emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, right: &Value) void;
@@ -9082,6 +9329,149 @@ get_enum_name_array_global = fn (module: &Module, enum_type: &Type) &Global
     }
 
     return enum_type.content.enum.name_array;
+}
+
+resolve_type = fn (module: &Module, type: &Type) &Type
+{
+    >result: &Type = zero;
+
+    switch (type.id)
+    {
+        .unresolved =>
+        {
+            #trap();
+        },
+        .integer =>
+        {
+            result = type;
+        },
+        else =>
+        {
+            #trap();
+        },
+    }
+
+    assert(result != zero);
+    return result;
+}
+
+clone_value = fn (module: &Module, scope: &Scope, old_value: &Value) &Value
+{
+    assert(old_value != zero);
+
+    >result: &Value = zero;
+
+    if (old_value.id == .variable)
+    {
+        result = reference_identifier(module, scope, old_value.content.variable.name, old_value.kind);
+    }
+    else
+    {
+        result = new_value(module);
+        result.& = old_value.&;
+
+        switch (old_value.id)
+        {
+            .variable =>
+            {
+                unreachable;
+            },
+            .binary =>
+            {
+                >left = clone_value(module, scope, old_value.content.binary.left);
+                >right = clone_value(module, scope, old_value.content.binary.right);
+
+                result.content = {
+                    .binary = {
+                        .left = left,
+                        .right = right,
+                        .id = old_value.content.binary.id,
+                    },
+                };
+            },
+            else =>
+            {
+                #trap();
+            },
+        }
+    }
+
+    assert(result != zero);
+
+    return result;
+}
+
+clone_statement = fn (module: &Module, scope: &Scope, old_statement: &Statement) &Statement
+{
+    >new_statement = arena_allocate[Statement](module.arena, 1);
+    new_statement.& = zero;
+    >old_statement_id = old_statement.id;
+    new_statement.id = old_statement_id; // TODO: is this right?
+    new_statement.line = old_statement.line;
+    new_statement.column = old_statement.column;
+
+    switch (old_statement_id)
+    {
+        .return =>
+        {
+            >old_return_value = old_statement.content.return;
+            >return_value: &Value = zero;
+            if (old_return_value)
+            {
+                return_value = clone_value(module, scope, old_return_value);
+            }
+
+            new_statement.content = {
+                .return = return_value,
+            };
+        },
+        else =>
+        {
+            #trap();
+        },
+    }
+
+    return new_statement;
+}
+
+BlockCopy = struct
+{
+    source: &Block,
+    destination: &Block,
+}
+
+copy_block = fn (module: &Module, parent_scope: &Scope, copy: BlockCopy) void
+{
+    >source = copy.source;
+    >destination = copy.destination;
+
+    destination.& = zero;
+    >scope = &destination.scope;
+    scope.& = source.scope;
+    scope.parent = parent_scope;
+    assert(!scope.llvm);
+
+    >last_statement: &Statement = zero;
+    >old_statement = source.first_statement;
+
+    while (old_statement)
+    {
+        >statement = clone_statement(module, scope, old_statement);
+        assert(!statement.next);
+
+        if (last_statement)
+        {
+            last_statement.next = last_statement;
+        }
+        else
+        {
+            destination.first_statement = statement;
+        }
+
+        last_statement = statement;
+
+        old_statement = old_statement.next;
+    }
 }
 
 analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysis: TypeAnalysis) void
@@ -10646,6 +11036,163 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             }
 
             value_type = expected_type;
+        },
+        .macro_instantiation =>
+        {
+            if (module.current_macro_declaration)
+            {
+                report_error();
+            }
+
+            >current_function = module.current_function;
+            if (!current_function)
+            {
+                report_error();
+            }
+
+            module.current_function = zero;
+
+            >current_macro_instantiation = module.current_macro_instantiation;
+            assert(!current_macro_instantiation); // TODO
+            >macro_instantiation = &value.content.macro_instantiation;
+            module.current_macro_instantiation = macro_instantiation;
+
+            >declaration = macro_instantiation.declaration;
+            >declaration_arguments = declaration.arguments;
+            >instantiation_declaration_arguments = arena_allocate_slice[Argument](module.arena, declaration_arguments.length);
+            macro_instantiation.declaration_arguments = instantiation_declaration_arguments;
+
+            >subprogram: &LLVMMetadata = zero;
+            if (module.has_debug_info)
+            {
+                >subroutine_type: &LLVMMetadata = zero;
+                >is_local_to_unit: u1 = 1;
+                >is_definition: u1 = 1;
+                >flags: LLVMDIFlags = zero;
+                >is_optimized = build_mode_is_optimized(module.build_mode);
+                subprogram = LLVMDIBuilderCreateFunction(module.llvm.di_builder, module.scope.llvm, declaration.name.pointer, declaration.name.length, declaration.name.pointer, declaration.name.length, module.llvm.file, macro_instantiation.scope.line, subroutine_type, #extend(is_local_to_unit), #extend(is_definition), macro_instantiation.scope.line, flags, #extend(is_optimized));
+            }
+
+            macro_instantiation.scope.llvm = subprogram;
+
+            // First copy
+            for (i: 0..declaration_arguments.length)
+            {
+                >instantiation_declaration_argument = &instantiation_declaration_arguments[i];
+                >declaration_argument = &declaration_arguments[i];
+                instantiation_declaration_argument.& = {
+                    .variable = {
+                        .type = declaration_argument.variable.type,
+                        .scope = &macro_instantiation.scope,
+                        .name = declaration_argument.variable.name,
+                        .line = declaration_argument.variable.line,
+                        .column = declaration_argument.variable.column,
+                        zero,
+                    },
+                    .index = declaration_argument.index,
+                };
+            }
+
+            >declaration_constant_arguments = declaration.constant_arguments;
+            >instantiation_constant_arguments = macro_instantiation.constant_arguments;
+
+            for (i: 0..declaration_constant_arguments.length)
+            {
+                >declaration_constant_argument = &declaration_constant_arguments[i];
+                >instantiation_constant_argument = &instantiation_constant_arguments[i];
+
+                assert(declaration_constant_argument.id == instantiation_constant_argument.id);
+
+                instantiation_constant_argument.name = declaration_constant_argument.name;
+
+                switch (declaration_constant_argument.id)
+                {
+                    .value =>
+                    {
+                        #trap();
+                    },
+                    .type =>
+                    {
+                        #trap();
+                    },
+                }
+            }
+
+            value_type = resolve_type(module, declaration.return_type);
+            assert(value_type.id != .unresolved);
+            macro_instantiation.return_type = value_type;
+
+            for (&argument: macro_instantiation.declaration_arguments)
+            {
+                argument.variable.type = resolve_type(module, argument.variable.type);
+            }
+
+            >instantiation_arguments = macro_instantiation.instantiation_arguments;
+            if (instantiation_arguments.length != instantiation_declaration_arguments.length)
+            {
+                report_error();
+            }
+
+            if (module.has_debug_info)
+            {
+                for (i: 0..instantiation_arguments.length)
+                {
+                    >instantiation_argument = instantiation_arguments[i];
+                    >declaration_argument = &instantiation_declaration_arguments[i];
+
+                    >argument_type = declaration_argument.variable.type;
+                    assert(argument_type != zero);
+                    analyze_type(module, instantiation_argument, argument_type, { .must_be_constant = analysis.must_be_constant, zero });
+                }
+
+                >type_buffer: [64]&LLVMMetadata = undefined;
+                >type_count = instantiation_arguments.length + 1;
+
+                resolve_type_in_place_debug(module, value_type);
+                type_buffer[0] = value_type.llvm.debug;
+
+                for (i: 0..instantiation_declaration_arguments.length)
+                {
+                    >declaration_argument = &instantiation_declaration_arguments[i];
+                    >type = declaration_argument.variable.type;
+                    resolve_type_in_place_debug(module, type);
+                    type_buffer[i + 1] = type.llvm.debug;
+                }
+
+                LLVMSetCurrentDebugLocation2(module.llvm.builder, zero);
+                >flags: LLVMDIFlags = zero;
+                >subroutine_type = LLVMDIBuilderCreateSubroutineType(module.llvm.di_builder, module.llvm.file, &type_buffer[0], #truncate(type_count), flags);
+                assert(macro_instantiation.scope.llvm != zero);
+                llvm_subprogram_replace_type(subprogram, subroutine_type);
+            }
+
+            assert(!macro_instantiation.block);
+            macro_instantiation.block = arena_allocate[Block](module.arena, 1);
+
+            copy_block(module, &macro_instantiation.scope, {
+                .source = declaration.block,
+                .destination = macro_instantiation.block,
+            });
+
+            resolve_type_in_place(module, value_type);
+            typecheck(module, expected_type, value_type);
+
+            if (!module.has_debug_info)
+            {
+                for (i: 0..instantiation_arguments.length)
+                {
+                    >instantiation_argument = instantiation_arguments[i];
+                    >declaration_argument = &instantiation_declaration_arguments[i];
+
+                    >argument_type = declaration_argument.variable.type;
+                    assert(argument_type != zero);
+                    analyze_type(module, instantiation_argument, argument_type, { .must_be_constant = analysis.must_be_constant, zero });
+                }
+            }
+
+            // END OF SCOPE
+            module.current_macro_instantiation = current_macro_instantiation;
+            module.current_function = current_function;
         },
         else =>
         {
@@ -12476,6 +13023,198 @@ emit_string_literal = fn (module: &Module, value: &Value) [2]&LLVMValue
     return [ global, LLVMConstInt(uint64(module).llvm.abi, length, 0) ];
 }
 
+emit_local_storage = fn (module: &Module, variable: &Variable) void
+{
+    assert(!variable.storage);
+    assert(variable.name.pointer != zero);
+    assert(variable.name.length != zero);
+
+    >value_type = variable.type;
+    resolve_type_in_place(module, value_type);
+    >pointer_type = get_pointer_type(module, value_type);
+
+    >alloca = create_alloca(module, {
+        .type = value_type,
+        .name = variable.name,
+        zero,
+    });
+
+    >storage = new_value(module);
+    storage.& = {
+        .type = pointer_type,
+        .id = .local,
+        .llvm = alloca,
+        zero,
+    };
+
+    variable.storage = storage;
+}
+
+null_expression = fn (module: &Module) &LLVMMetadata
+{
+    return LLVMDIBuilderCreateExpression(module.llvm.di_builder, zero, 0);
+}
+
+end_debug_local = fn (module: &Module, variable: &Variable, llvm_local: &LLVMMetadata) void
+{
+    >debug_location = LLVMDIBuilderCreateDebugLocation(module.llvm.context, variable.line, variable.column, variable.scope.llvm, module.llvm.inlined_at);
+    LLVMSetCurrentDebugLocation2(module.llvm.builder, debug_location);
+    >basic_block = LLVMGetInsertBlock(module.llvm.builder);
+    assert(basic_block != zero);
+    LLVMDIBuilderInsertDeclareRecordAtEnd(module.llvm.di_builder, variable.storage.llvm, llvm_local, null_expression(module), debug_location, basic_block);
+}
+
+emit_local = fn (module: &Module, local: &Local) void
+{
+    emit_local_storage(module, &local.variable);
+    assert(local.variable.storage != zero);
+
+    if (module.has_debug_info)
+    {
+        >debug_type = local.variable.type.llvm.debug;
+        assert(debug_type != zero);
+
+        >always_preserve: s32 = 1;
+        >flags: LLVMDIFlags = zero;
+        >scope = local.variable.scope.llvm;
+        >bit_alignment = get_byte_alignment(local.variable.type) * 8;
+        >name = local.variable.name;
+        >local_variable = LLVMDIBuilderCreateAutoVariable(module.llvm.di_builder, scope, name.pointer, name.length, module.llvm.file, local.variable.line, debug_type, always_preserve, flags, bit_alignment);
+
+        end_debug_local(module, &local.variable, local_variable);
+    }
+}
+
+emit_argument = fn (module: &Module, argument: &Argument) void
+{
+    emit_local_storage(module, &argument.variable);
+    assert(argument.variable.storage != zero);
+
+    if (module.has_debug_info)
+    {
+        >debug_type = argument.variable.type.llvm.debug;
+        assert(debug_type != zero);
+        >scope = argument.variable.scope.llvm;
+        assert(scope != zero);
+        >always_preserve: u1 = 1;
+        >flags: LLVMDIFlags = zero;
+        >argument_variable = LLVMDIBuilderCreateParameterVariable(module.llvm.di_builder, scope, argument.variable.name.pointer, argument.variable.name.length, argument.index, module.llvm.file, argument.variable.line, debug_type, #extend(always_preserve), flags);
+
+        end_debug_local(module, &argument.variable, argument_variable);
+    }
+}
+
+emit_macro_instantiation = fn (module: &Module, value: &Value) void
+{
+    assert(value.id == .macro_instantiation);
+    >current_function = module.current_function;
+    if (!current_function)
+    {
+        report_error();
+    }
+    module.current_function = zero;
+
+    >old_macro_instantiation = module.current_macro_instantiation;
+    assert(!old_macro_instantiation);
+    >macro_instantiation = &value.content.macro_instantiation;
+    module.current_macro_instantiation = macro_instantiation;
+
+    >caller_debug_location: &LLVMMetadata = zero;
+    if (module.has_debug_info)
+    {
+        assert(!module.llvm.inlined_at);
+        caller_debug_location = LLVMDIBuilderCreateDebugLocation(module.llvm.context, macro_instantiation.line, macro_instantiation.column, macro_instantiation.scope.parent.llvm, zero);
+        LLVMSetCurrentDebugLocation2(module.llvm.builder, caller_debug_location);
+    }
+
+    for (instantiation_argument: macro_instantiation.instantiation_arguments)
+    {
+        emit_value(module, instantiation_argument, .abi, 0);
+    }
+
+    >older_inlined_at = module.llvm.inlined_at;
+    assert(!older_inlined_at);
+    module.llvm.inlined_at = caller_debug_location;
+
+    >llvm_function = current_function.variable.storage.llvm;
+    >entry_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "macro.entry");
+
+    LLVMBuildBr(module.llvm.builder, entry_block);
+    LLVMPositionBuilderAtEnd(module.llvm.builder, entry_block);
+
+    >return_alloca: &LLVMValue = zero;
+    >return_type = macro_instantiation.return_type;
+
+    if (return_type.id != .void and return_type.id != .noreturn)
+    {
+        return_alloca = create_alloca(module, {
+            .type = return_type,
+            .name = "macro.return",
+            zero,
+        });
+    }
+
+    assert(!macro_instantiation.return_alloca != zero);
+    macro_instantiation.return_alloca = return_alloca;
+
+    >return_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "macro.return_block");
+    assert(!macro_instantiation.return_block);
+    macro_instantiation.return_block = return_block;
+
+    >declaration_arguments = macro_instantiation.declaration_arguments;
+    >instantiation_arguments = macro_instantiation.instantiation_arguments;
+    assert(declaration_arguments.length == instantiation_arguments.length);
+
+    for (i: 0..declaration_arguments.length)
+    {
+        >declaration_argument = &declaration_arguments[i];
+        >instantiation_argument = instantiation_arguments[i];
+
+        emit_argument(module, declaration_argument);
+
+        >type = declaration_argument.variable.type;
+        >resolved_type = resolve_alias(module, type);
+        >evaluation_kind = get_evaluation_kind(resolved_type);
+        >llvm_instantiation_argument = instantiation_argument.llvm;
+        >llvm_declaration_argument = declaration_argument.variable.storage.llvm;
+
+        switch (evaluation_kind)
+        {
+            .scalar =>
+            {
+                create_store(module, {
+                    .source = llvm_instantiation_argument,
+                    .destination = llvm_declaration_argument,
+                    .type = type,
+                    zero,
+                });
+            },
+            .aggregate =>
+            {
+                #trap();
+            },
+            .complex =>
+            {
+                #trap();
+            },
+        }
+    }
+
+    analyze_block(module, macro_instantiation.block);
+
+    if (LLVMGetInsertBlock(module.llvm.builder))
+    {
+        LLVMBuildBr(module.llvm.builder, return_block);
+    }
+
+    LLVMPositionBuilderAtEnd(module.llvm.builder, return_block);
+
+    // END OF SCOPE
+    module.llvm.inlined_at = older_inlined_at;
+    module.current_macro_instantiation = old_macro_instantiation;
+    module.current_function = current_function;
+}
+
 ShortcircuitingOperation = enum
 {
     and,
@@ -12493,7 +13232,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
     }
     else if (module.current_macro_instantiation)
     {
-        #trap();
+        parent_function_global = module.current_macro_instantiation.instantiation_function;
     }
     else
     {
@@ -13375,6 +14114,29 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                 else => { unreachable; },
             }
         },
+        .macro_instantiation =>
+        {
+            emit_macro_instantiation(module, value);
+
+            >macro_instantiation = &value.content.macro_instantiation;
+            >return_type = macro_instantiation.return_type;
+            >return_alloca = macro_instantiation.return_alloca;
+
+            // TODO: make this more serious
+            switch (return_type.id)
+            {
+                .void, .noreturn => { return; }, // Return early to omit the assert
+                else =>
+                {
+                    llvm_value = create_load(module, {
+                        .type = return_type,
+                        .pointer = return_alloca,
+                        .kind = type_kind,
+                        zero,
+                    });
+                },
+            }
+        },
         else =>
         {
             #trap();
@@ -13394,7 +14156,7 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
     }
     else if (module.current_macro_instantiation)
     {
-        #trap();
+        parent_function_global = module.current_macro_instantiation.instantiation_function;
     }
     else
     {
@@ -13736,70 +14498,6 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
     }
 }
 
-emit_local_storage = fn (module: &Module, variable: &Variable) void
-{
-    assert(!variable.storage);
-    assert(variable.name.pointer != zero);
-    assert(variable.name.length != zero);
-
-    >value_type = variable.type;
-    resolve_type_in_place(module, value_type);
-    >pointer_type = get_pointer_type(module, value_type);
-
-    >alloca = create_alloca(module, {
-        .type = value_type,
-        .name = variable.name,
-        zero,
-    });
-
-    >storage = new_value(module);
-    storage.& = {
-        .type = pointer_type,
-        .id = .local,
-        .llvm = alloca,
-        zero,
-    };
-
-    variable.storage = storage;
-}
-
-null_expression = fn (module: &Module) &LLVMMetadata
-{
-    return LLVMDIBuilderCreateExpression(module.llvm.di_builder, zero, 0);
-}
-
-end_debug_local = fn (module: &Module, variable: &Variable, llvm_local: &LLVMMetadata) void
-{
-    >debug_location = LLVMDIBuilderCreateDebugLocation(module.llvm.context, variable.line, variable.column, variable.scope.llvm, module.llvm.inlined_at);
-    LLVMSetCurrentDebugLocation2(module.llvm.builder, debug_location);
-    >basic_block = LLVMGetInsertBlock(module.llvm.builder);
-    assert(basic_block != zero);
-    LLVMDIBuilderInsertDeclareRecordAtEnd(module.llvm.di_builder, variable.storage.llvm, llvm_local, null_expression(module), debug_location, basic_block);
-}
-
-emit_local = fn (module: &Module, local: &Local) void
-{
-    emit_local_storage(module, &local.variable);
-    assert(local.variable.storage != zero);
-
-    if (module.has_debug_info)
-    {
-        >debug_type = local.variable.type.llvm.debug;
-        assert(debug_type != zero);
-
-        >always_preserve: s32 = 1;
-        >flags: LLVMDIFlags = zero;
-        >scope = local.variable.scope.llvm;
-        >bit_alignment = get_byte_alignment(local.variable.type) * 8;
-        >name = local.variable.name;
-        >local_variable = LLVMDIBuilderCreateAutoVariable(module.llvm.di_builder, scope, name.pointer, name.length, module.llvm.file, local.variable.line, debug_type, always_preserve, flags, bit_alignment);
-
-        end_debug_local(module, &local.variable, local_variable);
-    }
-}
-
-analyze_block = fn (module: &Module, block: &Block) void;
-
 analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) void
 {
     >parent_function_global: &Global = undefined;
@@ -13810,7 +14508,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
     }
     else if (module.current_macro_instantiation)
     {
-        #trap();
+        parent_function_global = module.current_macro_instantiation.instantiation_function;
     }
     else
     {
@@ -13882,7 +14580,14 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
             }
             else if (module.current_macro_instantiation)
             {
-                #trap();
+                >macro_instantiation = module.current_macro_instantiation;
+                >return_type = macro_instantiation.return_type;
+                assert(return_type != zero);
+
+                analyze_type(module, return_value, return_type, zero);
+                emit_assignment(module, macro_instantiation.return_alloca, get_pointer_type(module, return_type), return_value);
+                LLVMBuildBr(module.llvm.builder, macro_instantiation.return_block);
+                LLVMClearInsertionPosition(module.llvm.builder);
             }
             else
             {
@@ -16223,6 +16928,7 @@ names: [_][]u8 =
     "pointer_struct_initialization",
     "slice_array_literal",
     "slice_only_start",
+    "basic_macro",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32

@@ -2693,7 +2693,11 @@ fn Statement* parse_statement(Module* module, Scope* scope)
                             } break;
                         case StatementStartKeyword::return_st:
                             {
-                                auto return_value = parse_value(module, scope, {});
+                                Value* return_value = 0;
+                                if (module->content[module->offset] != ';')
+                                {
+                                    return_value = parse_value(module, scope, {});
+                                }
                                 statement->return_st = return_value;
                                 statement->id = StatementId::return_st;
                             } break;
