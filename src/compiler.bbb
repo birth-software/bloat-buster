@@ -7501,7 +7501,14 @@ parse = fn (module: &Module) void
                     },
                     .opaque =>
                     {
-                        #trap();
+                        skip_space(module);
+                        expect_character(module, ';');
+                        new_type(module, {
+                            .id = .opaque,
+                            .name = global_name,
+                            .scope = &module.scope,
+                            zero,
+                        });
                     },
                     .struct =>
                     {
@@ -8120,6 +8127,10 @@ resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
                     >bit_alignment = get_byte_alignment(type) * 8;
                     >array_type = LLVMDIBuilderCreateArrayType(module.llvm.di_builder, element_count, bit_alignment, element_type.llvm.debug, zero, 0);
                     result = array_type;
+                },
+                .opaque =>
+                {
+                    return;
                 },
                 else =>
                 {
@@ -17527,6 +17538,7 @@ names: [_][]u8 =
     "self_referential_struct",
     "forward_declared_type",
     "enum_array",
+    "opaque",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
