@@ -1632,6 +1632,17 @@ get_byte_size = fn (type: &Type) u64
             >result = type.content.union.byte_size;
             return result;
         },
+        .enum_array =>
+        {
+            >enum_type = type.content.enum_array.enum_type;
+            >element_type = type.content.enum_array.element_type;
+            assert(enum_type.id == .enum);
+            >element_count = enum_type.content.enum.fields.length;
+            >element_size = get_byte_size(element_type);
+
+            >result = element_size * element_count;
+            return result;
+        },
         else =>
         {
             #trap();
@@ -1678,6 +1689,10 @@ get_byte_alignment = fn (type: &Type) u32
         .alias =>
         {
             return get_byte_alignment(type.content.alias.type);
+        },
+        .enum_array =>
+        {
+            return get_byte_alignment(type.content.enum_array.element_type);
         },
         else =>
         {
@@ -3983,6 +3998,54 @@ FunctionKeyword = enum
     cc,
 }
 
+get_enum_array_type = fn (module: &Module, enum_type: &Type, element_type: &Type) &Type
+{
+    assert(enum_type != zero);
+    assert(element_type != zero);
+
+    >last_enum_type = module.first_enum_array_type;
+
+    while (last_enum_type)
+    {
+        assert(last_enum_type.id == .enum_array);
+
+        if (last_enum_type.content.enum_array.enum_type == enum_type and last_enum_type.content.enum_array.element_type == element_type)
+        {
+            return last_enum_type;
+        }
+        
+        >next = last_enum_type.content.enum_array.next;
+
+        if (!next)
+        {
+            break;
+        }
+
+        last_enum_type = next;
+    }
+
+    assert(enum_type.scope != zero);
+    assert(element_type.scope != zero);
+
+    >scope = #select(element_type.scope.kind == .global, enum_type.scope, element_type.scope);
+
+    >enum_array_type = new_type(module, {
+        .content = {
+            .enum_array = {
+                .enum_type = enum_type,
+                .element_type = element_type,
+                zero,
+            },
+        },
+        .id = .enum_array,
+        .name = arena_join_string(module.arena, [ "enum_array[", enum_type.name, "](", element_type.name, ")" ][..]),
+        .scope = scope,
+        zero,
+    });
+
+    return enum_array_type;
+}
+
 resolve_alias = fn (module: &Module, type: &Type) &Type
 {
     >result: &Type = zero;
@@ -4054,6 +4117,22 @@ resolve_alias = fn (module: &Module, type: &Type) &Type
         .alias =>
         {
             result = resolve_alias(module, type.content.alias.type);
+        },
+        .enum_array =>
+        {
+            >old_enum_type = type.content.enum_array.enum_type;
+            >old_element_type = type.content.enum_array.element_type;
+            >enum_type = resolve_alias(module, old_enum_type);
+            >element_type = resolve_alias(module, old_element_type);
+
+            if (old_enum_type == enum_type and old_element_type == element_type)
+            {
+                result = type;
+            }
+            else
+            {
+                result = get_enum_array_type(module, enum_type, element_type);
+            }
         },
         else =>
         {
@@ -4332,7 +4411,17 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
                 },
                 .enum_array =>
                 {
-                    #trap();
+                    skip_space(module);
+                    expect_character(module, left_bracket);
+                    >enum_type = parse_type(module, scope);
+                    expect_character(module, right_bracket);
+
+                    expect_character(module, left_parenthesis);
+                    >element_type = parse_type(module, scope);
+                    expect_character(module, right_parenthesis);
+
+                    >enum_array_type = get_enum_array_type(module, enum_type, element_type);
+                    return enum_array_type;
                 },
             }
         }
@@ -5534,7 +5623,7 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
 
             if (is_aggregate_initialization)
             {
-                #trap();
+                result = parse_aggregate_initialization(module, scope, builder, right_bracket);
             }
             else
             {
@@ -7743,6 +7832,24 @@ resolve_type_in_place_abi = fn (module: &Module, type: &Type) void
                 resolve_type_in_place_abi(module, aliased);
                 result = aliased.llvm.abi;
             },
+            .enum_array =>
+            {
+                >enum_type = type.content.enum_array.enum_type;
+                assert(enum_type.id == .enum);
+
+                >element_type = type.content.enum_array.element_type;
+                resolve_type_in_place_memory(module, element_type);
+
+                >element_count = enum_type.content.enum.fields.length;
+                assert(element_count != 0);
+
+                >array_type = LLVMArrayType2(element_type.llvm.memory, element_count);
+                result = array_type;
+
+                >llvm_size = LLVMStoreSizeOfType(module.llvm.target_data_layout, result);
+                >size = get_byte_size(type);
+                assert(llvm_size == size);
+            },
             else =>
             {
                 #trap();
@@ -8001,6 +8108,18 @@ resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
                     
                     >alignment = get_byte_alignment(aliased);
                     result = LLVMDIBuilderCreateTypedef(module.llvm.di_builder, aliased.llvm.debug, type.name.pointer, type.name.length, module.llvm.file, type.content.alias.line, type.content.alias.scope.llvm, alignment * 8);
+                },
+                .enum_array =>
+                {
+                    >enum_type = type.content.enum_array.enum_type;
+                    assert(enum_type.id == .enum);
+                    >element_type = type.content.enum_array.element_type;
+                    >element_count = enum_type.content.enum.fields.length;
+                    resolve_type_in_place_debug(module, element_type);
+                    assert(element_count != 0);
+                    >bit_alignment = get_byte_alignment(type) * 8;
+                    >array_type = LLVMDIBuilderCreateArrayType(module.llvm.di_builder, element_count, bit_alignment, element_type.llvm.debug, zero, 0);
+                    result = array_type;
                 },
                 else =>
                 {
@@ -10506,7 +10625,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 },
                 .enum_array =>
                 {
-                    #trap();
+                    element_type = pointer_element_type.content.enum_array.element_type;
                 },
                 else => { unreachable; },
             }
@@ -11004,7 +11123,72 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 },
                 .enum_array =>
                 {
-                    #trap();
+                    >is_ordered: u1 = 1;
+                    >enum_type = aggregate_type.content.enum_array.enum_type;
+                    >element_type = aggregate_type.content.enum_array.element_type;
+                    if (enum_type.id != .enum)
+                    {
+                        report_error();
+                    }
+
+                    >fields = enum_type.content.enum.fields;
+
+                    assert(fields.length <= 64);
+
+                    >same_values_as_field = fields.length == elements.length;
+                    >is_properly_initialized = same_values_as_field or is_zero;
+
+                    if (is_zero and same_values_as_field)
+                    {
+                        report_error();
+                    }
+
+                    if (!is_properly_initialized)
+                    {
+                        report_error();
+                    }
+
+                    assert(elements.length <= fields.length);
+
+                    for (initialization_index: 0..elements.length)
+                    {
+                        >element = &elements[initialization_index];
+                        >value = element.value;
+                        >name = element.name;
+
+                        >result_field: &EnumField = zero;
+
+                        for (&field: fields)
+                        {
+                            if (string_equal(name, field.name))
+                            {
+                                result_field = field;
+                                break;
+                            }
+                        }
+
+                        if (!result_field)
+                        {
+                            report_error();
+                        }
+
+                        >declaration_index: u64 = #extend(result_field - fields.pointer);
+                        >mask = 1 << declaration_index;
+                        >current_mask = field_mask;
+                        if (current_mask & mask)
+                        {
+                            // Repeated field
+                            report_error();
+                        }
+
+                        field_mask = current_mask | mask;
+                        is_ordered = is_ordered and declaration_index == initialization_index;
+
+                        analyze_type(module, value, element_type, { .must_be_constant = analysis.must_be_constant, zero });
+                        is_constant = is_constant and value_is_constant(value);
+                    }
+
+                    value.content.aggregate_initialization.is_constant = is_constant and is_ordered;
                 },
                 else => { report_error(); },
             }
@@ -14107,7 +14291,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                         },
                         .enum_array =>
                         {
-                            #trap();
+                            element_type = array_type.content.enum_array.element_type;
                         },
                         else => { unreachable; },
                     }
@@ -14413,7 +14597,17 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                         },
                         .enum_array =>
                         {
-                            #trap();
+                            assert(is_constant);
+                            assert(elements.length <= 64);
+                            >value_buffer: [64]&Value = undefined;
+
+                            for (i: 0..elements.length)
+                            {
+                                value_buffer[i] = elements[i].value;
+                            }
+                            >values = value_buffer[..elements.length];
+                            >element_type = resolved_value_type.content.enum_array.element_type;
+                            llvm_value = emit_constant_array(module, values, element_type);
                         },
                         else => { unreachable; },
                     }
@@ -17332,6 +17526,7 @@ names: [_][]u8 =
     "generic_pointer_array",
     "self_referential_struct",
     "forward_declared_type",
+    "enum_array",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32

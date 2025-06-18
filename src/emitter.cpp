@@ -4095,7 +4095,10 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, TypeAnal
                             bool is_ordered = true;
                             auto enum_type = aggregate_type->enum_array.enum_type;
                             auto element_type = aggregate_type->enum_array.element_type;
-                            assert(enum_type->id == TypeId::enumerator);
+                            if (enum_type->id != TypeId::enumerator)
+                            {
+                                report_error();
+                            }
                             auto fields = enum_type->enumerator.fields;
 
                             assert(fields.length <= 64);

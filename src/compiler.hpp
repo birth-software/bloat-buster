@@ -1933,12 +1933,13 @@ fn Type* get_enum_array_type(Module* module, Type* enum_type, Type* element_type
                 return last_enum_type;
             }
 
-            if (!last_enum_type->enum_array.next)
+            auto next = last_enum_type->enum_array.next;
+            if (!next)
             {
                 break;
             }
 
-            last_enum_type = last_enum_type->enum_array.next;
+            last_enum_type = next;
         }
     }
 
