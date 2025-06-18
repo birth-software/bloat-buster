@@ -5595,7 +5595,47 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                 },
                 .max, .min =>
                 {
-                    #trap();
+                    skip_space(module);
+                    expect_character(module, left_parenthesis);
+                    skip_space(module);
+
+                    >left = parse_value(module, scope, zero);
+
+                    skip_space(module);
+                    expect_character(module, ',');
+                    skip_space(module);
+
+                    >right = parse_value(module, scope, zero);
+
+                    skip_space(module);
+                    expect_character(module, right_parenthesis);
+
+                    >binary_id: BinaryId = undefined;
+
+                    switch (intrinsic)
+                    {
+                        .max =>
+                        {
+                            binary_id = .max;
+                        },
+                        .min =>
+                        {
+                            binary_id = .min;
+                        },
+                        else => { unreachable; },
+                    }
+
+                    result.& = {
+                        .content = {
+                            .binary = {
+                                .left = left,
+                                .right = right,
+                                .id = binary_id,
+                            },
+                        },
+                        .id = .binary,
+                        zero,
+                    };
                 },
                 .build_mode =>
                 {
@@ -11814,6 +11854,15 @@ get_llvm_type = fn (type: &Type, kind: TypeKind) &LLVMType
     }
 }
 
+emit_intrinsic_call = fn (module: &Module, index: LLVMIntrinsicIndex, argument_types: []&LLVMType, argument_values: []&LLVMValue) &LLVMValue
+{
+    >intrinsic_id = module.llvm.intrinsic_table[index];
+    >intrinsic_function = LLVMGetIntrinsicDeclaration(module.llvm.module, intrinsic_id, argument_types.pointer, argument_types.length);
+    >intrinsic_function_type = LLVMIntrinsicGetType(module.llvm.context, intrinsic_id, argument_types.pointer, argument_types.length);
+    >call = LLVMBuildCall2(module.llvm.builder, intrinsic_function_type, intrinsic_function, argument_values.pointer, #truncate(argument_values.length), "");
+    return call;
+}
+
 emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &LLVMValue, right_type: &Type, id: BinaryId, resolved_value_type: &Type) &LLVMValue
 {
     switch (resolved_value_type.id)
@@ -11830,7 +11879,34 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
             {
                 .max, .min =>
                 {
-                    #trap();
+                    >intrinsic_index: LLVMIntrinsicIndex = undefined;
+
+                    switch (resolved_value_type.id)
+                    {
+                        .integer =>
+                        {
+                            >signed = resolved_value_type.content.integer.signed;
+
+                            switch (id)
+                            {
+                                .max =>
+                                {
+                                    intrinsic_index = #select(signed, ."llvm.smax", ."llvm.umax");
+                                },
+                                .min =>
+                                {
+                                    intrinsic_index = #select(signed, ."llvm.smin", ."llvm.umin");
+                                },
+                                else => { unreachable; },
+                            }
+                        },
+                        else => { report_error(); },
+                    }
+
+                    >argument_types: [_]&LLVMType = [ resolved_value_type.llvm.abi ];
+                    >argument_values: [_]&LLVMValue = [ left, right ];
+                    >llvm_value = emit_intrinsic_call(module, intrinsic_index, argument_types[..], argument_values[..]);
+                    return llvm_value;
                 },
                 .shift_right =>
                 {
@@ -12939,15 +13015,6 @@ emit_constant_array = fn (module: &Module, elements: []&Value, element_type: &Ty
 
     >constant_array = LLVMConstArray2(element_type.llvm.memory, &value_buffer[0], elements.length);
     return constant_array;
-}
-
-emit_intrinsic_call = fn (module: &Module, index: LLVMIntrinsicIndex, argument_types: []&LLVMType, argument_values: []&LLVMValue) &LLVMValue
-{
-    >intrinsic_id = module.llvm.intrinsic_table[index];
-    >intrinsic_function = LLVMGetIntrinsicDeclaration(module.llvm.module, intrinsic_id, argument_types.pointer, argument_types.length);
-    >intrinsic_function_type = LLVMIntrinsicGetType(module.llvm.context, intrinsic_id, argument_types.pointer, argument_types.length);
-    >call = LLVMBuildCall2(module.llvm.builder, intrinsic_function_type, intrinsic_function, argument_values.pointer, #truncate(argument_values.length), "");
-    return call;
 }
 
 StructLikeFieldAccess = struct
@@ -17566,6 +17633,7 @@ names: [_][]u8 =
     "enum_debug_info",
     "return_array",
     "bool_pair",
+    "min_max",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
