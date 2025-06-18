@@ -8610,7 +8610,10 @@ abi_system_v_get_integer_type_at_offset = fn (module: &Module, type: &Type, offs
         },
         .array =>
         {
-            #trap();
+            >element_type = type.content.array.element_type;
+            >element_size = get_byte_size(element_type);
+            >element_offset = (offset / element_size) * element_size;
+            return abi_system_v_get_integer_type_at_offset(module, element_type, offset - element_offset, source_type, source_offset);
         },
         else => { #trap(); },
     }
@@ -17561,6 +17564,7 @@ names: [_][]u8 =
     "basic_struct_passing",
     "enum_arbitrary_abi",
     "enum_debug_info",
+    "return_array",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
