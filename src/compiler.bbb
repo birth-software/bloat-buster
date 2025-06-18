@@ -1783,6 +1783,11 @@ is_promotable_integer_type_for_abi = fn (type: &Type) u1
             >backing_type = type.content.bits.backing_type;
             return is_promotable_integer_type_for_abi(backing_type);
         },
+        .enum =>
+        {
+            >backing_type = type.content.enum.backing_type;
+            return is_promotable_integer_type_for_abi(backing_type);
+        },
         else =>
         {
             #trap();
@@ -8404,6 +8409,10 @@ abi_system_v_classify_type = fn (type: &Type, options: AbiSystemVClassifyArgumen
         {
             return abi_system_v_classify_type(type.content.bits.backing_type, options);
         },
+        .enum =>
+        {
+            return abi_system_v_classify_type(type.content.enum.backing_type, options);
+        },
         else =>
         {
             #trap();
@@ -8596,7 +8605,8 @@ abi_system_v_get_integer_type_at_offset = fn (module: &Module, type: &Type, offs
         },
         .enum =>
         {
-            #trap();
+            >backing_type = type.content.enum.backing_type;
+            return abi_system_v_get_integer_type_at_offset(module, backing_type, offset, #select(source_type == type, backing_type, source_type), source_offset);
         },
         .array =>
         {
@@ -17549,6 +17559,7 @@ names: [_][]u8 =
     "enum_array",
     "opaque",
     "basic_struct_passing",
+    "enum_arbitrary_abi",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
