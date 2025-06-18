@@ -17330,6 +17330,7 @@ names: [_][]u8 =
     "generic_pointer_macro",
     "noreturn_macro",
     "generic_pointer_array",
+    "self_referential_struct",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
