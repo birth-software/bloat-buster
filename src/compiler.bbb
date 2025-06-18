@@ -9556,6 +9556,23 @@ resolve_type = fn (module: &Module, type: &Type) &Type
                 result = get_pointer_type(module, element_type);
             }
         },
+        .struct =>
+        {
+            result = type;
+
+            if (type_is_slice(type))
+            {
+                >old_pointer_type = type.content.struct.fields[0].type;
+                assert(old_pointer_type.id == .pointer);
+                >old_element_type = old_pointer_type.content.pointer.element_type;
+                >element_type = resolve_type(module, old_element_type);
+
+                if (element_type != old_element_type)
+                {
+                    result = get_slice_type(module, element_type);
+                }
+            }
+        },
         else =>
         {
             #trap();
@@ -9619,6 +9636,30 @@ clone_value = fn (module: &Module, scope: &Scope, old_value: &Value) &Value
                 };
             },
             .unreachable => {},
+            .slice_expression =>
+            {
+                >array_like = clone_value(module, scope, old_value.content.slice_expression.array_like);
+                >start = old_value.content.slice_expression.start;
+                >end = old_value.content.slice_expression.end;
+
+                if (start)
+                {
+                    start = clone_value(module, scope, start);
+                }
+
+                if (end)
+                {
+                    end = clone_value(module, scope, end);
+                }
+
+                result.content = {
+                    .slice_expression = {
+                        .array_like = array_like,
+                        .start = start,
+                        .end = end,
+                    },
+                };
+            },
             else =>
             {
                 #trap();
@@ -9692,6 +9733,36 @@ clone_statement = fn (module: &Module, scope: &Scope, old_statement: &Statement)
                 .expression = value,
             };
         },
+        .local =>
+        {
+            >local_old = old_statement.content.local;
+            >local_new = new_local(module, scope);
+            assert(!local_old.variable.storage);
+            >initial_value = clone_value(module, scope, local_old.initial_value);
+
+            >local_type = local_old.variable.type;
+            if (local_type)
+            {
+                local_type = resolve_type(module, local_type);
+            }
+
+            local_new.& = {
+                .variable = {
+                    .type = local_type,
+                    .scope = scope,
+                    .name = local_old.variable.name,
+                    .line = local_old.variable.line,
+                    .column = local_old.variable.column,
+                    zero,
+                },
+                .initial_value = initial_value,
+                zero,
+            };
+
+            new_statement.content = {
+                .local = local_new,
+            };
+        },
         else =>
         {
             #trap();
@@ -9722,7 +9793,7 @@ copy_block = fn (module: &Module, parent_scope: &Scope, copy: BlockCopy) void
 
         if (last_statement)
         {
-            last_statement.next = last_statement;
+            last_statement.next = statement;
         }
         else
         {
@@ -10063,7 +10134,31 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 },
                 .pointer_from_int =>
                 {
-                    #trap();
+                    if (!expected_type)
+                    {
+                        report_error();
+                    }
+
+                    if (expected_type.id != .pointer)
+                    {
+                        report_error();
+                    }
+
+                    analyze_type(module, unary_value, zero, { .must_be_constant = analysis.must_be_constant, zero });
+
+                    >unary_value_type = unary_value.type;
+                    if (unary_value_type.id != .integer)
+                    {
+                        report_error();
+                    }
+
+                    // TODO: is this correct?
+                    if (get_bit_size(unary_value_type) != 64)
+                    {
+                        report_error();
+                    }
+
+                    value_type = expected_type;
                 },
                 .enum_from_int =>
                 {
@@ -14776,6 +14871,17 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                         zero,
                     });
                 },
+                .macro_instantiation =>
+                {
+                    emit_macro_instantiation(module, right);
+                    >size = get_byte_size(resolved_value_type);
+                    >alignment = get_byte_alignment(resolved_value_type);
+
+                    >u64_type = uint64(module);
+                    resolve_type_in_place(module, u64_type);
+
+                    LLVMBuildMemCpy(module.llvm.builder, left_llvm, alignment, right.content.macro_instantiation.return_alloca, alignment, LLVMConstInt(u64_type.llvm.abi, size, 0));
+                },
                 else =>
                 {
                     #trap();
@@ -17223,6 +17329,7 @@ names: [_][]u8 =
     "generic_macro",
     "generic_pointer_macro",
     "noreturn_macro",
+    "generic_pointer_array",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
