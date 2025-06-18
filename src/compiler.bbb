@@ -1731,6 +1731,11 @@ get_bit_size = fn (type: &Type) u64
             >bit_size = get_bit_size(type.content.alias.type);
             return bit_size;
         },
+        .union =>
+        {
+            >result = type.content.union.byte_size * 8;
+            return result;
+        },
         else =>
         {
             #trap();
@@ -2181,6 +2186,10 @@ value_is_constant = fn (value: &Value) u1
         .select =>
         {
             return 0;
+        },
+        .zero =>
+        {
+            return 1;
         },
         else =>
         {
@@ -17539,6 +17548,7 @@ names: [_][]u8 =
     "forward_declared_type",
     "enum_array",
     "opaque",
+    "basic_struct_passing",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
