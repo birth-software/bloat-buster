@@ -17565,6 +17565,7 @@ names: [_][]u8 =
     "enum_arbitrary_abi",
     "enum_debug_info",
     "return_array",
+    "bool_pair",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
