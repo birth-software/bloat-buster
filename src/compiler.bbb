@@ -1838,6 +1838,7 @@ ValueId = enum
     select,
     string_to_enum,
     macro_instantiation,
+    field_parent_pointer,
 }
 
 ValueConstantInteger = struct
@@ -2099,6 +2100,12 @@ MacroInstantiation = struct
     return_block: &LLVMBasicBlock,
 }
 
+ValueFieldParentPointer = struct
+{
+    pointer: &Value,
+    name: []u8,
+}
+
 ValueContent = union
 {
     constant_integer: ValueConstantInteger,
@@ -2120,6 +2127,7 @@ ValueContent = union
     string_to_enum: ValueStringToEnum,
     macro: &MacroDeclaration,
     macro_instantiation: MacroInstantiation,
+    field_parent_pointer: ValueFieldParentPointer,
 }
 
 ValueKind = enum
@@ -5643,7 +5651,30 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                 },
                 .field_parent_pointer =>
                 {
-                    #trap();
+                    skip_space(module);
+                    expect_character(module, left_parenthesis);
+
+                    >field_pointer = parse_value(module, scope, zero);
+
+                    skip_space(module);
+                    expect_character(module, ',');
+                    skip_space(module);
+
+                    >field_name = parse_string_literal(module);
+
+                    skip_space(module);
+                    expect_character(module, right_parenthesis);
+
+                    result.& = {
+                        .content = {
+                            .field_parent_pointer = {
+                                .pointer = field_pointer,
+                                .name = field_name,
+                            },
+                        },
+                        .id = .field_parent_pointer,
+                        zero,
+                    };
                 },
             }
         },
@@ -11829,6 +11860,53 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             module.current_macro_instantiation = current_macro_instantiation;
             module.current_function = current_function;
         },
+        .field_parent_pointer =>
+        {
+            >field_pointer = value.content.field_parent_pointer.pointer;
+            >field_name = value.content.field_parent_pointer.name;
+
+            if (!expected_type)
+            {
+                report_error();
+            }
+
+            value_type = expected_type;
+
+            if (value_type.id != .pointer)
+            {
+                report_error();
+            }
+
+            >aggregate_type = value_type.content.pointer.element_type;
+
+            >field_type: &Type = zero;
+
+            switch (aggregate_type.id)
+            {
+                .struct =>
+                {
+                    >fields = aggregate_type.content.struct.fields;
+
+                    for (&field: fields)
+                    {
+                        if (string_equal(field_name, field.name))
+                        {
+                            field_type = field.type;
+                            break;
+                        }
+                    }
+                },
+                else => { #trap(); },
+            }
+
+            if (!field_type)
+            {
+                report_error();
+            }
+
+            >pointer_to_field = get_pointer_type(module, field_type);
+            analyze_type(module, field_pointer, pointer_to_field, zero);
+        },
         else =>
         {
             #trap();
@@ -14817,6 +14895,56 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                 },
             }
         },
+        .field_parent_pointer =>
+        {
+            >field_pointer = value.content.field_parent_pointer.pointer;
+            >field_name = value.content.field_parent_pointer.name;
+
+            emit_value(module, field_pointer, .memory, 0);
+
+            >llvm_field_pointer = field_pointer.llvm;
+            assert(llvm_field_pointer != zero);
+
+            assert(resolved_value_type.id == .pointer);
+            >aggregate_type = resolved_value_type.content.pointer.element_type;
+
+            switch (aggregate_type.id)
+            {
+                .struct =>
+                {
+                    >fields = aggregate_type.content.struct.fields;
+
+                    >result_field: &Field = zero;
+
+                    for (&field: fields)
+                    {
+                        if (string_equal(field_name, field.name))
+                        {
+                            result_field = field;
+                            break;
+                        }
+                    }
+
+                    assert(result_field != zero);
+                    >offset = result_field.offset;
+
+                    >u64_type = uint64(module);
+                    resolve_type_in_place(module, u64_type);
+
+                    >llvm_u64 = u64_type.llvm.abi;
+
+                    >address_int = LLVMBuildPtrToInt(module.llvm.builder, llvm_field_pointer, llvm_u64, "");
+                    address_int = LLVMBuildSub(module.llvm.builder, address_int, LLVMConstInt(llvm_u64, offset, 0), "");
+
+                    >address_pointer = LLVMBuildIntToPtr(module.llvm.builder, address_int, resolved_value_type.llvm.abi, "");
+                    llvm_value = address_pointer;
+                },
+                else =>
+                {
+                    report_error();
+                },
+            }
+        },
         else =>
         {
             #trap();
@@ -17634,6 +17762,7 @@ names: [_][]u8 =
     "return_array",
     "bool_pair",
     "min_max",
+    "field_parent_pointer",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
