@@ -9537,7 +9537,10 @@ resolve_type = fn (module: &Module, type: &Type) &Type
                 report_error();
             }
         },
-        .integer =>
+        .void,
+        .noreturn,
+        .integer,
+        =>
         {
             result = type;
         },
@@ -9562,6 +9565,14 @@ resolve_type = fn (module: &Module, type: &Type) &Type
     assert(result != zero);
     return result;
 }
+
+BlockCopy = struct
+{
+    source: &Block,
+    destination: &Block,
+}
+
+copy_block = fn (module: &Module, parent_scope: &Scope, copy: BlockCopy) void;
 
 clone_value = fn (module: &Module, scope: &Scope, old_value: &Value) &Value
 {
@@ -9607,6 +9618,7 @@ clone_value = fn (module: &Module, scope: &Scope, old_value: &Value) &Value
                     },
                 };
             },
+            .unreachable => {},
             else =>
             {
                 #trap();
@@ -9643,6 +9655,43 @@ clone_statement = fn (module: &Module, scope: &Scope, old_statement: &Statement)
                 .return = return_value,
             };
         },
+        .if =>
+        {
+            >condition = clone_value(module, scope, old_statement.content.if.condition);
+            >if_statement = clone_statement(module, scope, old_statement.content.if.if);
+            >else_statement = old_statement.content.if.else;
+            if (else_statement)
+            {
+                else_statement = clone_statement(module, scope, else_statement);
+            }
+
+            new_statement.content = {
+                .if = {
+                    .condition = condition,
+                    .if = if_statement,
+                    .else = else_statement,
+                },
+            };
+        },
+        .block =>
+        {
+            >block = arena_allocate[Block](module.arena, 1);
+            copy_block(module, scope, {
+                .source = old_statement.content.block,
+                .destination = block,
+            });
+
+            new_statement.content = {
+                .block = block,
+            };
+        },
+        .expression =>
+        {
+            >value = clone_value(module, scope, old_statement.content.expression);
+            new_statement.content = {
+                .expression = value,
+            };
+        },
         else =>
         {
             #trap();
@@ -9650,12 +9699,6 @@ clone_statement = fn (module: &Module, scope: &Scope, old_statement: &Statement)
     }
 
     return new_statement;
-}
-
-BlockCopy = struct
-{
-    source: &Block,
-    destination: &Block,
 }
 
 copy_block = fn (module: &Module, parent_scope: &Scope, copy: BlockCopy) void
@@ -10049,6 +10092,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 .ampersand,
                 .exclamation,
                 .va_end,
+                .bitwise_not,
                 =>
                 {
                     >is_boolean = unary_is_boolean(unary_id);
@@ -13763,6 +13807,10 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                     LLVMSetInstructionCallConv(call, .fast);
                     llvm_value = call;
                 },
+                .bitwise_not =>
+                {
+                    llvm_value = LLVMBuildNot(module.llvm.builder, llvm_unary_value, "");
+                },
                 else => { #trap(); },
             }
         },
@@ -17174,6 +17222,7 @@ names: [_][]u8 =
     "basic_macro",
     "generic_macro",
     "generic_pointer_macro",
+    "noreturn_macro",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
