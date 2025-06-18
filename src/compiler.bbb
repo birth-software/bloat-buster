@@ -9541,6 +9541,18 @@ resolve_type = fn (module: &Module, type: &Type) &Type
         {
             result = type;
         },
+        .pointer =>
+        {
+            >old_element_type = type.content.pointer.element_type;
+            >element_type = resolve_type(module, old_element_type);
+
+            result = type;
+
+            if (element_type != old_element_type)
+            {
+                result = get_pointer_type(module, element_type);
+            }
+        },
         else =>
         {
             #trap();
@@ -9582,6 +9594,16 @@ clone_value = fn (module: &Module, scope: &Scope, old_value: &Value) &Value
                         .left = left,
                         .right = right,
                         .id = old_value.content.binary.id,
+                    },
+                };
+            },
+            .unary =>
+            {
+                >unary_value = clone_value(module, scope, old_value.content.unary.value);
+                result.content = {
+                    .unary = {
+                        .value = unary_value,
+                        .id = old_value.content.unary.id,
                     },
                 };
             },
@@ -12600,7 +12622,11 @@ emit_field_access = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, l
 
     if (real_aggregate_type != aggregate_element_type)
     {
-        #trap();
+        v = create_load(module, {
+            .type = aggregate_element_type,
+            .pointer = aggregate.llvm,
+            zero,
+        });
     }
     else
     {
@@ -17147,6 +17173,7 @@ names: [_][]u8 =
     "slice_only_start",
     "basic_macro",
     "generic_macro",
+    "generic_pointer_macro",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
