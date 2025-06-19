@@ -820,6 +820,8 @@ LLVMTargetMachineOptions = opaque;
 
 LLVMIntrinsicIndex = enum u32
 {
+    "llvm.ctlz",
+    "llvm.cttz",
     "llvm.smax",
     "llvm.smin",
     "llvm.trap",
@@ -1880,6 +1882,8 @@ UnaryId = enum
     dereference,
     pointer_from_int,
     enum_from_int,
+    leading_zeroes,
+    trailing_zeroes,
 }
 
 unary_is_boolean = fn (id: UnaryId) u1
@@ -3936,12 +3940,14 @@ ValueIntrinsic = enum
     integer_max,
     int_from_enum,
     int_from_pointer,
+    leading_zeroes,
     max,
     min,
     pointer_cast,
     pointer_from_int,
     select,
     string_to_enum,
+    trailing_zeroes,
     trap,
     truncate,
     va_start,
@@ -5415,6 +5421,8 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                 .pointer_cast,
                 .pointer_from_int,
                 .va_end,
+                .leading_zeroes,
+                .trailing_zeroes,
                 =>
                 {
                     >id: UnaryId = undefined;
@@ -5426,9 +5434,11 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                         .extend => { id = .extend; },
                         .int_from_enum => { id = .int_from_enum; },
                         .int_from_pointer => { id = .int_from_pointer; },
-                        .truncate => { id = .truncate; },
+                        .leading_zeroes => { id = .leading_zeroes; },
                         .pointer_cast => { id = .pointer_cast; },
                         .pointer_from_int => { id = .pointer_from_int; },
+                        .trailing_zeroes => { id = .trailing_zeroes; },
+                        .truncate => { id = .truncate; },
                         .va_end => { id = .va_end; },
                         else => { unreachable; },
                     }
@@ -5664,7 +5674,6 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
 
                     skip_space(module);
                     expect_character(module, right_parenthesis);
-
                     result.& = {
                         .content = {
                             .field_parent_pointer = {
@@ -5676,6 +5685,7 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                         zero,
                     };
                 },
+                else => { unreachable; },
             }
         },
         .left_bracket =>
@@ -10411,6 +10421,8 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 .exclamation,
                 .va_end,
                 .bitwise_not,
+                .leading_zeroes,
+                .trailing_zeroes,
                 =>
                 {
                     >is_boolean = unary_is_boolean(unary_id);
@@ -14268,6 +14280,27 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                 {
                     llvm_value = LLVMBuildNot(module.llvm.builder, llvm_unary_value, "");
                 },
+                .leading_zeroes,
+                .trailing_zeroes,
+                =>
+                {
+                    >intrinsic_index: LLVMIntrinsicIndex = undefined;
+
+                    switch (unary_id)
+                    {
+                        .leading_zeroes => { intrinsic_index = ."llvm.ctlz"; },
+                        .trailing_zeroes => { intrinsic_index = ."llvm.cttz"; },
+                        else => { unreachable; },
+                    }
+
+                    >u1_type = uint1(module);
+                    resolve_type_in_place(module, u1_type);
+
+                    >zero_is_poison = LLVMConstNull(u1_type.llvm.abi);
+                    >types: [_]&LLVMType = [ destination_type ];
+                    >values: [_]&LLVMValue = [ llvm_unary_value, zero_is_poison ];
+                    llvm_value = emit_intrinsic_call(module, intrinsic_index, types[..], values[..]);
+                },
                 else => { #trap(); },
             }
         },
@@ -17763,6 +17796,7 @@ names: [_][]u8 =
     "bool_pair",
     "min_max",
     "field_parent_pointer",
+    "leading_trailing_zeroes",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
