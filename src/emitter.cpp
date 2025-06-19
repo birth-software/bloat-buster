@@ -686,20 +686,18 @@ fn Field* get_member_at_offset(Type* struct_type, u32 offset)
 
     if (struct_type->structure.byte_size > offset)
     {
-        u32 offset_it = 0;
         auto fields = struct_type->structure.fields;
 
         for (u64 i = 0; i < fields.length; i += 1)
         {
             auto* field = &fields[i];
-
-            if (offset_it > offset)
+            auto field_offset = field->offset;
+            if (field_offset > offset)
             {
                 break;
             }
 
             result = field;
-            offset_it = (u32)align_forward(offset_it + get_byte_size(field->type), get_byte_alignment(field->type));
         }
 
         assert(result);
@@ -2811,6 +2809,7 @@ fn Type* get_build_mode_enum(Module* module)
             string_literal("aggressively_optimize_for_speed"),
             string_literal("aggressively_optimize_for_size"),
         };
+        static_assert(array_length(enum_names) == (u64)BuildMode::count);
 
         auto enum_fields = arena_allocate<EnumField>(module->arena, array_length(enum_names));
 
@@ -2825,7 +2824,7 @@ fn Type* get_build_mode_enum(Module* module)
             field_value += 1;
         }
 
-        auto backing_type = integer_type(module, { .bit_count = array_length(enum_names) - 1, .is_signed = false });
+        auto backing_type = integer_type(module, { .bit_count = (u32)BuildMode::count, .is_signed = false });
 
         result = type_allocate_init(module, {
             .enumerator = {
@@ -3095,11 +3094,11 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, TypeAnal
                                 resolve_type_in_place(module, u32_type);
                                 auto current_function = get_current_function(module);
                                 auto old_alloca_insertion_point = current_function->variable.storage->function.llvm.alloca_insertion_point;
-                                current_function->variable.storage->function.llvm.alloca_insertion_point = LLVMBuildAlloca(module->llvm.builder, u32_type->llvm.abi, "alloca_insert_point");
+                                current_function->variable.storage->function.llvm.alloca_insertion_point = LLVMBuildAlloca(module->llvm.builder, u32_type->llvm.abi, "alloca.insertion.point");
 
                                 auto alloca = create_alloca(module, {
                                     .type = string_type,
-                                    .name = string_literal("retval"),
+                                    .name = string_literal("return_value"),
                                 });
 
                                 auto* return_block = LLVMAppendBasicBlockInContext(module->llvm.context, llvm_function, "return_block");
@@ -3278,6 +3277,15 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, TypeAnal
                             } break;
                     }
                 }
+                else if (unary_type_id == UnaryTypeId::enum_names)
+                {
+                    if (unary_type->id != TypeId::enumerator)
+                    {
+                        report_error();
+                    }
+
+                    value_type = get_slice_type(module, get_slice_type(module, uint8(module)));
+                }
                 else
                 {
                     if (expected_type)
@@ -3312,6 +3320,7 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, TypeAnal
                             {
                                 value = integer_max_value(unary_type->integer.bit_count, unary_type->integer.is_signed);
                             } break;
+                        case UnaryTypeId::enum_names:
                         case UnaryTypeId::enum_values:
                             {
                                 unreachable();
@@ -4295,19 +4304,19 @@ fn void analyze_type(Module* module, Value* value, Type* expected_type, TypeAnal
                     auto old_alloca_insertion_point = current_function->variable.storage->function.llvm.alloca_insertion_point;
                     auto u32_type = uint32(module);
                     resolve_type_in_place(module, u32_type);
-                    current_function->variable.storage->function.llvm.alloca_insertion_point = LLVMBuildAlloca(module->llvm.builder, u32_type->llvm.abi, "alloca_insert_point");
+                    current_function->variable.storage->function.llvm.alloca_insertion_point = LLVMBuildAlloca(module->llvm.builder, u32_type->llvm.abi, "alloca.insertion.point");
 
                     LLVMValueRef arguments[2];
                     LLVMGetParams(llvm_function, arguments);
 
                     auto return_value_alloca = create_alloca(module, {
                         .type = enum_type,
-                        .name = string_literal("retval"),
+                        .name = string_literal("return_value"),
                     });
 
                     auto return_boolean_alloca = create_alloca(module, {
                         .type = u8_type,
-                        .name = string_literal("retbool"),
+                        .name = string_literal("return_bool"),
                     });
 
                     auto index_alloca = create_alloca(module, {
@@ -6732,6 +6741,37 @@ fn void emit_assignment(Module* module, LLVMValueRef left_llvm, Type* left_type,
                             auto value = emit_field_access(module, right, left_llvm, left_type, TypeKind::memory);
                             right->llvm = value;
                         } break;
+                    case ValueId::unary_type:
+                        {
+                            auto unary_type_id = right->unary_type.id;
+                            auto unary_type = right->unary_type.type;
+
+                            switch (unary_type_id)
+                            {
+                                case UnaryTypeId::enum_names:
+                                    {
+                                        assert(unary_type->id == TypeId::enumerator);
+                                        auto global = get_enum_name_array_global(module, unary_type);
+
+                                        auto u64_type = uint64(module);
+                                        resolve_type_in_place(module, u64_type);
+
+                                        LLVMValueRef slice_values[] = {
+                                            global->variable.storage->llvm,
+                                            LLVMConstInt(u64_type->llvm.abi, unary_type->enumerator.fields.length, 0),
+                                        };
+                                        auto slice = LLVMConstStructInContext(module->llvm.context, slice_values, array_length(slice_values), 0);
+
+                                        create_store(module, {
+                                            .source = slice,
+                                            .destination = left_llvm,
+                                            .type = resolved_value_type,
+                                        });
+                                    } break;
+                                default:
+                                    trap();
+                            }
+                        } break;
                     default: unreachable();
                 }
             } break;
@@ -7042,11 +7082,6 @@ fn void emit_macro_instantiation(Module* module, Value* value)
 
                 LLVMPositionBuilderAtEnd(module->llvm.builder, return_block);
 
-                // END OF SCOPE
-                if (module->has_debug_info)
-                {
-                    LLVMSetCurrentDebugLocation2(module->llvm.builder, caller_debug_location);
-                }
                 module->llvm.inlined_at = older_inlined_at;
                 module->current_macro_instantiation = old_macro_instantiation;
                 module->current_function = current_function;
@@ -7055,7 +7090,7 @@ fn void emit_macro_instantiation(Module* module, Value* value)
     }
 }
 
-fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u32* last_line, u32* last_column, LLVMMetadataRef* last_debug_location);
+fn void analyze_statement(Module* module, Scope* scope, Statement* statement);
 
 fn void analyze_block(Module* module, Block* block)
 {
@@ -7071,7 +7106,7 @@ fn void analyze_block(Module* module, Block* block)
 
     for (auto* statement = block->first_statement; statement; statement = statement->next)
     {
-        analyze_statement(module, &block->scope, statement, &last_line, &last_column, &last_debug_location);
+        analyze_statement(module, &block->scope, statement);
     }
 }
 
@@ -7305,7 +7340,7 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind, bool expect
                         {
                             assert(unary_type->id == TypeId::integer);
                             auto is_signed = unary_type->integer.is_signed;
-                            auto max_value = integer_max_value(resolved_value_type->integer.bit_count, is_signed);
+                            auto max_value = integer_max_value(unary_type->integer.bit_count, is_signed);
                             auto constant_integer = LLVMConstInt(resolved_value_type->llvm.abi, max_value, is_signed);
                             llvm_value = constant_integer;
                         } break;
@@ -7343,6 +7378,10 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind, bool expect
                                         llvm_value = value_array_variable;
                                     } break;
                             }
+                        } break;
+                    case UnaryTypeId::enum_names:
+                        {
+                            trap();
                         } break;
                 }
             } break;
@@ -7662,11 +7701,6 @@ fn void emit_value(Module* module, Value* value, TypeKind type_kind, bool expect
                                                 {
                                                     auto enum_type = array_type->enum_array.enum_type;
                                                     assert(enum_type->id == TypeId::enumerator);
-                                                    auto enumerator_size = get_bit_size(enum_type->enumerator.backing_type);
-                                                    if (enumerator_size != 64)
-                                                    {
-                                                        llvm_index = LLVMBuildIntCast2(module->llvm.builder, llvm_index, u64_llvm, false, "");
-                                                    }
                                                     element_type = array_type->enum_array.element_type;
                                                 } break;
                                             default: unreachable();
@@ -8177,7 +8211,7 @@ fn void analyze_value(Module* module, Value* value, Type* expected_type, TypeKin
     emit_value(module, value, type_kind, must_be_constant);
 }
 
-fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u32* last_line, u32* last_column, LLVMMetadataRef* last_debug_location)
+fn void analyze_statement(Module* module, Scope* scope, Statement* statement)
 {
     Global* parent_function_global;
     if (module->current_function)
@@ -8196,16 +8230,12 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
     auto* llvm_function = parent_function_global->variable.storage->llvm;
     assert(llvm_function);
 
+    LLVMMetadataRef statement_location = 0;
+
     if (module->has_debug_info)
     {
-        if (statement->line != *last_line || statement->column != *last_column)
-        {
-            auto new_location = LLVMDIBuilderCreateDebugLocation(module->llvm.context, statement->line, statement->column, scope->llvm, module->llvm.inlined_at);
-            *last_debug_location = new_location;
-            LLVMSetCurrentDebugLocation2(module->llvm.builder, new_location);
-            *last_line = statement->line;
-            *last_column = statement->column;
-        }
+        statement_location = LLVMDIBuilderCreateDebugLocation(module->llvm.context, statement->line, statement->column, scope->llvm, module->llvm.inlined_at);
+        LLVMSetCurrentDebugLocation2(module->llvm.builder, statement_location);
     }
 
     switch (statement->id)
@@ -8237,7 +8267,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                             {
                                 if (module->has_debug_info)
                                 {
-                                    LLVMSetCurrentDebugLocation2(module->llvm.builder, *last_debug_location);
+                                    LLVMSetCurrentDebugLocation2(module->llvm.builder, statement_location);
                                 }
 
                                 auto return_alloca = module->current_function->variable.storage->function.llvm.return_alloca;
@@ -8304,7 +8334,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                 LLVMBuildCondBr(module->llvm.builder, llvm_condition, taken_block, not_taken_block);
                 LLVMPositionBuilderAtEnd(module->llvm.builder, taken_block);
 
-                analyze_statement(module, scope, statement->if_st.if_statement, last_line, last_column, last_debug_location);
+                analyze_statement(module, scope, statement->if_st.if_statement);
 
                 if (LLVMGetInsertBlock(module->llvm.builder))
                 {
@@ -8315,7 +8345,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                 auto else_statement = statement->if_st.else_statement;
                 if (else_statement)
                 {
-                    analyze_statement(module, scope, else_statement, last_line, last_column, last_debug_location);
+                    analyze_statement(module, scope, else_statement);
                 }
 
                 if (LLVMGetInsertBlock(module->llvm.builder))
@@ -8950,7 +8980,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
 
                             assert(!local);
 
-                            analyze_statement(module, &statement->for_each.scope, statement->for_each.predicate, last_line, last_column, last_debug_location);
+                            analyze_statement(module, &statement->for_each.scope, statement->for_each.predicate);
 
                             if (LLVMGetInsertBlock(module->llvm.builder))
                             {
@@ -9054,7 +9084,7 @@ fn void analyze_statement(Module* module, Scope* scope, Statement* statement, u3
                                 LLVMBuildCondBr(module->llvm.builder, index_compare, body_block, exit_block);
 
                                 LLVMPositionBuilderAtEnd(module->llvm.builder, body_block);
-                                analyze_statement(module, &statement->for_each.scope, statement->for_each.predicate, last_line, last_column, last_debug_location);
+                                analyze_statement(module, &statement->for_each.scope, statement->for_each.predicate);
 
                                 if (LLVMGetInsertBlock(module->llvm.builder))
                                 {
@@ -9573,7 +9603,7 @@ void emit(Module* module)
 
             auto u32_type = uint32(module);
             resolve_type_in_place(module, u32_type);
-            global->variable.storage->function.llvm.alloca_insertion_point = LLVMBuildAlloca(module->llvm.builder, u32_type->llvm.abi, "alloca_insert_point");
+            global->variable.storage->function.llvm.alloca_insertion_point = LLVMBuildAlloca(module->llvm.builder, u32_type->llvm.abi, "alloca.insertion.point");
 
             auto return_abi_kind = function_type->abi.return_abi.flags.kind;
             switch (return_abi_kind)
@@ -9601,7 +9631,7 @@ void emit(Module* module)
                     {
                         auto alloca = create_alloca(module, {
                                 .type = function_type->abi.return_abi.semantic_type,
-                                .name = string_literal("retval"),
+                                .name = string_literal("return_value"),
                                 });
                         global->variable.storage->function.llvm.return_alloca = alloca;
                     } break;

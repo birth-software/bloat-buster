@@ -101,6 +101,29 @@ assert = macro (ok: u1) void
     }
 }
 
+ArgumentBuilder = struct
+{
+    buffer: [128]&u8,
+    count: u64,
+}
+
+add_argument = fn (builder: &ArgumentBuilder, argument: []u8) void
+{
+    assert(argument.pointer[argument.length] == 0);
+    >index = builder.count;
+    assert(index < builder.buffer.length);
+    builder.buffer[index] = argument.pointer;
+    builder.count = index + 1;
+}
+
+flush_arguments = fn (builder: &ArgumentBuilder) []&u8
+{
+    >argument_count = builder.count;
+    assert(argument_count < builder.buffer.length);
+    builder.buffer[argument_count] = zero;
+    return builder.buffer[..argument_count];
+}
+
 align_forward = fn (value: u64, alignment: u64) u64
 {
     assert(alignment != 0);
@@ -149,6 +172,22 @@ string_equal = fn(a: []u8, b: []u8) u1
     if (a.length == b.length)
     {
         result = memcmp(a.pointer, b.pointer, a.length) == 0;
+    }
+
+    return result;
+}
+
+string_first_character = fn (string: []u8, character: u8) u64
+{
+    >result = string_no_match;
+
+    for (i: 0..string.length)
+    {
+        if (character == string[i])
+        {
+            result = i;
+            break;
+        }
     }
 
     return result;
@@ -1001,7 +1040,7 @@ target_get_native = fn () Target
 target_compare = fn (a: Target, b: Target) u1
 {
     >is_same_cpu = a.cpu == b.cpu;
-    >is_same_os = a.cpu == b.cpu;
+    >is_same_os = a.os == b.os;
     return is_same_cpu and is_same_os;
 }
 
@@ -1533,6 +1572,10 @@ receives_type = fn (value: &Value) u1
 
             return receives_type(left) and receives_type(right);
         },
+        .unary_type =>
+        {
+            return 1; // TODO: base on unary_type_id
+        },
         else =>
         {
             #trap();
@@ -1727,6 +1770,11 @@ get_byte_size = fn (type: &Type) u64
             >result = element_size * element_count;
             return result;
         },
+        .alias =>
+        {
+            >result = get_byte_size(type.content.alias.type);
+            return result;
+        },
         else =>
         {
             #trap();
@@ -1795,7 +1843,9 @@ get_bit_size = fn (type: &Type) u64
         },
         .array =>
         {
-            return get_bit_size(type.content.array.element_type);
+            >element_bit_size = get_byte_size(type.content.array.element_type) * 8;
+            >result = element_bit_size * type.content.array.element_count;
+            return result;
         },
         .enum =>
         {
@@ -1819,6 +1869,15 @@ get_bit_size = fn (type: &Type) u64
         {
             >result = type.content.union.byte_size * 8;
             return result;
+        },
+        .enum_array =>
+        {
+            >enum_type = type.content.enum_array.enum_type;
+            >element_type = type.content.enum_array.element_type;
+            >element_bit_size = get_byte_size(element_type) * 8;
+            assert(enum_type.id == .enum);
+            >element_count = enum_type.content.enum.fields.length;
+            return element_bit_size * element_count;
         },
         else =>
         {
@@ -1876,6 +1935,10 @@ is_promotable_integer_type_for_abi = fn (type: &Type) u1
             >backing_type = type.content.enum.backing_type;
             return is_promotable_integer_type_for_abi(backing_type);
         },
+        .pointer =>
+        {
+            return 0;
+        },
         else =>
         {
             #trap();
@@ -1927,6 +1990,7 @@ ValueId = enum
     string_to_enum,
     macro_instantiation,
     field_parent_pointer,
+    build_mode,
 }
 
 ValueConstantInteger = struct
@@ -1998,6 +2062,7 @@ UnaryTypeId = enum
 {
     align_of,
     byte_size,
+    enum_names,
     enum_values,
     integer_max,
 }
@@ -2292,6 +2357,22 @@ value_is_constant = fn (value: &Value) u1
             return 0;
         },
         .zero =>
+        {
+            return 1;
+        },
+        .unary_type =>
+        {
+            >unary_type_id = value.content.unary_type.id;
+            switch (unary_type_id)
+            {
+                .align_of,
+                .byte_size,
+                .integer_max,
+                => { return 1; },
+                else => { unreachable; },
+            }
+        },
+        .build_mode =>
         {
             return 1;
         },
@@ -2781,6 +2862,7 @@ llvm_create_global_variable = fn (module: &LLVMModule, type: &LLVMType, is_const
 [extern] LLVMConstNamedStruct = fn [cc(c)] (type: &LLVMType, constant_pointer: &&LLVMValue, constant_count: u32) &LLVMValue;
 [extern] LLVMConstStructInContext = fn [cc(c)] (context: &LLVMContext, constant_pointer: &&LLVMValue, constant_count: u32, packed: s32) &LLVMValue;
 
+[extern] LLVMGetInstructionParent = fn [cc(c)] (value: &LLVMValue) &LLVMBasicBlock;
 [extern] LLVMInstructionEraseFromParent = fn [cc(c)] (value: &LLVMValue) void;
 [extern] LLVMGetOperand = fn [cc(c)] (value: &LLVMValue, index: u32) &LLVMValue;
 [extern] LLVMGetFirstUse = fn [cc(c)] (value: &LLVMValue) &LLVMUse;
@@ -2882,6 +2964,7 @@ Module = struct
     first_function_type: &Type,
 
     va_list_type: &Type,
+    build_mode_enum: &Type,
 
     void_value: &Value,
     first_global: &Global,
@@ -3761,6 +3844,7 @@ TypeKeyword = enum
     void,
     noreturn,
     enum_array,
+    fn,
 }
 
 type_is_slice = fn (type: &Type) u1
@@ -4027,6 +4111,7 @@ ValueIntrinsic = enum
     byte_size,
     enum_from_int,
     enum_name,
+    enum_names,
     enum_values,
     extend,
     field_parent_pointer,
@@ -4545,6 +4630,15 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
                     >enum_array_type = get_enum_array_type(module, enum_type, element_type);
                     return enum_array_type;
                 },
+                .fn =>
+                {
+                    skip_space(module);
+                    >mandate_argument_names: u1 = 0;
+                    >function_header = parse_function_header(module, scope, mandate_argument_names);
+                    >result = function_header.type;
+                    return result;
+                },
+                else => { unreachable; },
             }
         }
         else
@@ -5556,6 +5650,7 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                 },
                 .align_of,
                 .byte_size,
+                .enum_names,
                 .enum_values,
                 .integer_max,
                 =>
@@ -5573,6 +5668,7 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                     {
                         .align_of => { id = .align_of; },
                         .byte_size => { id = .byte_size; },
+                        .enum_names => { id = .enum_names; },
                         .enum_values => { id = .enum_values; },
                         .integer_max => { id = .integer_max; },
                         else => { unreachable; },
@@ -5751,7 +5847,10 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                 },
                 .build_mode =>
                 {
-                    #trap();
+                    result.& = {
+                        .id = .build_mode,
+                        zero,
+                    };
                 },
                 .field_parent_pointer =>
                 {
@@ -5785,7 +5884,7 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
         .left_bracket =>
         {
             >element_count: u64 = 0;
-            >value_buffer: [64]&Value = undefined;
+            >value_buffer: [128]&Value = undefined;
 
             skip_space(module);
 
@@ -5826,6 +5925,7 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                     }
 
                     >value = parse_value(module, scope, zero);
+                    assert(element_count < value_buffer.length);
                     value_buffer[element_count] = value;
                     element_count += 1;
 
@@ -5851,7 +5951,7 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
         },
         .dot =>
         {
-            >identifier = parse_identifier(module);
+            >identifier = parse_name(module);
             result = new_value(module);
             result.& = {
                 .content = {
@@ -6565,7 +6665,12 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                         },
                         .return =>
                         {
-                            >return_value = parse_value(module, scope, zero);
+                            >return_value: &Value = zero;
+                            // TODO: make this better
+                            if (module.content[module.offset] != ';')
+                            {
+                                return_value = parse_value(module, scope, zero);
+                            }
                             statement.content.return = return_value;
                             statement.id = .return;
                         },
@@ -7053,8 +7158,7 @@ parse_block = fn (module: &Module, parent_scope: &Scope) &Block
 
 enum_bit_count = fn (highest_value: u64) u64
 {
-    >needed_bit_count: u64 = 64 - #leading_zeroes(highest_value);
-    needed_bit_count = #select(needed_bit_count != 0, needed_bit_count, 1);
+    >needed_bit_count: u64 = #select(highest_value == 0, 1, 64 - #leading_zeroes(highest_value));
     return needed_bit_count;
 }
 
@@ -8155,8 +8259,18 @@ resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
                 .integer =>
                 {
                     >bit_count = type.content.integer.bit_count;
-                    >dwarf_encoding: LLVMDwarfTypeEncoding = #select(type.content.integer.signed, .signed, .unsigned);
-                    dwarf_encoding = #select(bit_count == 1, .boolean, dwarf_encoding);
+                    >dwarf_encoding: LLVMDwarfTypeEncoding = undefined;
+
+                    if (bit_count == 1)
+                    {
+                        dwarf_encoding = .boolean;
+                        bit_count = 8;
+                    }
+                    else
+                    {
+                        dwarf_encoding = #select(type.content.integer.signed, .signed, .unsigned);
+                    }
+
                     >flags: LLVMDIFlags = zero;
                     result = LLVMDIBuilderCreateBasicType(module.llvm.di_builder, type.name.pointer, type.name.length, bit_count, dwarf_encoding, flags);
                 },
@@ -8690,19 +8804,16 @@ get_member_at_offset = fn (struct_type: &Type, offset: u64) &Field
     >byte_size = get_byte_size(struct_type);
     if (byte_size > offset)
     {
-        >offset_it: u64 = 0;
         >fields = struct_type.content.struct.fields;
 
         for (&field: fields)
         {
-            if (offset_it > offset)
+            if (field.offset > offset)
             {
                 break;
             }
 
             result = field;
-            assert(offset_it == field.offset);
-            offset_it = align_forward(offset_it + get_byte_size(field.type), #extend(get_byte_alignment(field.type)));
         }
 
         assert(result != zero);
@@ -8922,7 +9033,11 @@ abi_system_v_get_indirect_result = fn (module: &Module, type: &Type, free_gpr: u
     {
         if (is_promotable_integer_type_for_abi(type))
         {
-            #trap();
+            return abi_system_v_get_extend({
+                .semantic_type = type,
+                .sign = type_is_signed(type),
+                zero,
+            });
         }
         else
         {
@@ -9919,6 +10034,7 @@ resolve_type = fn (module: &Module, type: &Type) &Type
         .void,
         .noreturn,
         .integer,
+        .enum,
         =>
         {
             result = type;
@@ -10038,6 +10154,29 @@ clone_value = fn (module: &Module, scope: &Scope, old_value: &Value) &Value
                         .end = end,
                     },
                 };
+            },
+            .call =>
+            {
+                >callable = clone_value(module, scope, old_value.content.call.callable);
+                >old_arguments = old_value.content.call.arguments;
+                >arguments = arena_allocate_slice[&Value](module.arena, old_arguments.length);
+
+                for (i: 0..arguments.length)
+                {
+                    arguments[i] = clone_value(module, scope, old_arguments[i]);
+                }
+
+                result.content = {
+                    .call = {
+                        .callable = callable,
+                        .arguments = arguments,
+                        .function_type = old_value.content.call.function_type,
+                    },
+                };
+            },
+            .unary_type =>
+            {
+                result.content = old_value.content;
             },
             else =>
             {
@@ -10183,6 +10322,47 @@ copy_block = fn (module: &Module, parent_scope: &Scope, copy: BlockCopy) void
 
         old_statement = old_statement.next;
     }
+}
+
+get_build_mode_enum = fn (module: &Module) &Type
+{
+    >result = module.build_mode_enum;
+
+    if (!result)
+    {
+        >enum_names = #enum_names(BuildMode);
+        >enum_fields = arena_allocate_slice[EnumField](module.arena, enum_names.length);
+
+        >field_value: u64 = 0;
+        for (enum_name: enum_names)
+        {
+            enum_fields[field_value] = {
+                .name = enum_name,
+                .value = field_value,
+            };
+
+            field_value += 1;
+        }
+
+        >backing_type = integer_type(module, { .bit_count = enum_names.length, .signed = 0 });
+
+        result = new_type(module, {
+            .content = {
+                .enum = {
+                    .fields = enum_fields,
+                    .backing_type = backing_type,
+                    zero,
+                },
+            },
+            .id = .enum,
+            .name = "BuildMode",
+            .scope = &module.scope,
+            zero,
+        });
+    }
+
+    assert(result != zero);
+    return result;
 }
 
 analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysis: TypeAnalysis) void
@@ -10519,7 +10699,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                         >current_function = get_current_function(module);
                         >old_alloca_insertion_point = current_function.variable.storage.content.function.llvm.alloca_insertion_point;
-                        current_function.variable.storage.content.function.llvm.alloca_insertion_point = LLVMBuildAlloca(module.llvm.builder, u32_type.llvm.abi, "alloca_insertion_point");
+                        current_function.variable.storage.content.function.llvm.alloca_insertion_point = LLVMBuildAlloca(module.llvm.builder, u32_type.llvm.abi, "alloca.insertion.point");
 
                         >alloca = create_alloca(module, {
                             .type = string_type,
@@ -10629,7 +10809,30 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 },
                 .enum_from_int =>
                 {
-                    #trap();
+                    if (!expected_type)
+                    {
+                        report_error();
+                    }
+
+                    if (expected_type.id != .enum)
+                    {
+                        report_error();
+                    }
+
+                    analyze_type(module, unary_value, expected_type.content.enum.backing_type, { .must_be_constant = analysis.must_be_constant, zero });
+
+                    >unary_value_type = unary_value.type;
+                    if (unary_value_type.id != .integer)
+                    {
+                        report_error();
+                    }
+
+                    if (get_bit_size(unary_value_type) != get_bit_size(expected_type))
+                    {
+                        report_error();
+                    }
+
+                    value_type = expected_type;
                 },
                 // Generic case
                 .minus,
@@ -10695,12 +10898,49 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
         .unary_type =>
         {
             >unary_type_id = value.content.unary_type.id;
-            >unary_type = value.content.unary_type.type; // TODO: call resolve_type
+            >unary_type = resolve_type(module, value.content.unary_type.type);
             value.content.unary_type.type = unary_type;
 
             if (unary_type_id == .enum_values)
             {
-                #trap();
+                >element_type = unary_type;
+
+                if (element_type.id != .enum)
+                {
+                    report_error();
+                }
+
+                >fields = element_type.content.enum.fields;
+
+                >element_count = fields.length;
+
+                if (element_count == 0)
+                {
+                    report_error();
+                }
+
+                >array_type = get_array_type(module, element_type, element_count);
+
+                switch (value.kind)
+                {
+                    .right =>
+                    {
+                        value_type = array_type;
+                    },
+                    .left =>
+                    {
+                        value_type = get_pointer_type(module, array_type);
+                    },
+                }
+            }
+            else if (unary_type_id == .enum_names)
+            {
+                if (unary_type.id != .enum)
+                {
+                    report_error();
+                }
+
+                value_type = get_slice_type(module, get_slice_type(module, uint8(module)));
             }
             else
             {
@@ -10736,7 +10976,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                         value = integer_max_value(unary_type.content.integer.bit_count, unary_type.content.integer.signed);
                     },
-                    .enum_values => { unreachable; },
+                    else => { unreachable; },
                 }
 
                 if (value > max_value)
@@ -11687,20 +11927,20 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 >u32_type = uint32(module);
                 resolve_type_in_place(module, u32_type);
 
-                current_function.variable.storage.content.function.llvm.alloca_insertion_point = LLVMBuildAlloca(module.llvm.builder, u32_type.llvm.abi, "alloca_insertion_point");
+                current_function.variable.storage.content.function.llvm.alloca_insertion_point = LLVMBuildAlloca(module.llvm.builder, u32_type.llvm.abi, "alloca.insertion.point");
 
                 >arguments: [2]&LLVMValue = undefined;
                 LLVMGetParams(llvm_function, &arguments[0]);
 
                 >return_value_alloca = create_alloca(module, {
                     .type = enum_type,
-                    .name = "retval",
+                    .name = "return_value",
                     zero,
                 });
 
                 >return_boolean_alloca = create_alloca(module, {
                     .type = u8_type,
-                    .name = "retbool",
+                    .name = "return_bool",
                     zero,
                 });
 
@@ -12162,6 +12402,16 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
             >pointer_to_field = get_pointer_type(module, field_type);
             analyze_type(module, field_pointer, pointer_to_field, zero);
+        },
+        .build_mode =>
+        {
+            value_type = get_build_mode_enum(module);
+            typecheck(module, expected_type, value_type);
+        },
+        .has_debug_info =>
+        {
+            value_type = uint1(module);
+            typecheck(module, expected_type, value_type);
         },
         else =>
         {
@@ -12988,7 +13238,13 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                                 }
                                                 .zero =>
                                                 {
-                                                    #trap();
+                                                    for (i: 0..coerce_fields.length)
+                                                    {
+                                                        >field = &coerce_fields[i];
+                                                        >field_type = field.type;
+                                                        llvm_abi_argument_value_buffer[abi_argument_count] = LLVMConstNull(field_type.llvm.abi);
+                                                        abi_argument_count += 1;
+                                                    }
                                                 },
                                                 else =>
                                                 {
@@ -13320,7 +13576,14 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
             {
                 switch (value.kind)
                 {
-                    .right => { #trap(); },
+                    .right =>
+                    {
+                        return create_load(module, {
+                            .type = destination_type,
+                            .pointer = destination_pointer,
+                            zero,
+                        });
+                    },
                     .left => { #trap(); },
                 }
             }
@@ -13336,7 +13599,8 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
 
 emit_constant_array = fn (module: &Module, elements: []&Value, element_type: &Type) &LLVMValue
 {
-    >value_buffer: [64]&LLVMValue = undefined;
+    >value_buffer: [128]&LLVMValue = undefined;
+    assert(elements.length <= value_buffer.length);
 
     resolve_type_in_place(module, element_type);
 
@@ -13455,7 +13719,14 @@ emit_field_access = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, l
 
             if (left_llvm)
             {
-                #trap();
+                assert(get_evaluation_kind(field_access.type) == .aggregate);
+                >alignment = get_byte_alignment(field_access.type);
+
+                >u64_type = uint64(module);
+                resolve_type_in_place(module, u64_type);
+                
+                LLVMBuildMemCpy(module.llvm.builder, left_llvm, alignment, gep, alignment, LLVMConstInt(u64_type.llvm.abi, get_byte_size(field_access.type), 0));
+                return gep;
             }
             else
             {
@@ -14019,7 +14290,7 @@ emit_string_literal = fn (module: &Module, value: &Value) [2]&LLVMValue
     >thread_local_mode: LLVMThreadLocalMode = .none;
     >externally_initialized: u1 = 0;
     >alignment: u32 = 1;
-    >global = llvm_create_global_variable(module.llvm.module, string_type, is_constant, .internal, constant_string, "conststring", thread_local_mode, externally_initialized, alignment, .global);
+    >global = llvm_create_global_variable(module.llvm.module, string_type, is_constant, .internal, constant_string, "const.string", thread_local_mode, externally_initialized, alignment, .global);
     return [ global, LLVMConstInt(uint64(module).llvm.abi, length, 0) ];
 }
 
@@ -14287,8 +14558,8 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                 >left = value.content.binary.left;
                 >right = value.content.binary.right;
 
-                >right_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "shorcircuit.right");
-                >end_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "shorcircuit.end");
+                >right_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "shortcircuit.right");
+                >end_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "shortcircuit.end");
 
                 >true_block: &LLVMBasicBlock = undefined;
                 >false_block: &LLVMBasicBlock = undefined;
@@ -14369,7 +14640,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
 
                 if (type_kind == .memory)
                 {
-                    #trap();
+                    llvm_value = memory_to_abi(module, llvm_value, boolean_type);
                 }
             }
             else
@@ -14545,6 +14816,10 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                     >values: [_]&LLVMValue = [ llvm_unary_value, zero_is_poison ];
                     llvm_value = emit_intrinsic_call(module, intrinsic_index, types[..], values[..]);
                 },
+                .enum_from_int =>
+                {
+                    llvm_value = llvm_unary_value;
+                },
                 else => { #trap(); },
             }
         },
@@ -14636,8 +14911,41 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                 },
                 .enum_values =>
                 {
-                    #trap();
+                    assert(type_kind == .memory);
+                    assert(unary_type.id == .enum);
+
+                    >buffer: [64]&LLVMValue = undefined;
+                    >fields = unary_type.content.enum.fields;
+                    assert(fields.length <= buffer.length);
+
+                    >llvm_enum_type = unary_type.llvm.memory;
+
+                    for (i: 0..fields.length)
+                    {
+                        buffer[i] = LLVMConstInt(llvm_enum_type, fields[i].value, 0);
+                    }
+
+                    >array_value = LLVMConstArray2(llvm_enum_type, &buffer[0], fields.length);
+
+                    switch (value.kind)
+                    {
+                        .right =>
+                        {
+                            llvm_value = array_value;
+                        },
+                        .left =>
+                        {
+                            assert(resolved_value_type.id == .pointer);
+                            >array_type = resolved_value_type.content.pointer.element_type;
+                            assert(array_type.id == .array);
+                            resolve_type_in_place(module, array_type);
+                            >alignment = get_byte_alignment(resolved_value_type);
+                            >value_array_variable = llvm_create_global_variable(module.llvm.module, array_type.llvm.memory, 1, .internal, array_value, "enum.values", .none, 0, alignment, .global);
+                            llvm_value = value_array_variable;
+                        },
+                    }
                 },
+                else => { unreachable; },
             }
         },
         .call =>
@@ -14909,6 +15217,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
 
                     >alloca = create_alloca(module, {
                         .type = aggregate_type,
+                        .name = "",
                         zero,
                     });
 
@@ -15047,7 +15356,33 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                             }
                             else
                             {
-                                #trap();
+                                llvm_value = LLVMConstNull(abi_type);
+
+                                for (&initialization_element: elements)
+                                {
+                                    >value = initialization_element.value;
+                                    >name = initialization_element.name;
+
+                                    >result_field: &Field = zero;
+
+                                    for (&field: fields)
+                                    {
+                                        if (string_equal(name, field.name))
+                                        {
+                                            result_field = field;
+                                            break;
+                                        }
+                                    }
+
+                                    assert(result_field != zero);
+
+                                    emit_value(module, value, .memory, must_be_constant);
+
+                                    >extended = LLVMBuildZExt(module.llvm.builder, value.llvm, abi_type, "");
+                                    >shl = LLVMBuildShl(module.llvm.builder, extended, LLVMConstInt(abi_type, result_field.offset, 0), "");
+                                    >or_value = LLVMBuildOr(module.llvm.builder, llvm_value, shl, "");
+                                    llvm_value = or_value;
+                                }
                             }
                         },
                         .enum_array =>
@@ -15222,6 +15557,18 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                 },
             }
         },
+        .undefined =>
+        {
+            llvm_value = LLVMGetPoison(get_llvm_type(resolved_value_type, type_kind));
+        },
+        .build_mode =>
+        {
+            llvm_value = LLVMConstInt(get_llvm_type(resolved_value_type.content.enum.backing_type, type_kind), #extend(#int_from_enum(module.build_mode)), 0);
+        },
+        .has_debug_info =>
+        {
+            llvm_value = LLVMConstInt(get_llvm_type(resolved_value_type, type_kind), #extend(module.has_debug_info), 0);
+        },
         else =>
         {
             #trap();
@@ -15295,11 +15642,11 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                     >element_type = resolved_value_type.content.array.element_type;
                     >element_count = resolved_value_type.content.array.element_count;
 
-                    if (right.content.array_initialization.is_constant)
+                    >is_constant = right.content.array_initialization.is_constant;
+                    if (is_constant)
                     {
                         emit_value(module, right, .memory, 0);
 
-                        >is_constant: u1 = 1;
                         >linkage: LLVMLinkage = .internal;
                         >initial_value = right.llvm;
                         >thread_local_mode: LLVMThreadLocalMode = .none;
@@ -15314,7 +15661,20 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                     }
                     else
                     {
-                        #trap();
+                        >u64_zero = LLVMConstNull(u64_type.llvm.abi);
+                        >pointer_to_element_type = get_pointer_type(module, element_type);
+
+                        for (i: 0..values.length)
+                        {
+                            >alloca_gep = create_gep(module, {
+                                .type = resolved_value_type.llvm.memory,
+                                .pointer = left_llvm,
+                                .indices = [ u64_zero, LLVMConstInt(u64_type.llvm.abi, i, 0) ][..],
+                                zero,
+                            });
+
+                            emit_assignment(module, alloca_gep, pointer_to_element_type, values[i]);
+                        }
                     }
                 },
                 .string_literal =>
@@ -15554,13 +15914,11 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                 {
                     // TODO: something
                 },
-                .select =>
+                .unary,
+                .array_expression,
+                .select,
+                =>
                 {
-                    if (!type_is_slice(resolved_value_type))
-                    {
-                        report_error();
-                    }
-
                     emit_value(module, right, .memory, 0);
 
                     create_store(module, {
@@ -15580,6 +15938,43 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                     resolve_type_in_place(module, u64_type);
 
                     LLVMBuildMemCpy(module.llvm.builder, left_llvm, alignment, right.content.macro_instantiation.return_alloca, alignment, LLVMConstInt(u64_type.llvm.abi, size, 0));
+                },
+                .field_access =>
+                {
+                    >value = emit_field_access(module, right, left_llvm, left_type, .memory);
+                    right.llvm = value;
+                },
+                .unary_type =>
+                {
+                    >unary_type_id = right.content.unary_type.id;
+                    >unary_type = right.content.unary_type.type;
+
+                    switch (unary_type_id)
+                    {
+                        .enum_names =>
+                        {
+                            assert(unary_type.id == .enum);
+
+                            >global = get_enum_name_array_global(module, unary_type);
+
+                            >u64_type = uint64(module);
+                            resolve_type_in_place(module, u64_type);
+
+                            >slice_values: [_]&LLVMValue = [
+                                global.variable.storage.llvm,
+                                LLVMConstInt(u64_type.llvm.abi, unary_type.content.enum.fields.length, 0),
+                            ];
+                            >slice = LLVMConstStructInContext(module.llvm.context, &slice_values[0], slice_values.length, 0);
+
+                            create_store(module, {
+                                .source = slice,
+                                .destination = left_llvm,
+                                .type = resolved_value_type,
+                                zero,
+                            });
+                        },
+                        else => { unreachable; },
+                    }
                 },
                 else =>
                 {
@@ -15939,7 +16334,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                             .range =>
                             {
                                 >start = value.content.range[0];
-                                >end = value.content.range[0];
+                                >end = value.content.range[1];
 
                                 for (v: value.content.range)
                                 {
@@ -16627,29 +17022,6 @@ generate_object = fn (module: &LLVMModule, target_machine: &LLVMTargetMachine, o
     return result;
 }
 
-ArgumentBuilder = struct
-{
-    buffer: [128]&u8,
-    count: u64,
-}
-
-add_argument = fn (builder: &ArgumentBuilder, argument: []u8) void
-{
-    assert(argument.pointer[argument.length] == 0);
-    >index = builder.count;
-    assert(index < builder.buffer.length);
-    builder.buffer[index] = argument.pointer;
-    builder.count = index + 1;
-}
-
-flush_arguments = fn (builder: &ArgumentBuilder) []&u8
-{
-    >argument_count = builder.count;
-    assert(argument_count < builder.buffer.length);
-    builder.buffer[argument_count] = zero;
-    return builder.buffer[..argument_count];
-}
-
 link = fn (module: &Module) void
 {
     >arena = module.arena;
@@ -17203,7 +17575,7 @@ emit = fn (module: &Module) void
                 >u32_type = uint32(module);
                 resolve_type_in_place(module, u32_type);
 
-                global.variable.storage.content.function.llvm.alloca_insertion_point = LLVMBuildAlloca(module.llvm.builder, u32_type.llvm.abi, "alloca_insertion_point");
+                global.variable.storage.content.function.llvm.alloca_insertion_point = LLVMBuildAlloca(module.llvm.builder, u32_type.llvm.abi, "alloca.insertion.point");
 
                 >return_abi = &function_type.abi.return_abi;
                 switch (return_abi.flags.kind)
@@ -17521,18 +17893,26 @@ emit = fn (module: &Module) void
                     if (first_use)
                     {
                         >second_use = LLVMGetNextUse(first_use);
-                        >has_one_use = first_use != zero and first_use == zero;
+                        >has_one_use = first_use != zero and second_use == zero;
 
                         if (has_one_use)
                         {
                             user = LLVMGetUser(first_use);
-                            has_single_jump_to_return_block = LLVMIsABranchInst(user) != zero and? LLVMIsConditional(user) != 0 and? LLVMGetSuccessor(user, 0) == return_block;
+                            has_single_jump_to_return_block = LLVMIsABranchInst(user) != zero and? LLVMIsConditional(user) == 0 and? LLVMGetSuccessor(user, 0) == return_block;
                         }
                     }
 
                     if (has_single_jump_to_return_block)
                     {
-#trap();
+                        assert(LLVMGetBasicBlockParent(return_block) != zero);
+                        >new_return_block = LLVMGetInstructionParent(user);
+                        // Remove unconditional branch instruction to the return block
+                        LLVMInstructionEraseFromParent(user);
+                        assert(!LLVMGetFirstUse(#pointer_cast(return_block)));
+                        assert(!LLVMGetBasicBlockTerminator(return_block));
+                        assert(LLVMGetBasicBlockParent(return_block) != zero);
+                        LLVMPositionBuilderAtEnd(module.llvm.builder, new_return_block);
+                        LLVMDeleteBasicBlock(return_block);
                     }
                     else
                     {
@@ -17550,7 +17930,7 @@ emit = fn (module: &Module) void
                 >semantic_return_type = return_abi.semantic_type;
                 if (semantic_return_type == noreturn_type(module) or function.content.function.attributes.naked)
                 {
-#trap();
+                    LLVMBuildUnreachable(module.llvm.builder);
                 }
                 else if (semantic_return_type == void_type(module))
                 {
@@ -17824,7 +18204,7 @@ compile = fn (arena: &Arena, options: CompileOptions) void
     emit(&module);
 }
 
-compile_file = fn (arena: &Arena, compile_options: CompileFile) []u8
+compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
 {
     >relative_file_path = compile_options.relative_file_path;
     if (relative_file_path.length < 5)
@@ -17901,7 +18281,113 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile) []u8
 
     if (is_compiler)
     {
-        #trap();
+        >builder: ArgumentBuilder = zero;
+
+        add_argument(&builder, "/home/david/dev/llvm/install/llvm_20.1.3_x86_64-linux-Release/bin/llvm-config");
+        add_argument(&builder, "--libdir");
+        add_argument(&builder, "--libs");
+        add_argument(&builder, "--system-libs");
+
+        >arguments = flush_arguments(&builder);
+
+        >llvm_config = os_execute(arena, arguments, envp, {
+            .policies = [ .pipe, .ignore ],
+            zero,
+        });
+
+        >success = llvm_config.termination_kind == .exit and llvm_config.termination_code == 0;
+
+        if (!success)
+        {
+            report_error();
+        }
+
+        >stream = llvm_config.streams[0];
+
+        >line = string_first_character(stream, '\n');
+
+        if (line == string_no_match)
+        {
+            report_error();
+        }
+
+        library_directory = stream[..line];
+        library_directories = { .pointer = &library_directory, .length = 1 };
+
+        stream = stream[line + 1..];
+
+        line = string_first_character(stream, '\n');
+        if (line == string_no_match)
+        {
+            report_error();
+        }
+
+        >llvm_library_stream = stream[..line];
+
+        stream = stream[line + 1..];
+
+        >library_count: u64 = 0;
+
+        while (1)
+        {
+            >space = string_first_character(llvm_library_stream, ' ');
+            if (space == string_no_match)
+            {
+                >library_argument = llvm_library_stream;
+                library_buffer[library_count] = library_argument[2..];
+                library_count += 1;
+                break;
+            }
+
+            // Omit the first two characters: "-l"
+            >library_argument = llvm_library_stream[2..space];
+            library_buffer[library_count] = library_argument;
+            library_count += 1;
+            llvm_library_stream = llvm_library_stream[space + 1..];
+        }
+
+        line = string_first_character(stream, '\n');
+        if (line == string_no_match)
+        {
+            report_error();
+        }
+
+        assert(line == stream.length - 1);
+
+        >system_library_stream = stream[..line];
+
+        while (1)
+        {
+            >space = string_first_character(system_library_stream, ' ');
+            if (space == string_no_match)
+            {
+                >library_argument = system_library_stream;
+                library_buffer[library_count] = library_argument[2..];
+                library_count += 1;
+                break;
+            }
+
+            // Omit the first two characters: "-l"
+            >library_argument = system_library_stream[2..space];
+            library_buffer[library_count] = library_argument;
+            library_count += 1;
+            system_library_stream = system_library_stream[space + 1..];
+        }
+
+        library_buffer[library_count] = "gcc";
+        library_count += 1;
+
+        library_buffer[library_count] = "gcc_s";
+        library_count += 1;
+
+        library_buffer[library_count] = "lldCommon";
+        library_count += 1;
+
+        library_buffer[library_count] = "lldELF";
+        library_count += 1;
+
+        library_names = library_buffer[..library_count];
+        library_paths = { .pointer = &llvm_bindings_library, .length = 1 };
     }
     else if (string_equal(base_name, "c_abi"))
     {
@@ -17915,7 +18401,7 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile) []u8
         .library_names = library_names,
         .library_paths = library_paths,
         .link_libc = 1,
-        .link_libcpp = 0,
+        .link_libcpp = is_compiler,
         .name = base_name,
         .build_mode = compile_options.build_mode,
         .content = file_content,
@@ -18125,7 +18611,7 @@ names: [_][]u8 =
                 .build_mode = build_mode,
                 .has_debug_info = has_debug_info,
                 .silent = 0,
-            });
+            }, envp);
         },
         .test =>
         {
@@ -18149,7 +18635,7 @@ names: [_][]u8 =
                             .build_mode = build_mode,
                             .has_debug_info = has_debug_info,
                             .silent = 1,
-                        });
+                        }, envp);
 
                         >arguments: [_]&u8 = [
                             executable_path.pointer,

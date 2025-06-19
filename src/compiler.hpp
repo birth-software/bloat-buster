@@ -898,6 +898,7 @@ enum class UnaryTypeId
 {
     align_of,
     byte_size,
+    enum_names,
     enum_values,
     integer_max,
 };
@@ -2063,8 +2064,7 @@ fn Type* resolve_alias(Module* module, Type* type)
 
 fn u64 enum_bit_count(u64 highest_value)
 {
-    auto needed_bit_count = 64 - (u64)clz(highest_value);
-    needed_bit_count = needed_bit_count ? needed_bit_count : 1;
+    auto needed_bit_count = highest_value == 0 ? 1 : 64 - clz(highest_value);
     return needed_bit_count;
 }
 
