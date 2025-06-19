@@ -43,6 +43,7 @@ enum class TypeKind
     abi,
     memory,
 };
+
 fn void analyze_block(Module* module, Block* block);
 fn void emit_local_storage(Module* module, Variable* variable);
 fn void emit_assignment(Module* module, LLVMValueRef left_llvm, Type* left_type, Value* right);
@@ -340,6 +341,7 @@ fn bool is_arbitrary_bit_integer(Type* type)
     {
         case TypeId::integer: switch (type->integer.bit_count)
                               {
+                                  case 1:
                                   case 8:
                                   case 16:
                                   case 32:
@@ -1622,7 +1624,10 @@ fn AbiInformation abi_system_v_get_indirect_result(Module* module, Type* type, u
     {
         if (is_promotable_integer_type_for_abi(type))
         {
-            trap();
+            return abi_system_v_get_extend({
+                .semantic_type = type,
+                .sign = type_is_signed(type),
+            });
         }
         else
         {
@@ -1653,7 +1658,6 @@ fn AbiInformation abi_system_v_get_indirect_result(Module* module, Type* type, u
         }
     }
 }
-
 
 struct AbiSystemVClassifyArgumentTypeOptions
 {
@@ -1949,7 +1953,7 @@ struct AllocaOptions
 
 fn Global* get_current_function(Module* module)
 {
-    Global* parent_function_global;
+    Global* parent_function_global = 0;
     if (module->current_function)
     {
         parent_function_global = module->current_function;
@@ -1957,10 +1961,6 @@ fn Global* get_current_function(Module* module)
     else if (module->current_macro_instantiation)
     {
         parent_function_global = module->current_macro_instantiation->instantiation_function;
-    }
-    else
-    {
-        report_error();
     }
 
     return parent_function_global;
@@ -9374,6 +9374,7 @@ void emit(Module* module)
                                     llvm_abi_argument_type_buffer[abi_index] = indirect_type->llvm.abi;
                                     abi_argument_type_count += 1;
                                 }
+
 
                                 for (u64 i = 0; i < semantic_argument_count; i += 1)
                                 {

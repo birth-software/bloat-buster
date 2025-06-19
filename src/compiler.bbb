@@ -1458,6 +1458,88 @@ Type = struct
     llvm: TypeLLVM,
 }
 
+receives_type = fn (value: &Value) u1
+{
+    switch (value.id)
+    {
+        .constant_integer,
+        .enum_literal,
+        .string_literal,
+        .zero,
+        =>
+        {
+            return 1;
+        },
+        .array_expression,
+        .call,
+        =>
+        {
+            return 0;
+        },
+        .variable =>
+        {
+            return value.kind == .left and value.id == .global;
+        },
+        .field_access =>
+        {
+            >aggregate = value.content.field_access.aggregate;
+            >field_name = value.content.field_access.field_name;
+
+            return string_equal(field_name, "length") and? aggregate.id == .variable and? aggregate.kind == .left and? aggregate.content.variable.type.id == .array;
+        },
+        .unary =>
+        {
+            >unary_id = value.content.unary.id;
+            >unary_value = value.content.unary.value;
+
+            switch (unary_id)
+            {
+                .extend,
+                .truncate,
+                .pointer_cast,
+                .pointer_from_int,
+                =>
+                {
+                    return 1;
+                },
+                .int_from_pointer,
+                .ampersand,
+                .dereference,
+                .va_end,
+                .leading_zeroes,
+                .trailing_zeroes,
+                .exclamation,
+                .int_from_enum,
+                .enum_from_int,
+                .enum_name,
+                =>
+                {
+                    return 0;
+                },
+                .minus,
+                .plus,
+                .bitwise_not,
+                =>
+                {
+                    return receives_type(unary_value);
+                },
+            }
+        },
+        .binary =>
+        {
+            >left = value.content.binary.left;
+            >right = value.content.binary.right;
+            >binary_id = value.content.binary.id;
+
+            return receives_type(left) and receives_type(right);
+        },
+        else =>
+        {
+            #trap();
+        },
+    }
+}
+
 type_is_signed = fn (type: &Type) u1
 {
     switch (type.id)
@@ -1553,7 +1635,7 @@ is_arbitrary_bit_integer = fn (type: &Type) u1
 
             switch (bit_count)
             {
-                8, 16, 32, 64, 128 => { return 0; },
+                1, 8, 16, 32, 64, 128 => { return 0; },
                 else => { return 1; },
             }
         },
@@ -1765,6 +1847,10 @@ is_integral_or_enumeration_type = fn (type: &Type) u1
         {
             return 0;
         },
+        .alias =>
+        {
+            return is_integral_or_enumeration_type(type.content.alias.type);
+        },
         else =>
         {
             unreachable;
@@ -1851,6 +1937,7 @@ ValueConstantInteger = struct
 
 ValueFunctionLLVM = struct
 {
+    alloca_insertion_point: &LLVMValue,
     return_block: &LLVMBasicBlock,
     return_alloca: &LLVMValue,
 }
@@ -2583,8 +2670,10 @@ LLVMICmpPredicate = enum u32
 
 [extern] LLVMAppendBasicBlockInContext = fn [cc(c)] (context: &LLVMContext, function: &LLVMValue, name: &u8) &LLVMBasicBlock;
 
+[extern] LLVMPositionBuilderBefore = fn [cc(c)] (builder: &LLVMBuilder, instruction: &LLVMValue) void;
 [extern] LLVMPositionBuilderAtEnd = fn [cc(c)] (builder: &LLVMBuilder, basic_block: &LLVMBasicBlock) void;
 [extern] LLVMClearInsertionPosition = fn [cc(c)] (builder: &LLVMBuilder) void;
+[extern] LLVMGetCurrentDebugLocation2 = fn [cc(c)] (builder: &LLVMBuilder) &LLVMMetadata;
 [extern] LLVMSetCurrentDebugLocation2 = fn [cc(c)] (builder: &LLVMBuilder, debug_location: &LLVMMetadata) void;
 
 [extern] LLVMSetAlignment = fn [cc(c)] (value: &LLVMValue, alignment: u32) void;
@@ -3100,6 +3189,11 @@ uint64 = fn (module: &Module) &Type
 sint32 = fn (module: &Module) &Type
 {
     return integer_type(module, { .bit_count = 32, .signed = 1 });
+}
+
+sint64 = fn (module: &Module) &Type
+{
+    return integer_type(module, { .bit_count = 64, .signed = 1 });
 }
 
 void_type = fn (module: &Module) &Type
@@ -9397,6 +9491,22 @@ ResolvedCallingConvention = enum
     win64,
 }
 
+get_current_function = fn (module: &Module) &Global
+{
+    >current_function = module.current_function;
+
+    if (!current_function)
+    {
+        >macro_instantiation = module.current_macro_instantiation;
+        if (macro_instantiation)
+        {
+            current_function = macro_instantiation.instantiation_function;
+        }
+    }
+
+    return current_function;
+}
+
 AllocaOptions = struct
 {
     type: &Type,
@@ -9415,7 +9525,17 @@ create_alloca = fn (module: &Module, options: AllocaOptions) &LLVMValue
         alignment = get_byte_alignment(abi_type);
     }
 
+    >original_block = LLVMGetInsertBlock(module.llvm.builder);
+    >function = get_current_function(module);
+    >debug_location = LLVMGetCurrentDebugLocation2(module.llvm.builder);
+    >alloca_insertion_point = function.variable.storage.content.function.llvm.alloca_insertion_point;
+    LLVMPositionBuilderBefore(module.llvm.builder, alloca_insertion_point);
+    LLVMSetCurrentDebugLocation2(module.llvm.builder, zero);
+
     >alloca = llvm_create_alloca(module.llvm.builder, abi_type.llvm.memory, alignment, options.name);
+    LLVMPositionBuilderAtEnd(module.llvm.builder, original_block);
+    LLVMSetCurrentDebugLocation2(module.llvm.builder, debug_location);
+
     return alloca;
 }
 
@@ -9565,56 +9685,82 @@ analyze_value = fn (module: &Module, value: &Value, expected_type: &Type, type_k
     emit_value(module, value, type_kind, must_be_constant);
 }
 
-analyze_binary_type = fn (module: &Module, left: &Value, right: &Value, is_boolean: u1, expected_type: &Type, must_be_constant: u1) void
+analyze_binary_type = fn (module: &Module, left: &Value, right: &Value, is_boolean: u1, expected_type: &Type, must_be_constant: u1, is_sub: u1) void
 {
     >left_constant = value_is_constant(left);
     >right_constant = value_is_constant(right);
+    >left_receives_type = receives_type(left);
+    >right_receives_type = receives_type(right);
 
-    if (!expected_type)
+    if (!expected_type and left_receives_type and right_receives_type)
     {
-        if (left_constant != zero and right_constant)
+        if (left.id == right.id)
         {
-            if (left.type == zero and right.type == zero)
+            switch (left.id)
             {
-                >string_literal = left.id == .string_literal and right.id == .string_literal;
-
-                if (string_literal)
+                .string_literal =>
                 {
-                    #trap();
-                }
-                else
+                    expected_type = get_slice_type(module, uint8(module));
+                },
+                else =>
                 {
                     report_error();
-                }
+                },
             }
-        }
-    }
-
-    if (is_boolean or expected_type == zero)
-    {
-        if (left_constant)
-        {
-            analyze_type(module, right, zero, { .must_be_constant = must_be_constant, zero });
-            analyze_type(module, left, right.type, { .must_be_constant = must_be_constant, zero });
         }
         else
         {
-            analyze_type(module, left, zero, { .must_be_constant = must_be_constant, zero });
-            analyze_type(module, right, left.type, { .must_be_constant = must_be_constant, zero });
+            report_error();
         }
     }
-    else if (!is_boolean and expected_type != zero)
+
+    if (!left_receives_type and !right_receives_type)
     {
+        analyze_type(module, left, zero, { .must_be_constant = must_be_constant, zero });
+        analyze_type(module, right, zero, { .must_be_constant = must_be_constant, zero });
+    }
+    else if (left_receives_type and !right_receives_type)
+    {
+        analyze_type(module, right, zero, { .must_be_constant = must_be_constant, zero });
+        analyze_type(module, left, right.type, { .must_be_constant = must_be_constant, zero });
+    }
+    else if (!left_receives_type and right_receives_type)
+    {
+        analyze_type(module, left, zero, { .must_be_constant = must_be_constant, zero });
+        analyze_type(module, right, left.type, { .must_be_constant = must_be_constant, zero });
+    }
+    else if (left_receives_type != zero and right_receives_type != zero)
+    {
+        assert(expected_type != zero);
+
+        if (is_boolean)
+        {
+            report_error();
+        }
+
         analyze_type(module, left, expected_type, { .must_be_constant = must_be_constant, zero });
         analyze_type(module, right, expected_type, { .must_be_constant = must_be_constant, zero });
     }
     else
     {
-        report_error();
+        unreachable;
     }
 
     assert(left.type != zero);
     assert(right.type != zero);
+
+    if (expected_type)
+    {
+        if (expected_type.id == .integer and left.type.id == .pointer and right.type.id == .pointer and is_sub)
+        {
+            check_types(module, left.type, right.type);
+        }
+        else if (!is_boolean)
+        {
+            typecheck(module, expected_type, left.type);
+            typecheck(module, expected_type, right.type);
+        }
+    }
 }
 
 get_va_list_type = fn (module: &Module) &Type
@@ -10120,10 +10266,96 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             >id = value.content.binary.id;
 
             >is_boolean = binary_is_boolean(id);
-            analyze_binary_type(module, left, right, is_boolean, expected_type, analysis.must_be_constant);
+            >is_sub = id == .sub;
+            analyze_binary_type(module, left, right, is_boolean, expected_type, analysis.must_be_constant, is_sub);
             check_types(module, left.type, right.type);
 
-            value_type = #select(is_boolean, uint1(module), left.type);
+            if (is_sub and left.type.id == .pointer and right.type.id == .pointer)
+            {
+                assert(left.type == right.type);
+
+                >u64_type = uint64(module);
+                >s64_type = sint64(module);
+
+                >left_int_from_pointer = new_value(module);
+                left_int_from_pointer.& = {
+                    .content = {
+                        .unary = {
+                            .value = left,
+                            .id = .int_from_pointer,
+                        },
+                    },
+                    .type = u64_type,
+                    .id = .unary,
+                    zero,
+                };
+
+                >right_int_from_pointer = new_value(module);
+                right_int_from_pointer.& = {
+                    .content = {
+                        .unary = {
+                            .value = right,
+                            .id = .int_from_pointer,
+                        },
+                    },
+                    .type = u64_type,
+                    .id = .unary,
+                    zero,
+                };
+
+                value.type = s64_type;
+                value.content.binary.left = left_int_from_pointer;
+                value.content.binary.right = right_int_from_pointer;
+
+                >sub = new_value(module);
+                sub.& = value.&;
+
+                >size_constant = new_value(module);
+                assert(left.type.id == .pointer);
+
+                >element_type = left.type.content.pointer.element_type;
+                size_constant.& = {
+                    .content = {
+                        .unary_type = {
+                            .type = element_type,
+                            .id = .byte_size,
+                        },
+                    },
+                    .id = .unary_type,
+                    zero,
+                };
+
+                analyze_type(module, size_constant, s64_type, { .must_be_constant = 1, zero });
+
+                value.& = {
+                    .content = {
+                        .binary = {
+                            .left = sub,
+                            .right = size_constant,
+                            .id = .div,
+                        },
+                    },
+                    .id = .binary,
+                    zero,
+                };
+
+                if (expected_type)
+                {
+                    #trap();
+                }
+                else
+                {
+                    value_type = s64_type;
+                }
+            }
+            else if (is_boolean)
+            {
+                value_type = uint1(module);
+            }
+            else
+            {
+                value_type = left.type;
+            }
         },
         .unary =>
         {
@@ -10285,7 +10517,9 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                         >u32_type = uint32(module);
                         resolve_type_in_place(module, u32_type);
 
-                        // TODO: alloca insert point
+                        >current_function = get_current_function(module);
+                        >old_alloca_insertion_point = current_function.variable.storage.content.function.llvm.alloca_insertion_point;
+                        current_function.variable.storage.content.function.llvm.alloca_insertion_point = LLVMBuildAlloca(module.llvm.builder, u32_type.llvm.abi, "alloca_insertion_point");
 
                         >alloca = create_alloca(module, {
                             .type = string_type,
@@ -10358,7 +10592,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                         enum_to_string_function = llvm_function;
                         enum_type.content.enum.enum_to_string_function = enum_to_string_function;
 
-                        // TODO: alloca insertion point restoration
+                        current_function.variable.storage.content.function.llvm.alloca_insertion_point = old_alloca_insertion_point;
                     }
 
                     assert(enum_to_string_function != zero);
@@ -11332,7 +11566,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             analyze_type(module, condition, zero, { .must_be_constant = analysis.must_be_constant, zero });
             >is_boolean: u1 = 0;
 
-            analyze_binary_type(module, true_value, false_value, is_boolean, expected_type, analysis.must_be_constant);
+            analyze_binary_type(module, true_value, false_value, is_boolean, expected_type, analysis.must_be_constant, 0);
 
             >true_type = true_value.type;
             >false_type = false_value.type;
@@ -11446,6 +11680,14 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 >loop_exit_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "loop.exit");
 
                 LLVMPositionBuilderAtEnd(module.llvm.builder, entry_block);
+
+                >current_function = get_current_function(module);
+                >old_alloca_insertion_point = current_function.variable.storage.content.function.llvm.alloca_insertion_point;
+
+                >u32_type = uint32(module);
+                resolve_type_in_place(module, u32_type);
+
+                current_function.variable.storage.content.function.llvm.alloca_insertion_point = LLVMBuildAlloca(module.llvm.builder, u32_type.llvm.abi, "alloca_insertion_point");
 
                 >arguments: [2]&LLVMValue = undefined;
                 LLVMGetParams(llvm_function, &arguments[0]);
@@ -11668,6 +11910,8 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                 enum_type.content.enum.string_to_enum_function = llvm_function;
                 enum_type.content.enum.string_to_enum_struct_type = struct_type;
+
+                current_function.variable.storage.content.function.llvm.alloca_insertion_point = old_alloca_insertion_point;
             }
 
             >struct_type = enum_type.content.enum.string_to_enum_struct_type;
@@ -16210,7 +16454,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                         }
                         else
                         {
-                            analyze_binary_type(module, start, end, 0, zero, 0);
+                            analyze_binary_type(module, start, end, 0, zero, 0, 0);
                             assert(start.type == end.type);
                             local_type = start.type;
                         }
@@ -16614,7 +16858,9 @@ emit = fn (module: &Module) void
     {
         >e: LLVMIntrinsicIndex = #enum_from_int(i);
         >name = #enum_name(e);
-        module.llvm.intrinsic_table[i] = LLVMLookupIntrinsicID(name.pointer, name.length);
+        >intrinsic_id = LLVMLookupIntrinsicID(name.pointer, name.length);
+        assert(intrinsic_id != 0);
+        module.llvm.intrinsic_table[i] = intrinsic_id;
     }
 
     for (i: 0..module.llvm.attribute_table.length)
@@ -16953,6 +17199,11 @@ emit = fn (module: &Module) void
 
                 LLVMPositionBuilderAtEnd(module.llvm.builder, entry_block);
                 LLVMSetCurrentDebugLocation2(module.llvm.builder, zero);
+
+                >u32_type = uint32(module);
+                resolve_type_in_place(module, u32_type);
+
+                global.variable.storage.content.function.llvm.alloca_insertion_point = LLVMBuildAlloca(module.llvm.builder, u32_type.llvm.abi, "alloca_insertion_point");
 
                 >return_abi = &function_type.abi.return_abi;
                 switch (return_abi.flags.kind)
@@ -17369,6 +17620,8 @@ emit = fn (module: &Module) void
 
                     LLVMBuildRet(module.llvm.builder, return_value);
                 }
+
+                LLVMInstructionEraseFromParent(global.variable.storage.content.function.llvm.alloca_insertion_point);
 
                 // END OF SCOPE
                 module.current_function = zero;
@@ -17797,6 +18050,7 @@ names: [_][]u8 =
     "min_max",
     "field_parent_pointer",
     "leading_trailing_zeroes",
+    "pointer_sub",
 ];
 
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
