@@ -19,7 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ ubuntu-latest ]
-        BIRTH_CMAKE_BUILD_TYPE: [ Debug, RelWithDebInfo, Release, MinSizeRel ]
+        BIRTH_CMAKE_BUILD_TYPE: [ Debug, Release ]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +31,34 @@ jobs:
           CLANG_PATH: clang-19
           CLANGXX_PATH: clang++-19
         run: |
+          set -eux
           ./generate.sh
           ./build.sh
           ./build/bb test
+          mkdir -p $HOME/bloat-buster-artifacts/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/$CMAKE_BUILD_TYPE
+          mv ./self-hosted-bb-cache $HOME/bloat-buster-artifacts/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/$CMAKE_BUILD_TYPE/cache
+  release:
+    needs: ci
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install
+        shell: bash
+        env:
+          BB_CI: 1
+        run: |
+          set -eux
+          mkdir -p $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)
+          mv $HOME/bloat-buster-artifacts/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/Release/cache/debug_none_di/compiler/aggressively_optimize_for_speed_nodi/compiler $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)
+      - name: Release
+        if: ${{ (github.ref == 'refs/heads/main') }}
+        shell: bash
+        env:
+          BB_CI: 1
+        run: |
+          set -eux
+          mv $HOME/bloat-buster-artifacts/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/Release/cache/debug_none_di/compiler/aggressively_optimize_for_speed_nodi/compiler $HOME/bloat-buster-artifacts/releases/main/
