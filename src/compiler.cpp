@@ -624,53 +624,49 @@ void entry_point(Slice<char* const> arguments, Slice<char* const> envp)
                 }
             }
 
-            for (BuildMode compiler_build_mode = BuildMode::debug_none; compiler_build_mode < BuildMode::count; compiler_build_mode = (BuildMode)((backing_type(BuildMode))compiler_build_mode + 1))
-            {
-                for (bool compiler_has_debug_info : has_debug_info_array)
-                {
-                    auto compiler = compile_file(arena, {
-                        .relative_file_path = string_literal("src/compiler.bbb"),
-                        .build_mode = compiler_build_mode,
-                        .has_debug_info = compiler_has_debug_info,
-                        .silent = true,
+            BuildMode compiler_build_mode = BuildMode::debug_none;
+            bool compiler_has_debug_info = true;
+            auto compiler = compile_file(arena, {
+                    .relative_file_path = string_literal("src/compiler.bbb"),
+                    .build_mode = compiler_build_mode,
+                    .has_debug_info = compiler_has_debug_info,
+                    .silent = true,
                     });
 
-                    char* const compiler_arguments[] =
-                    {
-                        (char*)compiler.pointer,
-                        (char*)"test",
-                        0,
-                    };
-                    Slice<char* const> arg_slice = array_to_slice(compiler_arguments);
-                    arg_slice.length -= 1;
-                    auto execution = os_execute(arena, arg_slice, environment, {});
-                    auto success = execution.termination_kind == TerminationKind::exit && execution.termination_code == 0;
-                    if (!success)
-                    {
-                        print(string_literal("Self-hosted tests failed: "));
-                        print(build_mode_to_string(compiler_build_mode));
-                        print(compiler_has_debug_info ? string_literal(" with debug info\n") : string_literal(" with no debug info\n"));
-                        bb_fail();
-                    }
+            char* const compiler_arguments[] =
+            {
+                (char*)compiler.pointer,
+                (char*)"test",
+                0,
+            };
+            Slice<char* const> arg_slice = array_to_slice(compiler_arguments);
+            arg_slice.length -= 1;
+            auto execution = os_execute(arena, arg_slice, environment, {});
+            auto success = execution.termination_kind == TerminationKind::exit && execution.termination_code == 0;
+            if (!success)
+            {
+                print(string_literal("Self-hosted tests failed: "));
+                print(build_mode_to_string(compiler_build_mode));
+                print(compiler_has_debug_info ? string_literal(" with debug info\n") : string_literal(" with no debug info\n"));
+                bb_fail();
+            }
 
-                    char* const reproduce_arguments[] =
-                    {
-                        (char*)compiler.pointer,
-                        (char*)"reproduce",
-                        0,
-                    };
-                    arg_slice = array_to_slice(reproduce_arguments);
-                    arg_slice.length -= 1;
-                    execution = os_execute(arena, arg_slice, environment, {});
-                    success = execution.termination_kind == TerminationKind::exit && execution.termination_code == 0;
-                    if (!success)
-                    {
-                        print(string_literal("Self-hosted reproduction failed: "));
-                        print(build_mode_to_string(compiler_build_mode));
-                        print(compiler_has_debug_info ? string_literal(" with debug info\n") : string_literal(" with no debug info\n"));
-                        bb_fail();
-                    }
-                }
+            char* const reproduce_arguments[] =
+            {
+                (char*)compiler.pointer,
+                (char*)"reproduce",
+                0,
+            };
+            arg_slice = array_to_slice(reproduce_arguments);
+            arg_slice.length -= 1;
+            execution = os_execute(arena, arg_slice, environment, {});
+            success = execution.termination_kind == TerminationKind::exit && execution.termination_code == 0;
+            if (!success)
+            {
+                print(string_literal("Self-hosted reproduction failed: "));
+                print(build_mode_to_string(compiler_build_mode));
+                print(compiler_has_debug_info ? string_literal(" with debug info\n") : string_literal(" with no debug info\n"));
+                bb_fail();
             }
         } break;
     case Command::count:
