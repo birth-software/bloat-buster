@@ -109,6 +109,29 @@ fn void compile(Arena* arena, Options options)
         .id = ValueId::infer_or_ignore,
     };
 
+    for (auto definition: options.definitions)
+    {
+        auto definition_global = new_global(&module);
+        auto definition_value = new_value(&module);
+        auto definition_storage = new_value(&module);
+        *definition_value = {
+            .string_literal = definition.value,
+            .id = ValueId::string_literal,
+        };
+        *definition_storage = {
+            .id = ValueId::global,
+        };
+        *definition_global = Global{
+            .variable = {
+                .storage = definition_storage,
+                .initial_value = definition_value,
+                .type = get_slice_type(&module, uint8(&module)),
+                .scope = &module.scope,
+                .name = definition.name,
+            },
+        };
+    }
+
     parse(&module);
     emit(&module);
 }
@@ -174,6 +197,13 @@ fn String compile_file(Arena* arena, Compile options)
     auto file_content = file_read(arena, relative_file_path);
     auto file_path = path_absolute(arena, relative_file_path);
 
+    Slice<Definition> definitions = {};
+    auto cmake_prefix_path = string_literal(CMAKE_PREFIX_PATH);
+    auto cmake_prefix_path_definition = Definition{
+        .name = string_literal("CMAKE_PREFIX_PATH"),
+        .value = cmake_prefix_path,
+    };
+
     String objects[] = {
         output_object_path,
     };
@@ -190,9 +220,11 @@ fn String compile_file(Arena* arena, Compile options)
 
     if (is_compiler)
     {
+        definitions = { .pointer = &cmake_prefix_path_definition, .length = 1 };
+
         ArgBuilder builder = {};
         String llvm_config_parts[] = {
-            string_literal(CMAKE_PREFIX_PATH),
+            cmake_prefix_path,
             string_literal("/bin/llvm-config"),
         };
         builder.add(arena, arena_join_string(arena, array_to_slice(llvm_config_parts)));
@@ -300,6 +332,7 @@ fn String compile_file(Arena* arena, Compile options)
             .path = file_path,
             .executable = output_executable_path,
             .name = base_name,
+            .definitions = definitions,
             .objects = object_slice,
             .library_paths = library_paths,
             .library_names = library_names,
@@ -615,6 +648,24 @@ void entry_point(Slice<char* const> arguments, Slice<char* const> envp)
                     if (!success)
                     {
                         print(string_literal("Self-hosted tests failed: "));
+                        print(build_mode_to_string(compiler_build_mode));
+                        print(compiler_has_debug_info ? string_literal(" with debug info\n") : string_literal(" with no debug info\n"));
+                        bb_fail();
+                    }
+
+                    char* const reproduce_arguments[] =
+                    {
+                        (char*)compiler.pointer,
+                        (char*)"reproduce",
+                        0,
+                    };
+                    arg_slice = array_to_slice(reproduce_arguments);
+                    arg_slice.length -= 1;
+                    execution = os_execute(arena, arg_slice, environment, {});
+                    success = execution.termination_kind == TerminationKind::exit && execution.termination_code == 0;
+                    if (!success)
+                    {
+                        print(string_literal("Self-hosted reproduction failed: "));
                         print(build_mode_to_string(compiler_build_mode));
                         print(compiler_has_debug_info ? string_literal(" with debug info\n") : string_literal(" with no debug info\n"));
                         bb_fail();

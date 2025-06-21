@@ -1296,6 +1296,12 @@ struct ModuleLLVM
     u32 debug_tag;
 };
 
+struct Definition
+{
+    String name;
+    String value;
+};
+
 struct Module
 {
     Arena* arena;
@@ -1408,6 +1414,7 @@ struct Options
     String path;
     String executable;
     String name;
+    Slice<Definition> definitions;
     Slice<String> objects;
     Slice<String> library_paths;
     Slice<String> library_names;

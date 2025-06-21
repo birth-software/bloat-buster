@@ -984,6 +984,7 @@ CompilerCommand = enum
 {
     compile,
     test,
+    reproduce,
 }
 
 BuildMode = enum
@@ -1044,12 +1045,19 @@ target_compare = fn (a: Target, b: Target) u1
     return is_same_cpu and is_same_os;
 }
 
+Definition = struct
+{
+    name: []u8,
+    value: []u8,
+}
+
 CompileOptions = struct
 {
     content: []u8,
     path: []u8,
     executable: []u8,
     name: []u8,
+    definitions: []Definition,
     objects: [][]u8,
     library_directories: [][]u8,
     library_names: [][]u8,
@@ -18200,6 +18208,38 @@ compile = fn (arena: &Arena, options: CompileOptions) void
     module.scope.types.first = base_type_allocation;
     module.scope.types.last = noreturn_type;
 
+    for (&definition: options.definitions)
+    {
+        >definition_global = new_global(&module);
+        >definition_value = new_value(&module);
+        >definition_storage = new_value(&module);
+
+        definition_value.& = {
+            .content = {
+                .string_literal = definition.value,
+            },
+            .id = .string_literal,
+            zero,
+        };
+
+        definition_storage.& = {
+            .id = .global,
+            zero,
+        };
+
+        definition_global.& = {
+            .variable = {
+                .storage = definition_storage,
+                .type = get_slice_type(&module, uint8(&module)),
+                .scope = &module.scope,
+                .name = definition.name,
+                zero,
+            },
+            .initial_value = definition_value,
+            zero,
+        };
+    }
+
     parse(&module);
     emit(&module);
 }
@@ -18268,6 +18308,12 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
     >file_path = path_absolute(arena, relative_file_path.pointer);
     >c_abi_object_path = ""; // TODO
 
+    >definitions: []Definition = zero;
+    >cmake_prefix_path_definition: Definition = {
+        .name = "CMAKE_PREFIX_PATH",
+        .value = CMAKE_PREFIX_PATH,
+    };
+
     >objects = [ output_object_path ][..];
     >c_abi_library = "build/libc_abi.a";
     >llvm_bindings_library = "build/libllvm_bindings.a";
@@ -18281,9 +18327,11 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
 
     if (is_compiler)
     {
+        definitions = { .pointer = &cmake_prefix_path_definition, .length = 1 };
+
         >builder: ArgumentBuilder = zero;
 
-        add_argument(&builder, "/home/david/dev/llvm/install/llvm_20.1.3_x86_64-linux-Release/bin/llvm-config");
+        add_argument(&builder, arena_join_string(arena, [ CMAKE_PREFIX_PATH, "/bin/llvm-config"][..]));
         add_argument(&builder, "--libdir");
         add_argument(&builder, "--libs");
         add_argument(&builder, "--system-libs");
@@ -18396,6 +18444,7 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
 
     >options: CompileOptions = {
         .executable = output_executable_path,
+        .definitions = definitions,
         .objects = objects,
         .library_directories = library_directories,
         .library_names = library_names,
@@ -18558,7 +18607,10 @@ names: [_][]u8 =
         return 1;
     }
 
+    >debug_info_array: [_]u1 = [1, 0];
+
     >command = command_string_to_enum.enum_value;
+
     switch (command)
     {
         .compile =>
@@ -18620,7 +18672,6 @@ names: [_][]u8 =
                 report_error();
             }
 
-            >debug_info_array: [_]u1 = [1, 0];
             for (name: names)
             {
                 for (build_mode: #enum_values(BuildMode))
@@ -18653,6 +18704,43 @@ names: [_][]u8 =
 
                         arena.position = position;
                     }
+                }
+            }
+        },
+        .reproduce =>
+        {
+            for (build_mode: #enum_values(BuildMode))
+            {
+                for (has_debug_info: debug_info_array)
+                {
+                    >position = arena.position;
+
+                    // Produce the compiler
+                    >relative_file_path = "src/compiler.bbb";
+                    >executable_path = compile_file(arena, {
+                        .relative_file_path = relative_file_path,
+                        .build_mode = build_mode,
+                        .has_debug_info = has_debug_info,
+                        .silent = 1,
+                    }, envp);
+
+                    // Test the compiler
+                    >arguments: [_]&u8 = [
+                        executable_path.pointer,
+                        "test",
+                        zero,
+                    ];
+                    >args = arguments[..arguments.length - 1];
+                    >execution = os_execute(arena, args, envp, zero);
+
+                    >success = execution.termination_kind == .exit and execution.termination_code == 0;
+
+                    if (!success)
+                    {
+                        #trap();
+                    }
+
+                    arena.position = position;
                 }
             }
         },

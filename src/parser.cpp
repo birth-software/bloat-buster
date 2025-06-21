@@ -3166,6 +3166,7 @@ fn Block* parse_block(Module* module, Scope* parent_scope)
 void parse(Module* module)
 {
     auto scope = &module->scope;
+
     while (1)
     {
         skip_space(module);
