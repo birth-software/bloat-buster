@@ -535,6 +535,7 @@ void entry_point(Slice<char* const> arguments, Slice<char* const> envp)
 
             auto build_mode = BuildMode::debug_none;
             auto has_debug_info = true;
+            auto is_host_cpu_model = true;
 
             if (arguments.length >= 4)
             {
@@ -583,12 +584,30 @@ void entry_point(Slice<char* const> arguments, Slice<char* const> envp)
                 }
             }
 
+            if (arguments.length >= 6)
+            {
+                auto is_host_cpu_model_string = c_string_to_slice(arguments[5]);
+                if (is_host_cpu_model_string.equal(string_literal("true")))
+                {
+                    is_host_cpu_model = true;
+                }
+                else if (is_host_cpu_model_string.equal(string_literal("false")))
+                {
+                    is_host_cpu_model = false;
+                }
+                else
+                {
+                    bb_fail_with_message(string_literal("Wrong value for is_host_cpu_model\n"));
+                }
+            }
+
             auto relative_file_path = c_string_to_slice(arguments[2]);
 
             compile_file(arena, {
                 .relative_file_path = relative_file_path,
                 .build_mode = build_mode,
                 .has_debug_info = has_debug_info,
+                .host_cpu_model = is_host_cpu_model,
                 .silent = false,
             });
         } break;
@@ -601,7 +620,6 @@ void entry_point(Slice<char* const> arguments, Slice<char* const> envp)
             }
 
             bool has_debug_info_array[] = {true, false};
-            bool is_host_cpu_model_array[] = {true, false};
 
             for (auto name: names)
             {
@@ -649,6 +667,7 @@ void entry_point(Slice<char* const> arguments, Slice<char* const> envp)
                     .relative_file_path = string_literal("src/compiler.bbb"),
                     .build_mode = compiler_build_mode,
                     .has_debug_info = compiler_has_debug_info,
+                    .host_cpu_model = true,
                     .silent = true,
                     });
 

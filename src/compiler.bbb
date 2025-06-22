@@ -18665,6 +18665,7 @@ names: [_][]u8 =
 
             >build_mode: BuildMode = .debug_none;
             >has_debug_info: u1 = 1;
+            >is_host_cpu_model: u1 = 1;
 
             if (argument_count >= 4)
             {
@@ -18693,6 +18694,23 @@ names: [_][]u8 =
                 }
             }
 
+            if (argument_count >= 6)
+            {
+                >is_host_cpu_model_string = c_string_to_slice(arguments[5]);
+                if (string_equal(is_host_cpu_model_string, "true"))
+                {
+                    is_host_cpu_model = 1;
+                }
+                else if (string_equal(is_host_cpu_model_string, "false"))
+                {
+                    is_host_cpu_model = 0;
+                }
+                else
+                {
+                    return 1;
+                }
+            }
+
             >relative_file_path_pointer = arguments[2];
             if (!relative_file_path_pointer)
             {
@@ -18704,7 +18722,7 @@ names: [_][]u8 =
             compile_file(arena, {
                 .relative_file_path = relative_file_path,
                 .build_mode = build_mode,
-                .host_cpu_model = 0,
+                .host_cpu_model = is_host_cpu_model,
                 .has_debug_info = has_debug_info,
                 .silent = 0,
             }, envp);
