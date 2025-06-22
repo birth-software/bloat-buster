@@ -54,7 +54,7 @@ jobs:
           set -eux
           mkdir -p $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)
           cp $HOME/bloat-buster-artifacts/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/Release/cache/debug_none_di/compiler/aggressively_optimize_for_speed_nodi/compiler $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)
-      - name: Release
+      - name: Release (locally)
         if: ${{ (github.ref == 'refs/heads/main') }}
         shell: bash
         env:
@@ -62,3 +62,12 @@ jobs:
         run: |
           set -eux
           cp $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/compiler $HOME/bloat-buster-artifacts/releases/main/
+
+      - name: Release (web)
+        uses: akkuman/gitea-release-action@v1
+        if: ${{ (github.ref == 'refs/heads/main') }}
+        env:
+          NODE_OPTIONS: '--experimental-fetch' # if nodejs < 18
+        with:
+          files: |-
+            /home/act_runner/bloat-buster-artifacts/releases/main/compiler
