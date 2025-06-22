@@ -1,5 +1,0 @@
-[extern] exit = fn [cc(c)] (exit_code: s32) noreturn;
-[export] main = fn [cc(c)] () s32
-{
-    exit(0);
-}

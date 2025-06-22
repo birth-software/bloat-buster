@@ -1,7 +1,0 @@
-[extern] exit = fn [cc(c)] (exit_code: s32) noreturn;
-
-[export] main = fn [cc(c)] () s32
-{
-    >c_function_pointer = &exit;
-    c_function_pointer(0);
-}

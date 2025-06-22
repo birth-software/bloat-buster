@@ -1,5 +1,0 @@
-[export] main = fn () s32
-{
-    >result: #ReturnType = 0;
-    return result;
-}

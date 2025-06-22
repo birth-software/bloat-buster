@@ -1,9 +1,0 @@
-[export] main = fn [cc(c)] () s32
-{
-    >result: s32 = 0;
-    if (result != 0)
-    {
-        unreachable;
-    }
-    return result;
-}

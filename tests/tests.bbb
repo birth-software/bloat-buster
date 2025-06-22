@@ -1,0 +1,2328 @@
+require = fn (ok: u1) void
+{
+    if (!ok)
+    {
+        #trap();
+    }
+}
+
+return_constant = fn () s32 // This is a comment
+// This is a comment
+{ // This is a comment
+    // This is a comment
+    return 0; // This is a comment
+}// This is a comment
+// This is a comment
+
+constant_add = fn () s32
+{
+    return -1 + 1;
+}
+
+constant_and = fn () s32
+{
+    return 1 & 2;
+}
+
+constant_div = fn () s32
+{
+    return 0 / 5;
+}
+
+constant_mul = fn () s32
+{
+    return 1 * 0;
+}
+
+constant_rem = fn () s32
+{
+    return 5 % 5;
+}
+
+constant_or = fn () s32
+{
+    return 0 | 0;
+}
+
+constant_sub = fn () s32
+{
+    return 1 - 1;
+}
+
+constant_xor = fn () s32
+{
+    return 0 ^ 0;
+}
+
+constant_shift_left = fn () s32
+{
+    return 0 << 1;
+}
+
+constant_shift_right = fn () s32
+{
+    return 0 >> 1;
+}
+
+minimal_stack = fn () s32
+{
+    >a: s32 = 0;
+    return a;
+}
+
+minimal_stack_arithmetic0 = fn () s32
+{
+    >a: s32 = 1;
+    return a - 1;
+}
+
+minimal_stack_arithmetic1 = fn () s32
+{
+    >a: s32 = 1;
+    >b = a - 1;
+    return b;
+}
+
+minimal_stack_arithmetic2 = fn () s32
+{
+    >a: s32 = 1;
+    >b = 1 - a;
+    return b;
+}
+
+stack_negation = fn () s32
+{
+    >v: s32 = 0;
+    return -v;
+}
+
+stack_add = fn () s32
+{
+    >a: s32 = -1;
+    >b: s32 = 1;
+    return a + b;
+}
+
+stack_sub = fn () s32
+{
+    >a: s32 = 1;
+    >b: s32 = 1;
+    return a - b;
+}
+
+extend = fn () s32
+{
+    >a: s8 = 0;
+    return #extend(a);
+}
+
+integer_max = fn () s32
+{
+    >a = #integer_max(u64);
+    return #truncate(a + 1);
+}
+
+integer_hex = fn () s32
+{
+    >result: s32 = 0x0;
+    return result;
+}
+
+basic_pointer = fn () s32
+{
+    >a: s32 = 0;
+    >pointer = &a;
+    return pointer.&;
+}
+
+basic_call_foo = fn () s32
+{
+    return 0;
+}
+
+basic_call = fn () s32
+{
+    return basic_call_foo();
+}
+
+basic_branch = fn () s32
+{
+    >result: s32 = 1;
+    if (result != 1)
+    {
+        return 1;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+basic_array = fn () s32
+{
+    >array: [_]s32 = [3, 2, 1, 0];
+    return array[3];
+}
+
+BasicEnum = enum
+{
+    zero = 0,
+    one = 1,
+    two = 2,
+    three = 3,
+}
+
+basic_enum = fn () s32
+{
+    >a: BasicEnum = .three;
+    >b: BasicEnum = .two;
+    >c: BasicEnum = .one;
+    >a_int: s32 = #extend(#int_from_enum(a));
+    >b_int: s32 = #extend(#int_from_enum(b));
+    >c_int: s32 = #extend(#int_from_enum(c));
+
+    return a_int - (b_int + c_int);
+}
+
+basic_slice_receiver = fn (slice: []u8) void
+{
+    require(slice.length == 3);
+    require(slice[0] == 0);
+    require(slice[1] == 1);
+    require(slice[2] == 2);
+}
+
+basic_slice = fn () void
+{
+    >a: [_]u8 = [0, 1, 2];
+    basic_slice_receiver(a[..]);
+}
+
+basic_string = fn () void
+{
+    >string = "abc";
+    require(string[0] == 'a');
+    require(string[1] == 'b');
+    require(string[2] == 'c');
+}
+
+basic_varargs_function = fn [cc(c)] (first_arg: u32, ...) void
+{
+    require(first_arg == 123456789);
+
+    >va = #va_start();
+
+    >a = #va_arg(&va, u32);
+
+    require(a == 987654321);
+
+    >first_arg_b = #va_arg(&va, u32);
+    require(first_arg == first_arg_b);
+}
+
+basic_varargs = fn () void
+{
+    >first_arg: u32 = 123456789;
+    >a: u32 = 987654321;
+    basic_varargs_function(first_arg, a, first_arg);
+}
+
+c_string_length = fn (c_string: &u8) u64
+{
+    >it = c_string;
+
+    while (it.&)
+    {
+        it = it + 1;
+    }
+
+    return #int_from_pointer(it) - #int_from_pointer(c_string);
+}
+
+basic_while = fn (argc: s32, argv: &&u8) void
+{
+    require(argc != 0);
+
+    >first_arg = argv[0];
+    require(first_arg != zero);
+
+    >arg_length = c_string_length(first_arg);
+    require(arg_length != 0);
+
+    require(first_arg[arg_length] == 0);
+}
+
+pointer_function = fn (v: &s32) void
+{
+    v.& = 1;
+}
+
+pointer = fn () s32
+{
+    >value: s32 = 0;
+    pointer_function(&value);
+    return #extend(value == 0);
+}
+
+pointer_cast = fn () s32
+{
+    >result: u32 = 0;
+    >p = &result;
+    >signed_pointer: &s32 = #pointer_cast(p);
+    return signed_pointer.&;
+}
+
+u1_return_foo = fn () u1
+{
+    >result: u1 = 0;
+    return result;
+}
+
+u1_return = fn () s32
+{
+    >result = u1_return_foo();
+    return #extend(result);
+}
+
+local_type_inference_foo = fn () s32
+{
+    return 0;
+}
+
+local_type_inference = fn () s32
+{
+    >a: s32 = 0;
+    >result = local_type_inference_foo() + a;
+    return result;
+}
+
+basic_global_foo: s32 = 0;
+
+basic_global = fn () s32
+{
+    return basic_global_foo;
+}
+
+basic_function_pointer_callback = fn () s32
+{
+    return 123;
+}
+
+basic_function_pointer = fn () s32
+{
+    >function_pointer = &basic_function_pointer_callback;
+    return function_pointer() - 123;
+}
+
+[extern] strlen = fn [cc(c)] (string: &u8) s64;
+
+basic_extern = fn () void
+{
+    >length = strlen("abc");
+    require(length == 3);
+}
+
+basic_byte_size = fn () void
+{
+    >sizeofu8: u8 = #byte_size(u8);
+    require(sizeofu8 == 1);
+    >sizeofu16: u8 = #byte_size(u16);
+    require(sizeofu16 == 2);
+    >sizeofs32: s32 = #byte_size(s32);
+    require(sizeofs32 == 4);
+    >sizeofs64: s32 = #byte_size(s64);
+    require(sizeofs64 == 8);
+}
+
+unsigned_assignment_operators = fn(n: s32) s32
+{
+    >result: u32 = #extend(n);
+    result >>= 1;
+    result <<= 1;
+    result ^= 1;
+    result |= 1;
+    result &= 1;
+    result += 1;
+    result -= 1;
+    result /= 1;
+    result %= 1;
+    result *= 0;
+
+    return #extend(result);
+}
+
+assignment_operators = fn () s32
+{
+    >result: s32 = 0;
+    >pointer = &result;
+    pointer -= 1;
+    pointer += 1;
+    result >>= 1;
+    result <<= 1;
+    result ^= 1;
+    result |= 1;
+    result &= 1;
+    result += 1;
+    result -= 1;
+    result /= 1;
+    result %= 1;
+    result *= 0;
+    return unsigned_assignment_operators(result);
+}
+
+not_pointer = fn () s32
+{
+    >a: s32 = 0;
+    >ptr = &a;
+    >b = !ptr;
+    return #extend(b);
+}
+
+BasicBitField = bits u8
+{
+    a: u2,
+    b: u2,
+    c: u2,
+    d: u2,
+}
+
+basic_bits = fn () void
+{
+    >bf: BasicBitField = {
+        .a = 3,
+        .b = 2,
+        .c = 2,
+        .d = 3,
+    };
+
+    require(bf.a == 3);
+    require(bf.b == 2);
+    require(bf.c == 2);
+    require(bf.d == 3);
+}
+
+BitsNoBackingType = bits
+{
+    a: u1,
+    b: u1,
+}
+
+bits_no_backing_type = fn () void
+{
+    >bf: BitsNoBackingType = {
+        .a = 1,
+        .b = 1,
+    };
+
+    require(bf.a == 1);
+    require(bf.b == 1);
+}
+
+BitsU1 = bits u32
+{
+    a: u1,
+    b: u1,
+    c: u1,
+}
+
+bits_return_u1_function = fn () u1
+{
+    >b1: BitsU1 = {
+        .a = 1,
+        .b = 1,
+        .c = 0,
+    };
+
+    return b1.c;
+}
+
+bits_return_u1 = fn () void
+{
+    >b1 = bits_return_u1_function();
+    require(b1 == 0);
+}
+
+BitsZero = bits
+{
+    a: u1,
+    b: u1,
+    c: u1,
+}
+
+bits_zero = fn () void
+{
+    >a_bz: BitsZero = zero;
+
+    require(a_bz.a == 0);
+    require(a_bz.b == 0);
+    require(a_bz.c == 0);
+
+    >b_bz: BitsZero = {
+        .a = 1,
+        .b = 1,
+        zero,
+    };
+
+    require(b_bz.a == 1);
+    require(b_bz.b == 1);
+    require(b_bz.c == 0);
+}
+
+basic_comparison_trivial = fn (a: s32, b: s32) u1
+{
+    return a + 1 == b + 1;
+}
+
+basic_comparison = fn (argument_count: s32) void
+{
+    require(basic_comparison_trivial(argument_count, argument_count));
+}
+
+BasicGlobalStruct = struct
+{
+    a: u32,
+    b: u32,
+    c: u32,
+}
+
+basic_global_struct_variable: BasicGlobalStruct = {
+    .a = 1,
+    .b = 2,
+    .c = 3,
+};
+
+basic_global_struct = fn () void
+{
+    require(basic_global_struct_variable.a == 1);
+    require(basic_global_struct_variable.b == 2);
+    require(basic_global_struct_variable.c == 3);
+}
+
+if_no_else = fn () s32
+{
+    >a: s32 = 5;
+    if (a == 2)
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+if_no_else_void = fn () void
+{
+    >result: s32 = 0;
+    if (result != 0)
+    {
+        #trap();
+    }
+}
+
+Indirect = struct
+{
+    a: u32,
+    b: u32,
+    c: u32,
+    d: u32,
+    e: u32,
+    f: u32,
+}
+
+indirect_ret = fn [cc(c)] () Indirect
+{
+    return { .a = 56, .b = 57, .c = 58, .d = 59, .e = 60, .f = 61 };
+}
+
+indirect_arg = fn [cc(c)] (s: Indirect) void
+{
+    require(s.a == 56);
+    require(s.b == 57);
+    require(s.c == 58);
+    require(s.d == 59);
+    require(s.e == 60);
+    require(s.f == 61);
+}
+
+basic_indirect = fn () void
+{
+    >s = indirect_ret();
+    require(s.a == 56);
+    require(s.b == 57);
+    require(s.c == 58);
+    require(s.d == 59);
+    require(s.e == 60);
+    require(s.f == 61);
+    indirect_arg(s);
+}
+
+IndirectVarArgs = struct
+{
+    a: u64,
+    b: u64,
+    c: u64,
+    d: u64,
+    e: u64
+    f: u64,
+    g: u64,
+    h: u64,
+    i: u64,
+    j: u64
+}
+
+indirect_varargs_function = fn [cc(c)] (first_arg: u32, ...) void
+{
+    if (first_arg != 123456789)
+    {
+        #trap();
+    }
+
+    >va = #va_start();
+
+    >s = #va_arg(&va, IndirectVarArgs);
+    require(s.a == 9);
+    require(s.b == 8);
+    require(s.c == 7);
+    require(s.d == 6);
+    require(s.e == 5);
+    require(s.f == 4);
+    require(s.g == 3);
+    require(s.h == 2);
+    require(s.i == 1);
+    require(s.j == 0);
+}
+
+indirect_varargs = fn () void
+{
+    >first_arg: u32 = 123456789;
+    >s: IndirectVarArgs = {
+        .a = 9,
+        .b = 8,
+        .c = 7,
+        .d = 6,
+        .e = 5,
+        .f = 4,
+        .g = 3,
+        .h = 2,
+        .i = 1,
+        .j = 0,
+    };
+    indirect_varargs_function(first_arg, s);
+}
+
+return_type_builtin = fn () s32
+{
+    >result: #ReturnType = 0;
+    return result;
+}
+
+Struct_u64_u64 = struct
+{
+    a: u64,
+    b: u64,
+}
+
+return_struct_u64_u64_function = fn [cc(c)] () Struct_u64_u64
+{
+    return { .a = 1, .b = 2 };
+}
+
+return_struct_u64_u64 = fn [cc(c)] () s32
+{
+    >r = return_struct_u64_u64_function();
+    return #truncate(r.a + r.b - 3);
+}
+
+select = fn () s32
+{
+    >boolean: u1 = 1;
+    >left: s32 = 0;
+    >right: s32 = 1;
+    return #select(boolean, left, right);
+}
+
+slice2 = fn (argc: s32, argv: &&u8) void
+{
+    require(argc != 0);
+    >arg_ptr = argv[0];
+    >a1 = arg_ptr[0..c_string_length(arg_ptr)];
+    >a2 = a1[1..];
+
+    require(a1.pointer == a2.pointer - 1);
+    require(a1.length == a2.length + 1);
+}
+
+SA1 = struct
+{
+    a: u8,
+    b: u8,
+    c: u8,
+}
+
+SA2 = struct
+{
+    a: u8,
+    b: u8,
+    c: u8,
+}
+
+struct_assignment = fn () void
+{
+    >s1: SA1 = {
+        .a = 255,
+        .b = 254,
+        .c = 253,
+    };
+    >s2: SA2 = {
+        .a = s1.a,
+        .b = s1.b,
+        .c = s1.c,
+    };
+
+    require(s1.a == 255);
+    require(s1.b == 254);
+    require(s1.c == 253);
+
+    require(s2.a == 255);
+    require(s2.b == 254);
+    require(s2.c == 253);
+}
+
+BasicStruct = struct
+{
+    x: s32,
+    y: s32,
+    z: s32,
+}
+
+basic_struct_fn = fn (s: BasicStruct) s32
+{
+    return s.z;
+}
+
+basic_struct = fn () s32
+{
+    >a: BasicStruct = {
+        .x = 2,
+        .y = 1,
+        .z = 0,
+    };
+
+    return basic_struct_fn(a);
+}
+
+struct_zero = fn () void
+{
+    >a: SA1 = zero;
+
+    require(a.a == 0);
+    require(a.b == 0);
+    require(a.c == 0);
+
+    >b: SA1 = {
+        .a = 1,
+        .b = 1,
+        zero,
+    };
+
+    require(b.a == 1);
+    require(b.b == 1);
+    require(b.c == 0);
+}
+
+basic_unreachable = fn () s32
+{
+    >result: s32 = 0;
+
+    if (result != 0)
+    {
+        unreachable;
+    }
+
+    return result;
+}
+
+S = struct
+{
+    a: u32,
+    b: u32,
+    c: u64,
+    d: u64,
+    e: u64
+}
+
+va_arg_function = fn [cc(c)] (first_arg: u32, ...) void
+{
+    >va = #va_start();
+
+    >a = #va_arg(&va, u32);
+    >b = #va_arg(&va, S);
+    >c = #va_arg(&va, s64); 
+    >d = #va_arg(&va, s32); 
+
+    require(first_arg == 123456789);
+    require(a == 123);
+    require(c == -1);
+    require(d == -2);
+    require(b.a == 1);
+    require(b.b == 2);
+    require(b.c == 3);
+    require(b.d == 4);
+    require(b.e == 5);
+
+    #va_end(&va);
+}
+
+S2 = struct
+{
+    a: u64,
+    b: u64,
+}
+
+va_arg_function2 = fn [cc(c)] (...) void
+{
+    >va = #va_start();
+    >s2 = #va_arg(&va, S2);
+    require(s2.a == 8);
+    require(s2.b == 9);
+    #va_end(&va);
+}
+
+va_args = fn [cc(c)] () void
+{
+    >first_arg: u32 = 123456789;
+    >a: u32 = 123;
+    >b: S = { .a = 1, .b = 2, .c = 3, .d = 4, .e = 5 };
+    >c: s64 = -1;
+    >d: s32 = -2;
+    va_arg_function(first_arg, a, b, c, d);
+    >s2: S2 = { .a = 8, .b = 9 };
+    va_arg_function2(s2);
+}
+
+EnumBoolEnum = enum {
+    a,
+    b,
+    c,
+    d,
+    e,
+    f,
+    g,
+}
+
+EnumBoolStruct = struct
+{
+    enum: EnumBoolEnum,
+    bool: u1,
+}
+
+enum_bool_struct = fn () void
+{
+    >s: EnumBoolStruct = {
+        .enum = .f,
+        .bool = 1,
+    };
+
+    require(s.enum == .f);
+    require(s.bool);
+}
+
+BigStruct = struct
+{
+    a: u64,
+    b: u64,
+    c: u64,
+    d: u64,
+    e: u8,
+}
+
+SmallPackedStruct = bits u8
+{
+    a: u2,
+    b: u2,
+    c: u2,
+    d: u2,
+}
+
+SmallStructInts = struct
+{
+    a: u8,
+    b: u8,
+    c: u8,
+    d: u8,
+}
+
+SplitStructInt = struct
+{
+    a: u64,
+    b: u8,
+    c: u32,
+}
+
+MedStructInts = struct
+{
+    x: s32,
+    y: s32,
+    z: s32,
+}
+
+Rect = struct
+{
+    left: u32,
+    right: u32,
+    top: u32,
+    bottom: u32,
+}
+
+StructWithArray = struct
+{
+    a: s32,
+    padding: [4]u8,
+    b: s64,
+}
+
+ByRef = struct
+{
+    val: s32,
+    arr: [15]s32,
+}
+
+ByValOrigin = struct
+{
+    x: u64,
+    y: u64,
+    z: u64,
+}
+
+ByValSize = struct
+{
+    width: u64,
+    height: u64,
+    depth: u64,
+}
+
+ByVal = struct
+{
+    origin: ByValOrigin,
+    size: ByValSize,
+}
+
+[extern] run_c_tests = fn [cc(c)] () void;
+
+[extern] c_u8 = fn [cc(c)] (x: u8) void;
+[extern] c_u16 = fn [cc(c)] (x: u16) void;
+[extern] c_u32 = fn [cc(c)] (x: u32) void;
+[extern] c_u64 = fn [cc(c)] (x: u64) void;
+
+[extern] c_s8 = fn [cc(c)] (x: s8) void;
+[extern] c_s16 = fn [cc(c)] (x: s16) void;
+[extern] c_s32 = fn [cc(c)] (x: s32) void;
+[extern] c_s64 = fn [cc(c)] (x: s64) void;
+
+[extern] c_bool = fn [cc(c)] (x: u8) void;
+
+[extern] c_five_integers = fn [cc(c)] (a: s32, b: s32, c: s32, d: s32, e: s32) void;
+[extern] c_ret_struct_u64_u64 = fn [cc(c)] () Struct_u64_u64;
+
+[extern] c_struct_u64_u64_0 = fn [cc(c)] (a: Struct_u64_u64) void;
+[extern] c_struct_u64_u64_1 = fn [cc(c)] (a: u64, b: Struct_u64_u64) void;
+[extern] c_struct_u64_u64_2 = fn [cc(c)] (a: u64, b: u64, c: Struct_u64_u64) void;
+[extern] c_struct_u64_u64_3 = fn [cc(c)] (a: u64, b: u64, c: u64, d: Struct_u64_u64) void;
+[extern] c_struct_u64_u64_4 = fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: Struct_u64_u64) void;
+[extern] c_struct_u64_u64_5 = fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: u64, f: Struct_u64_u64) void;
+[extern] c_struct_u64_u64_6 = fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: Struct_u64_u64) void;
+[extern] c_struct_u64_u64_7 = fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: Struct_u64_u64) void;
+[extern] c_struct_u64_u64_8 = fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u64, i: Struct_u64_u64) void;
+
+[extern] c_big_struct = fn [cc(c)] (x: BigStruct) void;
+[extern] c_small_struct_ints = fn [cc(c)] (x: SmallStructInts) void;
+[extern] c_ret_small_struct_ints = fn [cc(c)] () SmallStructInts;
+[extern] c_med_struct_ints = fn [cc(c)] (x: MedStructInts) void;
+[extern] c_ret_med_struct_ints = fn [cc(c)] () MedStructInts;
+[extern] c_small_packed_struct = fn [cc(c)] (x: SmallPackedStruct) void;
+[extern] c_ret_small_packed_struct = fn [cc(c)] () SmallPackedStruct;
+[extern] c_split_struct_ints = fn [cc(c)] (x: SplitStructInt) void;
+[extern] c_big_struct_both = fn [cc(c)] (x: BigStruct) BigStruct;
+[extern] c_multiple_struct_ints = fn [cc(c)] (a: Rect, b: Rect) void;
+
+[extern] c_ret_bool = fn [cc(c)] () u8;
+
+[extern] c_ret_u8 = fn [cc(c)] () u8;
+[extern] c_ret_u16 = fn [cc(c)] () u16;
+[extern] c_ret_u32 = fn [cc(c)] () u32;
+[extern] c_ret_u64 = fn [cc(c)] () u64;
+
+[extern] c_ret_s8 = fn [cc(c)] () s8;
+[extern] c_ret_s16 = fn [cc(c)] () s16;
+[extern] c_ret_s32 = fn [cc(c)] () s32;
+[extern] c_ret_s64 = fn [cc(c)] () s64;
+
+[extern] c_struct_with_array = fn [cc(c)] (x: StructWithArray) void;
+[extern] c_ret_struct_with_array = fn [cc(c)] () StructWithArray;
+
+[extern] c_modify_by_ref_param = fn [cc(c)] (x: ByRef) ByRef;
+[extern] c_func_ptr_byval = fn [cc(c)] (a: u64, b: u64, c: ByVal, d: u64, e: u64, f: u64) void;
+
+[export] bb_u8 = fn [cc(c)] (x: u8) void
+{
+    require(x == 0xff);
+}
+
+[export] bb_u16 = fn [cc(c)] (x: u16) void
+{
+    require(x == 0xfffe);
+}
+
+[export] bb_u32 = fn [cc(c)] (x: u32) void
+{
+    require(x == 0xfffffffd);
+}
+
+[export] bb_u64 = fn [cc(c)] (x: u64) void
+{
+    require(x == 0xfffffffffffffffc);
+}
+
+[export] bb_s8 = fn [cc(c)] (x: s8) void
+{
+    require(x == -1);
+}
+
+[export] bb_s16 = fn [cc(c)] (x: s16) void
+{
+    require(x == -2);
+}
+
+[export] bb_s32 = fn [cc(c)] (x: s32) void
+{
+    require(x == -3);
+}
+
+[export] bb_s64 = fn [cc(c)] (x: s64) void
+{
+    require(x == -4);
+}
+
+[export] bb_ptr = fn [cc(c)] (x: &u8) void
+{
+    require(#int_from_pointer(x) == 0xdeadbeef);
+}
+
+[export] bb_five_integers = fn [cc(c)] (a: s32, b: s32, c: s32, d: s32, e: s32) void
+{
+    require(a == 12);
+    require(b == 34);
+    require(c == 56);
+    require(d == 78);
+    require(e == 90);
+}
+
+[export] bb_bool = fn [cc(c)] (x: u8) void
+{
+    require(#truncate(x));
+}
+
+[export] bb_ret_struct_u64_u64 = fn [cc(c)] () Struct_u64_u64
+{
+    return { .a = 1, .b = 2, };
+}
+
+[export] bb_struct_u64_u64_0 = fn [cc(c)] (s: Struct_u64_u64) void
+{
+    require(s.a == 3);
+    require(s.b == 4);
+}
+
+[export] bb_struct_u64_u64_1 = fn [cc(c)] (_: u64, s: Struct_u64_u64) void
+{
+    require(s.a == 5);
+    require(s.b == 6);
+}
+
+[export] bb_struct_u64_u64_2 = fn [cc(c)] (_: u64, _: u64, s: Struct_u64_u64) void
+{
+    require(s.a == 7);
+    require(s.b == 8);
+}
+
+[export] bb_struct_u64_u64_3 = fn [cc(c)] (_: u64, _: u64, _: u64, s: Struct_u64_u64) void
+{
+    require(s.a == 9);
+    require(s.b == 10);
+}
+
+[export] bb_struct_u64_u64_4 = fn [cc(c)] (_: u64, _: u64, _: u64, _: u64, s: Struct_u64_u64) void
+{
+    require(s.a == 11);
+    require(s.b == 12);
+}
+
+[export] bb_struct_u64_u64_5 = fn [cc(c)] (_: u64, _: u64, _: u64, _: u64, _: u64, s: Struct_u64_u64) void
+{
+    require(s.a == 13);
+    require(s.b == 14);
+}
+
+[export] bb_struct_u64_u64_6 = fn [cc(c)] (_: u64, _: u64, _: u64, _: u64, _: u64, _: u64, s: Struct_u64_u64) void
+{
+    require(s.a == 15);
+    require(s.b == 16);
+}
+
+[export] bb_struct_u64_u64_7 = fn [cc(c)] (_: u64, _: u64, _: u64, _: u64, _: u64, _: u64, _: u64, s: Struct_u64_u64) void
+{
+    require(s.a == 17);
+    require(s.b == 18);
+}
+
+[export] bb_struct_u64_u64_8 = fn [cc(c)] (_: u64, _: u64, _: u64, _: u64, _: u64, _: u64, _: u64, _: u64, s: Struct_u64_u64) void
+{
+    require(s.a == 19);
+    require(s.b == 20);
+}
+
+[export] bb_big_struct = fn [cc(c)] (x: BigStruct) void
+{
+    require(x.a == 1);
+    require(x.b == 2);
+    require(x.c == 3);
+    require(x.d == 4);
+    require(x.e == 5);
+}
+
+[export] bb_small_packed_struct = fn [cc(c)] (x: SmallPackedStruct) void
+{
+    require(x.a == 0);
+    require(x.b == 1);
+    require(x.c == 2);
+    require(x.d == 3);
+}
+
+[export] bb_split_struct_ints = fn [cc(c)] (x: SplitStructInt) void
+{
+    require(x.a == 1234);
+    require(x.b == 100);
+    require(x.c == 1337);
+}
+
+[export] bb_big_struct_both = fn [cc(c)] (x: BigStruct) BigStruct
+{
+    require(x.a == 30);
+    require(x.b == 31);
+    require(x.c == 32);
+    require(x.d == 33);
+    require(x.e == 34);
+    >s: BigStruct = {
+        .a = 20,
+        .b = 21,
+        .c = 22,
+        .d = 23,
+        .e = 24,
+    };
+    return s;
+}
+
+[export] bb_ret_bool = fn [cc(c)] () u8
+{
+    return 1;
+}
+
+[export] bb_ret_u8 = fn [cc(c)] () u8
+{
+    return 0xff;
+}
+
+[export] bb_ret_u16 = fn [cc(c)] () u16
+{
+    return 0xffff;
+}
+
+[export] bb_ret_u32 = fn [cc(c)] () u32
+{
+    return 0xffffffff;
+}
+
+[export] bb_ret_u64 = fn [cc(c)] () u64
+{
+    return 0xffffffffffffffff;
+}
+
+[export] bb_ret_s8 = fn [cc(c)] () s8
+{
+    return -1;
+}
+
+[export] bb_ret_s16 = fn [cc(c)] () s16
+{
+    return -1;
+}
+
+[export] bb_ret_s32 = fn [cc(c)] () s32
+{
+    return -1;
+}
+
+[export] bb_ret_s64 = fn [cc(c)] () s64
+{
+    return -1;
+}
+
+[export] bb_ret_small_struct_ints = fn [cc(c)] () SmallStructInts
+{
+    return {
+        .a = 1,
+        .b = 2,
+        .c = 3,
+        .d = 4,
+    };
+}
+
+[export] bb_ret_med_struct_ints = fn [cc(c)] () MedStructInts
+{
+    return {
+        .x = 1,
+        .y = 2,
+        .z = 3,
+    };
+}
+
+[export] bb_multiple_struct_ints = fn [cc(c)] (x: Rect, y: Rect) void
+{
+    require(x.left == 1);
+    require(x.right == 21);
+    require(x.top == 16);
+    require(x.bottom == 4);
+    require(y.left == 178);
+    require(y.right == 189);
+    require(y.top == 21);
+    require(y.bottom == 15);
+}
+
+[export] bb_small_struct_ints = fn [cc(c)] (x: SmallStructInts) void
+{
+    require(x.a == 1);
+    require(x.b == 2);
+    require(x.c == 3);
+    require(x.d == 4);
+}
+
+[export] bb_med_struct_ints = fn [cc(c)] (s: MedStructInts) void
+{
+    require(s.x == 1);
+    require(s.y == 2);
+    require(s.z == 3);
+}
+
+c_abi_tests = fn () void
+{
+    run_c_tests();
+    c_u8(0xff);
+    c_u16(0xfffe);
+    c_u32(0xfffffffd);
+    c_u64(0xfffffffffffffffc);
+
+    //if (has_i128) {
+    //    c_struct_u128({ .value = 0xfffffffffffffffc, });
+    //}
+
+    c_s8(-1);
+    c_s16(-2);
+    c_s32(-3);
+    c_s64(-4);
+
+    //if (has_i128) {
+    //    c_struct_i128({ .value = -6, });
+    //}
+
+    c_bool(1);
+
+    c_five_integers(12, 34, 56, 78, 90);
+
+    >s = c_ret_struct_u64_u64();
+    require(s.a == 21);
+    require(s.b == 22);
+    c_struct_u64_u64_0({ .a = 23, .b = 24, });
+    c_struct_u64_u64_1(0, { .a = 25, .b = 26, });
+    c_struct_u64_u64_2(0, 1, { .a = 27, .b = 28, });
+    c_struct_u64_u64_3(0, 1, 2, { .a = 29, .b = 30, });
+    c_struct_u64_u64_4(0, 1, 2, 3, { .a = 31, .b = 32, });
+    c_struct_u64_u64_5(0, 1, 2, 3, 4, { .a = 33, .b = 34, });
+    c_struct_u64_u64_6(0, 1, 2, 3, 4, 5, { .a = 35, .b = 36, });
+    c_struct_u64_u64_7(0, 1, 2, 3, 4, 5, 6, { .a = 37, .b = 38, });
+    c_struct_u64_u64_8(0, 1, 2, 3, 4, 5, 6, 7, { .a = 39, .b = 40, });
+
+    >big_struct: BigStruct = {
+        .a = 1,
+        .b = 2,
+        .c = 3,
+        .d = 4,
+        .e = 5,
+    };
+    c_big_struct(big_struct);
+
+    >small: SmallStructInts = {
+        .a = 1,
+        .b = 2,
+        .c = 3,
+        .d = 4,
+    };
+    c_small_struct_ints(small);
+    >small2 = c_ret_small_struct_ints();
+    require(small2.a == 1);
+    require(small2.b == 2);
+    require(small2.c == 3);
+    require(small2.d == 4);
+
+    >med: MedStructInts = {
+        .x = 1,
+        .y = 2,
+        .z = 3,
+    };
+    c_med_struct_ints(med);
+    >med2 = c_ret_med_struct_ints();
+    require(med2.x == 1);
+    require(med2.y == 2);
+    require(med2.z == 3);
+
+    >p: SmallPackedStruct = { .a = 0, .b = 1, .c = 2, .d = 3, };
+    c_small_packed_struct(p);
+    >p2 = c_ret_small_packed_struct();
+    require(p2.a == 0);
+    require(p2.b == 1);
+    require(p2.c == 2);
+    require(p2.d == 3);
+
+    >split: SplitStructInt = {
+        .a = 1234,
+        .b = 100,
+        .c = 1337,
+    };
+    c_split_struct_ints(split);
+
+    > big: BigStruct = {
+        .a = 1,
+        .b = 2,
+        .c = 3,
+        .d = 4,
+        .e = 5,
+    };
+    >big2 = c_big_struct_both(big);
+    require(big2.a == 10);
+    require(big2.b == 11);
+    require(big2.c == 12);
+    require(big2.d == 13);
+    require(big2.e == 14);
+
+    >r1: Rect = {
+        .left = 1,
+        .right = 21,
+        .top = 16,
+        .bottom = 4,
+    };
+    >r2: Rect = {
+        .left = 178,
+        .right = 189,
+        .top = 21,
+        .bottom = 15,
+    };
+    c_multiple_struct_ints(r1, r2);
+
+    require(c_ret_bool() == 1);
+
+    require(c_ret_u8() == 0xff);
+    require(c_ret_u16() == 0xffff);
+    require(c_ret_u32() == 0xffffffff);
+    require(c_ret_u64() == 0xffffffffffffffff);
+
+    require(c_ret_s8() == -1);
+    require(c_ret_s16() == -1);
+    require(c_ret_s32() == -1);
+    require(c_ret_s64() == -1);
+
+    c_struct_with_array({ .a = 1, .padding = [0, 0, 0, 0], .b = 2, });
+
+    >x = c_ret_struct_with_array();
+    require(x.a == 4);
+    require(x.b == 155);
+
+    >res = c_modify_by_ref_param({ .val = 1, .arr = [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ] });
+    require(res.val == 42);
+
+    >function_pointer = &c_func_ptr_byval;
+    function_pointer(1, 2, { .origin = { .x = 9, .y = 10, .z = 11, }, .size = { .width = 12, .height = 13, .depth = 14, }, }, 3, 4, 5);
+}
+
+S2Enum = enum
+{
+    asd,
+    dsa,
+    gsa,
+}
+
+string_to_enum = fn () s32
+{
+    >e = "dsa";
+    >s2e = #string_to_enum(S2Enum, e);
+    >result: s32 = 1;
+
+    if (s2e.is_valid)
+    {
+        result = #extend(s2e.enum_value != .dsa);
+    }
+
+    return result;
+}
+
+empty_if = fn (argument_count: s32) s32
+{
+    >result: s32 = 0;
+
+    if (argument_count != 1)
+    {
+        result = 1;
+    }
+    else
+    {
+    }
+
+    return result;
+} 
+
+else_if = fn () s32
+{
+    >result: s32 = 0;
+    if (result == 1)
+    {
+        return 1;
+    }
+    else if (result == 0)
+    {
+        return 0;
+    }
+    else
+    {
+        return 5;
+    }
+}
+
+ElseIfEnum = enum
+{
+    a,
+    b,
+    c,
+}
+
+else_if_complicated = fn (argument_count: s32) s32
+{
+    >result: s32 = 0;
+    >foo: ElseIfEnum = .b;
+    switch (foo)
+    {
+        .b =>
+        {
+            if (argument_count != 0)
+            {
+                >a: s32 = 1;
+                if (result == 1)
+                {
+                }
+                else if (result == 0)
+                {
+                    return 0;
+                }
+                else
+                {
+                    return 5;
+                }
+                return a;
+            }
+        },
+        else =>
+        {
+        }
+    }
+
+    return 0;
+}
+
+basic_shortcircuiting_if = fn (argument_count: s32) s32
+{
+    >a: s32 = 0;
+    if (argument_count != 3 and? argument_count != 2)
+    {
+        return 0;
+    }
+    else
+    {
+        return 1;
+    }
+}
+
+shortcircuiting_if = fn (argument_count: s32) s32
+{
+    >a: s32 = 0;
+    if (argument_count != 0 and? argument_count != 2 and? argument_count != 3 or? argument_count != 1)
+    {
+        return 0;
+    }
+    else if (argument_count == 5 or? a == 0)
+    {
+        return 45;
+    }
+    else
+    {
+        return 1;
+    }
+}
+
+FieldAccessLeftAssign = struct
+{
+    a: u32,
+    b: u32,
+}
+
+field_access_left_assign = fn () void
+{
+    >s: FieldAccessLeftAssign = {
+        .a = 2,
+        .b = 3,
+    };
+
+    s.a = s.b + 1;
+    s.b = s.a + 2;
+
+    require(s.a == 4);
+    require(s.b == 6);
+}
+
+for_each = fn () void
+{
+    >array: [_]u32 = [5, 3, 2];
+    >counter: u32 = 0;
+    for (e : array)
+    {
+        counter += e;
+    }
+
+    require(counter == 10);
+
+    for (&e : array)
+    {
+        e.& += 1;
+    }
+
+    >new_counter: u32 = 0;
+
+    for (e : array)
+    {
+        new_counter += e;
+    }
+
+    require(new_counter == counter + array.length);
+}
+
+pointer_decay = fn () s32
+{
+    >array: [_]s32 = [1, 3, 5];
+    >pointer: &s32 = &array[0];
+    >index: u64 = 0;
+    pointer[index] = 0;
+    return pointer[index];
+}
+
+NameEnum = enum
+{
+    my_expected_result,
+    a,
+    b,
+}
+
+[extern] memcmp = fn [cc(c)] (a: &u8, b: &u8, byte_count: u64) s32;
+
+string_equal = fn (slice_a: []u8, slice_b: []u8) u1
+{
+    >result = slice_a.length == slice_b.length;
+    if (result)
+    {
+        result = memcmp(slice_a.pointer, slice_b.pointer, slice_a.length) == 0;
+    }
+
+    return result;
+}
+
+enum_name = fn () s32
+{
+    >some_enum: NameEnum = .my_expected_result;
+    return #extend(!string_equal(#enum_name(some_enum), "my_expected_result"));
+}
+
+join = fn (slice: []u8, parts: [][]u8) void
+{
+    >destination_i: u64 = 0;
+
+    for (part: parts)
+    {
+        >source_i: u64 = 0;
+
+        while (source_i < part.length)
+        {
+            slice[destination_i] = part[source_i];
+            destination_i += 1;
+            source_i += 1;
+        }
+    }
+}
+
+slice_of_slices = fn () s32
+{
+    >a = "a";
+    >b = "b";
+    >ab = "ab";
+    >buffer: [2]u8 = undefined;
+    >buffer_slice = buffer[..];
+    join(buffer_slice, [ a, b ][..]);
+
+    >result = memcmp(buffer_slice.pointer, ab.pointer, ab.length);
+    return result;
+}
+
+int = typealias s32;
+
+type_alias = fn [cc(c)] () int
+{
+    return 0;
+}
+
+integer_formats = fn () s32
+{
+    >a: s32 = 0o10;
+    >b: s32 = 0b1000;
+    >c: s32 = 0d0;
+    return a - b + c;
+}
+
+for_each_int = fn () s32
+{
+    >top: s32 = 64;
+    >accumulator: s32 = 0;
+    for (i: 0..top)
+    {
+        accumulator += 1;
+    }
+    return accumulator - top;
+}
+
+bool_array = fn () s32
+{
+    >signs: [2]u1 = [0, 0];
+    >accumulator: s32 = 0;
+
+    for (s: signs)
+    {
+        accumulator += #extend(s);
+    }
+
+    return accumulator;
+}
+
+BasicUnion = union
+{
+    s: s32,
+    u: u32,
+}
+
+basic_union = fn [cc(c)] () void
+{
+    >my_union: BasicUnion = {
+        .s = -1,
+    };
+    require(my_union.s == -1);
+    require(my_union.u == 0xffffffff);
+}
+
+break_continue = fn () s32
+{
+    >a: s32 = 0;
+
+    while (a < 10)
+    {
+        if (a == 3)
+        {
+            break;
+        }
+
+        a += 1;
+        continue;
+    }
+
+    >b: s32 = 2;
+    for (i: 0..10)
+    {
+        if (b == 2)
+        {
+            b += 1;
+            continue;
+        }
+        else
+        {
+            break;
+        }
+    }
+
+    return a - b;
+}
+
+i2315_abc: s32 = 5;
+asjdkj = i2315_abc - i2315_abc;
+
+constant_global_reference = fn () s32
+{
+    return asjdkj;
+}
+
+is_space = fn (ch: u8) u1
+{
+    return ch == ' ' or ch == '\n' or ch == '\t' or ch == '\r';
+}
+
+concat_logical_or = fn () s32
+{
+    return #extend(is_space('f'));
+}
+
+strict_array_type = fn () s32
+{
+    >arr: [3]s32 = [3, 1, 0];
+    return arr[2];
+}
+
+PointerStructInitialization = struct
+{
+    a: u16,
+    b: u8,
+    c: u8,
+    d: u32,
+}
+
+pointer_struct_initialization = fn () void
+{
+    >s: PointerStructInitialization = zero;
+
+    >p_s = &s;
+    p_s.& = {
+        .a = 1,
+        .b = 2,
+        .c = 3,
+        .d = 4,
+    };
+
+    require(s.a == 1);
+    require(s.b == 2);
+    require(s.c == 3);
+    require(s.d == 4);
+}
+
+slice_array_literal_receiver = fn (slices: [][]u8) void
+{
+    require(slices.length == 3);
+}
+
+slice_array_literal = fn () void
+{
+    >some_bool: u1 = 0;
+    slice_array_literal_receiver([ "abc", #select(some_bool, "bcd", "cbd"), "sas", ][..]);
+}
+
+slice_only_start = fn () void
+{
+    >s = "abcde";
+    >index: u64 = 3;
+    >s_sub = s[index..];
+    require(s_sub[0] == 'd');
+}
+
+sub = macro (a: s32, b: s32) s32
+{
+    return a - b;
+}
+
+basic_macro = fn () s32
+{
+    >a = sub(1, 1);
+    >b = sub(2, 2);
+    return a + b;
+}
+
+sub_generic = macro [T] (a: T, b: T) T
+{
+    return a - b;
+}
+
+generic_macro = fn () s32
+{
+    >a = sub_generic[s32](1, 1);
+    >b = sub_generic[u8](2, 2);
+    return a + #extend(b);
+}
+
+pointer_macro = macro [T] (ptr: &u32) &T
+{
+    return #pointer_cast(ptr);
+}
+
+A = struct
+{
+    a: u32,
+}
+
+B = struct
+{
+    b: u32,
+}
+
+generic_pointer_macro = fn () void
+{
+    >var: u32 = 0;
+    >a = pointer_macro[A](&var);
+    >b = pointer_macro[B](&var);
+    a.a = 1;
+    require(b.b == 1);
+    require(var == 1);
+}
+
+assert = macro (ok: u1) void
+{
+    if (!ok)
+    {
+        unreachable;
+    }
+}
+
+align_forward = fn (value: u64, alignment: u64) u64
+{
+    assert(alignment != 0);
+    >mask = alignment - 1;
+    >result = (value + mask) & ~mask;
+    return result;
+}
+
+noreturn_macro = fn () void
+{
+    >result = align_forward(1, 64);
+
+    if (result != 64)
+    {
+        #trap();
+    }
+}
+
+generic_pointer_array_macro = macro[T](addr: &u64, count: u64) []T
+{
+    >pointer: &T = #pointer_cast(addr);
+    return pointer[..count];
+}
+
+generic_pointer_array = fn () void
+{
+    >address_raw: u64 = 0xaaaaaaaaaaaaaaaa;
+    >some_var: &u64 = #pointer_from_int(address_raw);
+    >result: []&u8 = generic_pointer_array_macro[&u8](some_var, 1);
+    require(#int_from_pointer(result.pointer) == address_raw);
+    require(result.length == 1);
+}
+
+SelfReferentialStruct = struct
+{
+    self: &SelfReferentialStruct,
+}
+
+self_referential_struct = fn () void
+{
+    >s: SelfReferentialStruct = zero;
+    s.self = &s;
+    require(s.self == &s);
+}
+
+ForwardDeclaredType = struct;
+ForwardDeclaredTypeWrapper = struct
+{
+    forward: &ForwardDeclaredType,
+}
+
+ForwardDeclaredType = struct
+{
+    f: ForwardDeclaredTypeWrapper,
+}
+
+forward_declared_type = fn () void
+{
+    >f: ForwardDeclaredType = zero;
+    f.f.forward = &f;
+}
+
+EnumArrayEnum = enum
+{
+    a,
+    b,
+    c,
+    d,
+}
+
+enum_array = fn () void
+{
+    >some_enum_array: enum_array[EnumArrayEnum](u32) = [ .a = 4, .b = 3, .c = 2, .d = 1 ];
+    require(some_enum_array[.a] == 4);
+    require(some_enum_array[.b] == 3);
+    require(some_enum_array[.c] == 2);
+    require(some_enum_array[.d] == 1);
+}
+
+OpaqueType = opaque;
+
+[extern] memcpy = fn [cc(c)] (destination: &s32, source: &s32, size: u64) &OpaqueType;
+
+basic_opaque = fn () s32
+{
+    >destination: s32 = 1;
+    >source: s32 = 0;
+    >opaque_pointer = memcpy(&destination, &source, #byte_size(s32));
+    >pointer: &s32 = #pointer_cast(opaque_pointer);
+    if (pointer != &destination)
+    {
+        #trap();
+    }
+    return destination;
+}
+
+EnumArbitraryAbi = enum
+{
+    a,
+    b,
+    c,
+    d,
+}
+
+enum_arbitrary_abi_function = fn (arg: EnumArbitraryAbi) EnumArbitraryAbi
+{
+    return arg;
+}
+
+enum_arbitrary_abi = fn () void
+{
+    >some_e: EnumArbitraryAbi = .c;
+    >a = enum_arbitrary_abi_function(some_e);
+    >b = enum_arbitrary_abi_function(.d);
+    require(a == .c);
+    require(b == .d);
+}
+
+TypeId = enum
+{
+    void,
+    noreturn,
+    forward_declaration,
+    integer,
+    function,
+    pointer,
+    array,
+    enum,
+    struct,
+    bits,
+    alias,
+    union,
+    unresolved,
+    vector,
+    floating_point,
+    enum_array,
+    opaque,
+}
+
+Type = struct
+{
+    arr: [5]u32,
+    id: TypeId,
+    a: [2]u64,
+    b: u64,
+}
+
+enum_debug_info = fn () void
+{
+    >t: Type = {
+        .id = .integer,
+        zero,
+    };
+    t.arr[0] = 1;
+    t.arr[0] = 2;
+    t.arr[0] = 3;
+}
+
+ReturnArrayEnum = enum
+{
+    a,
+    b,
+    c,
+    d,
+    e,
+    f,
+}
+
+return_array_function = fn () [2]ReturnArrayEnum
+{
+    return [ .f, .e ];
+}
+
+return_array = fn () void
+{
+    >result = return_array_function();
+    require(result[0] == .f);
+    require(result[1] == .e);
+}
+
+BoolPair = struct
+{
+    a: u1,
+    b: u1,
+}
+
+bool_pair_function = fn () BoolPair
+{
+    return { .a = 0, .b = 1 };
+}
+
+bool_pair = fn () void
+{
+    >result = bool_pair_function();
+    require(!result.a);
+    require(result.b);
+}
+
+min_max = fn () void
+{
+    >a: u32 = 1;
+    >b: u32 = 2;
+    >min = #min(a, b);
+    >max = #max(a, b);
+    require(min == a);
+    require(max == b);
+}
+
+FieldParentPointerStruct = struct
+{
+    a: u8,
+    b: u32,
+    c: u8,
+}
+
+field_parent_pointer = fn () void
+{
+    >s: FieldParentPointerStruct = {
+        .a = 241,
+        .b = 12356,
+        .c = 128,
+    };
+
+    >p_a = &s.a;
+    >p_a_struct: &FieldParentPointerStruct = #field_parent_pointer(p_a, "a");
+    require(p_a_struct == &s);
+    require(p_a_struct.a == s.a);
+    require(p_a_struct.b == s.b);
+    require(p_a_struct.c == s.c);
+    
+    >p_b = &s.b;
+    >p_b_struct: &FieldParentPointerStruct = #field_parent_pointer(p_b, "b");
+    require(p_b_struct == &s);
+    require(p_b_struct.a == s.a);
+    require(p_b_struct.b == s.b);
+    require(p_b_struct.c == s.c);
+
+    >p_c = &s.c;
+    >p_c_struct: &FieldParentPointerStruct = #field_parent_pointer(p_c, "c");
+    require(p_c_struct == &s);
+    require(p_c_struct.a == s.a);
+    require(p_c_struct.b == s.b);
+    require(p_c_struct.c == s.c);
+}
+
+leading_trailing_zeroes = fn () void
+{
+    >a: u32 = 0b111;
+    require(#leading_zeroes(a) == 29);
+    require(#trailing_zeroes(a) == 0);
+    >b: u8 = 0b11010;
+    require(#leading_zeroes(b) == 3);
+    require(#trailing_zeroes(b) == 1);
+}
+
+pointer_sub = fn () void
+{
+    >a: [_]s32 = [ 3, 1 ];
+    >p0 = &a[0];
+    >p1 = p0 + 1;
+    >sub: u32 = #truncate(p1 - p0);
+    require(sub == 1);
+}
+
+[export] main = fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32
+{
+    >rc = return_constant();
+    require(rc == 0);
+
+    >const_add = constant_add();
+    require(const_add == 0);
+
+    >const_and = constant_and();
+    require(const_and == 0);
+
+    >const_div = constant_div();
+    require(const_div == 0);
+
+    >const_mul = constant_mul();
+    require(const_mul == 0);
+
+    >const_rem = constant_rem();
+    require(const_rem == 0);
+
+    >const_or = constant_or();
+    require(const_or == 0);
+
+    >const_sub = constant_sub();
+    require(const_sub == 0);
+
+    >const_xor = constant_xor();
+    require(const_xor == 0);
+
+    >const_shift_left = constant_shift_left();
+    require(const_shift_left == 0);
+
+    >const_shift_right = constant_shift_right();
+    require(const_shift_right == 0);
+
+    >min_stack = minimal_stack();
+    require(min_stack == 0);
+
+    >min_stack_arithmetic0 = minimal_stack_arithmetic0(); 
+    require(min_stack_arithmetic0 == 0);
+
+    >min_stack_arithmetic1 = minimal_stack_arithmetic1(); 
+    require(min_stack_arithmetic1 == 0);
+
+    >min_stack_arithmetic2 = minimal_stack_arithmetic2(); 
+    require(min_stack_arithmetic2 == 0);
+
+    >st_neg = stack_negation();
+    require(st_neg == 0);
+
+    >st_add = stack_add();
+    require(st_add == 0);
+
+    >st_sub = stack_sub();
+    require(st_sub == 0);
+
+    >ext = extend();
+    require(ext == 0);
+
+    >int_max = integer_max();
+    require(int_max == 0);
+
+    >int_hex = integer_hex();
+    require(int_hex == 0);
+
+    >b_pointer = basic_pointer();
+    require(b_pointer == 0);
+
+    >b_call = basic_call();
+    require(b_call == 0);
+
+    >b_branch = basic_branch();
+    require(b_branch == 0);
+
+    >b_array = basic_array();
+    require(b_array == 0);
+
+    >b_enum = basic_enum();
+    require(b_enum == 0);
+
+    basic_slice();
+
+    basic_string();
+
+    basic_varargs();
+
+    basic_while(argc, argv);
+
+    >p = pointer();
+    require(p == 0);
+
+    >pc = pointer_cast();
+    require(pc == 0);
+
+    >u1_ret = u1_return();
+    require(u1_ret == 0);
+
+    >lti = local_type_inference();
+    require(lti == 0);
+
+    >bg = basic_global();
+    require(bg == 0);
+
+    >bfp = basic_function_pointer();
+    require(bfp == 0);
+
+    basic_extern();
+
+    basic_byte_size();
+
+    >assignment_ops = assignment_operators();
+    require(assignment_ops == 0);
+
+    >np = not_pointer();
+    require(np == 0);
+
+    basic_bits();
+
+    bits_no_backing_type();
+
+    bits_return_u1();
+
+    bits_zero();
+
+    basic_comparison(argc);
+
+    basic_global_struct();
+
+    >if_ne = if_no_else();
+    require(if_ne == 0);
+
+    if_no_else_void();
+
+    basic_indirect();
+
+    indirect_varargs();
+
+    >rtb = return_type_builtin();
+    require(rtb == 0);
+
+    >rs6464 = return_struct_u64_u64();
+    require(rs6464 == 0);
+
+    >sel = select();
+    require(sel == 0);
+
+    slice2(argc, argv);
+
+    struct_assignment();
+
+    >bs = basic_struct();
+    require(bs == 0);
+
+    struct_zero();
+
+    >bu = basic_unreachable();
+    require(bu == 0);
+
+    va_args();
+
+    enum_bool_struct();
+
+    c_abi_tests();
+
+    >s2e = string_to_enum();
+    require(s2e == 0);
+
+    >ei = empty_if(argc);
+    require(ei == 0);
+
+    >eif = else_if();
+    require(eif == 0);
+
+    >ei_complicated = else_if_complicated(argc);
+    require(ei_complicated == 0);
+
+    >basic_sif = basic_shortcircuiting_if(argc);
+    require(basic_sif == 0);
+
+    >sif = shortcircuiting_if(argc);
+    require(sif == 0);
+
+    field_access_left_assign();
+
+    for_each();
+
+    >pdecay = pointer_decay();
+    require(pdecay == 0);
+
+    >en = enum_name();
+    require(en == 0);
+
+    >sos = slice_of_slices();
+    require(sos == 0);
+
+    require(type_alias() == 0);
+
+    >if = integer_formats();
+    require(if == 0);
+
+    >fei = for_each_int();
+    require(fei == 0);
+
+    >ba = bool_array();
+    require(ba == 0);
+
+    basic_union();
+
+    >bc = break_continue();
+    require(bc == 0);
+
+    >cgr = constant_global_reference();
+    require(cgr == 0);
+
+    >cc_logical_or = concat_logical_or();
+    require(cc_logical_or == 0);
+
+    >sat = strict_array_type();
+    require(sat == 0);
+
+    pointer_struct_initialization();
+
+    slice_array_literal();
+
+    slice_only_start();
+
+    >bm = basic_macro();
+    require(bm == 0);
+
+    >gm = generic_macro();
+    require(gm == 0);
+
+    generic_pointer_macro();
+
+    noreturn_macro();
+
+    generic_pointer_array();
+
+    self_referential_struct();
+
+    forward_declared_type();
+
+    enum_array();
+
+    >opq = basic_opaque();
+    require(opq == 0);
+
+    enum_arbitrary_abi();
+
+    enum_debug_info();
+
+    return_array();
+
+    bool_pair();
+
+    min_max();
+
+    field_parent_pointer();
+
+    leading_trailing_zeroes();
+
+    pointer_sub();
+
+    return 0;
+}

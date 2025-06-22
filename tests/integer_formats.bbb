@@ -1,7 +1,0 @@
-[export] main = fn [cc(c)] () s32
-{
-    >a: s32 = 0o10;
-    >b: s32 = 0b1000;
-    >c: s32 = 0d0;
-    return a - b + c;
-}

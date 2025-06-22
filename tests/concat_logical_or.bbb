@@ -1,9 +1,0 @@
-is_space = fn (ch: u8) u1
-{
-    return ch == ' ' or ch == '\n' or ch == '\t' or ch == '\r';
-}
-
-[export] main = fn [cc(c)] () s32
-{
-    return #extend(is_space('f'));
-}

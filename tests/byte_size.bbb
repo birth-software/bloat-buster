@@ -1,6 +1,0 @@
-[export] main = fn [cc(c)] () s32
-{
-    >a: s32 = #byte_size(s32);
-    >b: s32 = #byte_size(s32);
-    return a - b;
-}

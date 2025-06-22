@@ -1,5 +1,0 @@
-result: s32 = 0;
-
-[export] main = fn [cc(c)] () s32 {
-    return result;
-}
