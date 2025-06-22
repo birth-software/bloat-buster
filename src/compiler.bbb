@@ -1012,6 +1012,7 @@ CompileFile = struct
     relative_file_path: []u8,
     build_mode: BuildMode,
     has_debug_info: u1,
+    host_cpu_model: u1,
     silent: u1,
 }
 
@@ -1031,11 +1032,16 @@ Target = struct
 {
     cpu: CPUArchitecture,
     os: OperatingSystem,
+    host_cpu_model: u1,
 }
 
-target_get_native = fn () Target
+target_get_native = fn (host_cpu_model: u1) Target
 {
-    return { .cpu = .x86_64, .os = .linux };
+    return {
+        .cpu = .x86_64,
+        .os = .linux,
+        .host_cpu_model = host_cpu_model,
+    };
 }
 
 target_compare = fn (a: Target, b: Target) u1
@@ -12704,6 +12710,16 @@ enter_struct_pointer_for_coerced_access = fn (module: &Module, source_value: &LL
     }
 }
 
+coerce_integer_or_pointer_to_integer_or_pointer = fn (module: &Module, source: &LLVMValue, source_type: &Type, destination_type: &Type) &LLVMValue
+{
+    if (source_type != destination_type)
+    {
+        #trap();
+    }
+
+    return source;
+}
+
 create_coerced_store = fn (module: &Module, source_value: &LLVMValue, source_type: &Type, destination_value: &LLVMValue, destination_type: &Type, destination_size: u64, destination_volatile: u1) void
 {
     >source_size = get_byte_size(source_type);
@@ -12758,7 +12774,14 @@ create_coerced_store = fn (module: &Module, source_value: &LLVMValue, source_typ
     }
     else if (type_is_integer_backing(source_type))
     {
-        #trap();
+        >int_type = integer_type(module, { .bit_count = destination_size * 8, .signed = 0 });
+        >value = coerce_integer_or_pointer_to_integer_or_pointer(module, source_value, source_type, int_type);
+        create_store(module, {
+            .source = value,
+            .destination = destination_value,
+            .type = int_type,
+            zero,
+        });
     }
     else
     {
@@ -12784,11 +12807,6 @@ create_coerced_store = fn (module: &Module, source_value: &LLVMValue, source_typ
 
         LLVMBuildMemCpy(module.llvm.builder, destination_value, original_destination_alignment, source_alloca, source_alloca_alignment, LLVMConstInt(u64_type.llvm.abi, destination_size, 0));
     }
-}
-
-coerce_integer_or_pointer_to_integer_or_pointer = fn (module: &Module, source: &LLVMValue, source_type: &Type, destination_type: &Type) &LLVMValue
-{
-    #trap();
 }
 
 create_coerced_load = fn (module: &Module, source: &LLVMValue, source_type: &Type, destination_type: &Type) &LLVMValue
@@ -17179,11 +17197,20 @@ emit = fn (module: &Module) void
     >cpu_model: &u8 = zero;
     >cpu_features: &u8 = zero;
 
-    if (target_compare(module.target, target_get_native()))
+    if (target_compare(module.target, target_get_native(module.target.host_cpu_model)))
     {
         target_triple = host_target_triple;
-        cpu_model = host_cpu_model;
-        cpu_features = host_cpu_features;
+
+        if (module.target.host_cpu_model)
+        {
+            cpu_model = host_cpu_model;
+            cpu_features = host_cpu_features;
+        }
+        else
+        {
+            cpu_model = "generic";
+            cpu_features = "";
+        }
     }
     else
     {
@@ -18273,29 +18300,44 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
     >base_name = relative_file_path[base_start..extension_start];
 
     >is_compiler = string_equal(relative_file_path, "src/compiler.bbb");
+
+    os_make_directory(base_cache_dir.pointer);
+
     >base_dir = arena_join_string(arena, [
         base_cache_dir,
         "/",
-        #enum_name(#build_mode),
-        "_",
-        #select(#has_debug_info(), "di", "nodi"),
-    ][..]);
-    >outputh_path_dir = arena_join_string(arena, [
-        base_dir,
-        #select(is_compiler, "/compiler/", "/"),
-        #enum_name(compile_options.build_mode),
-        "_",
-        #select(compile_options.has_debug_info, "di", "nodi"),
+        #select(compile_options.host_cpu_model, "native", "generic"),
     ][..]);
 
-    os_make_directory(base_cache_dir.pointer);
+    os_make_directory(base_dir.pointer);
+
+    base_dir = arena_join_string(arena, [
+            base_dir,
+            "/",
+            #enum_name(#build_mode),
+            "_",
+            #select(#has_debug_info(), "di", "nodi"),
+    ][..]);
+
     os_make_directory(base_dir.pointer);
 
     if (is_compiler)
     {
-        >compiler_dir = arena_join_string(arena, [ base_dir, "/compiler" ][..]);
-        os_make_directory(compiler_dir.pointer);
+        base_dir = arena_join_string(arena, [
+            base_dir,
+            "/compiler",
+        ][..]);
+
+        os_make_directory(base_dir.pointer);
     }
+
+    >outputh_path_dir = arena_join_string(arena, [
+        base_dir,
+        "/",
+        #enum_name(compile_options.build_mode),
+        "_",
+        #select(compile_options.has_debug_info, "di", "nodi"),
+    ][..]);
 
     os_make_directory(outputh_path_dir.pointer);
 
@@ -18456,7 +18498,7 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
         .content = file_content,
         .path = file_path,
         .has_debug_info = compile_options.has_debug_info,
-        .target = target_get_native(),
+        .target = target_get_native(compile_options.host_cpu_model),
         .silent = compile_options.silent,
     };
 
@@ -18608,6 +18650,7 @@ names: [_][]u8 =
     }
 
     >debug_info_array: [_]u1 = [1, 0];
+    >is_host_cpu_model_array: [_]u1 = [1, 0];
 
     >command = command_string_to_enum.enum_value;
 
@@ -18661,6 +18704,7 @@ names: [_][]u8 =
             compile_file(arena, {
                 .relative_file_path = relative_file_path,
                 .build_mode = build_mode,
+                .host_cpu_model = 0,
                 .has_debug_info = has_debug_info,
                 .silent = 0,
             }, envp);
@@ -18674,22 +18718,67 @@ names: [_][]u8 =
 
             for (name: names)
             {
+                for (is_host_cpu_model: is_host_cpu_model_array)
+                {
+                    for (build_mode: #enum_values(BuildMode))
+                    {
+                        for (has_debug_info: debug_info_array)
+                        {
+                            >position = arena.position;
+
+                            >relative_file_path = arena_join_string(arena, [ "tests/", name, ".bbb" ][..]);
+                            >executable_path = compile_file(arena, {
+                                    .relative_file_path = relative_file_path,
+                                    .build_mode = build_mode,
+                                    .has_debug_info = has_debug_info,
+                                    .host_cpu_model = is_host_cpu_model,
+                                    .silent = 1,
+                                    }, envp);
+
+                            >arguments: [_]&u8 = [
+                                executable_path.pointer,
+                                zero,
+                            ];
+                            >args = arguments[..arguments.length - 1];
+                            >execution = os_execute(arena, args, envp, zero);
+
+                            >success = execution.termination_kind == .exit and execution.termination_code == 0;
+
+                            if (!success)
+                            {
+                                #trap();
+                            }
+
+                            arena.position = position;
+                        }
+                    }
+                }
+            }
+        },
+        .reproduce =>
+        {
+            for (is_host_cpu_model: is_host_cpu_model_array)
+            {
                 for (build_mode: #enum_values(BuildMode))
                 {
                     for (has_debug_info: debug_info_array)
                     {
                         >position = arena.position;
 
-                        >relative_file_path = arena_join_string(arena, [ "tests/", name, ".bbb" ][..]);
+                        // Produce the compiler
+                        >relative_file_path = "src/compiler.bbb";
                         >executable_path = compile_file(arena, {
-                            .relative_file_path = relative_file_path,
-                            .build_mode = build_mode,
-                            .has_debug_info = has_debug_info,
-                            .silent = 1,
-                        }, envp);
+                                .relative_file_path = relative_file_path,
+                                .host_cpu_model = is_host_cpu_model,
+                                .build_mode = build_mode,
+                                .has_debug_info = has_debug_info,
+                                .silent = 1,
+                                }, envp);
 
+                        // Test the compiler
                         >arguments: [_]&u8 = [
                             executable_path.pointer,
+                            "test",
                             zero,
                         ];
                         >args = arguments[..arguments.length - 1];
@@ -18704,43 +18793,6 @@ names: [_][]u8 =
 
                         arena.position = position;
                     }
-                }
-            }
-        },
-        .reproduce =>
-        {
-            for (build_mode: #enum_values(BuildMode))
-            {
-                for (has_debug_info: debug_info_array)
-                {
-                    >position = arena.position;
-
-                    // Produce the compiler
-                    >relative_file_path = "src/compiler.bbb";
-                    >executable_path = compile_file(arena, {
-                        .relative_file_path = relative_file_path,
-                        .build_mode = build_mode,
-                        .has_debug_info = has_debug_info,
-                        .silent = 1,
-                    }, envp);
-
-                    // Test the compiler
-                    >arguments: [_]&u8 = [
-                        executable_path.pointer,
-                        "test",
-                        zero,
-                    ];
-                    >args = arguments[..arguments.length - 1];
-                    >execution = os_execute(arena, args, envp, zero);
-
-                    >success = execution.termination_kind == .exit and execution.termination_code == 0;
-
-                    if (!success)
-                    {
-                        #trap();
-                    }
-
-                    arena.position = position;
                 }
             }
         },

@@ -163,21 +163,38 @@ fn String compile_file(Arena* arena, Compile options)
 
     auto is_compiler = relative_file_path.equal(string_literal("src/compiler.bbb"));
 
-    String output_path_dir_parts[] = {
+    make_directory(base_cache_dir);
+
+    String cpu_dir_parts[] = {
         string_literal(base_cache_dir),
-        is_compiler ? string_literal("/compiler/") : string_literal("/"),
+        string_literal("/"),
+        options.host_cpu_model ? string_literal("native") : string_literal("generic"),
+    };
+
+    auto cpu_dir = arena_join_string(arena, array_to_slice(cpu_dir_parts));
+
+    make_directory(cstr(cpu_dir));
+
+    auto base_dir = cpu_dir;
+
+    if (is_compiler)
+    {
+        String compiler_dir_parts[] = {
+            base_dir,
+            string_literal("/compiler"),
+        };
+        base_dir = arena_join_string(arena, array_to_slice(compiler_dir_parts));
+        make_directory(cstr(base_dir));
+    }
+
+    String output_path_dir_parts[] = {
+        base_dir,
+        string_literal("/"),
         build_mode_to_string(options.build_mode),
         string_literal("_"),
         options.has_debug_info ? string_literal("di") : string_literal("nodi"),
     };
     auto output_path_dir = arena_join_string(arena, array_to_slice(output_path_dir_parts));
-
-    make_directory(base_cache_dir);
-
-    if (is_compiler)
-    {
-        make_directory(base_cache_dir "/compiler");
-    }
 
     make_directory(cstr(output_path_dir));
     
@@ -341,6 +358,7 @@ fn String compile_file(Arena* arena, Compile options)
             .target = {
                 .cpu = CPUArchitecture::x86_64,
                 .os = OperatingSystem::linux_,
+                .host_cpu_model = options.host_cpu_model,
             },
             .build_mode = options.build_mode,
             .has_debug_info = options.has_debug_info,
@@ -583,6 +601,7 @@ void entry_point(Slice<char* const> arguments, Slice<char* const> envp)
             }
 
             bool has_debug_info_array[] = {true, false};
+            bool is_host_cpu_model_array[] = {true, false};
 
             for (auto name: names)
             {
@@ -596,11 +615,11 @@ void entry_point(Slice<char* const> arguments, Slice<char* const> envp)
                         auto relative_file_path = arena_join_string(arena, array_to_slice(relative_file_path_parts));
 
                         auto executable_path = compile_file(arena, {
-                            .relative_file_path = relative_file_path,
-                            .build_mode = build_mode,
-                            .has_debug_info = has_debug_info,
-                            .silent = true,
-                        });
+                                .relative_file_path = relative_file_path,
+                                .build_mode = build_mode,
+                                .has_debug_info = has_debug_info,
+                                .silent = true,
+                                });
 
                         char* const arguments[] =
                         {

@@ -416,15 +416,23 @@ fn void llvm_initialize(Module* module)
         module->scope.llvm = di_compile_unit;
     }
 
-    char* target_triple = {};
-    char* cpu_model = {};
-    char* cpu_features = {};
+    const char* target_triple = {};
+    const char* cpu_model = {};
+    const char* cpu_features = {};
 
     if (target_compare(module->target, target_get_native()))
     {
         target_triple = llvm_global.host_triple;
-        cpu_model = llvm_global.host_cpu_model;
-        cpu_features = llvm_global.host_cpu_features;
+        if (module->target.host_cpu_model)
+        {
+            cpu_model = llvm_global.host_cpu_model;
+            cpu_features = llvm_global.host_cpu_features;
+        }
+        else
+        {
+            cpu_model = "generic";
+            cpu_features = "";
+        }
     }
     else
     {

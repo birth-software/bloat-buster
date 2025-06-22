@@ -247,6 +247,7 @@ struct Target
 {
     CPUArchitecture cpu;
     OperatingSystem os;
+    bool host_cpu_model;
 };
 
 fn Target target_get_native()
@@ -270,6 +271,7 @@ struct Compile
     String relative_file_path;
     BuildMode build_mode;
     bool has_debug_info;
+    bool host_cpu_model;
     bool silent;
 };
 
