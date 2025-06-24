@@ -1,14 +1,11 @@
 name: CI
 
 on:
-  pull_request:
   push:
     tags:
       - "**"
     branches:
       - main
-  schedule:
-    - cron: "0 0 * * *"
 
 env:
   BB_CI: 1
@@ -19,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ ubuntu-latest ]
-        BIRTH_CMAKE_BUILD_TYPE: [ Release-assertions, Release ]
+        BIRTH_CMAKE_BUILD_TYPE: [ Debug, Release-assertions, Release ]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -53,6 +50,7 @@ jobs:
         run: |
           set -eux
           mkdir -p $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)
+          cp $HOME/bloat-buster-artifacts/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/Debug/cache/generic/debug_none_di/compiler/aggressively_optimize_for_speed_nodi/compiler $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/compiler_generic_debug
           cp $HOME/bloat-buster-artifacts/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/Release/cache/generic/debug_none_di/compiler/aggressively_optimize_for_speed_nodi/compiler $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/compiler_generic
           cp $HOME/bloat-buster-artifacts/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/Release/cache/native/debug_none_di/compiler/aggressively_optimize_for_speed_nodi/compiler $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/compiler_native
       - name: Release (locally)
@@ -62,6 +60,7 @@ jobs:
           BB_CI: 1
         run: |
           set -eux
+          cp $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/compiler_generic_debug $HOME/bloat-buster-artifacts/releases/main/
           cp $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/compiler_generic $HOME/bloat-buster-artifacts/releases/main/
           cp $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/compiler_native $HOME/bloat-buster-artifacts/releases/main/
       - name: Release (web)
@@ -71,5 +70,6 @@ jobs:
           NODE_OPTIONS: '--experimental-fetch' # if nodejs < 18
         with:
           files: |-
+            /home/act_runner/bloat-buster-artifacts/releases/main/compiler_generic_debug
             /home/act_runner/bloat-buster-artifacts/releases/main/compiler_generic
             /home/act_runner/bloat-buster-artifacts/releases/main/compiler_native
