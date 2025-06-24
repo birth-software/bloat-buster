@@ -19,7 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ ubuntu-latest ]
-        BIRTH_CMAKE_BUILD_TYPE: [ Debug, Release ]
+        BIRTH_CMAKE_BUILD_TYPE: [ Release-assertions, Release ]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
