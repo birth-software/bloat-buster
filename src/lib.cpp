@@ -225,3 +225,9 @@ Execution os_execute(Arena* arena, Slice<char* const> arguments, Slice<char* con
 
     return execution;
 }
+
+extern "C" char* getenv(const char*);
+char* os_get_environment_variable(const char* env)
+{
+    return getenv(env);
+}

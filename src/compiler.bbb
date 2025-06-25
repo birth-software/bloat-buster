@@ -77,6 +77,8 @@ O = bits u32
 [extern] memcpy = fn [cc(c)] (destination: &u8, source: &u8, byte_count: u64) &u8;
 [extern] exit = fn [cc(c)] (exit_code: int) noreturn;
 
+[extern] getenv = fn [cc(c)] (env: &u8) &u8;
+
 [extern] realpath = fn [cc(c)] (source_path: &u8, resolved_path: &u8) &u8;
 [extern] mkdir = fn [cc(c)] (path: &u8, mode: mode_t) int;
 
@@ -18355,6 +18357,16 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
         .name = "CMAKE_PREFIX_PATH",
         .value = CMAKE_PREFIX_PATH,
     };
+
+    if (is_compiler)
+    {
+        >cmake_prefix_path_cstr = getenv("CMAKE_PREFIX_PATH");
+        if (cmake_prefix_path_cstr)
+        {
+            >cmake_prefix_path_value = c_string_to_slice(cmake_prefix_path_cstr);
+            cmake_prefix_path_definition.value = cmake_prefix_path_value;
+        }
+    }
 
     >objects = [ output_object_path ][..];
     >c_abi_library = "build/libc_abi.a";

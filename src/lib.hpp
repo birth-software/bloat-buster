@@ -719,3 +719,4 @@ struct Execution
 };
 
 Execution os_execute(Arena* arena, Slice<char* const> arguments, Slice<char* const> environment, ExecuteOptions options);
+char* os_get_environment_variable(const char* env);

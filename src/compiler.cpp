@@ -221,6 +221,16 @@ fn String compile_file(Arena* arena, Compile options)
         .value = cmake_prefix_path,
     };
 
+    if (is_compiler)
+    {
+        auto cmake_prefix_path_cstr = os_get_environment_variable("CMAKE_PREFIX_PATH");
+        if (cmake_prefix_path_cstr)
+        {
+            auto cmake_prefix_path_string = c_string_to_slice(cmake_prefix_path_cstr);
+            cmake_prefix_path_definition.value = cmake_prefix_path_string;
+        }
+    }
+
     String objects[] = {
         output_object_path,
     };
