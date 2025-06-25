@@ -999,7 +999,7 @@ fn Type* parse_type(Module* module, Scope* scope)
             }
         }
     }
-    else if (start_character == '#')
+    else if (start_character == '@')
     {
         module->offset += 1;
         auto identifier = parse_identifier(module);
@@ -1167,7 +1167,7 @@ fn Token tokenize(Module* module)
                     .id = id,
                 };
             } break;
-        case '#':
+        case '@':
             {
                 module->offset += 1;
                 if (is_identifier_start(module->content[module->offset]))
@@ -2631,7 +2631,7 @@ fn Statement* parse_statement(Module* module, Scope* scope)
                 statement->local = local;
                 statement->id = StatementId::local;
             } break;
-        case '#':
+        case '@':
             {
                 statement->expression = parse_value(module, scope, {});
                 statement->id = StatementId::expression;

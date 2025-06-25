@@ -2,7 +2,7 @@ require = fn (ok: u1) void
 {
     if (!ok)
     {
-        #trap();
+        @trap();
     }
 }
 
@@ -113,13 +113,13 @@ stack_sub = fn () s32
 extend = fn () s32
 {
     >a: s8 = 0;
-    return #extend(a);
+    return @extend(a);
 }
 
 integer_max = fn () s32
 {
-    >a = #integer_max(u64);
-    return #truncate(a + 1);
+    >a = @integer_max(u64);
+    return @truncate(a + 1);
 }
 
 integer_hex = fn () s32
@@ -177,9 +177,9 @@ basic_enum = fn () s32
     >a: BasicEnum = .three;
     >b: BasicEnum = .two;
     >c: BasicEnum = .one;
-    >a_int: s32 = #extend(#int_from_enum(a));
-    >b_int: s32 = #extend(#int_from_enum(b));
-    >c_int: s32 = #extend(#int_from_enum(c));
+    >a_int: s32 = @extend(@int_from_enum(a));
+    >b_int: s32 = @extend(@int_from_enum(b));
+    >c_int: s32 = @extend(@int_from_enum(c));
 
     return a_int - (b_int + c_int);
 }
@@ -210,13 +210,13 @@ basic_varargs_function = fn [cc(c)] (first_arg: u32, ...) void
 {
     require(first_arg == 123456789);
 
-    >va = #va_start();
+    >va = @va_start();
 
-    >a = #va_arg(&va, u32);
+    >a = @va_arg(&va, u32);
 
     require(a == 987654321);
 
-    >first_arg_b = #va_arg(&va, u32);
+    >first_arg_b = @va_arg(&va, u32);
     require(first_arg == first_arg_b);
 }
 
@@ -236,7 +236,7 @@ c_string_length = fn (c_string: &u8) u64
         it = it + 1;
     }
 
-    return #int_from_pointer(it) - #int_from_pointer(c_string);
+    return @int_from_pointer(it) - @int_from_pointer(c_string);
 }
 
 basic_while = fn (argc: s32, argv: &&u8) void
@@ -261,14 +261,14 @@ pointer = fn () s32
 {
     >value: s32 = 0;
     pointer_function(&value);
-    return #extend(value == 0);
+    return @extend(value == 0);
 }
 
 pointer_cast = fn () s32
 {
     >result: u32 = 0;
     >p = &result;
-    >signed_pointer: &s32 = #pointer_cast(p);
+    >signed_pointer: &s32 = @pointer_cast(p);
     return signed_pointer.&;
 }
 
@@ -281,7 +281,7 @@ u1_return_foo = fn () u1
 u1_return = fn () s32
 {
     >result = u1_return_foo();
-    return #extend(result);
+    return @extend(result);
 }
 
 local_type_inference_foo = fn () s32
@@ -324,19 +324,19 @@ basic_extern = fn () void
 
 basic_byte_size = fn () void
 {
-    >sizeofu8: u8 = #byte_size(u8);
+    >sizeofu8: u8 = @byte_size(u8);
     require(sizeofu8 == 1);
-    >sizeofu16: u8 = #byte_size(u16);
+    >sizeofu16: u8 = @byte_size(u16);
     require(sizeofu16 == 2);
-    >sizeofs32: s32 = #byte_size(s32);
+    >sizeofs32: s32 = @byte_size(s32);
     require(sizeofs32 == 4);
-    >sizeofs64: s32 = #byte_size(s64);
+    >sizeofs64: s32 = @byte_size(s64);
     require(sizeofs64 == 8);
 }
 
 unsigned_assignment_operators = fn(n: s32) s32
 {
-    >result: u32 = #extend(n);
+    >result: u32 = @extend(n);
     result >>= 1;
     result <<= 1;
     result ^= 1;
@@ -348,7 +348,7 @@ unsigned_assignment_operators = fn(n: s32) s32
     result %= 1;
     result *= 0;
 
-    return #extend(result);
+    return @extend(result);
 }
 
 assignment_operators = fn () s32
@@ -375,7 +375,7 @@ not_pointer = fn () s32
     >a: s32 = 0;
     >ptr = &a;
     >b = !ptr;
-    return #extend(b);
+    return @extend(b);
 }
 
 BasicBitField = bits u8
@@ -514,7 +514,7 @@ if_no_else_void = fn () void
     >result: s32 = 0;
     if (result != 0)
     {
-        #trap();
+        @trap();
     }
 }
 
@@ -573,12 +573,12 @@ indirect_varargs_function = fn [cc(c)] (first_arg: u32, ...) void
 {
     if (first_arg != 123456789)
     {
-        #trap();
+        @trap();
     }
 
-    >va = #va_start();
+    >va = @va_start();
 
-    >s = #va_arg(&va, IndirectVarArgs);
+    >s = @va_arg(&va, IndirectVarArgs);
     require(s.a == 9);
     require(s.b == 8);
     require(s.c == 7);
@@ -611,7 +611,7 @@ indirect_varargs = fn () void
 
 return_type_builtin = fn () s32
 {
-    >result: #ReturnType = 0;
+    >result: @ReturnType = 0;
     return result;
 }
 
@@ -629,7 +629,7 @@ return_struct_u64_u64_function = fn [cc(c)] () Struct_u64_u64
 return_struct_u64_u64 = fn [cc(c)] () s32
 {
     >r = return_struct_u64_u64_function();
-    return #truncate(r.a + r.b - 3);
+    return @truncate(r.a + r.b - 3);
 }
 
 select = fn () s32
@@ -637,7 +637,7 @@ select = fn () s32
     >boolean: u1 = 1;
     >left: s32 = 0;
     >right: s32 = 1;
-    return #select(boolean, left, right);
+    return @select(boolean, left, right);
 }
 
 slice2 = fn (argc: s32, argv: &&u8) void
@@ -752,12 +752,12 @@ S = struct
 
 va_arg_function = fn [cc(c)] (first_arg: u32, ...) void
 {
-    >va = #va_start();
+    >va = @va_start();
 
-    >a = #va_arg(&va, u32);
-    >b = #va_arg(&va, S);
-    >c = #va_arg(&va, s64); 
-    >d = #va_arg(&va, s32); 
+    >a = @va_arg(&va, u32);
+    >b = @va_arg(&va, S);
+    >c = @va_arg(&va, s64); 
+    >d = @va_arg(&va, s32); 
 
     require(first_arg == 123456789);
     require(a == 123);
@@ -769,7 +769,7 @@ va_arg_function = fn [cc(c)] (first_arg: u32, ...) void
     require(b.d == 4);
     require(b.e == 5);
 
-    #va_end(&va);
+    @va_end(&va);
 }
 
 S2 = struct
@@ -780,11 +780,11 @@ S2 = struct
 
 va_arg_function2 = fn [cc(c)] (...) void
 {
-    >va = #va_start();
-    >s2 = #va_arg(&va, S2);
+    >va = @va_start();
+    >s2 = @va_arg(&va, S2);
     require(s2.a == 8);
     require(s2.b == 9);
-    #va_end(&va);
+    @va_end(&va);
 }
 
 va_args = fn [cc(c)] () void
@@ -1004,7 +1004,7 @@ ByVal = struct
 
 [export] bb_ptr = fn [cc(c)] (x: &u8) void
 {
-    require(#int_from_pointer(x) == 0xdeadbeef);
+    require(@int_from_pointer(x) == 0xdeadbeef);
 }
 
 [export] bb_five_integers = fn [cc(c)] (a: s32, b: s32, c: s32, d: s32, e: s32) void
@@ -1018,7 +1018,7 @@ ByVal = struct
 
 [export] bb_bool = fn [cc(c)] (x: u8) void
 {
-    require(#truncate(x));
+    require(@truncate(x));
 }
 
 [export] bb_ret_struct_u64_u64 = fn [cc(c)] () Struct_u64_u64
@@ -1361,12 +1361,12 @@ S2Enum = enum
 string_to_enum = fn () s32
 {
     >e = "dsa";
-    >s2e = #string_to_enum(S2Enum, e);
+    >s2e = @string_to_enum(S2Enum, e);
     >result: s32 = 1;
 
     if (s2e.is_valid)
     {
-        result = #extend(s2e.enum_value != .dsa);
+        result = @extend(s2e.enum_value != .dsa);
     }
 
     return result;
@@ -1552,7 +1552,7 @@ string_equal = fn (slice_a: []u8, slice_b: []u8) u1
 enum_name = fn () s32
 {
     >some_enum: NameEnum = .my_expected_result;
-    return #extend(!string_equal(#enum_name(some_enum), "my_expected_result"));
+    return @extend(!string_equal(@enum_name(some_enum), "my_expected_result"));
 }
 
 join = fn (slice: []u8, parts: [][]u8) void
@@ -1618,7 +1618,7 @@ bool_array = fn () s32
 
     for (s: signs)
     {
-        accumulator += #extend(s);
+        accumulator += @extend(s);
     }
 
     return accumulator;
@@ -1686,7 +1686,7 @@ is_space = fn (ch: u8) u1
 
 concat_logical_or = fn () s32
 {
-    return #extend(is_space('f'));
+    return @extend(is_space('f'));
 }
 
 strict_array_type = fn () s32
@@ -1729,7 +1729,7 @@ slice_array_literal_receiver = fn (slices: [][]u8) void
 slice_array_literal = fn () void
 {
     >some_bool: u1 = 0;
-    slice_array_literal_receiver([ "abc", #select(some_bool, "bcd", "cbd"), "sas", ][..]);
+    slice_array_literal_receiver([ "abc", @select(some_bool, "bcd", "cbd"), "sas", ][..]);
 }
 
 slice_only_start = fn () void
@@ -1761,12 +1761,12 @@ generic_macro = fn () s32
 {
     >a = sub_generic[s32](1, 1);
     >b = sub_generic[u8](2, 2);
-    return a + #extend(b);
+    return a + @extend(b);
 }
 
 pointer_macro = macro [T] (ptr: &u32) &T
 {
-    return #pointer_cast(ptr);
+    return @pointer_cast(ptr);
 }
 
 A = struct
@@ -1811,22 +1811,22 @@ noreturn_macro = fn () void
 
     if (result != 64)
     {
-        #trap();
+        @trap();
     }
 }
 
 generic_pointer_array_macro = macro[T](addr: &u64, count: u64) []T
 {
-    >pointer: &T = #pointer_cast(addr);
+    >pointer: &T = @pointer_cast(addr);
     return pointer[..count];
 }
 
 generic_pointer_array = fn () void
 {
     >address_raw: u64 = 0xaaaaaaaaaaaaaaaa;
-    >some_var: &u64 = #pointer_from_int(address_raw);
+    >some_var: &u64 = @pointer_from_int(address_raw);
     >result: []&u8 = generic_pointer_array_macro[&u8](some_var, 1);
-    require(#int_from_pointer(result.pointer) == address_raw);
+    require(@int_from_pointer(result.pointer) == address_raw);
     require(result.length == 1);
 }
 
@@ -1884,11 +1884,11 @@ basic_opaque = fn () s32
 {
     >destination: s32 = 1;
     >source: s32 = 0;
-    >opaque_pointer = memcpy(&destination, &source, #byte_size(s32));
-    >pointer: &s32 = #pointer_cast(opaque_pointer);
+    >opaque_pointer = memcpy(&destination, &source, @byte_size(s32));
+    >pointer: &s32 = @pointer_cast(opaque_pointer);
     if (pointer != &destination)
     {
-        #trap();
+        @trap();
     }
     return destination;
 }
@@ -1999,8 +1999,8 @@ min_max = fn () void
 {
     >a: u32 = 1;
     >b: u32 = 2;
-    >min = #min(a, b);
-    >max = #max(a, b);
+    >min = @min(a, b);
+    >max = @max(a, b);
     require(min == a);
     require(max == b);
 }
@@ -2021,21 +2021,21 @@ field_parent_pointer = fn () void
     };
 
     >p_a = &s.a;
-    >p_a_struct: &FieldParentPointerStruct = #field_parent_pointer(p_a, "a");
+    >p_a_struct: &FieldParentPointerStruct = @field_parent_pointer(p_a, "a");
     require(p_a_struct == &s);
     require(p_a_struct.a == s.a);
     require(p_a_struct.b == s.b);
     require(p_a_struct.c == s.c);
     
     >p_b = &s.b;
-    >p_b_struct: &FieldParentPointerStruct = #field_parent_pointer(p_b, "b");
+    >p_b_struct: &FieldParentPointerStruct = @field_parent_pointer(p_b, "b");
     require(p_b_struct == &s);
     require(p_b_struct.a == s.a);
     require(p_b_struct.b == s.b);
     require(p_b_struct.c == s.c);
 
     >p_c = &s.c;
-    >p_c_struct: &FieldParentPointerStruct = #field_parent_pointer(p_c, "c");
+    >p_c_struct: &FieldParentPointerStruct = @field_parent_pointer(p_c, "c");
     require(p_c_struct == &s);
     require(p_c_struct.a == s.a);
     require(p_c_struct.b == s.b);
@@ -2045,11 +2045,11 @@ field_parent_pointer = fn () void
 leading_trailing_zeroes = fn () void
 {
     >a: u32 = 0b111;
-    require(#leading_zeroes(a) == 29);
-    require(#trailing_zeroes(a) == 0);
+    require(@leading_zeroes(a) == 29);
+    require(@trailing_zeroes(a) == 0);
     >b: u8 = 0b11010;
-    require(#leading_zeroes(b) == 3);
-    require(#trailing_zeroes(b) == 1);
+    require(@leading_zeroes(b) == 3);
+    require(@trailing_zeroes(b) == 1);
 }
 
 pointer_sub = fn () void
@@ -2057,7 +2057,7 @@ pointer_sub = fn () void
     >a: [_]s32 = [ 3, 1 ];
     >p0 = &a[0];
     >p1 = p0 + 1;
-    >sub: u32 = #truncate(p1 - p0);
+    >sub: u32 = @truncate(p1 - p0);
     require(sub == 1);
 }
 

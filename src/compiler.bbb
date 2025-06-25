@@ -1,6 +1,6 @@
 report_error = fn () noreturn
 {
-    #trap();
+    @trap();
 }
 
 mode_t = typealias u64;
@@ -145,7 +145,7 @@ next_power_of_two = fn (n: u64) u64
     return n;
 }
 
-string_no_match = #integer_max(u64);
+string_no_match = @integer_max(u64);
 
 c_string_length = fn (c_string: &u8) u64
 {
@@ -156,7 +156,7 @@ c_string_length = fn (c_string: &u8) u64
         it = it + 1;
     }
 
-    return #int_from_pointer(it) - #int_from_pointer(c_string);
+    return @int_from_pointer(it) - @int_from_pointer(c_string);
 }
 
 c_string_to_slice = fn (c_string: &u8) []u8
@@ -167,7 +167,7 @@ c_string_to_slice = fn (c_string: &u8) []u8
 
 string_equal = fn(a: []u8, b: []u8) u1
 {
-    >result: #ReturnType = 0;
+    >result: @ReturnType = 0;
 
     if (a.length == b.length)
     {
@@ -281,7 +281,7 @@ os_linux_protection_flags = fn(map_flags: OS_ProtectionFlags) OS_Linux_PROT
 os_linux_map_flags = fn(map_flags: OS_MapFlags) OS_Linux_MAP
 {
     return {
-        .type = #select(map_flags.private, .private, .shared),
+        .type = @select(map_flags.private, .private, .shared),
         .anonymous = map_flags.anonymous,
         .no_reserve = map_flags.no_reserve,
         .populate = map_flags.populate,
@@ -294,7 +294,7 @@ os_reserve = fn (base: u64, size: u64, protection: OS_ProtectionFlags, map: OS_M
     >protection_flags = os_linux_protection_flags(protection);
     >map_flags = os_linux_map_flags(map);
     >address = mmap(base, size, protection_flags, map_flags, -1, 0);
-    if (#int_from_pointer(address) == #integer_max(u64))
+    if (@int_from_pointer(address) == @integer_max(u64))
     {
         unreachable;
     }
@@ -362,7 +362,7 @@ os_file_open = fn (path: &u8, flags: OpenFlags, permissions: OpenPermissions) Fi
         zero,
     };
 
-    >mode: mode_t = #select(permissions.execute, 0o755, 0o644);
+    >mode: mode_t = @select(permissions.execute, 0o755, 0o644);
     >fd = open(path, o, mode);
     return fd;
 }
@@ -383,14 +383,14 @@ os_file_get_size = fn (fd: File) u64
     >stat: Stat = undefined;
     >result = fstat(fd, &stat);
     assert(result == 0);
-    return #extend(stat.size);
+    return @extend(stat.size);
 }
 
 os_file_read_partially = fn (fd: File, pointer: &u8, length: u64) u64
 {
     >result = read(fd, pointer, length);
     assert(result > 0);
-    return #extend(result);
+    return @extend(result);
 }
 
 os_file_read = fn (fd: File, buffer: []u8, byte_count: u64) void
@@ -410,7 +410,7 @@ os_file_write_partially = fn (fd: File, pointer: &u8, length: u64) u64
 {
     >result = write(fd, pointer, length);
     assert(result > 0);
-    return #extend(result);
+    return @extend(result);
 }
 
 os_file_write = fn (fd: File, buffer: []u8) void
@@ -448,7 +448,7 @@ Arena = struct
     reserved: [32]u8,
 }
 
-minimum_position: u64 = #byte_size(Arena);
+minimum_position: u64 = @byte_size(Arena);
 
 ArenaInitialization = struct
 {
@@ -472,8 +472,8 @@ arena_initialize = fn (initialization: ArenaInitialization) &Arena
         .populate = 0,
     };
 
-    >arena: &Arena = #pointer_cast(os_reserve(0, initialization.reserved_size, protection_flags, map_flags));
-    os_commit(#int_from_pointer(arena), initialization.initial_size, {
+    >arena: &Arena = @pointer_cast(os_reserve(0, initialization.reserved_size, protection_flags, map_flags));
+    os_commit(@int_from_pointer(arena), initialization.initial_size, {
         .read = 1,
         .write = 1,
         zero,
@@ -504,14 +504,14 @@ arena_allocate_bytes = fn (arena: &Arena, size: u64, alignment: u64) &u8
     >aligned_offset = align_forward(arena.position, alignment);
     >aligned_size_after = aligned_offset + size;
 
-    >arena_byte_pointer: &u8 = #pointer_cast(arena);
+    >arena_byte_pointer: &u8 = @pointer_cast(arena);
 
     if (aligned_size_after > arena.os_position)
     {
         >target_committed_size = align_forward(aligned_size_after, arena.granularity);
         >size_to_commit = target_committed_size - arena.os_position;
         >commit_pointer = arena_byte_pointer + arena.os_position;
-        os_commit(#int_from_pointer(commit_pointer), size_to_commit, {
+        os_commit(@int_from_pointer(commit_pointer), size_to_commit, {
             .read = 1,
             .write = 1,
             zero,
@@ -528,12 +528,12 @@ arena_allocate_bytes = fn (arena: &Arena, size: u64, alignment: u64) &u8
 
 arena_allocate = macro [T] (arena: &Arena, count: u64) &T
 {
-    return #pointer_cast(arena_allocate_bytes(arena, #byte_size(T) * count, #align_of(T)));
+    return @pointer_cast(arena_allocate_bytes(arena, @byte_size(T) * count, @align_of(T)));
 }
 
 arena_allocate_slice = macro [T] (arena: &Arena, count: u64) []T
 {
-    >pointer: &T = #pointer_cast(arena_allocate_bytes(arena, #byte_size(T) * count, #align_of(T)));
+    >pointer: &T = @pointer_cast(arena_allocate_bytes(arena, @byte_size(T) * count, @align_of(T)));
     return pointer[..count];
 }
 
@@ -571,7 +571,7 @@ arena_join_string = fn (arena: &Arena, pieces: [][]u8) []u8
 
 exit_status = fn (s: u32) u8
 {
-    return #truncate((s & 0xff00) >> 8);
+    return @truncate((s & 0xff00) >> 8);
 }
 
 term_sig = fn (s: u32) u32
@@ -581,7 +581,7 @@ term_sig = fn (s: u32) u32
 
 stop_sig = fn (s: u32) u32
 {
-    return #extend(exit_status(s));
+    return @extend(exit_status(s));
 }
 
 if_exited = fn (s: u32) u1
@@ -591,7 +591,7 @@ if_exited = fn (s: u32) u1
 
 if_stopped = fn (s: u32) u1
 {
-    >v: u16 = #truncate(((s & 0xffff) * 0x10001) >> 8);
+    >v: u16 = @truncate(((s & 0xffff) * 0x10001) >> 8);
     return v > 0x7f00;
 }
 
@@ -655,7 +655,7 @@ os_execute = fn (arena: &Arena, arguments: []&u8, environment: &&u8, options: Ex
         {
             if (pipe(&pipes[i]) == -1)
             {
-                #trap();
+                @trap();
             }
         }
     }
@@ -666,13 +666,13 @@ os_execute = fn (arena: &Arena, arguments: []&u8, environment: &&u8, options: Ex
     {
         -1 =>
         {
-            #trap();
+            @trap();
         },
         0 =>
         {
             for (i: 0..2)
             {
-                >fd: s32 = #truncate(i + 1);
+                >fd: s32 = @truncate(i + 1);
 
                 switch (options.policies[i])
                 {
@@ -698,7 +698,7 @@ os_execute = fn (arena: &Arena, arguments: []&u8, environment: &&u8, options: Ex
                 unreachable;
             }
 
-            #trap();
+            @trap();
         },
         else =>
         {
@@ -718,8 +718,8 @@ os_execute = fn (arena: &Arena, arguments: []&u8, environment: &&u8, options: Ex
             if (is_pipe0 or is_pipe1)
             {
                 >element_count: u64 = 0;
-                element_count += #extend(is_pipe0);
-                element_count += #extend(is_pipe1);
+                element_count += @extend(is_pipe0);
+                element_count += @extend(is_pipe1);
                 allocation = arena_allocate_slice[u8](arena, allocation_size * element_count);
             }
 
@@ -732,7 +732,7 @@ os_execute = fn (arena: &Arena, arguments: []&u8, environment: &&u8, options: Ex
                     >buffer = allocation[offset..offset + allocation_size];
                     >byte_count = read(pipes[i][0], buffer.pointer, buffer.length);
                     assert(byte_count >= 0);
-                    result.streams[i] = buffer[..#extend(byte_count)];
+                    result.streams[i] = buffer[..@extend(byte_count)];
                     close(pipes[i][0]);
 
                     offset += allocation_size;
@@ -747,7 +747,7 @@ os_execute = fn (arena: &Arena, arguments: []&u8, environment: &&u8, options: Ex
                 if (if_exited(status))
                 {
                     result.termination_kind = .exit;
-                    result.termination_code = #extend(exit_status(status));
+                    result.termination_code = @extend(exit_status(status));
                 }
                 else if (if_signaled(status))
                 {
@@ -771,11 +771,11 @@ os_execute = fn (arena: &Arena, arguments: []&u8, environment: &&u8, options: Ex
             }
             else if (waitpid_result == -1)
             {
-                #trap();
+                @trap();
             }
             else
             {
-                #trap();
+                @trap();
             }
         },
     }
@@ -1350,7 +1350,7 @@ abi_set_padding_type = fn (abi_information: &AbiInformation, type: &Type) void
 
 abi_get_padding_type = fn (abi_information: &AbiInformation) &Type
 {
-    return #select(abi_can_have_padding_type(abi_information), abi_information.padding.type, zero);
+    return @select(abi_can_have_padding_type(abi_information), abi_information.padding.type, zero);
 }
 
 abi_set_direct_offset = fn (abi_information: &AbiInformation, offset: u32) void
@@ -1592,7 +1592,7 @@ receives_type = fn (value: &Value) u1
         },
         else =>
         {
-            #trap();
+            @trap();
         },
     }
 }
@@ -1624,7 +1624,7 @@ type_is_signed = fn (type: &Type) u1
         },
         else =>
         {
-            #trap();
+            @trap();
         },
     }
 }
@@ -1676,7 +1676,7 @@ is_illegal_vector_type = fn (type: &Type) u1
     {
         .vector =>
         {
-            #trap();
+            @trap();
         }
         else => { return 0; },
     }
@@ -1714,13 +1714,13 @@ is_arbitrary_bit_integer = fn (type: &Type) u1
 
 integer_max_value = fn (bit_count: u64, signed: u1) u64
 {
-    >value: u64 = #select(bit_count == 64, ~0, (1 << (bit_count - #extend(signed))) - 1);
+    >value: u64 = @select(bit_count == 64, ~0, (1 << (bit_count - @extend(signed))) - 1);
     return value;
 }
 
 align_bit_count = fn (bit_count: u64) u64
 {
-    >aligned_bit_count = #max(next_power_of_two(bit_count), 8);
+    >aligned_bit_count = @max(next_power_of_two(bit_count), 8);
     assert(aligned_bit_count % 8 == 0);
     return aligned_bit_count;
 }
@@ -1791,7 +1791,7 @@ get_byte_size = fn (type: &Type) u64
         },
         else =>
         {
-            #trap();
+            @trap();
         },
     }
 }
@@ -1802,7 +1802,7 @@ get_byte_alignment = fn (type: &Type) u32
     {
         .integer =>
         {
-            >aligned_byte_count: u32 = #truncate(aligned_byte_count_from_bit_count(type.content.integer.bit_count));
+            >aligned_byte_count: u32 = @truncate(aligned_byte_count_from_bit_count(type.content.integer.bit_count));
             assert(aligned_byte_count == 1 or aligned_byte_count == 2 or aligned_byte_count == 4 or aligned_byte_count == 8 or aligned_byte_count == 16);
             return aligned_byte_count;
         },
@@ -1842,7 +1842,7 @@ get_byte_alignment = fn (type: &Type) u32
         },
         else =>
         {
-            #trap();
+            @trap();
         },
     }
 }
@@ -1895,7 +1895,7 @@ get_bit_size = fn (type: &Type) u64
         },
         else =>
         {
-            #trap();
+            @trap();
         },
     }
 }
@@ -1904,7 +1904,7 @@ get_byte_allocation_size = fn (type: &Type) u64
 {
     >size = get_byte_size(type);
     >alignment = get_byte_alignment(type);
-    >result = align_forward(size, #extend(alignment));
+    >result = align_forward(size, @extend(alignment));
     return result;
 }
 
@@ -1955,7 +1955,7 @@ is_promotable_integer_type_for_abi = fn (type: &Type) u1
         },
         else =>
         {
-            #trap();
+            @trap();
         }
     }
 }
@@ -2392,7 +2392,7 @@ value_is_constant = fn (value: &Value) u1
         },
         else =>
         {
-            #trap();
+            @trap();
         }
     }
 }
@@ -2795,11 +2795,11 @@ llvm_create_global_variable = fn (module: &LLVMModule, type: &LLVMType, is_const
     assert(name.pointer[name.length] == 0);
     >global = LLVMAddGlobal(module, type, name.pointer);
 
-    LLVMSetGlobalConstant(global, #extend(is_constant));
+    LLVMSetGlobalConstant(global, @extend(is_constant));
     LLVMSetLinkage(global, linkage);
     LLVMSetInitializer(global, initial_value);
     LLVMSetThreadLocalMode(global, thread_local_mode);
-    LLVMSetExternallyInitialized(global, #extend(externally_initialized));
+    LLVMSetExternallyInitialized(global, @extend(externally_initialized));
     LLVMSetUnnamedAddress(global, unnamed_address);
     LLVMSetAlignment(global, alignment);
 
@@ -3142,25 +3142,25 @@ Statement = struct
 scope_to_for = fn (scope: &Scope) &StatementFor
 {
     assert(scope.kind == .for_each);
-    return #field_parent_pointer(scope, "scope");
+    return @field_parent_pointer(scope, "scope");
 }
 
 scope_to_block = fn (scope: &Scope) &Block
 {
     assert(scope.kind == .local);
-    return #field_parent_pointer(scope, "scope");
+    return @field_parent_pointer(scope, "scope");
 }
 
 scope_to_function = fn (scope: &Scope) &ValueFunction
 {
     assert(scope.kind == .function);
-    return #field_parent_pointer(scope, "scope");
+    return @field_parent_pointer(scope, "scope");
 }
 
 scope_to_module = fn (scope: &Scope) &Module
 {
     assert(scope.kind == .global);
-    return #field_parent_pointer(scope, "scope");
+    return @field_parent_pointer(scope, "scope");
 }
 
 new_local = fn (module: &Module, scope: &Scope) &Local
@@ -3255,7 +3255,7 @@ integer_type = fn (module: &Module, integer: TypeInteger) &Type
 {
     assert(integer.bit_count != 0);
     assert(integer.bit_count <= 64);
-    >index = #select(integer.bit_count == 128, i128_offset + #extend(integer.signed), integer.bit_count - 1 + 64 * #extend(integer.signed));
+    >index = @select(integer.bit_count == 128, i128_offset + @extend(integer.signed), integer.bit_count - 1 + 64 * @extend(integer.signed));
     >result = module.scope.types.first + index;
     assert(result.id == .integer);
     assert(result.content.integer.bit_count == integer.bit_count);
@@ -3369,7 +3369,7 @@ format_integer_decimal = fn (buffer: []u8, v: u64) u64
 
         while (value != 0)
         {
-            >digit_value: u8 = #truncate(value % 10);
+            >digit_value: u8 = @truncate(value % 10);
             >ascii_character = digit_value + '0';
             value /= 10;
             reverse_buffer[reverse_index] = ascii_character;
@@ -3524,15 +3524,15 @@ is_identifier = fn (ch: u8) u1
 get_line = fn (module: &Module) u32
 {
     >line = module.line_offset + 1;
-    assert(line <= #integer_max(u32));
-    return #truncate(line);
+    assert(line <= @integer_max(u32));
+    return @truncate(line);
 }
 
 get_column = fn (module: &Module) u32
 {
     >column = module.offset - module.line_character_offset + 1;
-    assert(column <= #integer_max(u32));
-    return #truncate(column);
+    assert(column <= @integer_max(u32));
+    return @truncate(column);
 }
 
 Checkpoint = struct
@@ -3566,8 +3566,8 @@ skip_space = fn (module: &Module) void
 
         while (module.offset < module.content.length and? is_space(module.content[module.offset]))
         {
-            module.line_offset += #extend(module.content[module.offset] == '\n');
-            module.line_character_offset = #select(module.content[module.offset] == '\n', module.offset, module.line_character_offset);
+            module.line_offset += @extend(module.content[module.offset] == '\n');
+            module.line_character_offset = @select(module.content[module.offset] == '\n', module.offset, module.line_character_offset);
             module.offset += 1;
         }
 
@@ -3607,7 +3607,7 @@ consume_character_if_match = fn (module: &Module, expected_character: u8) u1
     {
         >ch = module.content[module.offset];
         is_ch = expected_character == ch;
-        module.offset += #extend(is_ch);
+        module.offset += @extend(is_ch);
     }
 
     return is_ch;
@@ -3680,7 +3680,7 @@ parse_string_literal = fn (module: &Module) []u8
             break;
         }
 
-        escape_character_count += #extend(ch == '\\');
+        escape_character_count += @extend(ch == '\\');
         module.offset += 1;
     }
 
@@ -3763,7 +3763,7 @@ FunctionTypeAttribute = enum
 accumulate_decimal = fn(accumulator: u64, ch: u8) u64
 {
     assert(is_decimal(ch));
-    return (accumulator * 10) + #extend(ch - '0');
+    return (accumulator * 10) + @extend(ch - '0');
 }
 
 parse_decimal = fn (module: &Module) u64
@@ -3802,7 +3802,7 @@ accumulate_octal = fn (accumulator: u64, ch: u8) u64
 {
     assert(is_octal(ch));
 
-    return (accumulator * 8) + #extend(ch - '0');
+    return (accumulator * 8) + @extend(ch - '0');
 }
 
 parse_octal = fn (module: &Module) u64
@@ -3829,7 +3829,7 @@ parse_octal = fn (module: &Module) u64
 accumulate_binary = fn (accumulator: u64, ch: u8) u64
 {
     assert(is_binary(ch));
-    return (accumulator * 2) + #extend(ch - '0');
+    return (accumulator * 2) + @extend(ch - '0');
 }
 
 parse_binary = fn (module: &Module) u64
@@ -3966,14 +3966,14 @@ get_anonymous_struct_pair = fn (module: &Module, low: &Type, high: &Type) &Type
     }
 
     >high_alignment = get_byte_alignment(high);
-    >alignment = #max(get_byte_alignment(low), high_alignment);
-    >high_offset = align_forward(get_byte_size(low), #extend(alignment));
-    >byte_size = align_forward(high_offset + get_byte_size(high), #extend(alignment));
+    >alignment = @max(get_byte_alignment(low), high_alignment);
+    >high_offset = align_forward(get_byte_size(low), @extend(alignment));
+    >byte_size = align_forward(high_offset + get_byte_size(high), @extend(alignment));
 
     assert(low.scope != zero);
     assert(high.scope != zero);
 
-    >scope = #select(low.scope.kind == .global, high.scope, low.scope);
+    >scope = @select(low.scope.kind == .global, high.scope, low.scope);
 
     >fields = arena_allocate_slice[Field](module.arena, 2);
 
@@ -4024,12 +4024,12 @@ get_by_value_argument_pair = fn (module: &Module, low: &Type, high: &Type) &Type
 {
     >low_size = get_byte_allocation_size(low);
     >high_alignment = get_byte_alignment(high);
-    >high_start = align_forward(low_size, #extend(high_alignment));
+    >high_start = align_forward(low_size, @extend(high_alignment));
     assert(high_start != 0 and high_start <= 8);
 
     if (high_start != 8)
     {
-        #trap();
+        @trap();
     }
 
     >result = get_anonymous_struct_pair(module, low, high);
@@ -4248,7 +4248,7 @@ get_enum_array_type = fn (module: &Module, enum_type: &Type, element_type: &Type
     assert(enum_type.scope != zero);
     assert(element_type.scope != zero);
 
-    >scope = #select(element_type.scope.kind == .global, enum_type.scope, element_type.scope);
+    >scope = @select(element_type.scope.kind == .global, enum_type.scope, element_type.scope);
 
     >enum_array_type = new_type(module, {
         .content = {
@@ -4357,7 +4357,7 @@ resolve_alias = fn (module: &Module, type: &Type) &Type
         },
         else =>
         {
-            #trap();
+            @trap();
         },
     }
 
@@ -4460,7 +4460,7 @@ parse_function_header = fn (module: &Module, scope: &Scope, mandate_argument_nam
         while (module.offset < module.content.length)
         {
             >function_identifier = parse_identifier(module);
-            >function_keyword_s2e = #string_to_enum(FunctionKeyword, function_identifier);
+            >function_keyword_s2e = @string_to_enum(FunctionKeyword, function_identifier);
 
             if (!function_keyword_s2e.is_valid)
             {
@@ -4477,7 +4477,7 @@ parse_function_header = fn (module: &Module, scope: &Scope, mandate_argument_nam
                     expect_character(module, left_parenthesis);
                     skip_space(module);
                     >calling_convention_string = parse_identifier(module);
-                    >calling_convention_s2e = #string_to_enum(CallingConvention, calling_convention_string);
+                    >calling_convention_s2e = @string_to_enum(CallingConvention, calling_convention_string);
 
                     if (!calling_convention_s2e.is_valid)
                     {
@@ -4570,7 +4570,7 @@ parse_function_header = fn (module: &Module, scope: &Scope, mandate_argument_nam
     if (semantic_argument_count != 0)
     {
         argument_types = arena_allocate_slice[&Type](module.arena, semantic_argument_count);
-        memcpy(#pointer_cast(argument_types.pointer), #pointer_cast(&semantic_argument_type_buffer), semantic_argument_count * #byte_size(&Type));
+        memcpy(@pointer_cast(argument_types.pointer), @pointer_cast(&semantic_argument_type_buffer), semantic_argument_count * @byte_size(&Type));
     }
 
     >function_type = get_function_type(module, {
@@ -4614,7 +4614,7 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
     {
         >identifier = parse_identifier(module);
 
-        >type_keyword_s2e = #string_to_enum(TypeKeyword, identifier);
+        >type_keyword_s2e = @string_to_enum(TypeKeyword, identifier);
 
         if (type_keyword_s2e.is_valid)
         {
@@ -4835,12 +4835,12 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
             }
         }
     }
-    else if (start_character == '#')
+    else if (start_character == '@')
     {
         module.offset += 1;
 
         >identifier = parse_identifier(module);
-        >intrinsic_s2e = #string_to_enum(TypeIntrinsic, identifier);
+        >intrinsic_s2e = @string_to_enum(TypeIntrinsic, identifier);
         if (!intrinsic_s2e.is_valid)
         {
             report_error();
@@ -4883,7 +4883,7 @@ accumulate_hexadecimal = fn (accumulator: u64, ch: u8) u64
         unreachable;
     }
 
-    return (accumulator * 16) + #extend(value);
+    return (accumulator * 16) + @extend(value);
 }
 
 parse_hexadecimal = fn (module: &Module) u64
@@ -4959,7 +4959,7 @@ tokenize = fn (module: &Module) Token
                 zero,
             };
         },
-        '#' =>
+        '@' =>
         {
             module.offset += 1;
 
@@ -4967,7 +4967,7 @@ tokenize = fn (module: &Module) Token
             {
                 >identifier = parse_identifier(module);
 
-                >value_intrinsic_s2e = #string_to_enum(ValueIntrinsic, identifier);
+                >value_intrinsic_s2e = @string_to_enum(ValueIntrinsic, identifier);
                 if (value_intrinsic_s2e.is_valid)
                 {
                     >value_intrinsic = value_intrinsic_s2e.enum_value;
@@ -4994,7 +4994,7 @@ tokenize = fn (module: &Module) Token
             >id: TokenId = undefined;
             switch (next_ch)
             {
-                '<' => { id = #select(module.content[start_index + 2] == '=', .assign_shift_left, .shift_left); },
+                '<' => { id = @select(module.content[start_index + 2] == '=', .assign_shift_left, .shift_left); },
                 '=' => { id = .compare_less_equal; },
                 else => { id = .compare_less; },
             }
@@ -5021,7 +5021,7 @@ tokenize = fn (module: &Module) Token
             >id: TokenId = undefined;
             switch (next_ch)
             {
-                '>' => { id = #select(module.content[start_index + 2] == '=', .assign_shift_right, .shift_right); },
+                '>' => { id = @select(module.content[start_index + 2] == '=', .assign_shift_right, .shift_right); },
                 '=' => { id = .compare_greater_equal; },
                 else => { id = .compare_greater; },
             }
@@ -5046,8 +5046,8 @@ tokenize = fn (module: &Module) Token
         {
             >next_ch = module.content[start_index + 1];
             >is_compare_equal = next_ch == '=';
-            >id: TokenId = #select(is_compare_equal, .compare_equal, .assign);
-            module.offset += #extend(is_compare_equal) + 1;
+            >id: TokenId = @select(is_compare_equal, .compare_equal, .assign);
+            module.offset += @extend(is_compare_equal) + 1;
             token = {
                 .id = id,
                 zero,
@@ -5124,7 +5124,7 @@ tokenize = fn (module: &Module) Token
             token = {
                 .content = {
                     .integer = {
-                        .value = #extend(ch),
+                        .value = @extend(ch),
                         .kind = .character_literal,
                     },
                 },
@@ -5148,7 +5148,7 @@ tokenize = fn (module: &Module) Token
                 }
 
                 >inferred_decimal = token_integer_kind == .decimal and next_ch != 'd';
-                module.offset += 2 * #extend(token_integer_kind != .decimal or !inferred_decimal);
+                module.offset += 2 * @extend(token_integer_kind != .decimal or !inferred_decimal);
             }
 
             >value: u64 = undefined;
@@ -5221,14 +5221,14 @@ tokenize = fn (module: &Module) Token
 
             token.id = id;
 
-            module.offset += #extend(next_ch == '=') + 1;
+            module.offset += @extend(next_ch == '=') + 1;
         },
         else =>
         {
             if (is_identifier_start(start_character))
             {
                 >identifier = parse_identifier(module);
-                >value_keyword_s2e = #string_to_enum(ValueKeyword, identifier);
+                >value_keyword_s2e = @string_to_enum(ValueKeyword, identifier);
                 if (value_keyword_s2e.is_valid)
                 {
                     >value_keyword = value_keyword_s2e.enum_value;
@@ -5242,10 +5242,10 @@ tokenize = fn (module: &Module) Token
                 else
                 {
                     >advance = identifier.pointer[identifier.length] == '?';
-                    identifier.length += #extend(advance);
-                    module.offset += #extend(advance);
+                    identifier.length += @extend(advance);
+                    module.offset += @extend(advance);
 
-                    >operator_keyword_s2e = #string_to_enum(OperatorKeyword, identifier);
+                    >operator_keyword_s2e = @string_to_enum(OperatorKeyword, identifier);
 
                     if (operator_keyword_s2e.is_valid)
                     {
@@ -5260,8 +5260,8 @@ tokenize = fn (module: &Module) Token
                     }
                     else
                     {
-                        identifier.length -= #extend(advance);
-                        module.offset -= #extend(advance);
+                        identifier.length -= @extend(advance);
+                        module.offset -= @extend(advance);
 
                         token = {
                             .content = {
@@ -5288,13 +5288,13 @@ parse_precedence = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &V
 scope_to_macro_declaration = fn (scope: &Scope) &MacroDeclaration
 {
     assert(scope.kind == .macro_declaration);
-    return #field_parent_pointer(scope, "scope");
+    return @field_parent_pointer(scope, "scope");
 }
 
 scope_to_macro_instantiation = fn (scope: &Scope) &MacroInstantiation
 {
     assert(scope.kind == .macro_instantiation);
-    return #field_parent_pointer(scope, "scope");
+    return @field_parent_pointer(scope, "scope");
 }
 
 reference_identifier = fn (module: &Module, current_scope: &Scope, identifier: []u8, kind: ValueKind) &Value
@@ -5407,7 +5407,7 @@ reference_identifier = fn (module: &Module, current_scope: &Scope, identifier: [
                 {
                     if (string_equal(identifier, constant_argument.name))
                     {
-                        #trap();
+                        @trap();
                     }
                 }
 
@@ -5526,7 +5526,7 @@ parse_aggregate_initialization = fn (module: &Module, scope: &Scope, builder: Va
     }
 
     >elements = arena_allocate_slice[AggregateInitializationElement](module.arena, field_count);
-    memcpy(#pointer_cast(elements.pointer), #pointer_cast(&element_buffer), field_count * #byte_size(AggregateInitializationElement));
+    memcpy(@pointer_cast(elements.pointer), @pointer_cast(&element_buffer), field_count * @byte_size(AggregateInitializationElement));
 
     >result = new_value(module);
     result.& = {
@@ -5586,7 +5586,7 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
             >unary_builder = builder;
             unary_builder.precedence = .prefix;
             unary_builder.token = zero;
-            unary_builder.kind = #select(token.id == .ampersand, .left, builder.kind);
+            unary_builder.kind = @select(token.id == .ampersand, .left, builder.kind);
             
             >unary_value = parse_precedence(module, scope, unary_builder);
 
@@ -5813,7 +5813,7 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                 // TODO
                 .va_copy =>
                 {
-                    #trap();
+                    @trap();
                 },
                 .max, .min =>
                 {
@@ -5947,7 +5947,7 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                 }
 
                 >values = arena_allocate_slice[&Value](module.arena, element_count);
-                memcpy(#pointer_cast(values.pointer), #pointer_cast(&value_buffer), element_count * #byte_size(&Value));
+                memcpy(@pointer_cast(values.pointer), @pointer_cast(&value_buffer), element_count * @byte_size(&Value));
 
                 result = new_value(module);
 
@@ -6152,7 +6152,7 @@ parse_call_arguments = fn (module: &Module, scope: &Scope) []&Value
     if (argument_count != 0)
     {
         arguments = arena_allocate_slice[&Value](module.arena, argument_count);
-        memcpy(#pointer_cast(arguments.pointer), #pointer_cast(&argument_buffer), argument_count * #byte_size(&Value));
+        memcpy(@pointer_cast(arguments.pointer), @pointer_cast(&argument_buffer), argument_count * @byte_size(&Value));
     }
 
     return arguments;
@@ -6225,7 +6225,7 @@ parse_right = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                 else => { unreachable; },
             }
 
-            >right_precedence: Precedence = #enum_from_int(#int_from_enum(precedence) + 1);
+            >right_precedence: Precedence = @enum_from_int(@int_from_enum(precedence) + 1);
             >right_builder = builder;
             right_builder.precedence = right_precedence;
             right_builder.token = zero;
@@ -6366,7 +6366,7 @@ parse_right = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                     {
                         .value =>
                         {
-                            #trap();
+                            @trap();
                         },
                         .type =>
                         {
@@ -6526,7 +6526,7 @@ parse_right_with_left = fn (module: &Module, scope: &Scope, builder: ValueBuilde
         >token_precedence = get_token_precedence(token);
         if (token_precedence == .assignment)
         {
-            token_precedence = #select(builder.allow_assignment_operators, token_precedence, .none);
+            token_precedence = @select(builder.allow_assignment_operators, token_precedence, .none);
         }
 
         if (precedence > token_precedence)
@@ -6641,7 +6641,7 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
             };
             statement.id = .local;
         },
-        '#' =>
+        '@' =>
         {
             statement.content = {
                 .expression = parse_value(module, scope, zero),
@@ -6666,7 +6666,7 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
 
                 skip_space(module);
 
-                >statement_start_keyword_s2e = #string_to_enum(StatementStartKeyword, statement_start_identifier);
+                >statement_start_keyword_s2e = @string_to_enum(StatementStartKeyword, statement_start_identifier);
                 if (statement_start_keyword_s2e.is_valid)
                 {
                     >statement_start_keyword = statement_start_keyword_s2e.enum_value;
@@ -6675,7 +6675,7 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                     {
                         ._ =>
                         {
-                            #trap();
+                            @trap();
                         },
                         .return =>
                         {
@@ -6767,7 +6767,7 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                                 skip_space(module);
 
                                 >is_left = module.content[module.offset] == '&';
-                                module.offset += #extend(is_left);
+                                module.offset += @extend(is_left);
 
                                 >for_local_line = get_line(module);
                                 >for_local_column = get_column(module);
@@ -6787,14 +6787,14 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                                         zero,
                                     };
 
-                                    >kind: ValueKind = #select(is_left, .left, .right);
+                                    >kind: ValueKind = @select(is_left, .left, .right);
 
                                     left_value_buffer[left_value_count] = kind;
                                     left_value_count += 1;
                                 }
                                 else
                                 {
-                                    #trap();
+                                    @trap();
                                 }
 
                                 skip_space(module);
@@ -6853,10 +6853,10 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                             }
 
                             >left_values = arena_allocate_slice[ValueKind](module.arena, left_value_count);
-                            memcpy(#pointer_cast(left_values.pointer), #pointer_cast(&left_value_buffer), left_value_count * #byte_size(ValueKind));
+                            memcpy(@pointer_cast(left_values.pointer), @pointer_cast(&left_value_buffer), left_value_count * @byte_size(ValueKind));
 
                             >right_values = arena_allocate_slice[&Value](module.arena, right_value_count);
-                            memcpy(#pointer_cast(right_values.pointer), #pointer_cast(&right_value_buffer), right_value_count * #byte_size(&Value));
+                            memcpy(@pointer_cast(right_values.pointer), @pointer_cast(&right_value_buffer), right_value_count * @byte_size(&Value));
 
                             statement.content.for.kinds = left_values;
                             statement.content.for.iteratables = right_values;
@@ -7003,7 +7003,7 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                                     }
 
                                     clause_values = arena_allocate_slice[StatementSwitchDiscriminant](module.arena, case_count);
-                                    memcpy(#pointer_cast(clause_values.pointer), #pointer_cast(&case_buffer), case_count * #byte_size(StatementSwitchDiscriminant));
+                                    memcpy(@pointer_cast(clause_values.pointer), @pointer_cast(&case_buffer), case_count * @byte_size(StatementSwitchDiscriminant));
                                 }
 
                                 skip_space(module);
@@ -7028,7 +7028,7 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                             }
 
                             >clauses = arena_allocate_slice[StatementSwitchClause](module.arena, clause_count);
-                            memcpy(#pointer_cast(clauses.pointer), #pointer_cast(&clause_buffer), clause_count * #byte_size(StatementSwitchClause));
+                            memcpy(@pointer_cast(clauses.pointer), @pointer_cast(&clause_buffer), clause_count * @byte_size(StatementSwitchClause));
 
                             require_semicolon = 0;
 
@@ -7172,7 +7172,7 @@ parse_block = fn (module: &Module, parent_scope: &Scope) &Block
 
 enum_bit_count = fn (highest_value: u64) u64
 {
-    >needed_bit_count: u64 = #select(highest_value == 0, 1, 64 - #leading_zeroes(highest_value));
+    >needed_bit_count: u64 = @select(highest_value == 0, 1, 64 - @leading_zeroes(highest_value));
     return needed_bit_count;
 }
 
@@ -7200,7 +7200,7 @@ parse = fn (module: &Module) void
             while (module.offset < module.content.length)
             {
                 >global_attribute_keyword_string = parse_identifier(module);
-                >global_attribute_keyword_s2e = #string_to_enum(GlobalAttributeKeyword, global_attribute_keyword_string);
+                >global_attribute_keyword_s2e = @string_to_enum(GlobalAttributeKeyword, global_attribute_keyword_string);
                 if (!global_attribute_keyword_s2e.is_valid)
                 {
                     report_error();
@@ -7317,7 +7317,7 @@ parse = fn (module: &Module) void
             >global_keyword_string = parse_identifier(module);
             skip_space(module);
 
-            >global_keyword_s2e = #string_to_enum(GlobalKeyword, global_keyword_string);
+            >global_keyword_s2e = @string_to_enum(GlobalKeyword, global_keyword_string);
 
             is_global_keyword = global_keyword_s2e.is_valid;
 
@@ -7388,10 +7388,10 @@ parse = fn (module: &Module) void
                         consume_character_if_match(module, ';');
 
                         >fields = arena_allocate_slice[Field](module.arena, field_count);
-                        memcpy(#pointer_cast(fields.pointer), #pointer_cast(&field_buffer), field_count * #byte_size(Field));
+                        memcpy(@pointer_cast(fields.pointer), @pointer_cast(&field_buffer), field_count * @byte_size(Field));
 
-                        >needed_bit_count = #max(next_power_of_two(field_bit_offset), 8);
-                        if (needed_bit_count > #integer_max(u32))
+                        >needed_bit_count = @max(next_power_of_two(field_bit_offset), 8);
+                        if (needed_bit_count > @integer_max(u32))
                         {
                             report_error();
                         }
@@ -7517,7 +7517,7 @@ parse = fn (module: &Module) void
                             for (i: 0..field_count)
                             {
                                 >value = int_value_buffer[i];
-                                highest_value = #max(highest_value, value);
+                                highest_value = @max(highest_value, value);
                                 fields[i] = {
                                     .name = name_buffer[i],
                                     .value = value,
@@ -7598,7 +7598,7 @@ parse = fn (module: &Module) void
                                     .column = global_column,
                                 },
                                 .initial_value = zero,
-                                .linkage = #select(is_export or is_extern, .external, .internal),
+                                .linkage = @select(is_export or is_extern, .external, .internal),
                                 zero,
                             };
                         }
@@ -7625,7 +7625,7 @@ parse = fn (module: &Module) void
                                         .line = line,
                                         .column = 0,
                                     },
-                                    .index = #truncate(i + 1),
+                                    .index = @truncate(i + 1),
                                 };
                             }
 
@@ -7688,7 +7688,7 @@ parse = fn (module: &Module) void
 
                                 if (has_value)
                                 {
-                                    #trap();
+                                    @trap();
                                 }
                                 else
                                 {
@@ -7727,7 +7727,7 @@ parse = fn (module: &Module) void
                         expect_character(module, left_parenthesis);
 
                         macro_declaration.constant_arguments = arena_allocate_slice[ConstantArgument](module.arena, constant_argument_count);
-                        memcpy(#pointer_cast(macro_declaration.constant_arguments.pointer), #pointer_cast(&constant_argument_buffer), constant_argument_count * #byte_size(ConstantArgument));
+                        memcpy(@pointer_cast(macro_declaration.constant_arguments.pointer), @pointer_cast(&constant_argument_buffer), constant_argument_count * @byte_size(ConstantArgument));
 
                         if (module.first_macro_declaration)
                         {
@@ -7780,7 +7780,7 @@ parse = fn (module: &Module) void
                                     .column = argument_column,
                                     zero,
                                 },
-                                .index = #truncate(argument_index + 1),
+                                .index = @truncate(argument_index + 1),
                             };
 
                             argument_count += 1;
@@ -7795,7 +7795,7 @@ parse = fn (module: &Module) void
                         macro_declaration.return_type = return_type;
 
                         >arguments = arena_allocate_slice[Argument](module.arena, argument_count);
-                        memcpy(#pointer_cast(arguments.pointer), #pointer_cast(&argument_buffer), argument_count * #byte_size(Argument));
+                        memcpy(@pointer_cast(arguments.pointer), @pointer_cast(&argument_buffer), argument_count * @byte_size(Argument));
                         macro_declaration.arguments = arguments;
 
                         skip_space(module);
@@ -7866,7 +7866,7 @@ parse = fn (module: &Module) void
                                 >field_byte_size = get_byte_size(field_type);
                                 >field_byte_alignment = get_byte_alignment(field_type);
                                 // Align struct size by field alignment
-                                >field_byte_offset = align_forward(byte_size, #extend(field_byte_alignment));
+                                >field_byte_offset = align_forward(byte_size, @extend(field_byte_alignment));
 
                                 field_buffer[field_index] = {
                                     .name = field_name,
@@ -7876,7 +7876,7 @@ parse = fn (module: &Module) void
                                 };
 
                                 byte_size = field_byte_offset + field_byte_size;
-                                byte_alignment = #max(byte_alignment, field_byte_alignment);
+                                byte_alignment = @max(byte_alignment, field_byte_alignment);
 
                                 skip_space(module);
 
@@ -7885,14 +7885,14 @@ parse = fn (module: &Module) void
                                 field_count += 1;
                             }
 
-                            byte_size = align_forward(byte_size, #extend(byte_alignment));
-                            assert(byte_size % #extend(byte_alignment) == 0);
+                            byte_size = align_forward(byte_size, @extend(byte_alignment));
+                            assert(byte_size % @extend(byte_alignment) == 0);
 
                             skip_space(module);
                             consume_character_if_match(module, ';');
 
                             >fields = arena_allocate_slice[Field](module.arena, field_count);
-                            memcpy(#pointer_cast(fields.pointer), #pointer_cast(&field_buffer), field_count * #byte_size(Field));
+                            memcpy(@pointer_cast(fields.pointer), @pointer_cast(&field_buffer), field_count * @byte_size(Field));
 
                             struct_type.content = {
                                 .struct = {
@@ -7997,9 +7997,9 @@ parse = fn (module: &Module) void
                                 .line = field_line,
                             };
 
-                            biggest_field = #select(field_size > byte_size, field_index, biggest_field);
-                            alignment = #max(alignment, field_alignment);
-                            byte_size = #max(byte_size, field_size);
+                            biggest_field = @select(field_size > byte_size, field_index, biggest_field);
+                            alignment = @max(alignment, field_alignment);
+                            byte_size = @max(byte_size, field_size);
 
                             skip_space(module);
 
@@ -8010,7 +8010,7 @@ parse = fn (module: &Module) void
                         consume_character_if_match(module, ';');
 
                         >fields = arena_allocate_slice[UnionField](module.arena, field_count);
-                        memcpy(#pointer_cast(fields.pointer), #pointer_cast(&field_buffer), field_count * #byte_size(UnionField));
+                        memcpy(@pointer_cast(fields.pointer), @pointer_cast(&field_buffer), field_count * @byte_size(UnionField));
 
                         >biggest_size = get_byte_size(fields[biggest_field].type);
                         assert(biggest_size == byte_size);
@@ -8077,8 +8077,8 @@ resolve_type_in_place_abi = fn (module: &Module, type: &Type) void
             .integer =>
             {
                 >bit_count = type.content.integer.bit_count;
-                assert(bit_count <= #integer_max(u32));
-                result = LLVMIntTypeInContext(module.llvm.context, #truncate(bit_count));
+                assert(bit_count <= @integer_max(u32));
+                result = LLVMIntTypeInContext(module.llvm.context, @truncate(bit_count));
             },
             .pointer,
             .opaque,
@@ -8115,7 +8115,7 @@ resolve_type_in_place_abi = fn (module: &Module, type: &Type) void
                 }
 
                 >is_packed: u1 = 0;
-                result = LLVMStructTypeInContext(module.llvm.context, &llvm_type_buffer[0], #truncate(fields.length), #extend(is_packed));
+                result = LLVMStructTypeInContext(module.llvm.context, &llvm_type_buffer[0], @truncate(fields.length), @extend(is_packed));
                 >llvm_size = LLVMStoreSizeOfType(module.llvm.target_data_layout, result);
                 >size = get_byte_size(type);
                 assert(llvm_size == size);
@@ -8166,7 +8166,7 @@ resolve_type_in_place_abi = fn (module: &Module, type: &Type) void
             },
             else =>
             {
-                #trap();
+                @trap();
             },
         }
 
@@ -8200,7 +8200,7 @@ resolve_type_in_place_memory = fn (module: &Module, type: &Type) void
             {
                 >byte_size = get_byte_size(type);
                 >bit_count = byte_size * 8;
-                result = LLVMIntTypeInContext(module.llvm.context, #truncate(bit_count));
+                result = LLVMIntTypeInContext(module.llvm.context, @truncate(bit_count));
             },
             .enum =>
             {
@@ -8232,7 +8232,7 @@ resolve_type_in_place_memory = fn (module: &Module, type: &Type) void
             },
             else =>
             {
-                #trap();
+                @trap();
             },
         }
 
@@ -8282,7 +8282,7 @@ resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
                     }
                     else
                     {
-                        dwarf_encoding = #select(type.content.integer.signed, .signed, .unsigned);
+                        dwarf_encoding = @select(type.content.integer.signed, .signed, .unsigned);
                     }
 
                     >flags: LLVMDIFlags = zero;
@@ -8322,7 +8322,7 @@ resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
                     for (i: 0..fields.length)
                     {
                         >field = &fields[i];
-                        >enum_field = LLVMDIBuilderCreateEnumerator(module.llvm.di_builder, field.name.pointer, field.name.length, field.value, #extend(!type_is_signed(backing_type)));
+                        >enum_field = LLVMDIBuilderCreateEnumerator(module.llvm.di_builder, field.name.pointer, field.name.length, field.value, @extend(!type_is_signed(backing_type)));
                         field_buffer[i] = enum_field;
                     }
 
@@ -8361,7 +8361,7 @@ resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
                     >runtime_language: u32 = 0;
                     >vtable_holder: &LLVMMetadata = zero;
 
-                    >struct_type = LLVMDIBuilderCreateStructType(module.llvm.di_builder, module.scope.llvm, name.pointer, name.length, module.llvm.file, type.content.struct.line, byte_size * 8, alignment * 8, flags, derived_from, &llvm_type_buffer[0], #truncate(fields.length), runtime_language, vtable_holder, name.pointer, name.length);
+                    >struct_type = LLVMDIBuilderCreateStructType(module.llvm.di_builder, module.scope.llvm, name.pointer, name.length, module.llvm.file, type.content.struct.line, byte_size * 8, alignment * 8, flags, derived_from, &llvm_type_buffer[0], @truncate(fields.length), runtime_language, vtable_holder, name.pointer, name.length);
                     LLVMMetadataReplaceAllUsesWith(forward_declaration, struct_type);
                     result = struct_type;
                 },
@@ -8388,7 +8388,7 @@ resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
                     >derived_from: &LLVMMetadata = zero;
                     >runtime_language: u32 = 0;
                     >vtable_holder: &LLVMMetadata = zero;
-                    >struct_type = LLVMDIBuilderCreateStructType(module.llvm.di_builder, module.scope.llvm, type.name.pointer, type.name.length, module.llvm.file, type.content.bits.line, size, alignment, flags, zero, &llvm_type_buffer[0], #truncate(fields.length), runtime_language, vtable_holder, type.name.pointer, type.name.length);
+                    >struct_type = LLVMDIBuilderCreateStructType(module.llvm.di_builder, module.scope.llvm, type.name.pointer, type.name.length, module.llvm.file, type.content.bits.line, size, alignment, flags, zero, &llvm_type_buffer[0], @truncate(fields.length), runtime_language, vtable_holder, type.name.pointer, type.name.length);
                     result = struct_type;
                 },
                 .union =>
@@ -8420,7 +8420,7 @@ resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
 
                     >runtime_language: u32 = 0;
 
-                    >union_type = LLVMDIBuilderCreateUnionType(module.llvm.di_builder, module.scope.llvm, type.name.pointer, type.name.length, module.llvm.file, type.content.union.line, byte_size * 8, alignment * 8, flags, &llvm_type_buffer[0], #truncate(fields.length), runtime_language, type.name.pointer, type.name.length);
+                    >union_type = LLVMDIBuilderCreateUnionType(module.llvm.di_builder, module.scope.llvm, type.name.pointer, type.name.length, module.llvm.file, type.content.union.line, byte_size * 8, alignment * 8, flags, &llvm_type_buffer[0], @truncate(fields.length), runtime_language, type.name.pointer, type.name.length);
                     LLVMMetadataReplaceAllUsesWith(forward_declaration, union_type);
 
                     result = union_type;
@@ -8451,7 +8451,7 @@ resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
                 },
                 else =>
                 {
-                    #trap();
+                    @trap();
                 },
             }
 
@@ -8535,7 +8535,7 @@ abi_system_v_classify_post_merge = fn (aggregate_size: u64, classes: [2]AbiSyste
 
     if (result[1] == .x87_up)
     {
-        #trap();
+        @trap();
     }
 
     if (aggregate_size > 16 and (result[0] != .sse or result[1] != .sse_up))
@@ -8563,8 +8563,8 @@ abi_system_v_classify_type = fn (type: &Type, options: AbiSystemVClassifyArgumen
     >result: [2]AbiSystemVClass = zero;
 
     >is_memory = options.base_offset >= 8;
-    >current_index: u64 = #extend(is_memory);
-    >not_current_index: u64 = #extend(!is_memory);
+    >current_index: u64 = @extend(is_memory);
+    >not_current_index: u64 = @extend(!is_memory);
     assert(current_index != not_current_index);
     result[current_index] = .memory;
 
@@ -8587,7 +8587,7 @@ abi_system_v_classify_type = fn (type: &Type, options: AbiSystemVClassifyArgumen
             }
             else if (bit_count == 128)
             {
-                #trap();
+                @trap();
             }
             else
             {
@@ -8618,7 +8618,7 @@ abi_system_v_classify_type = fn (type: &Type, options: AbiSystemVClassifyArgumen
                                 >offset = options.base_offset + field.offset;
                                 >member_type = field.type;
                                 >member_size = get_byte_size(member_type);
-                                >member_alignment: u64 = #extend(get_byte_alignment(member_type));
+                                >member_alignment: u64 = @extend(get_byte_alignment(member_type));
 
                                 >native_vector_size: u64 = 16;
 
@@ -8653,7 +8653,7 @@ abi_system_v_classify_type = fn (type: &Type, options: AbiSystemVClassifyArgumen
                         },
                         .union =>
                         {
-                            #trap();
+                            @trap();
                         }
                         else => { unreachable; },
                     }
@@ -8666,7 +8666,7 @@ abi_system_v_classify_type = fn (type: &Type, options: AbiSystemVClassifyArgumen
 
             if (byte_size <= 64)
             {
-                if (options.base_offset % #extend(get_byte_alignment(type)) == 0)
+                if (options.base_offset % @extend(get_byte_alignment(type)) == 0)
                 {
                     >element_type = type.content.array.element_type;
                     >element_size = get_byte_size(element_type);
@@ -8718,7 +8718,7 @@ abi_system_v_classify_type = fn (type: &Type, options: AbiSystemVClassifyArgumen
         },
         else =>
         {
-            #trap();
+            @trap();
         },
     }
 
@@ -8749,7 +8749,7 @@ contains_no_user_data = fn (type: &Type, start: u64, end: u64) u1
                         break;
                     }
 
-                    >field_start = #select(field_offset < start, start - field_offset, 0);
+                    >field_start = @select(field_offset < start, start - field_offset, 0);
 
                     if (!contains_no_user_data(field.type, field_start, end - field_offset))
                     {
@@ -8774,7 +8774,7 @@ contains_no_user_data = fn (type: &Type, start: u64, end: u64) u1
                     },
                     .enum_array =>
                     {
-                        #trap();
+                        @trap();
                     },
                     else => { unreachable; },
                 }
@@ -8793,7 +8793,7 @@ contains_no_user_data = fn (type: &Type, start: u64, end: u64) u1
                         break;
                     }
 
-                    >element_start = #select(offset < start, start - offset, 0);
+                    >element_start = @select(offset < start, start - offset, 0);
 
                     if (!contains_no_user_data(element_type, element_start, end - offset))
                     {
@@ -8870,7 +8870,7 @@ abi_system_v_get_integer_type_at_offset = fn (module: &Module, type: &Type, offs
             }
             else
             {
-                #trap();
+                @trap();
             }
         },
         .struct =>
@@ -8901,12 +8901,12 @@ abi_system_v_get_integer_type_at_offset = fn (module: &Module, type: &Type, offs
         .bits =>
         {
             >backing_type = type.content.bits.backing_type;
-            return abi_system_v_get_integer_type_at_offset(module, backing_type, offset, #select(source_type == type, backing_type, source_type), source_offset);
+            return abi_system_v_get_integer_type_at_offset(module, backing_type, offset, @select(source_type == type, backing_type, source_type), source_offset);
         },
         .enum =>
         {
             >backing_type = type.content.enum.backing_type;
-            return abi_system_v_get_integer_type_at_offset(module, backing_type, offset, #select(source_type == type, backing_type, source_type), source_offset);
+            return abi_system_v_get_integer_type_at_offset(module, backing_type, offset, @select(source_type == type, backing_type, source_type), source_offset);
         },
         .array =>
         {
@@ -8915,13 +8915,13 @@ abi_system_v_get_integer_type_at_offset = fn (module: &Module, type: &Type, offs
             >element_offset = (offset / element_size) * element_size;
             return abi_system_v_get_integer_type_at_offset(module, element_type, offset - element_offset, source_type, source_offset);
         },
-        else => { #trap(); },
+        else => { @trap(); },
     }
 
     >source_size = get_byte_size(source_type);
     assert(source_size != source_offset);
     >byte_count = source_size - source_offset;
-    >bit_count = #select(byte_count > 8, 64, byte_count * 8);
+    >bit_count = @select(byte_count > 8, 64, byte_count * 8);
     >result = integer_type(module, { .bit_count = bit_count, .signed = 0 });
     return result;
 }
@@ -8997,7 +8997,7 @@ abi_system_v_get_extend = fn (options: AbiSystemVExtendOptions) AbiInformation
         zero,
     };
 
-    abi_set_coerce_to_type(&result, #select(options.type != zero, options.type, options.semantic_type));
+    abi_set_coerce_to_type(&result, @select(options.type != zero, options.type, options.semantic_type));
     abi_set_padding_type(&result, zero);
     abi_set_direct_offset(&result, 0);
     abi_set_direct_alignment(&result, 0);
@@ -9064,7 +9064,7 @@ abi_system_v_get_indirect_result = fn (module: &Module, type: &Type, free_gpr: u
     }
     else
     {
-        >alignment = #max(get_byte_alignment(type), 8);
+        >alignment = @max(get_byte_alignment(type), 8);
         >size = get_byte_size(type);
 
         if (free_gpr == 0 and alignment != 8 and size <= 8)
@@ -9118,7 +9118,7 @@ abi_system_v_get_indirect_return_result = fn (type: &Type) AbiInformation
     }
     else
     {
-        #trap();
+        @trap();
     }
 }
 
@@ -9165,7 +9165,7 @@ abi_system_v_classify_return_type = fn (module: &Module, semantic_return_type: &
         },
         else =>
         {
-            #trap();
+            @trap();
         },
     }
 
@@ -9181,12 +9181,12 @@ abi_system_v_classify_return_type = fn (module: &Module, semantic_return_type: &
 
             if (classes[0] == .none)
             {
-                #trap();
+                @trap();
             }
         },
         else =>
         {
-            #trap();
+            @trap();
         },
     }
 
@@ -9279,7 +9279,7 @@ abi_system_v_classify_argument_type = fn (module: &Module, semantic_argument_typ
 
             if (classes[0] == .none)
             {
-                #trap();
+                @trap();
             }
         },
         else => { unreachable; },
@@ -9315,7 +9315,7 @@ abi_system_v_classify_argument = fn (module: &Module, available_registers: &AbiR
 
     if (options.register_call)
     {
-        #trap();
+        @trap();
     }
 
     >result = abi_system_v_classify_argument_type(module, semantic_argument_type, {
@@ -9343,14 +9343,14 @@ abi_system_v_classify_argument = fn (module: &Module, available_registers: &AbiR
 
     if (abi_get_padding_type(&argument_abi))
     {
-        #trap();
+        @trap();
     }
 
     argument_abi.abi_start = options.abi_start;
 
     >count: u16 = 0;
 
-    >abi_start: u64 = #extend(argument_abi.abi_start);
+    >abi_start: u64 = @extend(argument_abi.abi_start);
 
     switch (argument_abi.flags.kind)
     {
@@ -9375,7 +9375,7 @@ abi_system_v_classify_argument = fn (module: &Module, available_registers: &AbiR
                     abi_argument_type_buffer[abi_start + i] = field_type;
                 }
 
-                count = #truncate(coerce_to_type.content.struct.fields.length);
+                count = @truncate(coerce_to_type.content.struct.fields.length);
             }
             else
             {
@@ -9443,7 +9443,7 @@ add_value_attribute = fn (module: &Module, value: &LLVMValue, index: u32, add_ca
 
     if (attributes.alignment)
     {
-        add_enum_attribute(module, .align, #extend(attributes.alignment), add_callback, value, index);
+        add_enum_attribute(module, .align, @extend(attributes.alignment), add_callback, value, index);
     }
 
     if (attributes.sign_extend)
@@ -9526,7 +9526,7 @@ emit_attributes = fn (module: &Module, value: &LLVMValue, add_callback: &LLVMAtt
         >abi_type = options.abi_argument_types[abi_index];
         resolve_type_in_place(module, abi_type);
 
-        add_value_attribute(module, value, #extend(abi_index + 1), add_callback, semantic_return_type.llvm.memory, abi_type.llvm.abi, {
+        add_value_attribute(module, value, @extend(abi_index + 1), add_callback, semantic_return_type.llvm.memory, abi_type.llvm.abi, {
             .alignment = get_byte_alignment(semantic_return_type),
             .sign_extend = 0,
             .zero_extend = 0,
@@ -9550,8 +9550,8 @@ emit_attributes = fn (module: &Module, value: &LLVMValue, add_callback: &LLVMAtt
             >abi_type = options.abi_argument_types[abi_index];
             resolve_type_in_place(module, abi_type);
 
-            add_value_attribute(module, value, #extend(abi_index + 1), add_callback, abi.semantic_type.llvm.memory, abi_type.llvm.abi, {
-                .alignment = #select(abi.flags.kind == .indirect, 8, 0),
+            add_value_attribute(module, value, @extend(abi_index + 1), add_callback, abi.semantic_type.llvm.memory, abi_type.llvm.abi, {
+                .alignment = @select(abi.flags.kind == .indirect, 8, 0),
                 .sign_extend = abi.flags.kind == .extend and abi.flags.sign_extension,
                 .zero_extend = abi.flags.kind == .extend and !abi.flags.sign_extension,
                 .no_alias = 0,
@@ -9690,7 +9690,7 @@ create_store = fn (module: &Module, options: StoreOptions) void
 
     if (resolved_type.llvm.abi != memory_type)
     {
-        source_value = LLVMBuildIntCast2(module.llvm.builder, source_value, memory_type, #extend(type_is_signed(resolved_type)), "");
+        source_value = LLVMBuildIntCast2(module.llvm.builder, source_value, memory_type, @extend(type_is_signed(resolved_type)), "");
     }
 
     >alignment = options.alignment;
@@ -9714,7 +9714,7 @@ memory_to_abi = fn (module: &Module, value: &LLVMValue, type: &Type) &LLVMValue
     >result = value;
     if (type.llvm.memory != type.llvm.abi)
     {
-        result = LLVMBuildIntCast2(module.llvm.builder, result, type.llvm.abi, #extend(type_is_signed(type)), "");
+        result = LLVMBuildIntCast2(module.llvm.builder, result, type.llvm.abi, @extend(type_is_signed(type)), "");
     }
     return result;
 }
@@ -9762,8 +9762,8 @@ GEPOptions = struct
 create_gep = fn (module: &Module, options: GEPOptions) &LLVMValue
 {
     assert(options.indices.length == 1 or options.indices.length == 2);
-    >gep_function = #select(options.not_inbounds, &LLVMBuildGEP2, &LLVMBuildInBoundsGEP2);
-    >gep = gep_function(module.llvm.builder, options.type, options.pointer, options.indices.pointer, #truncate(options.indices.length), "");
+    >gep_function = @select(options.not_inbounds, &LLVMBuildGEP2, &LLVMBuildInBoundsGEP2);
+    >gep = gep_function(module.llvm.builder, options.type, options.pointer, options.indices.pointer, @truncate(options.indices.length), "");
     return gep;
 }
 
@@ -9949,10 +9949,10 @@ get_enum_name_array_global = fn (module: &Module, enum_type: &Type) &Global
 
             >is_constant: u1 = 1;
             >null_terminate: u1 = 1;
-            >initial_value = LLVMConstStringInContext2(module.llvm.context, field.name.pointer, field.name.length, #extend(!null_terminate));
+            >initial_value = LLVMConstStringInContext2(module.llvm.context, field.name.pointer, field.name.length, @extend(!null_terminate));
             >alignment: u32 = 1;
 
-            >name_global = llvm_create_global_variable(module.llvm.module, LLVMArrayType2(u8_type.llvm.abi, field.name.length + #extend(null_terminate)), is_constant, .internal, initial_value, arena_join_string(module.arena, [ "string.", enum_type.name, ".", field.name ][..]), .none, 0, alignment, .global);
+            >name_global = llvm_create_global_variable(module.llvm.module, LLVMArrayType2(u8_type.llvm.abi, field.name.length + @extend(null_terminate)), is_constant, .internal, initial_value, arena_join_string(module.arena, [ "string.", enum_type.name, ".", field.name ][..]), .none, 0, alignment, .global);
 
             >constants: [_]&LLVMValue = [
                 name_global,
@@ -10084,7 +10084,7 @@ resolve_type = fn (module: &Module, type: &Type) &Type
         },
         else =>
         {
-            #trap();
+            @trap();
         },
     }
 
@@ -10194,7 +10194,7 @@ clone_value = fn (module: &Module, scope: &Scope, old_value: &Value) &Value
             },
             else =>
             {
-                #trap();
+                @trap();
             },
         }
     }
@@ -10297,7 +10297,7 @@ clone_statement = fn (module: &Module, scope: &Scope, old_statement: &Statement)
         },
         else =>
         {
-            #trap();
+            @trap();
         },
     }
 
@@ -10344,7 +10344,7 @@ get_build_mode_enum = fn (module: &Module) &Type
 
     if (!result)
     {
-        >enum_names = #enum_names(BuildMode);
+        >enum_names = @enum_names(BuildMode);
         >enum_fields = arena_allocate_slice[EnumField](module.arena, enum_names.length);
 
         >field_value: u64 = 0;
@@ -10386,7 +10386,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
     if (expected_type != zero and? expected_type.id == .unresolved)
     {
-        #trap();
+        @trap();
     }
 
     >value_type: &Type = zero;
@@ -10428,7 +10428,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                             report_error();
                         }
 
-                        #trap();
+                        @trap();
                     }
                     else
                     {
@@ -10535,7 +10535,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                 if (expected_type)
                 {
-                    #trap();
+                    @trap();
                 }
                 else
                 {
@@ -10726,7 +10726,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                         >enum_fields = enum_type.content.enum.fields;
 
-                        >switch_instruction = LLVMBuildSwitch(module.llvm.builder, llvm_argument, else_block, #truncate(enum_fields.length));
+                        >switch_instruction = LLVMBuildSwitch(module.llvm.builder, llvm_argument, else_block, @truncate(enum_fields.length));
                         >backing_type = enum_type.llvm.abi;
                         assert(backing_type != zero);
                         
@@ -10893,7 +10893,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 else =>
                 {
                     // TODO
-                    #trap();
+                    @trap();
                 },
             }
         },
@@ -10979,7 +10979,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                 switch (unary_type_id)
                 {
-                    .align_of => { value = #extend(get_byte_alignment(unary_type)); },
+                    .align_of => { value = @extend(get_byte_alignment(unary_type)); },
                     .byte_size => { value = get_byte_size(unary_type); },
                     .integer_max =>
                     {
@@ -11198,7 +11198,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             }
 
             >pointer_element_type = array_like_type.content.pointer.element_type;
-            >indexing_type = #select(pointer_element_type.id == .enum_array, pointer_element_type.content.enum_array.enum_type, uint64(module));
+            >indexing_type = @select(pointer_element_type.id == .enum_array, pointer_element_type.content.enum_array.enum_type, uint64(module));
 
             analyze_type(module, value.content.array_expression.index, zero, { .indexing_type = indexing_type, .must_be_constant = analysis.must_be_constant });
 
@@ -11285,7 +11285,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             }
 
             >aggregate_element_type = aggregate_type.content.pointer.element_type;
-            >real_aggregate_type = #select(aggregate_element_type.id == .pointer, aggregate_element_type.content.pointer.element_type, aggregate_element_type);
+            >real_aggregate_type = @select(aggregate_element_type.id == .pointer, aggregate_element_type.content.pointer.element_type, aggregate_element_type);
             >resolved_aggregate_type = resolve_alias(module, real_aggregate_type);
 
             switch (resolved_aggregate_type.id)
@@ -11313,7 +11313,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                     >field_type = result_field.type;
 
-                    value_type = #select(value.kind == .left, get_pointer_type(module, field_type), field_type);
+                    value_type = @select(value.kind == .left, get_pointer_type(module, field_type), field_type);
                 },
                 .union =>
                 {
@@ -11776,7 +11776,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                             report_error();
                         }
 
-                        >declaration_index: u64 = #extend(result_field - fields.pointer);
+                        >declaration_index: u64 = @extend(result_field - fields.pointer);
                         >mask = 1 << declaration_index;
                         >current_mask = field_mask;
                         if (current_mask & mask)
@@ -11867,7 +11867,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                 >enum_alignment = get_byte_alignment(enum_type);
                 >enum_size = get_byte_size(enum_type);
-                >byte_size = align_forward(enum_size + 1, #extend(enum_alignment));
+                >byte_size = align_forward(enum_size + 1, @extend(enum_alignment));
 
                 >struct_fields = arena_allocate_slice[Field](module.arena, 2);
 
@@ -12225,7 +12225,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 >is_definition: u1 = 1;
                 >flags: LLVMDIFlags = zero;
                 >is_optimized = build_mode_is_optimized(module.build_mode);
-                subprogram = LLVMDIBuilderCreateFunction(module.llvm.di_builder, module.scope.llvm, declaration.name.pointer, declaration.name.length, declaration.name.pointer, declaration.name.length, module.llvm.file, macro_instantiation.scope.line, subroutine_type, #extend(is_local_to_unit), #extend(is_definition), macro_instantiation.scope.line, flags, #extend(is_optimized));
+                subprogram = LLVMDIBuilderCreateFunction(module.llvm.di_builder, module.scope.llvm, declaration.name.pointer, declaration.name.length, declaration.name.pointer, declaration.name.length, module.llvm.file, macro_instantiation.scope.line, subroutine_type, @extend(is_local_to_unit), @extend(is_definition), macro_instantiation.scope.line, flags, @extend(is_optimized));
             }
 
             macro_instantiation.scope.llvm = subprogram;
@@ -12264,7 +12264,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 {
                     .value =>
                     {
-                        #trap();
+                        @trap();
                     },
                     .type =>
                     {
@@ -12337,7 +12337,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                 LLVMSetCurrentDebugLocation2(module.llvm.builder, zero);
                 >flags: LLVMDIFlags = zero;
-                >subroutine_type = LLVMDIBuilderCreateSubroutineType(module.llvm.di_builder, module.llvm.file, &type_buffer[0], #truncate(type_count), flags);
+                >subroutine_type = LLVMDIBuilderCreateSubroutineType(module.llvm.di_builder, module.llvm.file, &type_buffer[0], @truncate(type_count), flags);
                 assert(macro_instantiation.scope.llvm != zero);
                 llvm_subprogram_replace_type(subprogram, subroutine_type);
             }
@@ -12406,7 +12406,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                         }
                     }
                 },
-                else => { #trap(); },
+                else => { @trap(); },
             }
 
             if (!field_type)
@@ -12429,7 +12429,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
         },
         else =>
         {
-            #trap();
+            @trap();
         },
     }
 
@@ -12457,7 +12457,7 @@ emit_intrinsic_call = fn (module: &Module, index: LLVMIntrinsicIndex, argument_t
     >intrinsic_id = module.llvm.intrinsic_table[index];
     >intrinsic_function = LLVMGetIntrinsicDeclaration(module.llvm.module, intrinsic_id, argument_types.pointer, argument_types.length);
     >intrinsic_function_type = LLVMIntrinsicGetType(module.llvm.context, intrinsic_id, argument_types.pointer, argument_types.length);
-    >call = LLVMBuildCall2(module.llvm.builder, intrinsic_function_type, intrinsic_function, argument_values.pointer, #truncate(argument_values.length), "");
+    >call = LLVMBuildCall2(module.llvm.builder, intrinsic_function_type, intrinsic_function, argument_values.pointer, @truncate(argument_values.length), "");
     return call;
 }
 
@@ -12471,7 +12471,7 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
             >left_signed = type_is_signed(left_type);
             >right_signed = type_is_signed(left_type);
             assert(left_signed == right_signed);
-            >signed = #select(is_boolean, left_signed, resolved_value_type.content.integer.signed);
+            >signed = @select(is_boolean, left_signed, resolved_value_type.content.integer.signed);
 
             switch (id)
             {
@@ -12489,11 +12489,11 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
                             {
                                 .max =>
                                 {
-                                    intrinsic_index = #select(signed, ."llvm.smax", ."llvm.umax");
+                                    intrinsic_index = @select(signed, ."llvm.smax", ."llvm.umax");
                                 },
                                 .min =>
                                 {
-                                    intrinsic_index = #select(signed, ."llvm.smin", ."llvm.umin");
+                                    intrinsic_index = @select(signed, ."llvm.smin", ."llvm.umin");
                                 },
                                 else => { unreachable; },
                             }
@@ -12555,10 +12555,10 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
                     {
                         .compare_equal => { predicate = .eq; },
                         .compare_not_equal => { predicate = .ne; },
-                        .compare_less => { predicate = #select(signed, .slt, .ult); },
-                        .compare_less_equal => { predicate = #select(signed, .sle, .ule); },
-                        .compare_greater => { predicate = #select(signed, .sgt, .ugt); },
-                        .compare_greater_equal => { predicate = #select(signed, .sge, .uge); },
+                        .compare_less => { predicate = @select(signed, .slt, .ult); },
+                        .compare_less_equal => { predicate = @select(signed, .sle, .ule); },
+                        .compare_greater => { predicate = @select(signed, .sgt, .ugt); },
+                        .compare_greater_equal => { predicate = @select(signed, .sge, .uge); },
                     }
 
                     return LLVMBuildICmp(module.llvm.builder, predicate, left, right, "");
@@ -12658,7 +12658,7 @@ reanalyze_type_as_left_value = fn (module: &Module, value: &Value) void
     assert(value.kind == .right);
     invalidate_analysis(module, value);
     value.kind = .left;
-    >expected_type = #select(value.id == .aggregate_initialization, get_pointer_type(module, original_type), zero);
+    >expected_type = @select(value.id == .aggregate_initialization, get_pointer_type(module, original_type), zero);
     analyze_type(module, value, expected_type, zero);
 }
 
@@ -12697,7 +12697,7 @@ enter_struct_pointer_for_coerced_access = fn (module: &Module, source_value: &LL
         >gep = LLVMBuildStructGEP2(module.llvm.builder, source_type.llvm.abi, source_value, 0, "coerce.dive");
         if (first_field_type.id == .struct)
         {
-            #trap();
+            @trap();
         }
         else
         {
@@ -12714,7 +12714,7 @@ coerce_integer_or_pointer_to_integer_or_pointer = fn (module: &Module, source: &
 {
     if (source_type != destination_type)
     {
-        #trap();
+        @trap();
     }
 
     return source;
@@ -12739,9 +12739,9 @@ create_coerced_store = fn (module: &Module, source_value: &LLVMValue, source_typ
     {
         >destination_alignment = get_byte_alignment(destination_type);
 
-        if (source_type.id == .integer and destination_type.id == .pointer and source_size == align_forward(destination_size, #extend(destination_alignment)))
+        if (source_type.id == .integer and destination_type.id == .pointer and source_size == align_forward(destination_size, @extend(destination_alignment)))
         {
-            #trap();
+            @trap();
         }
         else if (source_type.id == .struct)
         {
@@ -12751,8 +12751,8 @@ create_coerced_store = fn (module: &Module, source_value: &LLVMValue, source_typ
             {
                 >field = &fields[i];
 
-                >gep = LLVMBuildStructGEP2(module.llvm.builder, source_type.llvm.abi, destination_value, #truncate(i), "");
-                >field_value = LLVMBuildExtractValue(module.llvm.builder, source_value, #truncate(i), "");
+                >gep = LLVMBuildStructGEP2(module.llvm.builder, source_type.llvm.abi, destination_value, @truncate(i), "");
+                >field_value = LLVMBuildExtractValue(module.llvm.builder, source_value, @truncate(i), "");
 
                 create_store(module, {
                     .source = field_value,
@@ -12788,7 +12788,7 @@ create_coerced_store = fn (module: &Module, source_value: &LLVMValue, source_typ
         // Coercion through memory
 
         >original_destination_alignment = get_byte_alignment(destination_type);
-        >source_alloca_alignment = #max(original_destination_alignment, get_byte_alignment(source_type));
+        >source_alloca_alignment = @max(original_destination_alignment, get_byte_alignment(source_type));
         >source_alloca = create_alloca(module, {
             .type = source_type,
             .name = "coerce",
@@ -12815,7 +12815,7 @@ create_coerced_load = fn (module: &Module, source: &LLVMValue, source_type: &Typ
 
     if (type_is_abi_equal(module, source_type, destination_type))
     {
-        #trap();
+        @trap();
     }
     else
     {
@@ -12858,14 +12858,14 @@ create_coerced_load = fn (module: &Module, source: &LLVMValue, source_type: &Typ
                 >scalable_vector_type: u1 = 0;
                 if (scalable_vector_type)
                 {
-                    #trap();
+                    @trap();
                 }
                 else
                 {
                     // Coercion through memory
                     >original_destination_alignment = get_byte_alignment(destination_type);
                     >source_alignment = get_byte_alignment(source_type);
-                    >destination_alignment = #max(original_destination_alignment, source_alignment);
+                    >destination_alignment = @max(original_destination_alignment, source_alignment);
                     >destination_alloca = create_alloca(module, {
                         .type = destination_type,
                         .name = "coerce",
@@ -12952,7 +12952,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
     >uses_in_alloca: u1 = 0;
     if (uses_in_alloca)
     {
-        #trap();
+        @trap();
     }
 
     >llvm_indirect_return_value: &LLVMValue = zero;
@@ -12982,7 +12982,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
             }
             else
             {
-                #trap();
+                @trap();
             }
 
             assert(pointer != zero);
@@ -12999,11 +12999,11 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
             }
             else if (return_abi.flags.kind == .in_alloca)
             {
-                #trap();
+                @trap();
             }
             else
             {
-                #trap();
+                @trap();
             }
         },
         else => {},
@@ -13043,9 +13043,9 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
         if (is_named_argument)
         {
             // TODO: better slice single statement
-            >llvm_abi_argument_types = llvm_abi_argument_type_buffer_slice[#extend(argument_abi.abi_start)..#extend(argument_abi.abi_start + argument_abi.abi_count)];
-            >destination_abi_argument_types = abi_argument_type_buffer_slice[#extend(argument_abi.abi_start)..#extend(argument_abi.abi_start + argument_abi.abi_count)];
-            >source_abi_argument_types = raw_function_type.content.function.abi.abi_argument_types[#extend(argument_abi.abi_start)..#extend(argument_abi.abi_start + argument_abi.abi_count)];
+            >llvm_abi_argument_types = llvm_abi_argument_type_buffer_slice[@extend(argument_abi.abi_start)..@extend(argument_abi.abi_start + argument_abi.abi_count)];
+            >destination_abi_argument_types = abi_argument_type_buffer_slice[@extend(argument_abi.abi_start)..@extend(argument_abi.abi_start + argument_abi.abi_count)];
+            >source_abi_argument_types = raw_function_type.content.function.abi.abi_argument_types[@extend(argument_abi.abi_start)..@extend(argument_abi.abi_start + argument_abi.abi_count)];
 
             for (i: 0..argument_abi.abi_count)
             {
@@ -13058,7 +13058,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
 
         if (argument_abi.padding.type != zero)
         {
-            #trap();
+            @trap();
         }
 
         assert(abi_argument_count == argument_abi.abi_start);
@@ -13082,13 +13082,13 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                     switch (evaluation_kind)
                     {
                         .scalar => { v = semantic_call_argument_value; },
-                        .aggregate => { #trap(); },
-                        .complex => { #trap(); },
+                        .aggregate => { @trap(); },
+                        .complex => { @trap(); },
                     }
 
                     if (!type_is_abi_equal(module, coerce_to_type, v.type))
                     {
-                        #trap();
+                        @trap();
                     }
 
                     llvm_abi_argument_value_buffer[abi_argument_count] = v.llvm;
@@ -13098,13 +13098,13 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                 {
                     if (coerce_to_type.id == .struct and argument_abi.flags.kind == .direct and !argument_abi.flags.can_be_flattened)
                     {
-                        #trap();
+                        @trap();
                     }
 
                     // TODO: fix this hack and collapse it into the generic path
                     if (coerce_to_type == uint8(module) and semantic_argument_type == uint1(module))
                     {
-                        #trap();
+                        @trap();
                     }
                     else
                     {
@@ -13113,9 +13113,9 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
 
                         switch (evaluation_kind)
                         {
-                            .scalar => { #trap(); },
+                            .scalar => { @trap(); },
                             .aggregate => { src = semantic_call_argument_value; },
-                            .complex => { #trap(); },
+                            .complex => { @trap(); },
                         }
 
                         assert(src != zero);
@@ -13130,7 +13130,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                             >source_type_is_scalable: u1 = 0;
                             if (source_type_is_scalable)
                             {
-                                #trap();
+                                @trap();
                             }
                             else
                             {
@@ -13149,7 +13149,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                             },
                                             else =>
                                             {
-                                                #trap();
+                                                @trap();
                                             }
                                         }
                                     }
@@ -13189,11 +13189,11 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                         for (i: 0..coerce_fields.length)
                                         {
                                             >field = &coerce_fields[i];
-                                            >gep = LLVMBuildStructGEP2(module.llvm.builder, coerce_to_type.llvm.memory, source, #truncate(i), "");
+                                            >gep = LLVMBuildStructGEP2(module.llvm.builder, coerce_to_type.llvm.memory, source, @truncate(i), "");
                                             >maybe_undef: u1 = 0;
                                             if (maybe_undef)
                                             {
-                                                #trap();
+                                                @trap();
                                             }
 
                                             >load = create_load(module, {
@@ -13213,7 +13213,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                         {
                                             for (i: 0..coerce_fields.length)
                                             {
-                                                llvm_abi_argument_value_buffer[abi_argument_count] = LLVMBuildExtractValue(module.llvm.builder, source, #truncate(i), "");
+                                                llvm_abi_argument_value_buffer[abi_argument_count] = LLVMBuildExtractValue(module.llvm.builder, source, @truncate(i), "");
                                                 abi_argument_count += 1;
                                             }
                                         }
@@ -13237,13 +13237,13 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
 
                                                         for (i: 0..coerce_fields.length)
                                                         {
-                                                            >gep = LLVMBuildStructGEP2(module.llvm.builder, coerce_to_type.llvm.abi, global, #truncate(i), "");
+                                                            >gep = LLVMBuildStructGEP2(module.llvm.builder, coerce_to_type.llvm.abi, global, @truncate(i), "");
                                                             >field = &coerce_fields[i];
 
                                                             >maybe_undef: u1 = 0;
                                                             if (maybe_undef)
                                                             {
-                                                                #trap();
+                                                                @trap();
                                                             }
 
                                                             >load = create_load(module, {
@@ -13259,7 +13259,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                                     }
                                                     else
                                                     {
-                                                        #trap();
+                                                        @trap();
                                                     }
                                                 }
                                                 .zero =>
@@ -13274,7 +13274,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                                 },
                                                 else =>
                                                 {
-                                                    #trap();
+                                                    @trap();
                                                 },
                                             }
                                         }
@@ -13324,7 +13324,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                     }
                                     else
                                     {
-                                        #trap();
+                                        @trap();
                                     }
 
                                     assert(pointer_type != zero);
@@ -13346,13 +13346,13 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                     >is_cmse_ns_call: u1 = 0;
                                     if (is_cmse_ns_call)
                                     {
-                                        #trap();
+                                        @trap();
                                     }
 
                                     >maybe_undef: u1 = 0;
                                     if (maybe_undef)
                                     {
-                                        #trap();
+                                        @trap();
                                     }
 
                                     v = load;
@@ -13377,7 +13377,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                 if (evaluation_kind == .aggregate)
                 {
                     >same_address_space: u1 = 1;
-                    >abi_start: u64 = #extend(argument_abi.abi_start);
+                    >abi_start: u64 = @extend(argument_abi.abi_start);
                     assert(abi_start >= raw_function_type.content.function.abi.abi_argument_types.length or same_address_space);
 
                     // TODO: handmade code, may contain bugs
@@ -13388,7 +13388,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
 
                     if (abi_argument_type == semantic_argument_type)
                     {
-                        #trap();
+                        @trap();
                     }
                     else if (abi_argument_type.id == .pointer and abi_argument_type.content.pointer.element_type == semantic_argument_type)
                     {
@@ -13446,17 +13446,17 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                     }
                     else
                     {
-                        #trap();
+                        @trap();
                     }
                 }
 
                 if (!do_continue)
                 {
-                    #trap();
+                    @trap();
                 }
             },
             .ignore => { unreachable; },
-            else => { #trap(); }, // TODO
+            else => { @trap(); }, // TODO
         }
 
         assert(abi_argument_count == argument_abi.abi_start + argument_abi.abi_count);
@@ -13466,16 +13466,16 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
 
     if (raw_function_type.content.function.base.is_variable_argument)
     {
-        assert(declaration_abi_argument_types.length <= #extend(abi_argument_count));
+        assert(declaration_abi_argument_types.length <= @extend(abi_argument_count));
     }
     else
     {
-        assert(declaration_abi_argument_types.length == #extend(abi_argument_count));
+        assert(declaration_abi_argument_types.length == @extend(abi_argument_count));
     }
 
     assert(raw_function_type.llvm.abi != zero);
 
-    >llvm_call = LLVMBuildCall2(module.llvm.builder, raw_function_type.llvm.abi, llvm_callable, &llvm_abi_argument_value_buffer[0], #extend(abi_argument_count), "");
+    >llvm_call = LLVMBuildCall2(module.llvm.builder, raw_function_type.llvm.abi, llvm_callable, &llvm_abi_argument_value_buffer[0], @extend(abi_argument_count), "");
     >llvm_calling_convention: LLVMCallingConvention = undefined;
     switch (raw_function_type.content.function.base.calling_convention)
     {
@@ -13489,7 +13489,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
     emit_attributes(module, llvm_call, &LLVMAddCallSiteAttribute, {
         .return_abi = return_abi,
         .argument_abis = argument_abis,
-        .abi_argument_types = abi_argument_type_buffer[..#extend(abi_argument_count)],
+        .abi_argument_types = abi_argument_type_buffer[..@extend(abi_argument_count)],
         .abi_return_type = raw_function_type.content.function.abi.abi_return_type,
         .attributes = zero,
     });
@@ -13523,7 +13523,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
             >fixed_vector_type: u1 = 0;
             if (fixed_vector_type)
             {
-                #trap();
+                @trap();
             }
 
             >coerce_alloca: &LLVMValue = zero;
@@ -13547,7 +13547,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
 
             if (return_abi.attributes.direct.offset != 0)
             {
-                #trap();
+                @trap();
             }
 
             >destination_type = return_abi.semantic_type;
@@ -13555,7 +13555,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
             >source_value = llvm_call;
             >source_type = raw_function_type.content.function.abi.abi_return_type;
             >destination_size = get_byte_size(destination_type);
-            >left_destination_size = destination_size - #extend(return_abi.attributes.direct.offset);
+            >left_destination_size = destination_size - @extend(return_abi.attributes.direct.offset);
             >is_destination_volatile: u1 = 0;
 
             switch (return_abi.semantic_type.id)
@@ -13569,7 +13569,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                     }
                     else
                     {
-                        #trap();
+                        @trap();
                     }
                 },
                 .array =>
@@ -13610,7 +13610,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                             zero,
                         });
                     },
-                    .left => { #trap(); },
+                    .left => { @trap(); },
                 }
             }
         },
@@ -13661,7 +13661,7 @@ emit_field_access = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, l
     assert(aggregate_type.id == .pointer);
     >aggregate_element_type = aggregate_type.content.pointer.element_type;
 
-    >real_aggregate_type = #select(aggregate_element_type.id == .pointer, aggregate_element_type.content.pointer.element_type, aggregate_element_type);
+    >real_aggregate_type = @select(aggregate_element_type.id == .pointer, aggregate_element_type.content.pointer.element_type, aggregate_element_type);
     >resolved_aggregate_type = resolve_alias(module, real_aggregate_type);
     resolve_type_in_place(module, resolved_aggregate_type);
 
@@ -13704,7 +13704,7 @@ emit_field_access = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, l
                     }
 
                     assert(result_field != zero);
-                    >field_index: u32 = #truncate(result_field - fields.pointer);
+                    >field_index: u32 = @truncate(result_field - fields.pointer);
 
                     field_access = {
                         .type = resolved_aggregate_type.content.struct.fields[field_index].type,
@@ -13800,7 +13800,7 @@ emit_field_access = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, l
 
             if (left_llvm)
             {
-                #trap();
+                @trap();
             }
 
             return trunc;
@@ -13972,7 +13972,7 @@ emit_slice_expresion = fn (module: &Module, value: &Value) [2]&LLVMValue
             >slice_length: &LLVMValue = zero;
             if (has_start)
             {
-                #trap();
+                @trap();
             }
             else if (end != zero)
             {
@@ -14014,7 +14014,7 @@ emit_va_arg_from_memory = fn (module: &Module, va_list_pointer: &LLVMValue, va_l
 
     if (get_byte_alignment(argument_type) > 8)
     {
-        #trap();
+        @trap();
     }
 
     >argument_type_size = get_byte_size(argument_type);
@@ -14107,7 +14107,7 @@ emit_va_arg = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_ty
         }
         else
         {
-            #trap();
+            @trap();
         }
 
         >raw_in_regs = 48 - needed_registers.gpr * 8;
@@ -14118,11 +14118,11 @@ emit_va_arg = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_ty
         >in_regs: &LLVMValue = zero;
         if (needed_registers.gpr != 0)
         {
-            in_regs = LLVMConstInt(u32_llvm, #extend(raw_in_regs), 0);
+            in_regs = LLVMConstInt(u32_llvm, @extend(raw_in_regs), 0);
         }
         else
         {
-            #trap();
+            @trap();
         }
 
         if (needed_registers.gpr != 0)
@@ -14131,7 +14131,7 @@ emit_va_arg = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_ty
         }
         else
         {
-            #trap();
+            @trap();
         }
 
         assert(in_regs != zero);
@@ -14139,25 +14139,25 @@ emit_va_arg = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_ty
         >fp_offset_pointer: &LLVMValue = zero;
         if (needed_registers.sse != 0)
         {
-            #trap();
+            @trap();
         }
 
         >fp_offset: &LLVMValue = zero;
         if (needed_registers.sse != 0)
         {
-            #trap();
+            @trap();
         }
 
         >raw_fits_in_fp = 176 - needed_registers.sse * 16;
         >fits_in_fp: &LLVMValue = zero;
         if (needed_registers.sse != 0)
         {
-            #trap();
+            @trap();
         }
 
         if (needed_registers.sse != 0 and needed_registers.gpr != 0)
         {
-            #trap();
+            @trap();
         }
 
         >in_reg_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "va_arg.in_reg");
@@ -14180,7 +14180,7 @@ emit_va_arg = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_ty
 
         if (needed_registers.gpr != 0 and needed_registers.sse != 0)
         {
-            #trap();
+            @trap();
         }
         else if (needed_registers.gpr != 0)
         {
@@ -14196,11 +14196,11 @@ emit_va_arg = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_ty
         }
         else if (needed_registers.sse == 1)
         {
-            #trap();
+            @trap();
         }
         else if (needed_registers.sse == 2)
         {
-            #trap();
+            @trap();
         }
         else
         {
@@ -14210,7 +14210,7 @@ emit_va_arg = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_ty
         if (needed_registers.gpr != 0)
         {
             >raw_offset = needed_registers.gpr * 8;
-            >new_offset = LLVMBuildAdd(module.llvm.builder, gpr_offset, LLVMConstInt(u32_llvm, #extend(raw_offset), 0), "");
+            >new_offset = LLVMBuildAdd(module.llvm.builder, gpr_offset, LLVMConstInt(u32_llvm, @extend(raw_offset), 0), "");
             create_store(module, {
                 .source = new_offset,
                 .destination = gpr_offset_pointer,
@@ -14221,7 +14221,7 @@ emit_va_arg = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_ty
 
         if (needed_registers.sse != 0)
         {
-            #trap();
+            @trap();
         }
 
         LLVMBuildBr(module.llvm.builder, end_block);
@@ -14271,10 +14271,10 @@ emit_va_arg = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_ty
             }
             else
             {
-                #trap();
+                @trap();
             }
         },
-        .complex => { #trap(); },
+        .complex => { @trap(); },
     }
 }
 
@@ -14306,12 +14306,12 @@ emit_string_literal = fn (module: &Module, value: &Value) [2]&LLVMValue
     >pointer = value.content.string_literal.pointer;
     >length = value.content.string_literal.length;
 
-    >constant_string = LLVMConstStringInContext2(module.llvm.context, pointer, length, #extend(!null_terminate));
+    >constant_string = LLVMConstStringInContext2(module.llvm.context, pointer, length, @extend(!null_terminate));
 
     >u8_type = uint8(module);
     resolve_type_in_place(module, u8_type);
 
-    >string_type = LLVMArrayType2(u8_type.llvm.abi, length + #extend(null_terminate));
+    >string_type = LLVMArrayType2(u8_type.llvm.abi, length + @extend(null_terminate));
     >is_constant: u1 = 1;
     >thread_local_mode: LLVMThreadLocalMode = .none;
     >externally_initialized: u1 = 0;
@@ -14395,7 +14395,7 @@ emit_argument = fn (module: &Module, argument: &Argument) void
         assert(scope != zero);
         >always_preserve: u1 = 1;
         >flags: LLVMDIFlags = zero;
-        >argument_variable = LLVMDIBuilderCreateParameterVariable(module.llvm.di_builder, scope, argument.variable.name.pointer, argument.variable.name.length, argument.index, module.llvm.file, argument.variable.line, debug_type, #extend(always_preserve), flags);
+        >argument_variable = LLVMDIBuilderCreateParameterVariable(module.llvm.di_builder, scope, argument.variable.name.pointer, argument.variable.name.length, argument.index, module.llvm.file, argument.variable.line, debug_type, @extend(always_preserve), flags);
 
         end_debug_local(module, &argument.variable, argument_variable);
     }
@@ -14488,11 +14488,11 @@ emit_macro_instantiation = fn (module: &Module, value: &Value) void
             },
             .aggregate =>
             {
-                #trap();
+                @trap();
             },
             .complex =>
             {
-                #trap();
+                @trap();
             },
         }
     }
@@ -14556,7 +14556,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
         .constant_integer =>
         {
             >llvm_integer_type = get_llvm_type(resolved_value_type, type_kind);
-            llvm_value = LLVMConstInt(llvm_integer_type, value.content.constant_integer.value, #extend(value.content.constant_integer.signed));
+            llvm_value = LLVMConstInt(llvm_integer_type, value.content.constant_integer.value, @extend(value.content.constant_integer.signed));
         },
         .binary =>
         {
@@ -14628,10 +14628,10 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                             {
                                 right_condition = right_llvm;
                             },
-                            else => { #trap(); },
+                            else => { @trap(); },
                         }
                     },
-                    else => { #trap(); },
+                    else => { @trap(); },
                 }
 
                 assert(right_condition != zero);
@@ -14761,7 +14761,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                         },
                         .left =>
                         {
-                            #trap();
+                            @trap();
                         }
                     }
                 },
@@ -14846,7 +14846,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                 {
                     llvm_value = llvm_unary_value;
                 },
-                else => { #trap(); },
+                else => { @trap(); },
             }
         },
         .variable =>
@@ -14876,7 +14876,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                             report_error();
                         }
 
-                        >global: &Global = #field_parent_pointer(variable, "variable");
+                        >global: &Global = @field_parent_pointer(variable, "variable");
                         llvm_value = global.initial_value.llvm;
                     }
                     else
@@ -14895,12 +14895,12 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                                         zero,
                                     });
                                 },
-                                .complex => { #trap(); },
+                                .complex => { @trap(); },
                             }
                         }
                         else
                         {
-                            #trap();
+                            @trap();
                         }
                     }
                 },
@@ -14920,7 +14920,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                 .align_of =>
                 {
                     assert(resolved_value_type.id == .integer);
-                    llvm_value = LLVMConstInt(llvm_result_type, #extend(get_byte_alignment(unary_type)), 0);
+                    llvm_value = LLVMConstInt(llvm_result_type, @extend(get_byte_alignment(unary_type)), 0);
                 },
                 .byte_size =>
                 {
@@ -14933,7 +14933,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                     assert(unary_type.id == .integer);
                     >signed = unary_type.content.integer.signed;
                     >max_value = integer_max_value(unary_type.content.integer.bit_count, signed);
-                    llvm_value = LLVMConstInt(llvm_result_type, max_value, #extend(signed));
+                    llvm_value = LLVMConstInt(llvm_result_type, max_value, @extend(signed));
                 },
                 .enum_values =>
                 {
@@ -14995,7 +14995,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                 {
                     .right =>
                     {
-                        #trap();
+                        @trap();
                     },
                     .left =>
                     {
@@ -15175,7 +15175,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                 },
                 else =>
                 {
-                    #trap();
+                    @trap();
                 },
             }
         },
@@ -15202,7 +15202,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
             }
 
             >llvm_type = get_llvm_type(resolved_value_type, type_kind);
-            llvm_value = LLVMConstInt(llvm_type, result_field.value, #extend(type_is_signed(resolved_value_type)));
+            llvm_value = LLVMConstInt(llvm_type, result_field.value, @extend(type_is_signed(resolved_value_type)));
         },
         .trap =>
         {
@@ -15300,7 +15300,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
 
                                 assert(constant_count == fields.length);
 
-                                llvm_value = LLVMConstNamedStruct(get_llvm_type(resolved_value_type, type_kind), &constant_buffer[0], #truncate(constant_count));
+                                llvm_value = LLVMConstNamedStruct(get_llvm_type(resolved_value_type, type_kind), &constant_buffer[0], @truncate(constant_count));
                             }
                             else
                             {
@@ -15310,7 +15310,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                         },
                         .union =>
                         {
-                            #trap();
+                            @trap();
                         },
                         .bits =>
                         {
@@ -15452,10 +15452,10 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                     >bit_count = condition_type.content.integer.bit_count;
                     if (bit_count != 1)
                     {
-                        #trap();
+                        @trap();
                     }
                 },
-                else => { #trap(); },
+                else => { @trap(); },
             }
 
             emit_value(module, true_value, type_kind, must_be_constant);
@@ -15589,15 +15589,15 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
         },
         .build_mode =>
         {
-            llvm_value = LLVMConstInt(get_llvm_type(resolved_value_type.content.enum.backing_type, type_kind), #extend(#int_from_enum(module.build_mode)), 0);
+            llvm_value = LLVMConstInt(get_llvm_type(resolved_value_type.content.enum.backing_type, type_kind), @extend(@int_from_enum(module.build_mode)), 0);
         },
         .has_debug_info =>
         {
-            llvm_value = LLVMConstInt(get_llvm_type(resolved_value_type, type_kind), #extend(module.has_debug_info), 0);
+            llvm_value = LLVMConstInt(get_llvm_type(resolved_value_type, type_kind), @extend(module.has_debug_info), 0);
         },
         else =>
         {
-            #trap();
+            @trap();
         },
     }
 
@@ -15710,7 +15710,7 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
 
                     for (i: 0..string_literal.length)
                     {
-                        >member_pointer = LLVMBuildStructGEP2(module.llvm.builder, slice_type.llvm.abi, left_llvm, #truncate(i), "");
+                        >member_pointer = LLVMBuildStructGEP2(module.llvm.builder, slice_type.llvm.abi, left_llvm, @truncate(i), "");
                         >slice_member_type = slice_type.content.struct.fields[i].type;
                         create_store(module, {
                             .source = string_literal[i],
@@ -15806,11 +15806,11 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                                     }
 
                                     field_mask |= 1 << declaration_index;
-                                    max_field_index = #max(max_field_index, declaration_index);
+                                    max_field_index = @max(max_field_index, declaration_index);
 
                                     >field = &fields[declaration_index];
 
-                                    >destination_pointer = LLVMBuildStructGEP2(module.llvm.builder, resolved_value_type.llvm.memory, left_llvm, #truncate(declaration_index), "");
+                                    >destination_pointer = LLVMBuildStructGEP2(module.llvm.builder, resolved_value_type.llvm.memory, left_llvm, @truncate(declaration_index), "");
 
                                     emit_assignment(module, destination_pointer, get_pointer_type(module, field.type), value);
                                 }
@@ -15859,7 +15859,7 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                             },
                             else =>
                             {
-                                #trap();
+                                @trap();
                             },
                         }
                     }
@@ -15909,7 +15909,7 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                     {
                         .left =>
                         {
-                            #trap();
+                            @trap();
                         },
                         .right =>
                         {
@@ -16004,13 +16004,13 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                 },
                 else =>
                 {
-                    #trap();
+                    @trap();
                 },
             }
         },
         .complex =>
         {
-            #trap();
+            @trap();
         },
     }
 }
@@ -16118,7 +16118,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
             assert(!local.variable.storage);
 
             analyze_type(module, local.initial_value, expected_type, zero);
-            local.variable.type = #select(expected_type != zero, expected_type, local.initial_value.type);
+            local.variable.type = @select(expected_type != zero, expected_type, local.initial_value.type);
             assert(local.variable.type != zero);
 
             emit_local(module, local);
@@ -16224,14 +16224,14 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
 
             LLVMBuildBr(module.llvm.builder, entry_block);
 
-            if (!LLVMGetFirstUse(#pointer_cast(body_block)))
+            if (!LLVMGetFirstUse(@pointer_cast(body_block)))
             {
-                #trap();
+                @trap();
             }
 
-            if (!LLVMGetFirstUse(#pointer_cast(exit_block)))
+            if (!LLVMGetFirstUse(@pointer_cast(exit_block)))
             {
-                #trap();
+                @trap();
             }
 
             LLVMPositionBuilderAtEnd(module.llvm.builder, exit_block);
@@ -16332,7 +16332,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
             for (i: 0..clauses.length)
             {
                 >clause = &clauses[i];
-                clause.basic_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, #select(clause.values.length == 0, "switch.else_case_block", "switch.case_block"));
+                clause.basic_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, @select(clause.values.length == 0, "switch.else_case_block", "switch.case_block"));
                 discriminant_case_count += clause.values.length;
 
                 if (clause.values.length == 0)
@@ -16399,7 +16399,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                 else_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "switch.else_case_block");
             }
 
-            >switch_instruction = LLVMBuildSwitch(module.llvm.builder, discriminant.llvm, else_block, #truncate(discriminant_case_count));
+            >switch_instruction = LLVMBuildSwitch(module.llvm.builder, discriminant.llvm, else_block, @truncate(discriminant_case_count));
             >all_blocks_terminated: u1 = 1;
 
             for (&clause: clauses)
@@ -16782,7 +16782,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                                 }
                                 else
                                 {
-                                    #trap();
+                                    @trap();
                                 }
                             },
                             .left =>
@@ -16950,7 +16950,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                     else
                     {
                         // TODO: case for reverse range
-                        #trap();
+                        @trap();
                     }
                 },
             }
@@ -16983,7 +16983,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
         },
         else =>
         {
-            #trap();
+            @trap();
         },
     }
 }
@@ -17039,7 +17039,7 @@ generate_object = fn (module: &LLVMModule, target_machine: &LLVMTargetMachine, o
     >code_generation_options: LLVMCodeGenerationOptions = {
         .output_file_path = options.path,
         .file_type = .object,
-        .optimize_when_possible = #extend(options.optimization_level > .O0),
+        .optimize_when_possible = @extend(options.optimization_level > .O0),
         .verify_module = 1,
         zero,
     };
@@ -17132,7 +17132,7 @@ link = fn (module: &Module) void
     >result = lld_elf_link(linker_arguments.pointer, linker_arguments.length, 1, 0);
     if (!result.success)
     {
-        #trap();
+        @trap();
     }
 }
 
@@ -17146,7 +17146,7 @@ emit_debug_argument = fn (module: &Module, argument: &Argument, basic_block: &LL
     >flags: LLVMDIFlags = zero;
     >scope = argument.variable.scope.llvm;
 
-    >parameter_variable = LLVMDIBuilderCreateParameterVariable(module.llvm.di_builder, scope, argument.variable.name.pointer, argument.variable.name.length, argument.index, module.llvm.file, argument.variable.line, argument.variable.type.llvm.debug, #extend(always_preserve), flags);
+    >parameter_variable = LLVMDIBuilderCreateParameterVariable(module.llvm.di_builder, scope, argument.variable.name.pointer, argument.variable.name.length, argument.index, module.llvm.file, argument.variable.line, argument.variable.type.llvm.debug, @extend(always_preserve), flags);
 
     >inlined_at = module.llvm.inlined_at;
     >debug_location = LLVMDIBuilderCreateDebugLocation(module.llvm.context, argument.variable.line, argument.variable.column, scope, inlined_at);
@@ -17190,7 +17190,7 @@ emit = fn (module: &Module) void
         >sysroot = "";
         >sdk = "";
 
-        module.scope.llvm = LLVMDIBuilderCreateCompileUnit(di_builder, language, di_file, producer_name.pointer, producer_name.length, #extend(is_optimized), flags.pointer, flags.length, runtime_version, split_name.pointer, split_name.length, emission_kind, 0, 0, #extend(is_optimized), sysroot.pointer, sysroot.length, sdk.pointer, sdk.length);
+        module.scope.llvm = LLVMDIBuilderCreateCompileUnit(di_builder, language, di_file, producer_name.pointer, producer_name.length, @extend(is_optimized), flags.pointer, flags.length, runtime_version, split_name.pointer, split_name.length, emission_kind, 0, 0, @extend(is_optimized), sysroot.pointer, sysroot.length, sdk.pointer, sdk.length);
     }
 
     >target_triple: &u8 = zero;
@@ -17214,7 +17214,7 @@ emit = fn (module: &Module) void
     }
     else
     {
-        #trap();
+        @trap();
     }
 
     >target_machine_options = LLVMCreateTargetMachineOptions();
@@ -17263,8 +17263,8 @@ emit = fn (module: &Module) void
 
     for (i: 0..module.llvm.intrinsic_table.length)
     {
-        >e: LLVMIntrinsicIndex = #enum_from_int(i);
-        >name = #enum_name(e);
+        >e: LLVMIntrinsicIndex = @enum_from_int(i);
+        >name = @enum_name(e);
         >intrinsic_id = LLVMLookupIntrinsicID(name.pointer, name.length);
         assert(intrinsic_id != 0);
         module.llvm.intrinsic_table[i] = intrinsic_id;
@@ -17272,8 +17272,8 @@ emit = fn (module: &Module) void
 
     for (i: 0..module.llvm.attribute_table.length)
     {
-        >e: LLVMAttributeIndex = #enum_from_int(i);
-        >name = #enum_name(e);
+        >e: LLVMAttributeIndex = @enum_from_int(i);
+        >name = @enum_name(e);
         >attribute_id = LLVMGetEnumAttributeKindForName(name.pointer, name.length);
         assert(attribute_id != 0);
         module.llvm.attribute_table[i] = attribute_id;
@@ -17325,8 +17325,8 @@ emit = fn (module: &Module) void
 
                             function_type.abi.available_registers = {
                                 .system_v = {
-                                    .gpr = #select(register_call, 11, 6),
-                                    .sse = #select(register_call, 16, 8),
+                                    .gpr = @select(register_call, 11, 6),
+                                    .sse = @select(register_call, 16, 8),
                                 },
                             };
 
@@ -17395,24 +17395,24 @@ emit = fn (module: &Module) void
 
                             }
 
-                            >abi_argument_types = arena_allocate_slice[&Type](module.arena, #extend(abi_argument_type_count));
-                            memcpy(#pointer_cast(abi_argument_types.pointer), #pointer_cast(&abi_argument_type_buffer), #extend(#byte_size(&Type) * abi_argument_type_count));
+                            >abi_argument_types = arena_allocate_slice[&Type](module.arena, @extend(abi_argument_type_count));
+                            memcpy(@pointer_cast(abi_argument_types.pointer), @pointer_cast(&abi_argument_type_buffer), @extend(@byte_size(&Type) * abi_argument_type_count));
                             function_type.abi.abi_argument_types = abi_argument_types;
                         },
                             .win64 =>
                             {
-#trap();
+@trap();
                             },
                     }
 
-                    >llvm_function_type = LLVMFunctionType(function_type.abi.abi_return_type.llvm.abi, &llvm_abi_argument_type_buffer[0], #truncate(function_type.abi.abi_argument_types.length), #extend(function_type.base.is_variable_argument));
+                    >llvm_function_type = LLVMFunctionType(function_type.abi.abi_return_type.llvm.abi, &llvm_abi_argument_type_buffer[0], @truncate(function_type.abi.abi_argument_types.length), @extend(function_type.base.is_variable_argument));
 
                     >subroutine_type: &LLVMMetadata = zero;
 
                     if (module.has_debug_info)
                     {
                         >debug_argument_type_buffer: [64]&LLVMMetadata = undefined;
-                        >debug_argument_types = debug_argument_type_buffer[..function_type.abi.argument_abis.length + 1 + #extend(function_type.base.is_variable_argument)];
+                        >debug_argument_types = debug_argument_type_buffer[..function_type.abi.argument_abis.length + 1 + @extend(function_type.base.is_variable_argument)];
                         debug_argument_types[0] = function_type.abi.return_abi.semantic_type.llvm.debug;
                         assert(debug_argument_types[0] != zero);
 
@@ -17436,7 +17436,7 @@ emit = fn (module: &Module) void
                         }
 
                         >flags: LLVMDIFlags = zero;
-                        subroutine_type = LLVMDIBuilderCreateSubroutineType(module.llvm.di_builder, module.llvm.file, debug_argument_types.pointer, #truncate(debug_argument_types.length), flags);
+                        subroutine_type = LLVMDIBuilderCreateSubroutineType(module.llvm.di_builder, module.llvm.file, debug_argument_types.pointer, @truncate(debug_argument_types.length), flags);
                     }
 
                     assert(global.variable.storage.type.id == .pointer);
@@ -17491,7 +17491,7 @@ emit = fn (module: &Module) void
                         >scope_line = line + 1;
                         >flags: LLVMDIFlags = zero;
                         >is_optimized = build_mode_is_optimized(module.build_mode);
-                        subprogram = LLVMDIBuilderCreateFunction(module.llvm.di_builder, module.scope.llvm, name.pointer, name.length, linkage_name.pointer, linkage_name.length, module.llvm.file, line, subroutine_type, #extend(is_local_to_unit), #extend(is_definition), scope_line, flags, #extend(is_optimized));
+                        subprogram = LLVMDIBuilderCreateFunction(module.llvm.di_builder, module.scope.llvm, name.pointer, name.length, linkage_name.pointer, linkage_name.length, module.llvm.file, line, subroutine_type, @extend(is_local_to_unit), @extend(is_definition), scope_line, flags, @extend(is_optimized));
                         LLVMSetSubprogram(llvm_function, subprogram);
                     }
 
@@ -17556,7 +17556,7 @@ emit = fn (module: &Module) void
                             >name = global.variable.name;
                             >linkage_name = name;
                             >local_to_unit = global.linkage == .internal;
-                            >global_debug = LLVMDIBuilderCreateGlobalVariableExpression(module.llvm.di_builder, module.scope.llvm, name.pointer, name.length, linkage_name.pointer, linkage_name.length, module.llvm.file, global.variable.line, global_type.llvm.debug, #extend(local_to_unit), null_expression(module), zero, alignment * 8);
+                            >global_debug = LLVMDIBuilderCreateGlobalVariableExpression(module.llvm.di_builder, module.scope.llvm, name.pointer, name.length, linkage_name.pointer, linkage_name.length, module.llvm.file, global.variable.line, global_type.llvm.debug, @extend(local_to_unit), null_expression(module), zero, alignment * 8);
                             LLVMGlobalSetMetadata(llvm_global, 0, global_debug);
                         }
                     },
@@ -17621,19 +17621,19 @@ emit = fn (module: &Module) void
                             >indirect_argument_index = function_type.abi.return_abi.flags.sret_after_this;
                             if (function_type.abi.return_abi.flags.sret_after_this)
                             {
-#trap();
+@trap();
                             }
 
                             global.variable.storage.content.function.llvm.return_alloca = llvm_abi_arguments[indirect_argument_index];
 
                             if (!function_type.abi.return_abi.flags.indirect_by_value)
                             {
-#trap();
+@trap();
                             }
                         },
                         .in_alloca =>
                         {
-#trap();
+@trap();
                         },
                         else =>
                         {
@@ -17655,8 +17655,8 @@ emit = fn (module: &Module) void
                     >argument = &arguments[i];
                     >argument_abi = &argument_abis[i];
                     // TODO: double slice
-                    >argument_abi_arguments = llvm_abi_arguments[#extend(argument_abi.abi_start)..];
-                    argument_abi_arguments = argument_abi_arguments[..#extend(argument_abi.abi_count)];
+                    >argument_abi_arguments = llvm_abi_arguments[@extend(argument_abi.abi_start)..];
+                    argument_abi_arguments = argument_abi_arguments[..@extend(argument_abi.abi_count)];
 
                     >semantic_argument_storage: &LLVMValue = zero;
 
@@ -17675,12 +17675,12 @@ emit = fn (module: &Module) void
 
                                 if (coerce_to_type.llvm.abi != LLVMTypeOf(v))
                                 {
-#trap();
+@trap();
                                 }
 
                                 if (is_promoted)
                                 {
-#trap();
+@trap();
                                 }
 
                                 // TODO: this we can get rid of because we handle all of this inside `create_alloca`, load, stores, etc
@@ -17712,7 +17712,7 @@ emit = fn (module: &Module) void
                                     }
                                     else
                                     {
-#trap();
+@trap();
                                     }
 
                                     create_store(module, {
@@ -17747,7 +17747,7 @@ emit = fn (module: &Module) void
                                 >is_fixed_vector_type: u1 = 0;
                                 if (is_fixed_vector_type)
                                 {
-#trap();
+@trap();
                                 }
 
                                 if (coerce_to_type.id == .struct and coerce_to_type.content.struct.fields.length > 1 and argument_abi.flags.kind == .direct and !argument_abi.flags.can_be_flattened)
@@ -17755,7 +17755,7 @@ emit = fn (module: &Module) void
                                     >contains_homogeneous_scalable_vector_types: u1 = 0;
                                     if (contains_homogeneous_scalable_vector_types)
                                     {
-#trap();
+@trap();
                                     }
                                 }
 
@@ -17770,7 +17770,7 @@ emit = fn (module: &Module) void
 
                                 if (argument_abi.attributes.direct.offset > 0)
                                 {
-#trap();
+@trap();
                                 }
                                 else
                                 {
@@ -17786,7 +17786,7 @@ emit = fn (module: &Module) void
 
                                     if (is_scalable)
                                     {
-#trap();
+@trap();
                                     }
                                     else
                                     {
@@ -17810,14 +17810,14 @@ emit = fn (module: &Module) void
                                         }
 
                                         >fields = coerce_to_type.content.struct.fields;
-                                        assert(fields.length == #extend(argument_abi.abi_count));
+                                        assert(fields.length == @extend(argument_abi.abi_count));
 
                                         resolve_type_in_place(module, coerce_to_type);
 
                                         for (i: 0..fields.length)
                                         {
                                             >field = &fields[i];
-                                            >gep = LLVMBuildStructGEP2(module.llvm.builder, coerce_to_type.llvm.abi, address, #truncate(i), "");
+                                            >gep = LLVMBuildStructGEP2(module.llvm.builder, coerce_to_type.llvm.abi, address, @truncate(i), "");
                                             create_store(module, {
                                                     .source = argument_abi_arguments[i],
                                                     .destination = gep,
@@ -17840,7 +17840,7 @@ emit = fn (module: &Module) void
                                 {
                                     assert(argument_abi.abi_count == 1);
                                     >abi_argument_type = function_type.abi.abi_argument_types[argument_abi.abi_start];
-                                    >destination_size: u64 = get_byte_size(pointer_type) - #extend(argument_abi.attributes.direct.offset);
+                                    >destination_size: u64 = get_byte_size(pointer_type) - @extend(argument_abi.attributes.direct.offset);
                                     >is_volatile: u1 = 0;
                                     create_coerced_store(module, argument_abi_arguments[0], abi_argument_type, pointer, pointer_type, destination_size, is_volatile);
                                 }
@@ -17859,13 +17859,13 @@ emit = fn (module: &Module) void
                                     {
                                         if (argument_abi.flags.indirect_realign or argument_abi.flags.kind == .indirect_aliased)
                                         {
-#trap();
+@trap();
                                         }
 
                                         >use_indirect_debug_address = !argument_abi.flags.indirect_by_value;
                                         if (use_indirect_debug_address)
                                         {
-#trap();
+@trap();
                                         }
 
                                         >llvm_argument = argument_abi_arguments[0];
@@ -17873,7 +17873,7 @@ emit = fn (module: &Module) void
                                     },
                                         .scalar =>
                                         {
-#trap();
+@trap();
                                         },
                                 }
                             },
@@ -17908,9 +17908,9 @@ emit = fn (module: &Module) void
                 if (current_basic_block)
                 {
                     assert(!LLVMGetBasicBlockTerminator(current_basic_block));
-                    if (!LLVMGetFirstInstruction(current_basic_block) or !LLVMGetFirstUse(#pointer_cast(current_basic_block)))
+                    if (!LLVMGetFirstInstruction(current_basic_block) or !LLVMGetFirstUse(@pointer_cast(current_basic_block)))
                     {
-                        LLVMReplaceAllUsesWith(#pointer_cast(return_block), #pointer_cast(current_basic_block));
+                        LLVMReplaceAllUsesWith(@pointer_cast(return_block), @pointer_cast(current_basic_block));
                         LLVMDeleteBasicBlock(return_block);
                     }
                     else
@@ -17922,7 +17922,7 @@ emit = fn (module: &Module) void
                 {
                     >has_single_jump_to_return_block: u1 = 0;
 
-                    >first_use = LLVMGetFirstUse(#pointer_cast(return_block));
+                    >first_use = LLVMGetFirstUse(@pointer_cast(return_block));
                     >user: &LLVMValue = zero;
 
                     if (first_use)
@@ -17943,7 +17943,7 @@ emit = fn (module: &Module) void
                         >new_return_block = LLVMGetInstructionParent(user);
                         // Remove unconditional branch instruction to the return block
                         LLVMInstructionEraseFromParent(user);
-                        assert(!LLVMGetFirstUse(#pointer_cast(return_block)));
+                        assert(!LLVMGetFirstUse(@pointer_cast(return_block)));
                         assert(!LLVMGetBasicBlockTerminator(return_block));
                         assert(LLVMGetBasicBlockParent(return_block) != zero);
                         LLVMPositionBuilderAtEnd(module.llvm.builder, new_return_block);
@@ -18010,7 +18010,7 @@ emit = fn (module: &Module) void
                                 }
                                 else
                                 {
-#trap();
+@trap();
                                 }
 
                                 assert(source != zero);
@@ -18026,9 +18026,9 @@ emit = fn (module: &Module) void
                                 >evaluation_kind = get_evaluation_kind(function_type.abi.return_abi.semantic_type);
                                 switch (evaluation_kind)
                                 {
-                                    .scalar => { #trap(); },
+                                    .scalar => { @trap(); },
                                         .aggregate => {},
-                                        .complex => { #trap(); },
+                                        .complex => { @trap(); },
                                 }
                             },
                     }
@@ -18131,10 +18131,10 @@ compile = fn (arena: &Arena, options: CompileOptions) void
         for (b: 0..64)
         {
             >bit_count = b + 1;
-            >first_digit: u8 = #truncate(#select(bit_count < 10, bit_count % 10 + '0', bit_count / 10 + '0'));
-            >second_digit: u8 = #truncate(#select(bit_count > 9, bit_count % 10 + '0', 0));
-            >name_buffer: [3]u8 = [ #select(sign, 's', 'u'), first_digit, second_digit ];
-            >name_length: u64 = 2 + #extend(bit_count > 9);
+            >first_digit: u8 = @truncate(@select(bit_count < 10, bit_count % 10 + '0', bit_count / 10 + '0'));
+            >second_digit: u8 = @truncate(@select(bit_count > 9, bit_count % 10 + '0', 0));
+            >name_buffer: [3]u8 = [ @select(sign, 's', 'u'), first_digit, second_digit ];
+            >name_length: u64 = 2 + @extend(bit_count > 9);
 
             >name = arena_duplicate_string(arena, name_buffer[..name_length]);
 
@@ -18164,7 +18164,7 @@ compile = fn (arena: &Arena, options: CompileOptions) void
 
     for (sign: signs)
     {
-        >name = #select(sign, "s128", "u128");
+        >name = @select(sign, "s128", "u128");
         type_it.& = {
             .content = {
                 .integer = {
@@ -18296,7 +18296,7 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
         separator_index = 0;
     }
     
-    >base_start = separator_index + #extend(separator_index != 0 or relative_file_path[separator_index] == '/');
+    >base_start = separator_index + @extend(separator_index != 0 or relative_file_path[separator_index] == '/');
     >base_name = relative_file_path[base_start..extension_start];
 
     >is_compiler = string_equal(relative_file_path, "src/compiler.bbb");
@@ -18306,7 +18306,7 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
     >base_dir = arena_join_string(arena, [
         base_cache_dir,
         "/",
-        #select(compile_options.host_cpu_model, "native", "generic"),
+        @select(compile_options.host_cpu_model, "native", "generic"),
     ][..]);
 
     os_make_directory(base_dir.pointer);
@@ -18314,9 +18314,9 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
     base_dir = arena_join_string(arena, [
             base_dir,
             "/",
-            #enum_name(#build_mode),
+            @enum_name(@build_mode),
             "_",
-            #select(#has_debug_info(), "di", "nodi"),
+            @select(@has_debug_info(), "di", "nodi"),
     ][..]);
 
     os_make_directory(base_dir.pointer);
@@ -18334,9 +18334,9 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
     >outputh_path_dir = arena_join_string(arena, [
         base_dir,
         "/",
-        #enum_name(compile_options.build_mode),
+        @enum_name(compile_options.build_mode),
         "_",
-        #select(compile_options.has_debug_info, "di", "nodi"),
+        @select(compile_options.has_debug_info, "di", "nodi"),
     ][..]);
 
     os_make_directory(outputh_path_dir.pointer);
@@ -18517,7 +18517,7 @@ names: [_][]u8 =
     global_state_initialize();
     >arena = global_state.arena;
 
-    >arguments = argv[..#extend(argument_count)];
+    >arguments = argv[..@extend(argument_count)];
     if (arguments.length < 2)
     {
         return 1;
@@ -18525,7 +18525,7 @@ names: [_][]u8 =
 
     >command_string = c_string_to_slice(arguments[1]);
 
-    >command_string_to_enum = #string_to_enum(CompilerCommand, command_string);
+    >command_string_to_enum = @string_to_enum(CompilerCommand, command_string);
     if (!command_string_to_enum.is_valid)
     {
         return 1;
@@ -18551,7 +18551,7 @@ names: [_][]u8 =
 
             if (argument_count >= 4)
             {
-                >build_mode_string_to_enum = #string_to_enum(BuildMode, c_string_to_slice(arguments[3]));
+                >build_mode_string_to_enum = @string_to_enum(BuildMode, c_string_to_slice(arguments[3]));
                 if (!build_mode_string_to_enum.is_valid)
                 {
                     return 1;
@@ -18620,7 +18620,7 @@ names: [_][]u8 =
             {
                 for (is_host_cpu_model: is_host_cpu_model_array)
                 {
-                    for (build_mode: #enum_values(BuildMode))
+                    for (build_mode: @enum_values(BuildMode))
                     {
                         for (has_debug_info: debug_info_array)
                         {
@@ -18646,7 +18646,7 @@ names: [_][]u8 =
 
                             if (!success)
                             {
-                                #trap();
+                                @trap();
                             }
 
                             arena.position = position;
@@ -18659,7 +18659,7 @@ names: [_][]u8 =
         {
             for (is_host_cpu_model: is_host_cpu_model_array)
             {
-                for (build_mode: #enum_values(BuildMode))
+                for (build_mode: @enum_values(BuildMode))
                 {
                     for (has_debug_info: debug_info_array)
                     {
@@ -18688,7 +18688,7 @@ names: [_][]u8 =
 
                         if (!success)
                         {
-                            #trap();
+                            @trap();
                         }
 
                         arena.position = position;
