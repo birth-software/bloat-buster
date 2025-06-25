@@ -2,9 +2,12 @@
 set -eux
 
 if [[ -z "${BB_CI:-}" ]]; then
+    BB_CI=0
+fi
+
+if [[ -z "${CMAKE_BUILD_TYPE:-}" ]]; then
     CMAKE_BUILD_TYPE=Debug
     LLVM_CMAKE_BUILD_TYPE=Release
-    BB_CI=0
 else
     LLVM_CMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE
 fi

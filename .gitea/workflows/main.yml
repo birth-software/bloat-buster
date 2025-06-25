@@ -9,6 +9,7 @@ on:
 
 env:
   BB_CI: 1
+  BUILD_DEBUG: 1
 
 jobs:
   ci:
@@ -29,11 +30,7 @@ jobs:
           CLANGXX_PATH: clang++-19
         run: |
           set -eux
-          ./generate.sh
-          ./build.sh
-          ./build/bb test
-          mkdir -p $HOME/bloat-buster-artifacts/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/$CMAKE_BUILD_TYPE
-          mv ./self-hosted-bb-cache $HOME/bloat-buster-artifacts/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/$CMAKE_BUILD_TYPE/cache
+          ci/reproduce.sh
   release:
     needs: ci
     strategy:
@@ -49,10 +46,7 @@ jobs:
           BB_CI: 1
         run: |
           set -eux
-          mkdir -p $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)
-          cp $HOME/bloat-buster-artifacts/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/Debug/cache/generic/debug_none_di/compiler/aggressively_optimize_for_speed_nodi/compiler $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/compiler_generic_debug
-          cp $HOME/bloat-buster-artifacts/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/Release/cache/generic/debug_none_di/compiler/aggressively_optimize_for_speed_nodi/compiler $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/compiler_generic
-          cp $HOME/bloat-buster-artifacts/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/Release/cache/native/debug_none_di/compiler/aggressively_optimize_for_speed_nodi/compiler $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/compiler_native
+          ci/install.sh
       - name: Release (locally)
         if: ${{ (github.ref == 'refs/heads/main') }}
         shell: bash
@@ -60,9 +54,7 @@ jobs:
           BB_CI: 1
         run: |
           set -eux
-          cp $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/compiler_generic_debug $HOME/bloat-buster-artifacts/releases/main/
-          cp $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/compiler_generic $HOME/bloat-buster-artifacts/releases/main/
-          cp $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/compiler_native $HOME/bloat-buster-artifacts/releases/main/
+          ci/release.sh
       - name: Release (web)
         uses: akkuman/gitea-release-action@v1
         if: ${{ (github.ref == 'refs/heads/main') }}
