@@ -7,6 +7,7 @@
 #include <llvm-c/Target.h>
 #include <llvm-c/Analysis.h>
 #include <llvm-c/TargetMachine.h>
+#include <llvm-c/Transforms/PassBuilder.h>
 
 struct LLDResult
 {
@@ -14,31 +15,6 @@ struct LLDResult
     String stderr_string;
     bool success;
 };
-
-enum class BBLLVMCodeGenerationPipelineResult : u8
-{
-    success = 0,
-    failed_to_create_file = 1,
-    failed_to_add_emit_passes = 2,
-};
-
-enum class BBLLVMCodeGenerationFileType : u8
-{
-    assembly_file = 0,
-    object_file = 1,
-    null = 2,
-};
-
-struct BBLLVMCodeGenerationPipelineOptions
-{
-    String output_dwarf_file_path;
-    String output_file_path;
-    BBLLVMCodeGenerationFileType file_type;
-    bool optimize_when_possible;
-    bool verify_module;
-};
-
-static_assert(sizeof(BBLLVMCodeGenerationPipelineOptions) == 5 * sizeof(u64));
 
 enum class BBLLVMOptimizationLevel : u8
 {
@@ -49,26 +25,6 @@ enum class BBLLVMOptimizationLevel : u8
     Os = 4,
     Oz = 5,
 };
-
-#define BB_LLVM_OPTIMIZATION_PIPELINE_OPTIONS_PADDING_BIT_COUNT (51)
-struct BBLLVMOptimizationPipelineOptions
-{
-    u64 optimization_level:3;
-    u64 debug_info:1;
-    u64 loop_unrolling:1;
-    u64 loop_interleaving:1;
-    u64 loop_vectorization:1;
-    u64 slp_vectorization:1;
-    u64 merge_functions:1;
-    u64 call_graph_profile:1;
-    u64 unified_lto:1;
-    u64 assignment_tracking:1;
-    u64 verify_module:1;
-    u64 reserved:BB_LLVM_OPTIMIZATION_PIPELINE_OPTIONS_PADDING_BIT_COUNT;
-};
-
-static_assert(sizeof(BBLLVMOptimizationPipelineOptions) == sizeof(u64));
-static_assert(BB_LLVM_OPTIMIZATION_PIPELINE_OPTIONS_PADDING_BIT_COUNT == 51);
 
 enum class DwarfType
 {
@@ -122,9 +78,6 @@ fn bool llvm_initialized = false;
 extern "C" LLVMValueRef llvm_find_return_value_dominating_store(LLVMBuilderRef b, LLVMValueRef ra, LLVMTypeRef et);
 
 extern "C" void llvm_subprogram_replace_type(LLVMMetadataRef subprogram, LLVMMetadataRef subroutine_type);
-
-extern "C" void llvm_module_run_optimization_pipeline(LLVMModuleRef module, LLVMTargetMachineRef target_machine, BBLLVMOptimizationPipelineOptions options);
-extern "C" BBLLVMCodeGenerationPipelineResult llvm_module_run_code_generation_pipeline(LLVMModuleRef m, LLVMTargetMachineRef tm, const BBLLVMCodeGenerationPipelineOptions* options);
 
 #define lld_api_args() char* const* argument_pointer, u64 argument_count, bool exit_early, bool disable_output
 #define lld_api_function_decl(link_name) LLDResult lld_ ## link_name ## _link(lld_api_args())

@@ -343,11 +343,26 @@ fn String compile_file(Arena* arena, Compile options)
 
         library_buffer[library_count] = string_literal("lldCommon");
         library_count += 1;
+
+        library_buffer[library_count] = string_literal("lldCOFF");
+        library_count += 1;
+
         library_buffer[library_count] = string_literal("lldELF");
         library_count += 1;
 
+        library_buffer[library_count] = string_literal("lldMachO");
+        library_count += 1;
+
+        library_buffer[library_count] = string_literal("lldMinGW");
+        library_count += 1;
+
+        library_buffer[library_count] = string_literal("lldWasm");
+        library_count += 1;
+
+        library_buffer[library_count] = string_literal("llvm_bindings");
+        library_count += 1;
+
         library_names = { library_buffer, library_count };
-        library_paths = { &llvm_bindings_library, 1 };
     }
     else if (base_name.equal(string_literal("tests")))
     {

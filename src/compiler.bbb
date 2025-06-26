@@ -835,6 +835,8 @@ fail = fn () noreturn
     exit(1);
 }
 
+LLVMError = opaque;
+
 LLVMContext = opaque;
 LLVMModule = opaque;
 
@@ -858,6 +860,8 @@ LLVMTarget = opaque;
 LLVMTargetDataLayout = opaque;
 LLVMTargetMachine = opaque;
 LLVMTargetMachineOptions = opaque;
+
+LLVMPassBuilderOptions = opaque;
 
 LLVMIntrinsicIndex = enum u32
 {
@@ -2646,43 +2650,10 @@ LLVMOptimizationLevel = enum u3
     Oz = 5,
 }
 
-LLVMOptimizationOptions = bits u64
-{
-    optimization_level: LLVMOptimizationLevel,
-    debug_info: u1,
-    loop_unrolling: u1,
-    loop_interleaving: u1,
-    loop_vectorization: u1,
-    slp_vectorization: u1,
-    merge_functions: u1,
-    call_graph_profile: u1,
-    unified_lto: u1,
-    assignment_tracking: u1,
-    verify_module: u1,
-    reserved: u51,
-}
-
-LLVMCodeGenerationFileType = enum u8
+LLVMCodeGenerationFileType = enum u32
 {
     assembly = 0,
     object = 1,
-    null = 2,
-}
-
-LLVMCodeGenerationOptions = struct
-{
-    output_dwarf_file_path: []u8,
-    output_file_path: []u8,
-    file_type: LLVMCodeGenerationFileType,
-    optimize_when_possible: u8,
-    verify_module: u8,
-}
-
-LLVMCodeGenerationResult = enum u8
-{
-    success = 0,
-    failed_to_create_file = 1,
-    failed_to_emit_passes = 2,
 }
 
 LLVMICmpPredicate = enum u32
@@ -2931,8 +2902,19 @@ llvm_module_create_function = fn (module: &LLVMModule, function_type: &LLVMType,
 [extern] LLVMSetFunctionCallConv = fn [cc(c)] (function: &LLVMValue, calling_convention: LLVMCallingConvention) void;
 [extern] LLVMSetInstructionCallConv = fn [cc(c)] (call: &LLVMValue, calling_convention: LLVMCallingConvention) void;
 
-[extern] llvm_module_run_optimization_pipeline = fn [cc(c)] (module: &LLVMModule, target_machine: &LLVMTargetMachine, options: &LLVMOptimizationOptions) void;
-[extern] llvm_module_run_code_generation_pipeline = fn [cc(c)] (module: &LLVMModule, target_machine: &LLVMTargetMachine, options: &LLVMCodeGenerationOptions) LLVMCodeGenerationResult;
+[extern] LLVMCreatePassBuilderOptions = fn [cc(c)] () &LLVMPassBuilderOptions;
+
+[extern] LLVMPassBuilderOptionsSetVerifyEach = fn [cc(c)] (options: &LLVMPassBuilderOptions, value: s32) void;
+[extern] LLVMPassBuilderOptionsSetDebugLogging = fn [cc(c)] (options: &LLVMPassBuilderOptions, value: s32) void;
+[extern] LLVMPassBuilderOptionsSetLoopInterleaving = fn [cc(c)] (options: &LLVMPassBuilderOptions, value: s32) void;
+[extern] LLVMPassBuilderOptionsSetLoopVectorization = fn [cc(c)] (options: &LLVMPassBuilderOptions, value: s32) void;
+[extern] LLVMPassBuilderOptionsSetSLPVectorization = fn [cc(c)] (options: &LLVMPassBuilderOptions, value: s32) void;
+[extern] LLVMPassBuilderOptionsSetLoopUnrolling = fn [cc(c)] (options: &LLVMPassBuilderOptions, value: s32) void;
+[extern] LLVMPassBuilderOptionsSetMergeFunctions = fn [cc(c)] (options: &LLVMPassBuilderOptions, value: s32) void;
+
+[extern] LLVMRunPasses = fn [cc(c)] (module: &LLVMModule, passes: &u8, target_machine: &LLVMTargetMachine, options: &LLVMPassBuilderOptions) &LLVMError;
+
+[extern] LLVMTargetMachineEmitToFile = fn [cc(c)] (target_machine: &LLVMTargetMachine, module: &LLVMModule, file_name: &u8, file_type: LLVMCodeGenerationFileType, error_message: &&u8) s32;
 
 LLDResult = struct
 {
@@ -17016,38 +16998,52 @@ LLVMObjectGenerate = struct
     has_debug_info: u1,
 }
 
-generate_object = fn (module: &LLVMModule, target_machine: &LLVMTargetMachine, options: LLVMObjectGenerate) LLVMCodeGenerationResult
+generate_object = fn (module: &LLVMModule, target_machine: &LLVMTargetMachine, options: LLVMObjectGenerate) u1
 {
     if (options.run_optimization_passes)
     {
-        >prefer_speed = options.optimization_level == .O2 or options.optimization_level == .O3;
-        >options: LLVMOptimizationOptions = {
-            .optimization_level = options.optimization_level,
-            .debug_info = options.has_debug_info,
-            .loop_unrolling = prefer_speed,
-            .loop_interleaving = prefer_speed,
-            .loop_vectorization = prefer_speed,
-            .slp_vectorization = prefer_speed,
-            .merge_functions = prefer_speed,
-            .call_graph_profile = 0,
-            .unified_lto = 0,
-            .assignment_tracking = options.has_debug_info,
-            .verify_module = 1,
-            zero,
-        };
-        llvm_module_run_optimization_pipeline(module, target_machine, &options);
+        >prefer_speed: s32 = @extend(options.optimization_level == .O2 or options.optimization_level == .O3);
+        >pass_builder_options = LLVMCreatePassBuilderOptions();
+        LLVMPassBuilderOptionsSetVerifyEach(pass_builder_options, 1);
+        LLVMPassBuilderOptionsSetDebugLogging(pass_builder_options, 0);
+        LLVMPassBuilderOptionsSetLoopInterleaving(pass_builder_options, prefer_speed);
+        LLVMPassBuilderOptionsSetLoopVectorization(pass_builder_options, prefer_speed);
+        LLVMPassBuilderOptionsSetSLPVectorization(pass_builder_options, prefer_speed);
+        LLVMPassBuilderOptionsSetLoopUnrolling(pass_builder_options, prefer_speed);
+        LLVMPassBuilderOptionsSetMergeFunctions(pass_builder_options, prefer_speed);
+
+        >passes: &u8 = undefined;
+        switch (options.optimization_level)
+        {
+            .O0 => { passes = "default<O0>"; },
+            .O1 => { passes = "default<O1>"; },
+            .O2 => { passes = "default<O2>"; },
+            .O3 => { passes = "default<O3>"; },
+            .Os => { passes = "default<Os>"; },
+            .Oz => { passes = "default<Oz>"; },
+        }
+
+        >error = LLVMRunPasses(module, passes, target_machine, pass_builder_options);
+        if (error)
+        {
+            report_error();
+        }
     }
 
-    >code_generation_options: LLVMCodeGenerationOptions = {
-        .output_file_path = options.path,
-        .file_type = .object,
-        .optimize_when_possible = @extend(options.optimization_level > .O0),
-        .verify_module = 1,
-        zero,
-    };
+    >file_name = options.path.pointer;
+    >error_message: &u8 = zero;
+    >result = LLVMTargetMachineEmitToFile(target_machine, module, file_name, .object, &error_message);
+    if (result != 0)
+    {
+        assert(error_message != zero);
+        @trap();
+    }
+    else
+    {
+        assert(!error_message);
+    }
 
-    >result = llvm_module_run_code_generation_pipeline(module, target_machine, &code_generation_options);
-    return result;
+    return result == 0;
 }
 
 link = fn (module: &Module) void
@@ -18106,10 +18102,7 @@ emit = fn (module: &Module) void
         .has_debug_info = module.has_debug_info,
     });
 
-    if (object_generation_result != .success)
-    {
-        report_error();
-    }
+    assert(object_generation_result);
 
     link(module);
 }
@@ -18370,7 +18363,6 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
 
     >objects = [ output_object_path ][..];
     >c_abi_library = "build/libc_abi.a";
-    >llvm_bindings_library = "build/libllvm_bindings.a";
 
     >library_buffer: [256][]u8 = undefined;
     >library_directory: []u8 = zero;
@@ -18485,11 +18477,25 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
         library_buffer[library_count] = "lldCommon";
         library_count += 1;
 
+        library_buffer[library_count] = "lldCOFF";
+        library_count += 1;
+
         library_buffer[library_count] = "lldELF";
         library_count += 1;
 
+        library_buffer[library_count] = "lldMachO";
+        library_count += 1;
+
+        library_buffer[library_count] = "lldMinGW";
+        library_count += 1;
+
+        library_buffer[library_count] = "lldWasm";
+        library_count += 1;
+
+        library_buffer[library_count] = "llvm_bindings";
+        library_count += 1;
+
         library_names = library_buffer[..library_count];
-        library_paths = { .pointer = &llvm_bindings_library, .length = 1 };
     }
     else if (string_equal(base_name, "tests"))
     {

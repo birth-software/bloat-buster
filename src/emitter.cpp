@@ -9176,36 +9176,52 @@ struct ObjectGenerate
     bool has_debug_info;
 };
 
-fn BBLLVMCodeGenerationPipelineResult generate_object(LLVMModuleRef module, LLVMTargetMachineRef target_machine, ObjectGenerate options)
+fn bool generate_object(LLVMModuleRef module, LLVMTargetMachineRef target_machine, ObjectGenerate options)
 {
     if (options.run_optimization_passes)
     {
-        // BBLLVM
         bool prefer_speed = options.optimization_level == BBLLVMOptimizationLevel::O2 || options.optimization_level == BBLLVMOptimizationLevel::O3;
-        BBLLVMOptimizationPipelineOptions optimization_options = {
-            .optimization_level = (u64)options.optimization_level,
-            .debug_info = options.has_debug_info,
-            .loop_unrolling = prefer_speed,
-            .loop_interleaving = prefer_speed,
-            .loop_vectorization = prefer_speed,
-            .slp_vectorization = prefer_speed,
-            .merge_functions = prefer_speed,
-            .call_graph_profile = false,
-            .unified_lto = false,
-            .assignment_tracking = options.has_debug_info,
-            .verify_module = true,
-        };
-        llvm_module_run_optimization_pipeline(module, target_machine, optimization_options);
+        auto pass_builder_options = LLVMCreatePassBuilderOptions();
+        LLVMPassBuilderOptionsSetVerifyEach(pass_builder_options, 1);
+        LLVMPassBuilderOptionsSetDebugLogging(pass_builder_options, 0);
+        LLVMPassBuilderOptionsSetLoopInterleaving(pass_builder_options, prefer_speed);
+        LLVMPassBuilderOptionsSetLoopVectorization(pass_builder_options, prefer_speed);
+        LLVMPassBuilderOptionsSetSLPVectorization(pass_builder_options, prefer_speed);
+        LLVMPassBuilderOptionsSetLoopUnrolling(pass_builder_options, prefer_speed);
+        LLVMPassBuilderOptionsSetMergeFunctions(pass_builder_options, prefer_speed);
+
+        const char* passes;
+        switch (options.optimization_level)
+        {
+            case BBLLVMOptimizationLevel::O0: passes = "default<O0>"; break;
+            case BBLLVMOptimizationLevel::O1: passes = "default<O1>"; break;
+            case BBLLVMOptimizationLevel::O2: passes = "default<O2>"; break;
+            case BBLLVMOptimizationLevel::O3: passes = "default<O3>"; break;
+            case BBLLVMOptimizationLevel::Os: passes = "default<Os>"; break;
+            case BBLLVMOptimizationLevel::Oz: passes = "default<Oz>"; break;
+        }
+
+        auto error = LLVMRunPasses(module, passes, target_machine, pass_builder_options);
+        if (error)
+        {
+            report_error();
+        }
     }
 
-    BBLLVMCodeGenerationPipelineOptions code_generation_options = {
-        .output_file_path = options.path,
-        .file_type = BBLLVMCodeGenerationFileType::object_file,
-        .optimize_when_possible = options.optimization_level > BBLLVMOptimizationLevel::O0,
-        .verify_module = true,
-    };
-    auto result = llvm_module_run_code_generation_pipeline(module, target_machine, &code_generation_options);
-    return result;
+    auto file_name = cstr(options.path);
+    char* error_message = 0;
+    auto result = LLVMTargetMachineEmitToFile(target_machine, module, file_name, LLVMObjectFile, &error_message);
+    if (result)
+    {
+        assert(error_message);
+        trap();
+    }
+    else
+    {
+        assert(!error_message);
+    }
+
+    return !result;
 }
 
 fn void link(Module* module)
@@ -10057,10 +10073,7 @@ void emit(Module* module)
         .run_optimization_passes = module->build_mode != BuildMode::debug_none,
         .has_debug_info = module->has_debug_info,
     });
-    if (object_generation_result != BBLLVMCodeGenerationPipelineResult::success)
-    {
-        report_error();
-    }
+    assert(object_generation_result);
 
     link(module);
 }
