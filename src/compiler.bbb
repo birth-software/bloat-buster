@@ -17151,6 +17151,10 @@ link = fn (module: &Module) void
     >result = lld_elf_link(linker_arguments.pointer, linker_arguments.length, 1, 0);
     if (!result.success)
     {
+        print(result.stdout);
+        print("\n");
+        print(result.stderr);
+        print("\n");
         @trap();
     }
 }
@@ -18364,7 +18368,6 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
 
     >file_content = file_read(arena, relative_file_path);
     >file_path = path_absolute(arena, relative_file_path.pointer);
-    >c_abi_object_path = ""; // TODO
 
     >definitions: []Definition = zero;
     >cmake_prefix_path_definition: Definition = {
@@ -18382,8 +18385,8 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
         }
     }
 
-    >objects = [ output_object_path ][..];
-    >c_abi_library = "build/libc_abi.a";
+    >object_array = [ output_object_path, "self-hosted-bb-cache/c_abi.o" ];
+    >objects = object_array[..1];
 
     >library_buffer: [256][]u8 = undefined;
     >library_directory: []u8 = zero;
@@ -18520,7 +18523,7 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
     }
     else if (string_equal(base_name, "tests"))
     {
-        library_paths = { .pointer = &c_abi_library, .length = 1 };
+        objects = object_array[..];
     }
 
     >options: CompileOptions = {
@@ -18722,6 +18725,8 @@ names: [_][]u8 =
                         ];
                         >args = arguments[..arguments.length - 1];
                         >execution = os_execute(arena, args, envp, zero);
+                        print(executable_path);
+                        print("\n");
 
                         >success = execution.termination_kind == .exit and execution.termination_code == 0;
 

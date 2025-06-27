@@ -5,7 +5,9 @@ on:
 
 env:
   BB_CI: 1
-
+  CLANG_PATH: clang-19
+  CLANGXX_PATH: clang++-19
+  LLVM_VERSION: 20.1.7
 jobs:
   ci:
     strategy:
@@ -19,12 +21,8 @@ jobs:
       - name: Build and test (Packaged LLVM)
         shell: bash
         env:
-          BB_CI: 1
           CMAKE_BUILD_TYPE: ${{matrix.BIRTH_CMAKE_BUILD_TYPE}}
-          CLANG_PATH: clang-19
-          CLANGXX_PATH: clang++-19
         run: |
           set -eux
           ./generate.sh
-          ./build.sh
-          ./build/bb test
+          CMAKE_PREFIX_PATH=$HOME/dev/llvm/install/llvm_${LLVM_VERSION}_x86_64-linux-${CMAKE_BUILD_TYPE} $HOME/bloat-buster-artifacts/releases/main/compiler_generic reproduce

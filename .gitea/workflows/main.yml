@@ -10,6 +10,9 @@ on:
 env:
   BB_CI: 1
   BUILD_DEBUG: 1
+  LLVM_VERSION: 20.1.7
+  CLANG_PATH: clang-19
+  CLANGXX_PATH: clang++-19
 
 jobs:
   ci:
@@ -24,10 +27,7 @@ jobs:
       - name: Build and test (Packaged LLVM)
         shell: bash
         env:
-          BB_CI: 1
           CMAKE_BUILD_TYPE: ${{matrix.BIRTH_CMAKE_BUILD_TYPE}}
-          CLANG_PATH: clang-19
-          CLANGXX_PATH: clang++-19
         run: |
           set -eux
           ci/reproduce.sh
