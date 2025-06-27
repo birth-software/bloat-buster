@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -eux
 
+if [[ -z "${LLVM_VERSION:-}" ]]; then
+    LLVM_VERSION=20.1.7
+fi
+
 if [[ -z "${BB_CI:-}" ]]; then
     BB_CI=0
 fi
@@ -11,8 +15,6 @@ if [[ -z "${CMAKE_BUILD_TYPE:-}" ]]; then
 else
     LLVM_CMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE
 fi
-
-BUILD_DIR=build
 
 BIRTH_NATIVE_OS_STRING=$OSTYPE
 
@@ -31,20 +33,22 @@ case "$BIRTH_NATIVE_ARCH_STRING" in
     *) exit 1
 esac
 
-case "$BIRTH_OS" in
-    linux) LINKER_TYPE=MOLD;;
-    *) LINKER_TYPE=DEFAULT;;
-esac
-
-rm -rf $BUILD_DIR
-mkdir $BUILD_DIR
-cd $BUILD_DIR
-LLVM_PREFIX_PATH=$HOME/dev/llvm/install/llvm_20.1.7_$BIRTH_ARCH-$BIRTH_OS-$LLVM_CMAKE_BUILD_TYPE
+if [[ -z "${CMAKE_PREFIX_PATH:-}" ]]; then
+    CMAKE_PREFIX_PATH=$HOME/dev/llvm/install/llvm_${LLVM_VERSION}_${BIRTH_ARCH}-${BIRTH_OS}-${LLVM_CMAKE_BUILD_TYPE}
+fi
 
 if [[ -z "${CLANG_PATH:-}" ]]; then
     CLANG_PATH=clang
     CLANGXX_PATH=clang++
 fi
 
-cmake .. -G Ninja -DCMAKE_C_COMPILER=$CLANG_PATH -DCMAKE_CXX_COMPILER=$CLANGXX_PATH -DCMAKE_LINKER_TYPE=$LINKER_TYPE -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE%%-*} -DCMAKE_PREFIX_PATH=$LLVM_PREFIX_PATH -DCMAKE_COLOR_DIAGNOSTICS=ON -DBB_CI=$BB_CI
-cd ..
+OPT_ARGS=""
+
+case "${CMAKE_BUILD_TYPE%%-*}" in
+    Debug) OPT_ARGS="-O0 -g";;
+    Release*) OPT_ARGS="-O3";;
+    *) exit 1;;
+esac
+
+mkdir -p self-hosted-bb-cache
+$CLANG_PATH -c tests/c_abi.c -o self-hosted-bb-cache/c_abi.o $OPT_ARGS -std=gnu2x
