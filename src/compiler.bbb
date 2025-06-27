@@ -73,12 +73,26 @@ O = bits u32
     _: u9,
 }
 
+[extern] __errno_location = fn [cc(c)] () &u32;
+
+Error = enum u32
+{
+    success = 0,
+    perm = 1,
+}
+
+errno = fn () Error
+{
+    return @enum_from_int(__errno_location().&);
+}
+
 [extern] memcmp = fn [cc(c)] (a: &u8, b: &u8, byte_count: usize) int;
 [extern] memcpy = fn [cc(c)] (destination: &u8, source: &u8, byte_count: u64) &u8;
 [extern] exit = fn [cc(c)] (exit_code: int) noreturn;
 
 [extern] getenv = fn [cc(c)] (env: &u8) &u8;
 
+[extern] getcwd = fn [cc(c)] (pointer: &u8, length: u64) &u8;
 [extern] realpath = fn [cc(c)] (source_path: &u8, resolved_path: &u8) &u8;
 [extern] mkdir = fn [cc(c)] (path: &u8, mode: mode_t) int;
 
@@ -436,6 +450,13 @@ os_path_absolute_stack = fn (buffer: []u8, relative_file_path: &u8) []u8
     {
         result = c_string_to_slice(syscall_result);
         assert(result.length < buffer.length);
+    }
+    else
+    {
+        >error = errno();
+        >cwd = getcwd(buffer.pointer, buffer.length);
+        assert(cwd == buffer.pointer);
+        @trap();
     }
 
     return result;
