@@ -18398,7 +18398,7 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
 
         >builder: ArgumentBuilder = zero;
 
-        add_argument(&builder, arena_join_string(arena, [ CMAKE_PREFIX_PATH, "/bin/llvm-config"][..]));
+        add_argument(&builder, arena_join_string(arena, [ cmake_prefix_path_definition.value, "/bin/llvm-config"][..]));
         add_argument(&builder, "--libdir");
         add_argument(&builder, "--libs");
         add_argument(&builder, "--system-libs");
