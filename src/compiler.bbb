@@ -3735,7 +3735,7 @@ parse_name = fn (module: &Module) []u8
         result = parse_identifier(module);
     }
 
-    return result;
+    return arena_duplicate_string(module.arena, result);
 }
 
 new_value = fn (module: &Module) &Value
@@ -5488,7 +5488,7 @@ parse_aggregate_initialization = fn (module: &Module, scope: &Scope, builder: Va
 
         if (consume_character_if_match(module, '.'))
         {
-            >name = parse_identifier(module);
+            >name = arena_duplicate_string(module.arena, parse_identifier(module));
             skip_space(module);
             expect_character(module, '=');
             skip_space(module);
@@ -6499,7 +6499,7 @@ parse_right = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
 
             skip_space(module);
 
-            >identifier = parse_identifier(module);
+            >identifier = arena_duplicate_string(module.arena, parse_identifier(module));
             result = new_value(module);
 
             result.& = {
@@ -7370,7 +7370,7 @@ parse = fn (module: &Module) void
                             }
 
                             >field_line = get_line(module);
-                            >field_name = parse_identifier(module);
+                            >field_name = arena_duplicate_string(module.arena, parse_identifier(module));
 
                             skip_space(module);
                             expect_character(module, ':');
@@ -7865,7 +7865,7 @@ parse = fn (module: &Module) void
 
                                 >field_index = field_count;
                                 >field_line = get_line(module);
-                                >field_name = parse_identifier(module);
+                                >field_name = arena_duplicate_string(module.arena, parse_identifier(module));
 
                                 skip_space(module);
                                 expect_character(module, ':');
@@ -7990,7 +7990,7 @@ parse = fn (module: &Module) void
                             field_count += 1;
 
                             >field_line = get_line(module);
-                            >field_name = parse_identifier(module);
+                            >field_name = arena_duplicate_string(module.arena, parse_identifier(module));
 
                             skip_space(module);
                             expect_character(module, ':');
@@ -9646,11 +9646,33 @@ get_current_function = fn (module: &Module) &Global
     return current_function;
 }
 
+TypeKind = enum
+{
+    abi,
+    memory,
+}
+
+get_llvm_type = fn (type: &Type, kind: TypeKind) &LLVMType
+{
+    switch (kind)
+    {
+        .abi =>
+        {
+            return type.llvm.abi;
+        },
+        .memory =>
+        {
+            return type.llvm.memory;
+        },
+    }
+}
+
 AllocaOptions = struct
 {
     type: &Type,
     name: []u8,
     alignment: u32,
+    use_abi: u1,
 }
 
 create_alloca = fn (module: &Module, options: AllocaOptions) &LLVMValue
@@ -9671,7 +9693,7 @@ create_alloca = fn (module: &Module, options: AllocaOptions) &LLVMValue
     LLVMPositionBuilderBefore(module.llvm.builder, alloca_insertion_point);
     LLVMSetCurrentDebugLocation2(module.llvm.builder, zero);
 
-    >alloca = llvm_create_alloca(module.llvm.builder, abi_type.llvm.memory, alignment, options.name);
+    >alloca = llvm_create_alloca(module.llvm.builder, get_llvm_type(abi_type, @select(options.use_abi, .abi, .memory)), alignment, options.name);
     LLVMPositionBuilderAtEnd(module.llvm.builder, original_block);
     LLVMSetCurrentDebugLocation2(module.llvm.builder, debug_location);
 
@@ -9713,12 +9735,6 @@ create_store = fn (module: &Module, options: StoreOptions) void
     LLVMSetAlignment(store, alignment);
 }
 
-TypeKind = enum
-{
-    abi,
-    memory,
-}
-
 memory_to_abi = fn (module: &Module, value: &LLVMValue, type: &Type) &LLVMValue
 {
     >result = value;
@@ -9735,6 +9751,7 @@ LoadOptions = struct
     pointer: &LLVMValue,
     alignment: u32,
     kind: TypeKind,
+    use_abi: u1,
 }
 
 create_load = fn (module: &Module, options: LoadOptions) &LLVMValue
@@ -9746,16 +9763,19 @@ create_load = fn (module: &Module, options: LoadOptions) &LLVMValue
         alignment = get_byte_alignment(options.type);
     }
 
-    >result = LLVMBuildLoad2(module.llvm.builder, options.type.llvm.memory, options.pointer, "");
+    >result = LLVMBuildLoad2(module.llvm.builder, get_llvm_type(options.type, @select(options.use_abi, .abi, .memory)), options.pointer, "");
     LLVMSetAlignment(result, alignment);
 
-    switch (options.kind)
+    if (!options.use_abi)
     {
-        .abi =>
+        switch (options.kind)
         {
-            result = memory_to_abi(module, result, options.type);
-        },
-        .memory => {},
+            .abi =>
+            {
+                result = memory_to_abi(module, result, options.type);
+            },
+            .memory => {},
+        }
     }
 
     return result;
@@ -12008,7 +12028,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     zero,
                 });
 
-                >element_length_pointer = LLVMBuildStructGEP2(module.llvm.builder, slice_struct_type.llvm.abi, array_element_pointer, 1, "");
+                >element_length_pointer = LLVMBuildStructGEP2(module.llvm.builder, slice_struct_type.llvm.abi, array_element_pointer, 1, "length");
                 >element_length = create_load(module, {
                     .type = u64_type,
                     .pointer = element_length_pointer,
@@ -12061,7 +12081,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     zero,
                 });
 
-                >element_pointer_pointer = LLVMBuildStructGEP2(module.llvm.builder, slice_struct_type.llvm.abi, length_array_element_pointer, 0, "");
+                >element_pointer_pointer = LLVMBuildStructGEP2(module.llvm.builder, slice_struct_type.llvm.abi, length_array_element_pointer, 0, "pointer");
                 >element_pointer = create_load(module, {
                     .type = get_pointer_type(module, u8_type),
                     .pointer = element_pointer_pointer,
@@ -12456,21 +12476,6 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
     value.type = value_type;
 }
 
-get_llvm_type = fn (type: &Type, kind: TypeKind) &LLVMType
-{
-    switch (kind)
-    {
-        .abi =>
-        {
-            return type.llvm.abi;
-        },
-        .memory =>
-        {
-            return type.llvm.memory;
-        },
-    }
-}
-
 emit_intrinsic_call = fn (module: &Module, index: LLVMIntrinsicIndex, argument_types: []&LLVMType, argument_values: []&LLVMValue) &LLVMValue
 {
     >intrinsic_id = module.llvm.intrinsic_table[index];
@@ -12741,7 +12746,9 @@ coerce_integer_or_pointer_to_integer_or_pointer = fn (module: &Module, source: &
 
 create_coerced_store = fn (module: &Module, source_value: &LLVMValue, source_type: &Type, destination_value: &LLVMValue, destination_type: &Type, destination_size: u64, destination_volatile: u1) void
 {
-    >source_size = get_byte_size(source_type);
+    >source_size = get_bit_size(source_type);
+    assert(source_size % 8 == 0);
+    source_size = source_size / 8;
 
     // TODO: this smells badly
     // destination_type != uint1(module)
@@ -12770,7 +12777,7 @@ create_coerced_store = fn (module: &Module, source_value: &LLVMValue, source_typ
             {
                 >field = &fields[i];
 
-                >gep = LLVMBuildStructGEP2(module.llvm.builder, source_type.llvm.abi, destination_value, @truncate(i), "");
+                >gep = LLVMBuildStructGEP2(module.llvm.builder, source_type.llvm.abi, destination_value, @truncate(i), field.name.pointer);
                 >field_value = LLVMBuildExtractValue(module.llvm.builder, source_value, @truncate(i), "");
 
                 create_store(module, {
@@ -12810,8 +12817,9 @@ create_coerced_store = fn (module: &Module, source_value: &LLVMValue, source_typ
         >source_alloca_alignment = @max(original_destination_alignment, get_byte_alignment(source_type));
         >source_alloca = create_alloca(module, {
             .type = source_type,
-            .name = "coerce",
+            .name = "coerce.store.alloca",
             .alignment = source_alloca_alignment,
+            zero,
         });
 
         create_store(module, {
@@ -12887,8 +12895,9 @@ create_coerced_load = fn (module: &Module, source: &LLVMValue, source_type: &Typ
                     >destination_alignment = @max(original_destination_alignment, source_alignment);
                     >destination_alloca = create_alloca(module, {
                         .type = destination_type,
-                        .name = "coerce",
+                        .name = "coerce.load.alloca",
                         .alignment = destination_alignment,
+                        .use_abi = 1,
                     });
 
                     >u64_type = uint64(module);
@@ -12900,6 +12909,7 @@ create_coerced_load = fn (module: &Module, source: &LLVMValue, source_type: &Typ
                         .type = destination_type,
                         .pointer = destination_alloca,
                         .alignment = destination_alignment,
+                        .use_abi = 1,
                         zero,
                     });
                     result = load;
@@ -13186,8 +13196,9 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                 {
                                     >alloca = create_alloca(module, {
                                         .type = argument_abi.semantic_type,
-                                        .name = "coerce",
+                                        .name = "struct.coerce.alloca",
                                         .alignment = alignment,
+                                        zero,
                                     });
                                     >u64_type = uint64(module);
                                     resolve_type_in_place(module, u64_type);
@@ -13208,7 +13219,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                         for (i: 0..coerce_fields.length)
                                         {
                                             >field = &coerce_fields[i];
-                                            >gep = LLVMBuildStructGEP2(module.llvm.builder, coerce_to_type.llvm.memory, source, @truncate(i), "");
+                                            >gep = LLVMBuildStructGEP2(module.llvm.builder, coerce_to_type.llvm.memory, source, @truncate(i), field.name.pointer);
                                             >maybe_undef: u1 = 0;
                                             if (maybe_undef)
                                             {
@@ -13256,8 +13267,8 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
 
                                                         for (i: 0..coerce_fields.length)
                                                         {
-                                                            >gep = LLVMBuildStructGEP2(module.llvm.builder, coerce_to_type.llvm.abi, global, @truncate(i), "");
                                                             >field = &coerce_fields[i];
+                                                            >gep = LLVMBuildStructGEP2(module.llvm.builder, coerce_to_type.llvm.abi, global, @truncate(i), field.name.pointer);
 
                                                             >maybe_undef: u1 = 0;
                                                             if (maybe_undef)
@@ -13557,7 +13568,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
             {
                 coerce_alloca = create_alloca(module, {
                     .type = return_abi.semantic_type,
-                    .name = "coerce",
+                    .name = "call.return.coerce",
                     zero,
                 });
             }
@@ -13724,6 +13735,7 @@ emit_field_access = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, l
 
                     assert(result_field != zero);
                     >field_index: u32 = @truncate(result_field - fields.pointer);
+                    >field = &fields[field_index];
 
                     field_access = {
                         .type = resolved_aggregate_type.content.struct.fields[field_index].type,
@@ -13760,7 +13772,7 @@ emit_field_access = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, l
                 else => { unreachable; },
             }
 
-            >gep = LLVMBuildStructGEP2(module.llvm.builder, field_access.struct_type, v, field_access.field_index, "");
+            >gep = LLVMBuildStructGEP2(module.llvm.builder, field_access.struct_type, v, field_access.field_index, field_name.pointer);
 
             if (left_llvm)
             {
@@ -14023,7 +14035,7 @@ emit_va_arg_from_memory = fn (module: &Module, va_list_pointer: &LLVMValue, va_l
 {
     assert(va_list_struct.id == .struct);
 
-    >overflow_arg_area_pointer = LLVMBuildStructGEP2(module.llvm.builder, va_list_struct.llvm.abi, va_list_pointer, 2, "");
+    >overflow_arg_area_pointer = LLVMBuildStructGEP2(module.llvm.builder, va_list_struct.llvm.abi, va_list_pointer, 2, "overflow_arg_area");
     >overflow_arg_area_type = va_list_struct.content.struct.fields[2].type;
     >overflow_arg_area = create_load(module, {
         .type = overflow_arg_area_type,
@@ -14116,7 +14128,7 @@ emit_va_arg = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_ty
 
         if (needed_registers.gpr != 0)
         {
-            gpr_offset_pointer = LLVMBuildStructGEP2(module.llvm.builder, va_list_struct_llvm, va_list_value_llvm, 0, "");
+            gpr_offset_pointer = LLVMBuildStructGEP2(module.llvm.builder, va_list_struct_llvm, va_list_value_llvm, 0, "gpr_offset");
             gpr_offset = create_load(module, {
                 .type = va_list_struct.content.struct.fields[0].type,
                 .pointer = gpr_offset_pointer,
@@ -14190,7 +14202,7 @@ emit_va_arg = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_ty
         >reg_save_area_type = va_list_struct.content.struct.fields[3].type;
         >reg_save_area = create_load(module, {
             .type = reg_save_area_type,
-            .pointer = LLVMBuildStructGEP2(module.llvm.builder, va_list_struct_llvm, va_list_value_llvm, 3, ""),
+            .pointer = LLVMBuildStructGEP2(module.llvm.builder, va_list_struct_llvm, va_list_value_llvm, 3, "reg_save_area"),
             .alignment = 16,
             zero,
         });
@@ -15731,11 +15743,12 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                 {
                     >string_literal = emit_string_literal(module, right);
                     >slice_type = get_slice_type(module, uint8(module));
-
+                    >slice_fields = slice_type.content.struct.fields;
                     for (i: 0..string_literal.length)
                     {
-                        >member_pointer = LLVMBuildStructGEP2(module.llvm.builder, slice_type.llvm.abi, left_llvm, @truncate(i), "");
-                        >slice_member_type = slice_type.content.struct.fields[i].type;
+                        >slice_field = &slice_fields[i];
+                        >member_pointer = LLVMBuildStructGEP2(module.llvm.builder, slice_type.llvm.abi, left_llvm, @truncate(i), slice_field.name.pointer);
+                        >slice_member_type = slice_field.type;
                         create_store(module, {
                             .source = string_literal[i],
                             .destination = member_pointer,
@@ -15834,7 +15847,7 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
 
                                     >field = &fields[declaration_index];
 
-                                    >destination_pointer = LLVMBuildStructGEP2(module.llvm.builder, resolved_value_type.llvm.memory, left_llvm, @truncate(declaration_index), "");
+                                    >destination_pointer = LLVMBuildStructGEP2(module.llvm.builder, resolved_value_type.llvm.memory, left_llvm, @truncate(declaration_index), field.name.pointer);
 
                                     emit_assignment(module, destination_pointer, get_pointer_type(module, field.type), value);
                                 }
@@ -15906,7 +15919,7 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                         zero,
                     });
 
-                    >slice_length_destination = LLVMBuildStructGEP2(module.llvm.builder, resolved_value_type.llvm.abi, left_llvm, 1, "");
+                    >slice_length_destination = LLVMBuildStructGEP2(module.llvm.builder, resolved_value_type.llvm.abi, left_llvm, 1, "length");
                     create_store(module, {
                         .source = slice_values[1],
                         .destination = slice_length_destination,
@@ -17441,10 +17454,10 @@ emit = fn (module: &Module) void
                             memcpy(@pointer_cast(abi_argument_types.pointer), @pointer_cast(&abi_argument_type_buffer), @extend(@byte_size(&Type) * abi_argument_type_count));
                             function_type.abi.abi_argument_types = abi_argument_types;
                         },
-                            .win64 =>
-                            {
-@trap();
-                            },
+                        .win64 =>
+                        {
+                            @trap();
+                        },
                     }
 
                     >llvm_function_type = LLVMFunctionType(function_type.abi.abi_return_type.llvm.abi, &llvm_abi_argument_type_buffer[0], @truncate(function_type.abi.abi_argument_types.length), @extend(function_type.base.is_variable_argument));
@@ -17663,19 +17676,19 @@ emit = fn (module: &Module) void
                             >indirect_argument_index = function_type.abi.return_abi.flags.sret_after_this;
                             if (function_type.abi.return_abi.flags.sret_after_this)
                             {
-@trap();
+                                @trap();
                             }
 
                             global.variable.storage.content.function.llvm.return_alloca = llvm_abi_arguments[indirect_argument_index];
 
                             if (!function_type.abi.return_abi.flags.indirect_by_value)
                             {
-@trap();
+                                @trap();
                             }
                         },
                         .in_alloca =>
                         {
-@trap();
+                            @trap();
                         },
                         else =>
                         {
@@ -17717,12 +17730,12 @@ emit = fn (module: &Module) void
 
                                 if (coerce_to_type.llvm.abi != LLVMTypeOf(v))
                                 {
-@trap();
+                                    @trap();
                                 }
 
                                 if (is_promoted)
                                 {
-@trap();
+                                    @trap();
                                 }
 
                                 // TODO: this we can get rid of because we handle all of this inside `create_alloca`, load, stores, etc
@@ -17754,7 +17767,7 @@ emit = fn (module: &Module) void
                                     }
                                     else
                                     {
-@trap();
+                                        @trap();
                                     }
 
                                     create_store(module, {
@@ -17789,7 +17802,7 @@ emit = fn (module: &Module) void
                                 >is_fixed_vector_type: u1 = 0;
                                 if (is_fixed_vector_type)
                                 {
-@trap();
+                                    @trap();
                                 }
 
                                 if (coerce_to_type.id == .struct and coerce_to_type.content.struct.fields.length > 1 and argument_abi.flags.kind == .direct and !argument_abi.flags.can_be_flattened)
@@ -17797,7 +17810,7 @@ emit = fn (module: &Module) void
                                     >contains_homogeneous_scalable_vector_types: u1 = 0;
                                     if (contains_homogeneous_scalable_vector_types)
                                     {
-@trap();
+                                        @trap();
                                     }
                                 }
 
@@ -17812,7 +17825,7 @@ emit = fn (module: &Module) void
 
                                 if (argument_abi.attributes.direct.offset > 0)
                                 {
-@trap();
+                                    @trap();
                                 }
                                 else
                                 {
@@ -17828,7 +17841,7 @@ emit = fn (module: &Module) void
 
                                     if (is_scalable)
                                     {
-@trap();
+                                        @trap();
                                     }
                                     else
                                     {
@@ -17848,6 +17861,7 @@ emit = fn (module: &Module) void
                                                     .type = coerce_to_type, 
                                                     .name = "coerce",
                                                     .alignment = address_alignment,
+                                                    zero,
                                                     });
                                         }
 
@@ -17859,7 +17873,7 @@ emit = fn (module: &Module) void
                                         for (i: 0..fields.length)
                                         {
                                             >field = &fields[i];
-                                            >gep = LLVMBuildStructGEP2(module.llvm.builder, coerce_to_type.llvm.abi, address, @truncate(i), "");
+                                            >gep = LLVMBuildStructGEP2(module.llvm.builder, coerce_to_type.llvm.abi, address, @truncate(i), field.name.pointer);
                                             create_store(module, {
                                                     .source = argument_abi_arguments[i],
                                                     .destination = gep,
@@ -17901,22 +17915,22 @@ emit = fn (module: &Module) void
                                     {
                                         if (argument_abi.flags.indirect_realign or argument_abi.flags.kind == .indirect_aliased)
                                         {
-@trap();
+                                            @trap();
                                         }
 
                                         >use_indirect_debug_address = !argument_abi.flags.indirect_by_value;
                                         if (use_indirect_debug_address)
                                         {
-@trap();
+                                            @trap();
                                         }
 
                                         >llvm_argument = argument_abi_arguments[0];
                                         semantic_argument_storage = llvm_argument;
                                     },
-                                        .scalar =>
-                                        {
-@trap();
-                                        },
+                                    .scalar =>
+                                    {
+                                        @trap();
+                                    },
                                 }
                             },
                             else =>
@@ -18052,7 +18066,7 @@ emit = fn (module: &Module) void
                                 }
                                 else
                                 {
-@trap();
+                                    @trap();
                                 }
 
                                 assert(source != zero);

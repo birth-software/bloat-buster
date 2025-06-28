@@ -2070,6 +2070,66 @@ breakpoint = fn () void
     }
 }
 
+CPUArchitecture = enum
+{
+    x86_64,
+}
+
+OperatingSystem = enum
+{
+    linux,
+}
+
+Target = struct
+{
+    cpu: CPUArchitecture,
+    os: OperatingSystem,
+    host_cpu_model: u1,
+}
+
+struct_arbitrary_int_abi_function = fn [cc(c)] (host_cpu_model: u1) Target
+{
+    return {
+        .cpu = .x86_64,
+        .os = .linux,
+        .host_cpu_model = host_cpu_model,
+    };
+}
+
+StructArbitraryIntAbiContainer = struct
+{
+    a: u8,
+    b: u8,
+    c: Target,
+    d: u8,
+    e: u8
+    f: u8,
+    g: u8,
+}
+
+struct_arbitrary_int_abi = fn () void
+{
+    >some_struct: StructArbitraryIntAbiContainer = {
+        .f = 45,
+        .g = 46,
+        .e = 123,
+        .d = 231,
+        .c = struct_arbitrary_int_abi_function(0),
+        .a = 123,
+        .b = 231,
+    };
+
+    require(some_struct.a == 123);
+    require(some_struct.b == 231);
+    require(some_struct.c.cpu == .x86_64);
+    require(some_struct.c.os == .linux);
+    require(!some_struct.c.host_cpu_model);
+    require(some_struct.d == 231);
+    require(some_struct.e == 123);
+    require(some_struct.f == 45);
+    require(some_struct.g == 46);
+}
+
 [export] main = fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32
 {
     >rc = return_constant();
@@ -2334,6 +2394,8 @@ breakpoint = fn () void
     pointer_sub();
 
     breakpoint();
+
+    struct_arbitrary_int_abi();
 
     return 0;
 }
