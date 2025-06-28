@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+
+env:
+  BB_CI: 1
+  CLANG_PATH: clang-19
+  CLANGXX_PATH: clang++-19
+  LLVM_VERSION: 20.1.7
+jobs:
+  ci:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest ]
+        BIRTH_CMAKE_BUILD_TYPE: [ Release ] #Release-assertions, Release ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install release
+        uses: robinraju/release-downloader@v1
+        with:
+          latest: true
+          filename: compiler_generic
+      - name: Install LLVM
+        uses: robinraju/release-downloader@v1
+        with:
+          repository: birth-software/llvm
+          tag: 'v20.1.7'
+          filename: llvm_${{env.LLVM_VERSION}}_x86_64-linux-${{matrix.BIRTH_CMAKE_BUILD_TYPE}}.7z
+      - name: Build and test (Packaged LLVM)
+        shell: bash
+        env:
+          CMAKE_BUILD_TYPE: ${{matrix.BIRTH_CMAKE_BUILD_TYPE}}
+        run: |
+          set -eux
+          ls
+          sudo apt update
+          sudo apt install -y clang-19
+          7z x llvm_${{env.LLVM_VERSION}}_x86_64-linux-${{matrix.BIRTH_CMAKE_BUILD_TYPE}}.7z
+          rm llvm_${{env.LLVM_VERSION}}_x86_64-linux-${{matrix.BIRTH_CMAKE_BUILD_TYPE}}.7z
+          ./generate.sh
+          chmod +x compiler_generic
+          CMAKE_PREFIX_PATH=$PWD/llvm_${LLVM_VERSION}_x86_64-linux-${CMAKE_BUILD_TYPE} ./compiler_generic reproduce
