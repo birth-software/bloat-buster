@@ -888,6 +888,7 @@ LLVMIntrinsicIndex = enum u32
 {
     "llvm.ctlz",
     "llvm.cttz",
+    "llvm.debugtrap",
     "llvm.smax",
     "llvm.smin",
     "llvm.trap",
@@ -2032,6 +2033,7 @@ ValueId = enum
     macro_instantiation,
     field_parent_pointer,
     build_mode,
+    breakpoint,
 }
 
 ValueConstantInteger = struct
@@ -4126,6 +4128,7 @@ ValueKeyword = enum
 ValueIntrinsic = enum
 {
     align_of,
+    breakpoint,
     build_mode,
     byte_size,
     enum_from_int,
@@ -5769,6 +5772,7 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                 .trap,
                 .va_start,
                 .has_debug_info,
+                .breakpoint,
                 =>
                 {
                     skip_space(module);
@@ -5782,6 +5786,7 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                         .trap => { id = .trap; },
                         .va_start => { id = .va_start; },
                         .has_debug_info => { id = .has_debug_info; },
+                        .breakpoint => { id = .breakpoint; },
                         else => { unreachable; },
                     }
 
@@ -12432,6 +12437,15 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             value_type = uint1(module);
             typecheck(module, expected_type, value_type);
         },
+        .breakpoint =>
+        {
+            if (expected_type)
+            {
+                report_error();
+            }
+
+            value_type = void_type(module);
+        },
         else =>
         {
             @trap();
@@ -15599,6 +15613,11 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
         .has_debug_info =>
         {
             llvm_value = LLVMConstInt(get_llvm_type(resolved_value_type, type_kind), @extend(module.has_debug_info), 0);
+        },
+        .breakpoint =>
+        {
+            >call = emit_intrinsic_call(module, ."llvm.debugtrap", zero, zero);
+            llvm_value = call;
         },
         else =>
         {

@@ -2061,6 +2061,15 @@ pointer_sub = fn () void
     require(sub == 1);
 }
 
+breakpoint = fn () void
+{
+    >ok: u1 = 1;
+    if (!ok)
+    {
+        @breakpoint();
+    }
+}
+
 [export] main = fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32
 {
     >rc = return_constant();
@@ -2323,6 +2332,8 @@ pointer_sub = fn () void
     leading_trailing_zeroes();
 
     pointer_sub();
+
+    breakpoint();
 
     return 0;
 }
