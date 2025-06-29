@@ -47,6 +47,8 @@ OPT_ARGS=""
 case "${CMAKE_BUILD_TYPE%%-*}" in
     Debug) OPT_ARGS="-O0 -g";;
     Release*) OPT_ARGS="-O3";;
+    RelWithDebInfo*) OPT_ARGS="-O3 -g";;
+    MinSizeRel*) OPT_ARGS="-Oz -g";;
     *) exit 1;;
 esac
 

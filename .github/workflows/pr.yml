@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ self-hosted ]
-        BIRTH_CMAKE_BUILD_TYPE: [ Release-assertions, Release ]
+        BIRTH_CMAKE_BUILD_TYPE: [ Release ]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -25,4 +25,8 @@ jobs:
         run: |
           set -eux
           ./generate.sh
-          CMAKE_PREFIX_PATH=$HOME/dev/llvm/install/llvm_${LLVM_VERSION}_x86_64-linux-${CMAKE_BUILD_TYPE} $HOME/bloat-buster-artifacts/releases/main/compiler_generic reproduce
+          CMAKE_PREFIX_PATH="$HOME/dev/llvm/install/llvm_${LLVM_VERSION}_x86_64-linux-${CMAKE_BUILD_TYPE}" time $HOME/bloat-buster-artifacts/releases/main/compiler_generic reproduce
+      # - uses: actions/upload-artifact@v4
+      #   with:
+      #     path: ./perf_${{env.CMAKE_BUILD_TYPE}}.json
+      #     if-no-files-found: error
