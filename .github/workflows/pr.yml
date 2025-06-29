@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-latest ]
+        os: [ self-hosted ]
         BIRTH_CMAKE_BUILD_TYPE: [ Release-assertions, Release ]
     runs-on: ${{ matrix.os }}
     steps:
