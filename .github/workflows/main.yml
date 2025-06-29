@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-latest ]
+        os: [ self-hosted ]
         BIRTH_CMAKE_BUILD_TYPE: [ Debug, Release-assertions, Release ]
     runs-on: ${{ matrix.os }}
     steps:
@@ -33,10 +33,11 @@ jobs:
           ci/reproduce.sh
   release:
     needs: ci
+    permissions: write-all
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-latest ]
+        os: [ self-hosted ]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -55,13 +56,35 @@ jobs:
         run: |
           set -eux
           ci/release.sh
-      - name: Release (web)
-        uses: akkuman/gitea-release-action@v1
+      - name: Create tag
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        id: generate-tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          TAG="dev"
+          git tag -d $TAG || true
+          git push origin --delete $TAG || true
+          git fetch --tags
+          git tag -l
+          git tag $TAG
+          git push origin $TAG
+          echo "RELEASE_TAG_NAME=$TAG" >> $GITHUB_ENV
+      - name: Release
+        uses: softprops/action-gh-release@v2
         if: ${{ (github.ref == 'refs/heads/main') }}
         env:
-          NODE_OPTIONS: '--experimental-fetch' # if nodejs < 18
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          files: |-
+          tag_name: ${{ env.RELEASE_TAG_NAME }}
+          name: "Development build"
+          fail_on_unmatched_files: true
+          make_latest: true
+          files: |
             /home/act_runner/bloat-buster-artifacts/releases/main/compiler_generic_debug
             /home/act_runner/bloat-buster-artifacts/releases/main/compiler_generic
             /home/act_runner/bloat-buster-artifacts/releases/main/compiler_native
