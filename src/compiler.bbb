@@ -18354,23 +18354,15 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
 
     >is_compiler = string_equal(relative_file_path, "src/compiler.bbb");
 
+    >base_cache_dir_env = getenv("BB_CACHE_DIR");
+    if (base_cache_dir_env)
+    {
+        base_cache_dir = c_string_to_slice(base_cache_dir_env);
+    }
+
     os_make_directory(base_cache_dir.pointer);
 
-    >base_dir = arena_join_string(arena, [
-        base_cache_dir,
-        "/",
-        @select(compile_options.host_cpu_model, "native", "generic"),
-    ][..]);
-
-    os_make_directory(base_dir.pointer);
-
-    base_dir = arena_join_string(arena, [
-            base_dir,
-            "/",
-            @enum_name(@build_mode),
-            "_",
-            @select(@has_debug_info(), "di", "nodi"),
-    ][..]);
+    >base_dir = base_cache_dir;
 
     os_make_directory(base_dir.pointer);
 
@@ -18418,7 +18410,7 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
         }
     }
 
-    >object_array = [ output_object_path, "self-hosted-bb-cache/c_abi.o" ];
+    >object_array = [ output_object_path, arena_join_string(arena, [ base_cache_dir, "/c_abi.o" ][..]) ];
     >objects = object_array[..1];
 
     >library_buffer: [256][]u8 = undefined;
@@ -18758,8 +18750,6 @@ names: [_][]u8 =
                         ];
                         >args = arguments[..arguments.length - 1];
                         >execution = os_execute(arena, args, envp, zero);
-                        print(executable_path);
-                        print("\n");
 
                         >success = execution.termination_kind == .exit and execution.termination_code == 0;
 
