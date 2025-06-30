@@ -9,10 +9,10 @@ on:
 
 env:
   BB_CI: 1
-  BUILD_DEBUG: 1
   LLVM_VERSION: 20.1.7
   CLANG_PATH: clang-19
   CLANGXX_PATH: clang++-19
+  BB_CACHE_DIR: self-hosted-bb-cache
 
 jobs:
   ci:
@@ -20,7 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ self-hosted ]
-        BIRTH_CMAKE_BUILD_TYPE: [ Debug, Release-assertions, Release ]
+        BIRTH_CMAKE_BUILD_TYPE: [ Release-assertions, Release ]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -84,7 +84,7 @@ jobs:
           name: "Development build"
           fail_on_unmatched_files: true
           make_latest: true
+          draft: false
           files: |
-            /home/act_runner/bloat-buster-artifacts/releases/main/compiler_generic_debug
             /home/act_runner/bloat-buster-artifacts/releases/main/compiler_generic
             /home/act_runner/bloat-buster-artifacts/releases/main/compiler_native

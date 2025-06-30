@@ -50,5 +50,9 @@ case "${CMAKE_BUILD_TYPE%%-*}" in
     *) exit 1;;
 esac
 
-mkdir -p self-hosted-bb-cache
-$CLANG_PATH -c tests/c_abi.c -o self-hosted-bb-cache/c_abi.o $OPT_ARGS -std=gnu2x
+if [[ -z "${BB_CACHE_DIR:-}" ]]; then
+    BB_CACHE_DIR=self-hosted-bb-cache
+fi
+
+mkdir -p $BB_CACHE_DIR
+$CLANG_PATH -c tests/c_abi.c -o $BB_CACHE_DIR/c_abi.o $OPT_ARGS -std=gnu2x
