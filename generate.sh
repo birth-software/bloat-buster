@@ -51,7 +51,7 @@ case "${CMAKE_BUILD_TYPE%%-*}" in
 esac
 
 if [[ -z "${BB_CACHE_DIR:-}" ]]; then
-    BB_CACHE_DIR=self-hosted-bb-cache
+    BB_CACHE_DIR=bb-cache
 fi
 
 mkdir -p $BB_CACHE_DIR
