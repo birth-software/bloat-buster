@@ -12,7 +12,7 @@ env:
   LLVM_VERSION: 20.1.7
   CLANG_PATH: clang-19
   CLANGXX_PATH: clang++-19
-  BB_CACHE_DIR: self-hosted-bb-cache
+  BB_CACHE_DIR: bb-cache
 
 jobs:
   ci:

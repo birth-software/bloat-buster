@@ -1044,7 +1044,7 @@ CompileFile = struct
     silent: u1,
 }
 
-base_cache_dir = "self-hosted-bb-cache";
+base_cache_dir = "bb-cache";
 
 CPUArchitecture = enum
 {
