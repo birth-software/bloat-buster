@@ -18675,7 +18675,7 @@ names: [_][]u8 =
                 .build_mode = build_mode,
                 .host_cpu_model = is_host_cpu_model,
                 .has_debug_info = has_debug_info,
-                .silent = 0,
+                .silent = 1,
             }, envp);
         },
         .test =>
