@@ -18371,16 +18371,6 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
 
     os_make_directory(base_dir.pointer);
 
-    if (is_compiler)
-    {
-        base_dir = arena_join_string(arena, [
-            base_dir,
-            "/compiler",
-        ][..]);
-
-        os_make_directory(base_dir.pointer);
-    }
-
     >outputh_path_dir = arena_join_string(arena, [
         base_dir,
         "/",
