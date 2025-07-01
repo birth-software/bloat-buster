@@ -9,6 +9,7 @@ env:
   CLANGXX_PATH: clang++-19
   LLVM_VERSION: 20.1.7
   BB_CACHE_DIR: bb-cache
+
 jobs:
   ci:
     strategy:
