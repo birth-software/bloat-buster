@@ -1,8 +1,3 @@
-report_error = fn () noreturn
-{
-    @trap();
-}
-
 mode_t = typealias u64;
 int = typealias s32;
 usize = typealias u64;
@@ -3170,6 +3165,14 @@ scope_to_module = fn (scope: &Scope) &Module
     return @field_parent_pointer(scope, "scope");
 }
 
+report_error = fn (module: &Module, message: []u8) noreturn
+{
+    print("ERROR: ");
+    print(message);
+    print("\n");
+    @trap();
+}
+
 new_local = fn (module: &Module, scope: &Scope) &Local
 {
     >result = arena_allocate[Local](module.arena, 1);
@@ -3207,7 +3210,7 @@ new_local = fn (module: &Module, scope: &Scope) &Local
         }
         else =>
         {
-            report_error();
+            report_error(module, "TODO: new_local");
         }
     }
 
@@ -3624,7 +3627,7 @@ expect_character = fn (module: &Module, expected_character: u8) void
 {
     if (!consume_character_if_match(module, expected_character))
     {
-        report_error();
+        report_error(module, "Expected character but found another one");
     }
 }
 
@@ -3651,7 +3654,7 @@ parse_identifier = fn (module: &Module) []u8
 
     if (module.offset - start == 0)
     {
-        report_error();
+        report_error(module, "No identifier was found when expected one");
     }
 
     >result = module.content[start..module.offset];
@@ -3667,7 +3670,7 @@ escape_character = fn (ch: u8) u8
         'r' => { return '\r'; },
         '\'' => { return '\''; },
         '\\' => { return '\\'; },
-        else => { report_error(); },
+        else => { @trap(); },
     }
 }
 
@@ -4472,7 +4475,7 @@ parse_function_header = fn (module: &Module, scope: &Scope, mandate_argument_nam
 
             if (!function_keyword_s2e.is_valid)
             {
-                report_error();
+                report_error(module, "Invalid function keyword");
             }
 
             skip_space(module);
@@ -4489,7 +4492,7 @@ parse_function_header = fn (module: &Module, scope: &Scope, mandate_argument_nam
 
                     if (!calling_convention_s2e.is_valid)
                     {
-                        report_error();
+                        report_error(module, "Invalid calling convention");
                     }
 
                     >candidate_calling_convention = calling_convention_s2e.enum_value;
@@ -4509,7 +4512,7 @@ parse_function_header = fn (module: &Module, scope: &Scope, mandate_argument_nam
             }
             else
             {
-                report_error();
+                report_error(module, "TODO");
             }
         }
     }
@@ -4698,14 +4701,14 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
 
                 if (bit_count == 0)
                 {
-                    report_error();
+                    report_error(module, "Invalid integer bit count: 0");
                 }
 
                 if (bit_count > 64)
                 {
                     if (bit_count != 128)
                     {
-                        report_error();
+                        report_error(module, "Invalid integer bit count > 64");
                     }
                 }
 
@@ -4733,7 +4736,7 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
                     it_scope = it_scope.parent;
                 }
 
-                report_error();
+                report_error(module, "Type with identifier not found");
             }
         }
     }
@@ -4781,7 +4784,7 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
 
                 if (!value_is_constant(length_value))
                 {
-                    report_error();
+                    report_error(module, "Length not constant");
                 }
 
                 switch (length_value.id)
@@ -4792,14 +4795,14 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
 
                         if (element_count == 0)
                         {
-                            report_error();
+                            report_error(module, "Array element count cannot be zero");
                         }
 
                         resolved = 1;
                     },
                     else =>
                     {
-                        report_error();
+                        report_error(module, "Invalid value type");
                     },
                 }
 
@@ -4833,7 +4836,7 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
             {
                 if (!resolved)
                 {
-                    report_error();
+                    report_error(module, "TODO: Array must be resolved?");
                 }
 
                 assert(element_count != 0);
@@ -4851,7 +4854,7 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
         >intrinsic_s2e = @string_to_enum(TypeIntrinsic, identifier);
         if (!intrinsic_s2e.is_valid)
         {
-            report_error();
+            report_error(module, "Invalid intrinsic");
         }
 
         >intrinsic = intrinsic_s2e.enum_value;
@@ -4866,7 +4869,7 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
     }
     else
     {
-        report_error();
+        report_error(module, "TODO: parse_type");
     }
 }
 
@@ -4921,7 +4924,7 @@ tokenize = fn (module: &Module) Token
     >start_index = module.offset;
     if (start_index == module.content.length)
     {
-        report_error();
+        report_error(module, "Reached EOF");
     }
 
     >start_character = module.content[start_index];
@@ -4988,12 +4991,12 @@ tokenize = fn (module: &Module) Token
                 }
                 else
                 {
-                    report_error();
+                    report_error(module, "Invalid value intrinsic");
                 }
             }
             else
             {
-                report_error();
+                report_error(module, "Intrinsic must be followed with identifier");
             }
         },
         '<' =>
@@ -5122,7 +5125,7 @@ tokenize = fn (module: &Module) Token
                 ch = module.content[module.offset];
                 if (ch == '\'')
                 {
-                    report_error();
+                    report_error(module, "Empty character");
                 }
             }
 
@@ -5167,7 +5170,7 @@ tokenize = fn (module: &Module) Token
                 .decimal => { value = parse_decimal(module); },
                 .octal => { value = parse_octal(module); },
                 .binary => { value = parse_binary(module); },
-                .character_literal => { report_error(); },
+                .character_literal => { report_error(module, "Invalid character literal format"); },
             }
 
             token = {
@@ -5282,7 +5285,7 @@ tokenize = fn (module: &Module) Token
             }
             else
             {
-                report_error();
+                report_error(module, "TODO");
             }
         }
     }
@@ -5462,7 +5465,7 @@ reference_identifier = fn (module: &Module, current_scope: &Scope, identifier: [
     }
     else
     {
-        report_error();
+        report_error(module, "Value identifier not found");
     }
 }
 
@@ -5526,7 +5529,7 @@ parse_aggregate_initialization = fn (module: &Module, scope: &Scope, builder: Va
             }
             else
             {
-                report_error();
+                report_error(module, "Only zero allowed");
             }
         }
 
@@ -5926,7 +5929,7 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                 {
                     if (!consume_character_if_match(module, ','))
                     {
-                        report_error();
+                        report_error(module, "Expected comma");
                     }
                 }
             }
@@ -6026,7 +6029,7 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
         },
         else =>
         {
-            report_error();
+            report_error(module, "TODO: parse_left");
         },
     }
 
@@ -6283,7 +6286,7 @@ parse_right = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
 
                     if (macro_declaration_is_generic(declaration))
                     {
-                        report_error();
+                        report_error(module, "Declaration must not be generic");
                     }
 
                     >instantiation_line = get_line(module);
@@ -6346,7 +6349,7 @@ parse_right = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
 
                 if (!macro_declaration_is_generic(declaration))
                 {
-                    report_error();
+                    report_error(module, "Declaration must be generic");
                 }
 
                 >instantiation_line = get_line(module);
@@ -6367,7 +6370,7 @@ parse_right = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                     >constant_argument_index = constant_argument_count;
                     if (constant_argument_index == original_constant_argument_count)
                     {
-                        report_error();
+                        report_error(module, "Constant argument count not matching");
                     }
 
                     >constant_argument = declaration.constant_arguments[constant_argument_index];
@@ -6403,7 +6406,7 @@ parse_right = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
 
                 if (original_constant_argument_count != constant_argument_count)
                 {
-                    report_error();
+                    report_error(module, "Constant argument count must match");
                 }
 
                 >instantiation_arguments = parse_call_arguments(module, scope);
@@ -6450,7 +6453,7 @@ parse_right = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                 {
                     if (!start_value)
                     {
-                        report_error();
+                        report_error(module, "Array expression must have a value");
                     }
 
                     >index = start_value;
@@ -6516,7 +6519,7 @@ parse_right = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
         },
         else =>
         {
-            report_error();
+            report_error(module, "TODO: parse_right");
         },
     }
 
@@ -6838,7 +6841,7 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                                 {
                                     if (left_value_count != 1)
                                     {
-                                        report_error();
+                                        report_error(module, "Expected left_value_count");
                                     }
 
                                     right_value_buffer[right_value_count] = parse_value(module, scope, zero);
@@ -6852,14 +6855,14 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                                     right_value_buffer[0].kind = .left;
                                     for_kind = .slice;
                                 },
-                                else => { report_error(); },
+                                else => { report_error(module, "TODO: for token"); },
                             }
 
                             statement.content.for.kind = for_kind;
 
                             if (for_kind == .slice and left_value_count != right_value_count)
                             {
-                                report_error();
+                                report_error(module, "TODO: for slice left/right mismatch");
                             }
 
                             >left_values = arena_allocate_slice[ValueKind](module.arena, left_value_count);
@@ -7114,7 +7117,7 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
             }
             else
             {
-                report_error();
+                report_error(module, "TODO: statement start character");
             }
         },
     }
@@ -7213,7 +7216,7 @@ parse = fn (module: &Module) void
                 >global_attribute_keyword_s2e = @string_to_enum(GlobalAttributeKeyword, global_attribute_keyword_string);
                 if (!global_attribute_keyword_s2e.is_valid)
                 {
-                    report_error();
+                    report_error(module, "Invalid global attribute keyword");
                 }
 
                 >global_attribute_keyword = global_attribute_keyword_s2e.enum_value;
@@ -7235,7 +7238,7 @@ parse = fn (module: &Module) void
                 }
                 else
                 {
-                    report_error();
+                    report_error(module, "TODO: Expected right bracket?");
                 }
             }
 
@@ -7256,13 +7259,13 @@ parse = fn (module: &Module) void
 
                 if (last_global.variable.storage.id != .forward_declared_function)
                 {
-                    report_error();
+                    report_error(module, "Previously declared global must be forward-declared function");
                 }
 
                 // TODO: only forbid extern, not exports
                 if (last_global.linkage == .external)
                 {
-                    report_error();
+                    report_error(module, "Function forward declarations with later definition must not have external linkage");
                 }
 
                 break;
@@ -7290,7 +7293,7 @@ parse = fn (module: &Module) void
                 }
                 else
                 {
-                    report_error();
+                    report_error(module, "Type with later definition must previously be forward declared");
                 }
             }
 
@@ -7337,7 +7340,7 @@ parse = fn (module: &Module) void
 
                 if (global_forward_declaration != zero and global_keyword != .fn)
                 {
-                    report_error();
+                    report_error(module, "Global forward declaration must be a function");
                 }
 
                 switch (global_keyword)
@@ -7403,7 +7406,7 @@ parse = fn (module: &Module) void
                         >needed_bit_count = @max(next_power_of_two(field_bit_offset), 8);
                         if (needed_bit_count > @integer_max(u32))
                         {
-                            report_error();
+                            report_error(module, "TODO: Needed bit count must be less or equal than 32?");
                         }
 
                         >bit_count = needed_bit_count;
@@ -7415,13 +7418,13 @@ parse = fn (module: &Module) void
 
                         if (backing_type.id != .integer)
                         {
-                            report_error();
+                            report_error(module, "Backing type must be integer");
                         }
 
                         >backing_type_bit_size = get_bit_size(backing_type);
                         if (backing_type_bit_size > 64)
                         {
-                            report_error();
+                            report_error(module, "Backing type bit size must be less or equal than 64");
                         }
 
                         new_type(module, {
@@ -7490,26 +7493,26 @@ parse = fn (module: &Module) void
                                             {
                                                 field_integer_value = field_value.content.constant_integer.value;
                                             },
-                                            else => { report_error(); },
+                                            else => { report_error(module, "TODO: Invalid value"); },
                                         }
                                     }
                                     else
                                     {
                                         // TODO: ??
-                                        report_error();
+                                        report_error(module, "TODO: must be constant");
                                     }
                                 }
                                 else
                                 {
                                     // TODO: ??
-                                    report_error();
+                                    report_error(module, "TODO: must be resolved");
                                 }
                             }
                             else
                             {
                                 if (!is_resolved)
                                 {
-                                    report_error();
+                                    report_error(module, "TODO: must be resolved 2");
                                 }
                             }
 
@@ -7558,7 +7561,7 @@ parse = fn (module: &Module) void
                         }
                         else
                         {
-                            report_error();
+                            report_error(module, "TODO: must be resolved 3");
                         }
                     },
                     .fn =>
@@ -7578,7 +7581,7 @@ parse = fn (module: &Module) void
 
                             if (global_forward_declaration.variable.type != function_type)
                             {
-                                report_error();
+                                report_error(module, "Function forward declaration must match definition");
                             }
 
                             assert(global_forward_declaration.variable.storage.type == pointer_to_function_type);
@@ -7726,7 +7729,7 @@ parse = fn (module: &Module) void
                             // END OF SCOPE
                             if (constant_argument_count == 0)
                             {
-                                report_error();
+                                report_error(module, "Constant argument must not be zero");
                             }
                         }
                         else
@@ -7920,7 +7923,7 @@ parse = fn (module: &Module) void
                         {
                             if (type_forward_declaration)
                             {
-                                report_error();
+                                report_error(module, "TODO: type_forward_declaration exists");
                             }
 
                             expect_character(module, ';');
@@ -7932,7 +7935,7 @@ parse = fn (module: &Module) void
 
                         if (!consume_character_if_match(module, ';'))
                         {
-                            report_error();
+                            report_error(module, "Expected semicolon after alias");
                         }
 
                         >alias_type = new_type(module, {
@@ -8601,7 +8604,8 @@ abi_system_v_classify_type = fn (type: &Type, options: AbiSystemVClassifyArgumen
             }
             else
             {
-                report_error();
+                print("TODO: unexpected bit count\n");
+                @trap();
             }
         },
         .struct,
@@ -9150,7 +9154,7 @@ abi_system_v_classify_return_type = fn (module: &Module, semantic_return_type: &
             }
             else
             {
-                report_error();
+                report_error(module, "TODO: abi_system_v_classify_type");
             }
         },
         .integer =>
@@ -9813,7 +9817,7 @@ check_types = fn (module: &Module, expected: &Type, source: &Type) void
 
             if (!is_dst_p_and_source_int)
             {
-                report_error();
+                report_error(module, "Type checking failed!");
             }
         }
     }
@@ -9863,13 +9867,13 @@ analyze_binary_type = fn (module: &Module, left: &Value, right: &Value, is_boole
                 },
                 else =>
                 {
-                    report_error();
+                    report_error(module, "TODO: analyze_binary_type");
                 },
             }
         }
         else
         {
-            report_error();
+            report_error(module, "TODO: left.id == right.id");
         }
     }
 
@@ -9894,7 +9898,7 @@ analyze_binary_type = fn (module: &Module, left: &Value, right: &Value, is_boole
 
         if (is_boolean)
         {
-            report_error();
+            report_error(module, "TODO: is_boolean");
         }
 
         analyze_type(module, left, expected_type, { .must_be_constant = must_be_constant, zero });
@@ -10048,7 +10052,7 @@ resolve_type = fn (module: &Module, type: &Type) &Type
             >instantiation = module.current_macro_instantiation;
             if (!instantiation)
             {
-                report_error();
+                report_error(module, "Unresolved type must be within a macro instantiation");
             }
 
             >declaration = instantiation.declaration;
@@ -10072,7 +10076,7 @@ resolve_type = fn (module: &Module, type: &Type) &Type
 
             if (!result)
             {
-                report_error();
+                report_error(module, "Unresolved type not found");
             }
         },
         .void,
@@ -10435,7 +10439,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
             if (!expected_type)
             {
-                report_error();
+                report_error(module, "Constant integer expects a type");
             }
 
             resolve_type_in_place(module, expected_type);
@@ -10455,7 +10459,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     {
                         if (type_is_signed)
                         {
-                            report_error();
+                            report_error(module, "Must not be signed");
                         }
 
                         @trap();
@@ -10465,7 +10469,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                         >max_value = integer_max_value(type_bit_count, type_is_signed);
                         if (value_constant > max_value)
                         {
-                            report_error();
+                            report_error(module, "Value bigger than type max value");
                         }
 
                         value_type = expected_type;
@@ -10477,7 +10481,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 },
                 else =>
                 {
-                    report_error();
+                    report_error(module, "TODO: constant_integer");
                 },
             }
 
@@ -10592,7 +10596,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 {
                     if (!expected_type)
                     {
-                        report_error();
+                        report_error(module, "Extend expects a type");
                     }
 
                     >extended_value = unary_value;
@@ -10605,11 +10609,11 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                     if (source_bit_size > expected_bit_size)
                     {
-                        report_error();
+                        report_error(module, "Source type is bigger than destination type");
                     }
                     else if (source_bit_size == expected_bit_size and type_is_signed(source) == type_is_signed(expected_type))
                     {
-                        report_error();
+                        report_error(module, "Type sizes match and have the same signedness");
                     }
 
                     value_type = expected_type;
@@ -10618,7 +10622,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 {
                     if (!expected_type)
                     {
-                        report_error();
+                        report_error(module, "Truncate expects a type");
                     }
 
                     analyze_type(module, unary_value, zero, { .must_be_constant = analysis.must_be_constant, zero });
@@ -10628,7 +10632,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                     if (expected_bit_size >= source_bit_size)
                     {
-                        report_error();
+                        report_error(module, "Source type bigger or equal size than destination_type");
                     }
 
                     value_type = expected_type;
@@ -10638,7 +10642,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     analyze_type(module, unary_value, zero, { .must_be_constant = analysis.must_be_constant, zero });
                     if (value.kind == .left)
                     {
-                        report_error();
+                        report_error(module, "Dereference must not be lvalue");
                     }
                     >pointer_type = unary_value.type;
                     assert(pointer_type.id == .pointer);
@@ -10654,7 +10658,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     >value_enum_type = unary_value.type;
                     if (value_enum_type.id != .enum)
                     {
-                        report_error();
+                        report_error(module, "int_from_enum value must be enum");
                     }
 
                     >backing_type = value_enum_type.content.enum.backing_type;
@@ -10670,7 +10674,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                     if (value_enum_type.id != .pointer)
                     {
-                        report_error();
+                        report_error(module, "int_from_pointer value must be pointer");
                     }
 
                     value_type = uint64(module);
@@ -10680,12 +10684,12 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 {
                     if (!expected_type)
                     {
-                        report_error();
+                        report_error(module, "Pointer cast must have a result type");
                     }
 
                     if (expected_type.id != .pointer)
                     {
-                        report_error();
+                        report_error(module, "pointer_cast result type is not pointer");
                     }
 
                     analyze_type(module, unary_value, zero, { .must_be_constant = analysis.must_be_constant, zero });
@@ -10694,12 +10698,12 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                     if (value_pointer_type == expected_type)
                     {
-                        report_error();
+                        report_error(module, "value_pointer_type == expected_type");
                     }
 
                     if (value_pointer_type.id != .pointer)
                     {
-                        report_error();
+                        report_error(module, "value_pointer_type must be pointer");
                     }
 
                     value_type = expected_type;
@@ -10714,7 +10718,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                     if (enum_type.id != .enum)
                     {
-                        report_error();
+                        report_error(module, "enum_name value must be enum");
                     }
 
                     resolve_type_in_place(module, enum_type);
@@ -10827,12 +10831,12 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 {
                     if (!expected_type)
                     {
-                        report_error();
+                        report_error(module, "pointer_from_int must have a result type");
                     }
 
                     if (expected_type.id != .pointer)
                     {
-                        report_error();
+                        report_error(module, "pointer_from_int result type must be pointer");
                     }
 
                     analyze_type(module, unary_value, zero, { .must_be_constant = analysis.must_be_constant, zero });
@@ -10840,13 +10844,13 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     >unary_value_type = unary_value.type;
                     if (unary_value_type.id != .integer)
                     {
-                        report_error();
+                        report_error(module, "pointer_from_int value must be integer");
                     }
 
                     // TODO: is this correct?
                     if (get_bit_size(unary_value_type) != 64)
                     {
-                        report_error();
+                        report_error(module, "TODO:????");
                     }
 
                     value_type = expected_type;
@@ -10855,12 +10859,12 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 {
                     if (!expected_type)
                     {
-                        report_error();
+                        report_error(module, "enum_from_int must have a result type");
                     }
 
                     if (expected_type.id != .enum)
                     {
-                        report_error();
+                        report_error(module, "enum_from_int result type must be enum");
                     }
 
                     analyze_type(module, unary_value, expected_type.content.enum.backing_type, { .must_be_constant = analysis.must_be_constant, zero });
@@ -10868,12 +10872,12 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     >unary_value_type = unary_value.type;
                     if (unary_value_type.id != .integer)
                     {
-                        report_error();
+                        report_error(module, "enum_from_int value must be integer");
                     }
 
                     if (get_bit_size(unary_value_type) != get_bit_size(expected_type))
                     {
-                        report_error();
+                        report_error(module, "TODO???????");
                     }
 
                     value_type = expected_type;
@@ -10951,7 +10955,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                 if (element_type.id != .enum)
                 {
-                    report_error();
+                    report_error(module, "enum_values element type must be enum");
                 }
 
                 >fields = element_type.content.enum.fields;
@@ -10960,7 +10964,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                 if (element_count == 0)
                 {
-                    report_error();
+                    report_error(module, "element_count must not be zero");
                 }
 
                 >array_type = get_array_type(module, element_type, element_count);
@@ -10981,7 +10985,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             {
                 if (unary_type.id != .enum)
                 {
-                    report_error();
+                    report_error(module, "enum_names type must be enum");
                 }
 
                 value_type = get_slice_type(module, get_slice_type(module, uint8(module)));
@@ -11001,7 +11005,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                 if (value_type.id != .integer)
                 {
-                    report_error();
+                    report_error(module, "value_type expected to be integer");
                 }
 
                 >value: u64 = undefined;
@@ -11015,7 +11019,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     {
                         if (unary_type.id != .integer)
                         {
-                            report_error();
+                            report_error(module, "unary_type must be integer");
                         }
 
                         value = integer_max_value(unary_type.content.integer.bit_count, unary_type.content.integer.signed);
@@ -11025,7 +11029,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                 if (value > max_value)
                 {
-                    report_error();
+                    report_error(module, "value is higher than type max value");
                 }
             }
 
@@ -11062,18 +11066,18 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                                 {
                                     function_type = element_type;
                                 },
-                                else => { report_error(); },
+                                else => { report_error(module, "not a function 1"); },
                             }
                         },
                         else =>
                         {
-                            report_error();
+                            report_error(module, "not a function 2");
                         },
                     }
                 },
                 else =>
                 {
-                    report_error();
+                    report_error(module, "not a function 3");
                 },
             }
 
@@ -11088,14 +11092,14 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             {
                 if (call_arguments.length < semantic_argument_types.length)
                 {
-                    report_error();
+                    report_error(module, "not enough arguments");
                 }
             }
             else
             {
                 if (call_arguments.length != semantic_argument_types.length)
                 {
-                    report_error();
+                    report_error(module, "argument count not matching");
                 }
             }
 
@@ -11126,7 +11130,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             {
                 if (expected_type.id != .array)
                 {
-                    report_error();
+                    report_error(module, "array initialization value must be of type array");
                 }
 
                 >element_type = expected_type.content.array.element_type;
@@ -11143,7 +11147,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 {
                     if (expected_type.content.array.element_count != values.length)
                     {
-                        report_error();
+                        report_error(module, "element count mismatch");
                     }
                 }
 
@@ -11159,7 +11163,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                 if (value.kind == .left) // TODO: possible?
                 {
-                    report_error();
+                    report_error(module, "TODO: value.kind == .left");
                 }
 
                 value_type = expected_type;
@@ -11168,7 +11172,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             {
                 if (values.length == 0)
                 {
-                    report_error();
+                    report_error(module, "array initialization must not be empty");
                 }
 
                 >expected_type: &Type = zero;
@@ -11185,7 +11189,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     {
                         if (expected_type != value_type)
                         {
-                            report_error();
+                            report_error(module, "array element type mismatch");
                         }
                     }
                     else
@@ -11197,7 +11201,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                 if (!expected_type)
                 {
-                    report_error();
+                    report_error(module, "array must have expected element type");
                 }
 
                 >element_type = expected_type;
@@ -11224,7 +11228,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             >array_like_type = array_like.type;
             if (array_like_type.id != .pointer)
             {
-                report_error();
+                report_error(module, "array expression value must be pointer (lvalue)");
             }
 
             >pointer_element_type = array_like_type.content.pointer.element_type;
@@ -11246,7 +11250,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                     if (!slice_type.content.struct.is_slice)
                     {
-                        report_error();
+                        report_error(module, "struct must be slice");
                     }
 
                     >slice_pointer_type = slice_type.content.struct.fields[0].type;
@@ -11283,12 +11287,12 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
             if (!expected_type)
             {
-                report_error();
+                report_error(module, "enum literal must have result type");
             }
 
             if (expected_type.id != .enum)
             {
-                report_error();
+                report_error(module, "enum literal result type must be enum");
             }
 
             value_type = expected_type;
@@ -11305,13 +11309,13 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
             if (aggregate.kind == .right)
             {
-                report_error();
+                report_error(module, "field_access aggregate must be lvalue");
             }
 
             >aggregate_type = aggregate.type;
             if (aggregate_type.id != .pointer)
             {
-                report_error();
+                report_error(module, "field_access aggregate must have pointer type");
             }
 
             >aggregate_element_type = aggregate_type.content.pointer.element_type;
@@ -11338,7 +11342,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                     if (!result_field)
                     {
-                        report_error();
+                        report_error(module, "struct field not found");
                     }
 
                     >field_type = result_field.type;
@@ -11361,7 +11365,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                     if (!union_field)
                     {
-                        report_error();
+                        report_error(module, "union field not found");
                     }
 
                     >field_type = union_field.type;
@@ -11376,7 +11380,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 {
                     if (value.kind == .left)
                     {
-                        report_error();
+                        report_error(module, "bits must not be lvalue");
                     }
 
                     >fields = resolved_aggregate_type.content.bits.fields;
@@ -11393,7 +11397,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                     if (!result_field)
                     {
-                        report_error();
+                        report_error(module, "bits field not found");
                     }
 
                     assert(value.kind == .right);
@@ -11403,14 +11407,14 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 {
                     if (!string_equal(field_name, "length"))
                     {
-                        report_error();
+                        report_error(module, "array field access must be length");
                     }
 
                     if (expected_type)
                     {
                         if (expected_type.id != .integer)
                         {
-                            report_error();
+                            report_error(module, "array length expects integer type");
                         }
 
                         value_type = expected_type;
@@ -11437,11 +11441,11 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 },
                 .pointer =>
                 {
-                    report_error();
+                    report_error(module, "TODO: pointer");
                 },
                 else =>
                 {
-                    report_error();
+                    report_error(module, "TODO: field_access");
                 },
             }
 
@@ -11457,7 +11461,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
             if (array_like.kind != .left)
             {
-                report_error();
+                report_error(module, "Slice array-like value must be lvalue");
             }
 
             analyze_type(module, array_like, zero, { .must_be_constant = analysis.must_be_constant, zero });
@@ -11465,7 +11469,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             >pointer_type = array_like.type;
             if (pointer_type.id != .pointer)
             {
-                report_error();
+                report_error(module, "Slice array-like value must be pointer");
             }
 
             >sliceable_type = resolve_alias(module, pointer_type.content.pointer.element_type);
@@ -11482,7 +11486,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 {
                     if (!sliceable_type.content.struct.is_slice)
                     {
-                        report_error();
+                        report_error(module, "Struct must be slice");
                     }
 
                     >slice_pointer_type = sliceable_type.content.struct.fields[0].type;
@@ -11494,7 +11498,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 {
                     element_type = sliceable_type.content.array.element_type;
                 },
-                else => { report_error(); },
+                else => { report_error(module, "Wrong sliceable type"); },
             }
 
             assert(element_type != zero);
@@ -11514,7 +11518,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                     if (index.type.id != .integer)
                     {
-                        report_error();
+                        report_error(module, "Index type must be integer");
                     }
                 }
             }
@@ -11557,7 +11561,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
         {
             if (!expected_type)
             {
-                report_error();
+                report_error(module, "Aggregate initialization must have a result type");
             }
 
             >resolved_type = resolve_alias(module, expected_type);
@@ -11582,7 +11586,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 {
                     if (resolved_type.id != .pointer)
                     {
-                        report_error();
+                        report_error(module, "Lvalue must have pointer type");
                     }
 
                     aggregate_type = resolved_type.content.pointer.element_type;
@@ -11606,12 +11610,12 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                     if (zero and same_values_as_field)
                     {
-                        report_error();
+                        report_error(module, "Zero aggregate initialization and all values initialized are incompatible");
                     }
 
                     if (!is_properly_initialized)
                     {
-                        report_error();
+                        report_error(module, "Either all fields must be initialized or aggregate initialization must be annotated with zero");
                     }
 
                     assert(elements.length <= fields.length);
@@ -11638,7 +11642,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                         if (declaration_index == fields.length)
                         {
-                            report_error();
+                            report_error(module, "aggregate initialization field not found");
                         }
 
                         >mask = 1 << declaration_index;
@@ -11646,7 +11650,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                         if (current_mask & mask)
                         {
                             // Repeated field
-                            report_error();
+                            report_error(module, "aggregate initialization field already initialized");
                         }
 
                         field_mask = current_mask | mask;
@@ -11669,14 +11673,14 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     >same_values_as_field = fields.length == elements.length;
                     >is_properly_initialized = same_values_as_field or is_zero;
 
-                    if (is_zero and same_values_as_field)
+                    if (zero and same_values_as_field)
                     {
-                        report_error();
+                        report_error(module, "Zero aggregate initialization and all values initialized are incompatible");
                     }
 
                     if (!is_properly_initialized)
                     {
-                        report_error();
+                        report_error(module, "Either all fields must be initialized or aggregate initialization must be annotated with zero");
                     }
 
                     assert(elements.length <= fields.length);
@@ -11702,7 +11706,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                         if (declaration_index == fields.length)
                         {
-                            report_error();
+                            report_error(module, "aggregate initialization field not found");
                         }
 
                         >mask = 1 << declaration_index;
@@ -11711,7 +11715,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                         if (current_mask & mask)
                         {
                             // Repeated field
-                            report_error();
+                            report_error(module, "aggregate initialization field already initialized");
                         }
 
                         field_mask = current_mask | mask;
@@ -11730,7 +11734,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 {
                     if (elements.length != 1)
                     {
-                        report_error();
+                        report_error(module, "union initialization must only have a single field initializer");
                     }
 
                     >initialization_value = elements[0].value;
@@ -11750,7 +11754,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                     if (!result_field)
                     {
-                        report_error();
+                        report_error(module, "aggregate initialization union field not found");
                     }
 
                     analyze_type(module, initialization_value, result_field.type, { .must_be_constant = analysis.must_be_constant, zero });
@@ -11762,7 +11766,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     >element_type = aggregate_type.content.enum_array.element_type;
                     if (enum_type.id != .enum)
                     {
-                        report_error();
+                        report_error(module, "Enum array enum type must be enum");
                     }
 
                     >fields = enum_type.content.enum.fields;
@@ -11772,14 +11776,14 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     >same_values_as_field = fields.length == elements.length;
                     >is_properly_initialized = same_values_as_field or is_zero;
 
-                    if (is_zero and same_values_as_field)
+                    if (zero and same_values_as_field)
                     {
-                        report_error();
+                        report_error(module, "Zero aggregate initialization and all values initialized are incompatible");
                     }
 
                     if (!is_properly_initialized)
                     {
-                        report_error();
+                        report_error(module, "Either all fields must be initialized or aggregate initialization must be annotated with zero");
                     }
 
                     assert(elements.length <= fields.length);
@@ -11803,7 +11807,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                         if (!result_field)
                         {
-                            report_error();
+                            report_error(module, "field not found");
                         }
 
                         >declaration_index: u64 = @extend(result_field - fields.pointer);
@@ -11812,7 +11816,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                         if (current_mask & mask)
                         {
                             // Repeated field
-                            report_error();
+                            report_error(module, "repeated enum array field");
                         }
 
                         field_mask = current_mask | mask;
@@ -11824,19 +11828,19 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                     value.content.aggregate_initialization.is_constant = is_constant and is_ordered;
                 },
-                else => { report_error(); },
+                else => { report_error(module, "unknown aggregate initialization type"); },
             }
         },
         .zero =>
         {
             if (!expected_type)
             {
-                report_error();
+                report_error(module, "zero initialization must have a result type");
             }
 
             if (expected_type.id == .void or expected_type.id == .noreturn)
             {
-                report_error();
+                report_error(module, "zero with non-sized type");
             }
 
             value_type = expected_type;
@@ -11874,7 +11878,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
             if (enum_type.id != .enum)
             {
-                report_error();
+                report_error(module, "string_to_enum type must be enum");
             }
 
             if (!enum_type.content.enum.string_to_enum_function)
@@ -12212,12 +12216,12 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
         {
             if (!expected_type)
             {
-                report_error();
+                report_error(module, "undefined must have result type");
             }
 
             if (expected_type.id == .void or expected_type.id == .noreturn)
             {
-                report_error();
+                report_error(module, "undefined with non-sized type");
             }
 
             value_type = expected_type;
@@ -12226,13 +12230,13 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
         {
             if (module.current_macro_declaration)
             {
-                report_error();
+                report_error(module, "cannot have a macro instantiation inside a macro declaration");
             }
 
             >current_function = module.current_function;
             if (!current_function)
             {
-                report_error();
+                report_error(module, "macro instantiation must be inside a function");
             }
 
             module.current_function = zero;
@@ -12336,7 +12340,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             >instantiation_arguments = macro_instantiation.instantiation_arguments;
             if (instantiation_arguments.length != instantiation_declaration_arguments.length)
             {
-                report_error();
+                report_error(module, "instantiation argument count must match declaration argument count");
             }
 
             if (module.has_debug_info)
@@ -12407,14 +12411,14 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
             if (!expected_type)
             {
-                report_error();
+                report_error(module, "field_parent_pointer must have a result type");
             }
 
             value_type = expected_type;
 
             if (value_type.id != .pointer)
             {
-                report_error();
+                report_error(module, "field_parent_pointer result type must be pointer");
             }
 
             >aggregate_type = value_type.content.pointer.element_type;
@@ -12441,7 +12445,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
             if (!field_type)
             {
-                report_error();
+                report_error(module, "field_parent_pointer field not found");
             }
 
             >pointer_to_field = get_pointer_type(module, field_type);
@@ -12461,7 +12465,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
         {
             if (expected_type)
             {
-                report_error();
+                report_error(module, "breakpoint must not have result type");
             }
 
             value_type = void_type(module);
@@ -12522,7 +12526,7 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
                                 else => { unreachable; },
                             }
                         },
-                        else => { report_error(); },
+                        else => { report_error(module, "TODO: max/min type"); },
                     }
 
                     >argument_types: [_]&LLVMType = [ resolved_value_type.llvm.abi ];
@@ -12604,7 +12608,7 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
 
             if (id != .add and id != .sub)
             {
-                report_error();
+                report_error(module, "Binary operation between pointers must either be add or sub");
             }
 
             >index = right;
@@ -12622,7 +12626,7 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
         }
         else =>
         {
-            report_error();
+            report_error(module, "TODO: binary");
         }
     }
 }
@@ -12958,13 +12962,13 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                 zero,
                             });
                         },
-                        else => { report_error(); },
+                        else => { report_error(module, "call function type mismatch"); },
                     }
                 },
                 .function => { llvm_callable = llvm_value; },
             }
         },
-        else => { report_error(); },
+        else => { report_error(module, "call function type mismatch 2"); },
     }
 
     assert(llvm_callable != zero);
@@ -13151,7 +13155,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
 
                         if (argument_abi.attributes.direct.offset != 0)
                         {
-                            report_error();
+                            report_error(module, "TODO: argument.attributes.direct.offset != 0");
                         }
 
                         if (coerce_to_type.id == .struct and argument_abi.flags.kind == .direct and argument_abi.flags.can_be_flattened)
@@ -14438,7 +14442,7 @@ emit_macro_instantiation = fn (module: &Module, value: &Value) void
     >current_function = module.current_function;
     if (!current_function)
     {
-        report_error();
+        report_error(module, "macro instantiation must be inside a function");
     }
     module.current_function = zero;
 
@@ -14601,7 +14605,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
             {
                 if (must_be_constant)
                 {
-                    report_error();
+                    report_error(module, "shortcircuiting operation and must be constant is incompatible");
                 }
 
                 >op: ShortcircuitingOperation = undefined;
@@ -14816,7 +14820,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                             },
                             else =>
                             {
-                                report_error();
+                                report_error(module, "TODO: boolean negation type");
                             },
                         }
                     }
@@ -14904,7 +14908,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                     {
                         if (variable.scope.kind != .global)
                         {
-                            report_error();
+                            report_error(module, "variable must be constant");
                         }
 
                         >global: &Global = @field_parent_pointer(variable, "variable");
@@ -15076,7 +15080,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
 
             if (array_like.kind == .right)
             {
-                report_error();
+                report_error(module, "array expression must be lvalue");
             }
 
             emit_value(module, array_like, .memory, must_be_constant);
@@ -15229,7 +15233,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
 
             if (!result_field)
             {
-                report_error();
+                report_error(module, "enum literal not found");
             }
 
             >llvm_type = get_llvm_type(resolved_value_type, type_kind);
@@ -15267,7 +15271,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                 {
                     if (resolved_value_type.id != .pointer)
                     {
-                        report_error();
+                        report_error(module, "lvalue must be pointer");
                     }
 
                     >aggregate_type = resolved_value_type.content.pointer.element_type;
@@ -15336,7 +15340,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                             else
                             {
                                 // TODO: shouldn't this be a left value?
-                                report_error();
+                                report_error(module, "TODO: compiler internal error");
                             }
                         },
                         .union =>
@@ -15403,7 +15407,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
 
                                             field_value = result_enum_field.value;
                                         },
-                                        else => { report_error(); },
+                                        else => { report_error(module, "TODO: constant bits value id"); },
                                     }
 
                                     bits_value |= field_value << result_field.offset;
@@ -15610,7 +15614,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                 },
                 else =>
                 {
-                    report_error();
+                    report_error(module, "TODO: field parent pointer type");
                 },
             }
         },
@@ -15654,7 +15658,7 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
     }
     else
     {
-        report_error();
+        report_error(module, "not a current function");
     }
 
     >llvm_function = parent_function_global.variable.storage.llvm;
@@ -16066,7 +16070,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
     }
     else
     {
-        report_error();
+        report_error(module, "Not inside a function");
     }
 
     >llvm_function = parent_function_global.variable.storage.llvm;
@@ -16097,18 +16101,18 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                     {
                         if (return_value)
                         {
-                            report_error();
+                            report_error(module, "return value with return type 'void'");
                         }
                     },
                     .noreturn =>
                     {
-                        report_error();
+                        report_error(module, "return statement with 'noreturn'");
                     },
                     else =>
                     {
                         if (!return_value)
                         {
-                            report_error();
+                            report_error(module, "sizable return type with no return value");
                         }
 
                         if (module.has_debug_info)
@@ -16145,7 +16149,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
             }
             else
             {
-                report_error();
+                report_error(module, "TODO: internal compiler error");
             }
         },
         .local =>
@@ -16232,10 +16236,10 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                         >value = condition.content.constant_integer.value;
                         if (value == 0)
                         {
-                            report_error();
+                            report_error(module, "zero-condition in a while loop");
                         }
                     },
-                    else => { report_error(); },
+                    else => { report_error(module, "TODO: condition value id"); },
                 }
 
                 LLVMBuildBr(module.llvm.builder, body_block);
@@ -16287,7 +16291,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
             >left_type = left.type;
             if (left_type.id != .pointer)
             {
-                report_error();
+                report_error(module, "left type must be pointer");
             }
 
             >element_type = left_type.content.pointer.element_type;
@@ -16363,7 +16367,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
             switch (discriminant_type.id)
             {
                 .enum, .integer => {},
-                else => { report_error(); },
+                else => { report_error(module, "TODO: discriminant_type"); },
             }
 
             for (i: 0..clauses.length)
@@ -16377,7 +16381,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                     if (else_clause_index != invalid_clause_index)
                     {
                         // Double else
-                        report_error();
+                        report_error(module, "Double else");
                     }
 
                     else_clause_index = i;
@@ -16406,7 +16410,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
 
                                 if (start.id != end.id)
                                 {
-                                    report_error();
+                                    report_error(module, "range values id must match");
                                 }
 
                                 switch (start.id)
@@ -16415,10 +16419,10 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                                     {
                                         if (start.content.constant_integer.value >= end.content.constant_integer.value)
                                         {
-                                            report_error();
+                                            report_error(module, "start value is greater or equal than end value");
                                         }
                                     },
-                                    else => { report_error(); },
+                                    else => { report_error(module, "TODO: start value id"); },
                                 }
                             },
                         }
@@ -16567,7 +16571,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                         {
                             if (!type_is_slice(iteratable.type))
                             {
-                                report_error();
+                                report_error(module, "expected slice type");
                             }
 
                             iteratable.kind = .right;
@@ -16581,7 +16585,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
 
                                 if (pointer_type.id != .pointer)
                                 {
-                                    report_error();
+                                    report_error(module, "lvalue must be pointer");
                                 }
 
                                 aggregate_type = pointer_type.content.pointer.element_type;
@@ -16605,7 +16609,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                             {
                                 if (!type_is_slice(aggregate_type))
                                 {
-                                    report_error();
+                                    report_error(module, "aggregate type must be slice");
                                 }
 
                                 >pointer_type = aggregate_type.content.struct.fields[0].type;
@@ -17001,7 +17005,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
             >exit_block = module.llvm.exit_block;
             if (!exit_block)
             {
-                report_error();
+                report_error(module, "no exit block found for break");
             }
 
             LLVMBuildBr(module.llvm.builder, exit_block);
@@ -17012,7 +17016,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
             >continue_block = module.llvm.continue_block;
             if (!continue_block)
             {
-                report_error();
+                report_error(module, "no continue block found for continue");
             }
 
             LLVMBuildBr(module.llvm.builder, continue_block);
@@ -17079,7 +17083,8 @@ generate_object = fn (module: &LLVMModule, target_machine: &LLVMTargetMachine, o
         >error = LLVMRunPasses(module, passes, target_machine, pass_builder_options);
         if (error)
         {
-            report_error();
+            print("error running optimization passes\n");
+            @trap();
         }
     }
 
@@ -17136,7 +17141,7 @@ link = fn (module: &Module) void
 
     if (scrt1_object_path.length == 0)
     {
-        report_error();
+        report_error(module, "scrt1 object not found");
     }
 
     add_argument(&builder, arena_join_string(arena, [ "-L", scrt1_directory_path ][..]));
@@ -17227,7 +17232,7 @@ emit = fn (module: &Module) void
         >last_slash = string_last_character(module.path, '/');
         if (last_slash == string_no_match)
         {
-            report_error();
+            report_error(module, "module source file path must contain directories");
         }
 
         >directory = module.path[..last_slash];
@@ -17292,7 +17297,7 @@ emit = fn (module: &Module) void
     >result = LLVMGetTargetFromTriple(target_triple, &target, &error_message);
     if (result != 0)
     {
-        report_error();
+        report_error(module, "LLVM target not found");
     }
 
     assert(!error_message);
@@ -17567,58 +17572,58 @@ emit = fn (module: &Module) void
                             else => { unreachable; },
                     }
                 },
-                    .global =>
+                .global =>
+                {
+                    assert(!module.current_function);
+                    >initial_value = global.initial_value;
+                    analyze_value(module, initial_value, global.variable.type, .memory, 1);
+
+                    >initial_value_type = initial_value.type;
+
+                    if (!global.variable.type)
                     {
-                        assert(!module.current_function);
-                        >initial_value = global.initial_value;
-                        analyze_value(module, initial_value, global.variable.type, .memory, 1);
+                        global.variable.type = initial_value_type;
+                    }
 
-                        >initial_value_type = initial_value.type;
+                    >global_type = global.variable.type;
 
-                        if (!global.variable.type)
-                        {
-                            global.variable.type = initial_value_type;
-                        }
-
-                        >global_type = global.variable.type;
-
-                        if (global_type != initial_value_type)
-                        {
-                            report_error();
-                        }
-
-                        resolve_type_in_place(module, global_type);
-
-                        >is_constant: u1 = 0;
-                        >linkage: LLVMLinkage = undefined;
-                        switch (global.linkage)
-                        {
-                            .internal => { linkage = .internal; },
-                                .external => { linkage = .external; },
-                        }
-
-                        >thread_local_mode: LLVMThreadLocalMode = .none;
-                        >externally_initialized: u1 = 0;
-                        >alignment = get_byte_alignment(global_type);
-                        >unnamed_address: LLVMUnnamedAddress = .none;
-
-                        >llvm_global = llvm_create_global_variable(module.llvm.module, global_type.llvm.memory, is_constant, linkage, initial_value.llvm, global.variable.name, thread_local_mode, externally_initialized, alignment, unnamed_address);
-                        global.variable.storage.llvm = llvm_global;
-                        global.variable.storage.type = get_pointer_type(module, global_type);
-
-                        if (module.has_debug_info)
-                        {
-                            >name = global.variable.name;
-                            >linkage_name = name;
-                            >local_to_unit = global.linkage == .internal;
-                            >global_debug = LLVMDIBuilderCreateGlobalVariableExpression(module.llvm.di_builder, module.scope.llvm, name.pointer, name.length, linkage_name.pointer, linkage_name.length, module.llvm.file, global.variable.line, global_type.llvm.debug, @extend(local_to_unit), null_expression(module), zero, alignment * 8);
-                            LLVMGlobalSetMetadata(llvm_global, 0, global_debug);
-                        }
-                    },
-                    else =>
+                    if (global_type != initial_value_type)
                     {
-                        report_error();
-                    },
+                        report_error(module, "Global type must match initial value type");
+                    }
+
+                    resolve_type_in_place(module, global_type);
+
+                    >is_constant: u1 = 0;
+                    >linkage: LLVMLinkage = undefined;
+                    switch (global.linkage)
+                    {
+                        .internal => { linkage = .internal; },
+                        .external => { linkage = .external; },
+                    }
+
+                    >thread_local_mode: LLVMThreadLocalMode = .none;
+                    >externally_initialized: u1 = 0;
+                    >alignment = get_byte_alignment(global_type);
+                    >unnamed_address: LLVMUnnamedAddress = .none;
+
+                    >llvm_global = llvm_create_global_variable(module.llvm.module, global_type.llvm.memory, is_constant, linkage, initial_value.llvm, global.variable.name, thread_local_mode, externally_initialized, alignment, unnamed_address);
+                    global.variable.storage.llvm = llvm_global;
+                    global.variable.storage.type = get_pointer_type(module, global_type);
+
+                    if (module.has_debug_info)
+                    {
+                        >name = global.variable.name;
+                        >linkage_name = name;
+                        >local_to_unit = global.linkage == .internal;
+                        >global_debug = LLVMDIBuilderCreateGlobalVariableExpression(module.llvm.di_builder, module.scope.llvm, name.pointer, name.length, linkage_name.pointer, linkage_name.length, module.llvm.file, global.variable.line, global_type.llvm.debug, @extend(local_to_unit), null_expression(module), zero, alignment * 8);
+                        LLVMGlobalSetMetadata(llvm_global, 0, global_debug);
+                    }
+                },
+                else =>
+                {
+                    report_error(module, "TODO: global id");
+                },
             }
         }
 
@@ -18115,7 +18120,7 @@ emit = fn (module: &Module) void
         print("\n==========================\nLLVM VERIFICATION ERROR\n==========================\n");
         print(c_string_to_slice(verification_error_message));
         print("\n");
-        report_error();
+        report_error(module, "LLVM IR module verification failed");
     }
 
     if (!module.silent)
@@ -18442,7 +18447,8 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
 
         if (!success)
         {
-            report_error();
+            print("LLVM config failed\n");
+            @trap();
         }
 
         >stream = llvm_config.streams[0];
@@ -18451,7 +18457,8 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
 
         if (line == string_no_match)
         {
-            report_error();
+            print("Unexpected llvm-config output\n");
+            @trap();
         }
 
         library_directory = stream[..line];
@@ -18462,7 +18469,8 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
         line = string_first_character(stream, '\n');
         if (line == string_no_match)
         {
-            report_error();
+            print("Unexpected llvm-config output 2\n");
+            @trap();
         }
 
         >llvm_library_stream = stream[..line];
@@ -18492,7 +18500,8 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
         line = string_first_character(stream, '\n');
         if (line == string_no_match)
         {
-            report_error();
+            print("Unexpected llvm-config output 3\n");
+            @trap();
         }
 
         assert(line == stream.length - 1);
@@ -18680,7 +18689,8 @@ names: [_][]u8 =
         {
             if (arguments.length != 2)
             {
-                report_error();
+                print("Test must have no arguments\n");
+                @trap();
             }
 
             for (name: names)
