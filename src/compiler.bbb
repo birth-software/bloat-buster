@@ -18387,6 +18387,8 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
         @enum_name(compile_options.build_mode),
         "_",
         @select(compile_options.has_debug_info, "di", "nodi"),
+        "_",
+        @select(compile_options.host_cpu_model, "native", "generic"),
     ][..]);
 
     os_make_directory(outputh_path_dir.pointer);
