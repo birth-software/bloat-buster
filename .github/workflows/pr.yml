@@ -17,6 +17,9 @@ jobs:
       matrix:
         os: [ self-hosted ]
         BIRTH_CMAKE_BUILD_TYPE: [ Release-assertions, Release ]
+        BIRTH_BUILD_MODE: [ debug_none, debug, soft_optimize, optimize_for_speed, optimize_for_size, aggressively_optimize_for_speed, aggressively_optimize_for_size ]
+        HAS_DEBUG_INFO: [ true, false ]
+        IS_NATIVE: [ true, false ]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +27,12 @@ jobs:
         shell: bash
         env:
           CMAKE_BUILD_TYPE: ${{matrix.BIRTH_CMAKE_BUILD_TYPE}}
+          BIRTH_BUILD_MODE: ${{matrix.BIRTH_BUILD_MODE}}
+          HAS_DEBUG_INFO: ${{matrix.HAS_DEBUG_INFO}}
+          IS_NATIVE: ${{matrix.IS_NATIVE}}
         run: |
           set -eux
           ./generate.sh
-          CMAKE_PREFIX_PATH=$HOME/dev/llvm/install/llvm_${LLVM_VERSION}_x86_64-linux-${CMAKE_BUILD_TYPE} $HOME/bloat-buster-artifacts/releases/main/compiler_generic reproduce
+          CMAKE_PREFIX_PATH=$HOME/dev/llvm/install/llvm_${LLVM_VERSION}_x86_64-linux-${CMAKE_BUILD_TYPE} $HOME/bloat-buster-artifacts/releases/main/compiler_generic compile src/compiler.bbb $BIRTH_BUILD_MODE $HAS_DEBUG_INFO $IS_NATIVE
+          tree
+          ${BB_CACHE_DIR}/${BIRTH_BUILD_MODE}_$([ "$HAS_DEBUG_INFO" == "true" ] && echo "di" || echo "nodi")_$([ "$IS_NATIVE" == "true" ] && echo "native" || echo "generic")/compiler test
