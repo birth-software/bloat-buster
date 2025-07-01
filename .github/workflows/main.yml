@@ -13,7 +13,7 @@ env:
   CLANG_PATH: clang-19
   CLANGXX_PATH: clang++-19
   BB_CACHE_DIR: bb-cache
-  BB_BUILD_DEBUG: 0
+  BB_BUILD_DEBUG: 1
   BB_BUILD_NATIVE: 0
 jobs:
   ci:
@@ -88,3 +88,4 @@ jobs:
           draft: false
           files: |
             /home/act_runner/bloat-buster-artifacts/releases/main/compiler_generic
+            /home/act_runner/bloat-buster-artifacts/releases/main/compiler_generic_debug
