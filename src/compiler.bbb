@@ -18716,6 +18716,9 @@ names: [_][]u8 =
 
                             if (!success)
                             {
+                                print("Failed to run test ");
+                                print(executable_path);
+                                print("\n");
                                 @trap();
                             }
 
@@ -18758,6 +18761,9 @@ names: [_][]u8 =
 
                         if (!success)
                         {
+                            print("Failed to reproduce ");
+                            print(executable_path);
+                            print("\n");
                             @trap();
                         }
 
