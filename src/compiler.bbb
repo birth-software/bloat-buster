@@ -1207,7 +1207,7 @@ TypeId = enum
     union,
     unresolved,
     vector,
-    floating_point,
+    float,
     enum_array,
     opaque,
 }
@@ -1216,6 +1216,11 @@ TypeInteger = struct
 {
     bit_count: u64,
     signed: u1,
+}
+
+TypeFloat = struct
+{
+    bit_count: u64,
 }
 
 TypePointer = struct
@@ -1507,6 +1512,7 @@ TypeUnion = struct
 TypeContent = union
 {
     integer: TypeInteger,
+    float: TypeFloat,
     function: TypeFunction,
     pointer: TypePointer,
     array: TypeArray,
@@ -1614,6 +1620,10 @@ receives_type = fn (value: &Value) u1
         {
             return 1; // TODO: base on unary_type_id
         },
+        .float_string_literal =>
+        {
+            return 1;
+        },
         else =>
         {
             @trap();
@@ -1646,6 +1656,10 @@ type_is_signed = fn (type: &Type) u1
         {
             return type_is_signed(type.content.alias.type);
         },
+        .float =>
+        {
+            return 1;
+        },
         else =>
         {
             @trap();
@@ -1668,6 +1682,7 @@ get_evaluation_kind = fn (type: &Type) EvaluationKind
         .pointer,
         .bits,
         .enum,
+        .float,
         =>
         {
             return .scalar;
@@ -1813,6 +1828,12 @@ get_byte_size = fn (type: &Type) u64
             >result = get_byte_size(type.content.alias.type);
             return result;
         },
+        .float =>
+        {
+            >bit_count = type.content.float.bit_count;
+            assert(bit_count % 8 == 0);
+            return bit_count / 8;
+        },
         else =>
         {
             @trap();
@@ -1863,6 +1884,17 @@ get_byte_alignment = fn (type: &Type) u32
         .enum_array =>
         {
             return get_byte_alignment(type.content.enum_array.element_type);
+        },
+        .float =>
+        {
+            >bit_count = type.content.float.bit_count;
+            switch (bit_count)
+            {
+                32 => { return 4; },
+                64 => { return 8; },
+                128 => { return 16; },
+                else => { unreachable; },
+            }
         },
         else =>
         {
@@ -2030,6 +2062,7 @@ ValueId = enum
     field_parent_pointer,
     build_mode,
     breakpoint,
+    float_string_literal,
 }
 
 ValueConstantInteger = struct
@@ -2172,6 +2205,22 @@ binary_is_boolean = fn (id: BinaryId) u1
         {
             return 1;
         },
+    }
+}
+
+binary_is_logical_boolean = fn (id: BinaryId) u1
+{
+    switch (id)
+    {
+        .logical_and,
+        .logical_or,
+        .logical_and_shortcircuit,
+        .logical_or_shortcircuit,
+        =>
+        {
+            return 1;
+        },
+        else => { return 0; },
     }
 }
 
@@ -2323,6 +2372,7 @@ ValueContent = union
     macro: &MacroDeclaration,
     macro_instantiation: MacroInstantiation,
     field_parent_pointer: ValueFieldParentPointer,
+    float_string_literal: []u8,
 }
 
 ValueKind = enum
@@ -2415,6 +2465,10 @@ value_is_constant = fn (value: &Value) u1
         {
             return 1;
         },
+        .float_string_literal =>
+        {
+            return 1;
+        },
         else =>
         {
             @trap();
@@ -2422,8 +2476,11 @@ value_is_constant = fn (value: &Value) u1
     }
 }
 
+i128_type_count: u64 = 2;
 i128_offset: u64 = 64 * 2;
-void_offset: u64 = i128_offset + 2;
+float_offset: u64 = i128_offset + i128_type_count;
+float_type_count: u64 = 2;
+void_offset: u64 = float_offset + float_type_count;
 
 MacroDeclaration = struct
 {
@@ -2689,6 +2746,26 @@ LLVMICmpPredicate = enum u32
     sle = 41,
 }
 
+LLVMFCmpPredicate = enum u32
+{
+    false,
+    oeq,
+    ogt,
+    oge,
+    olt,
+    ole,
+    one,
+    ord,
+    uno,
+    ueq,
+    ugt,
+    uge,
+    ult,
+    ule,
+    une,
+    true,
+}
+
 [extern] LLVMContextCreate = fn [cc(c)] () &LLVMContext;
 [extern] LLVMModuleCreateWithNameInContext = fn (name: &u8, context: &LLVMContext) &LLVMModule;
 [extern] LLVMCreateBuilderInContext = fn (context: &LLVMContext) &LLVMBuilder;
@@ -2699,6 +2776,8 @@ LLVMICmpPredicate = enum u32
 [extern] LLVMVoidTypeInContext = fn [cc(c)] (context: &LLVMContext) &LLVMType;
 [extern] LLVMPointerTypeInContext = fn [cc(c)] (context: &LLVMContext, address_space: u32) &LLVMType;
 [extern] LLVMIntTypeInContext = fn [cc(c)] (context: &LLVMContext, bit_count: u32) &LLVMType;
+[extern] LLVMFloatTypeInContext = fn [cc(c)] (context: &LLVMContext) &LLVMType;
+[extern] LLVMDoubleTypeInContext = fn [cc(c)] (context: &LLVMContext) &LLVMType;
 [extern] LLVMFunctionType = fn [cc(c)] (return_type: &LLVMType, argument_pointer: &&LLVMType, argument_count: u32, is_variable_argument: s32) &LLVMType;
 [extern] LLVMArrayType2 = fn [cc(c)] (element_type: &LLVMType, element_count: u64) &LLVMType;
 [extern] LLVMStructTypeInContext = fn [cc(c)] (context: &LLVMContext, type_pointer: &&LLVMType, type_count: u32, is_packed: s32) &LLVMType;
@@ -2834,6 +2913,7 @@ llvm_create_global_variable = fn (module: &LLVMModule, type: &LLVMType, is_const
 [extern] LLVMBuildNot = fn [cc(c)] (builder: &LLVMBuilder, value: &LLVMValue, name: &u8) &LLVMValue;
 
 [extern] LLVMBuildICmp = fn [cc(c)] (builder: &LLVMBuilder, predicate: LLVMICmpPredicate, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
+[extern] LLVMBuildFCmp = fn [cc(c)] (builder: &LLVMBuilder, predicate: LLVMFCmpPredicate, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
 
 [extern] LLVMBuildAdd = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
 [extern] LLVMBuildSub = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
@@ -2862,6 +2942,8 @@ llvm_create_global_variable = fn (module: &LLVMModule, type: &LLVMType, is_const
 
 [extern] LLVMConstNull = fn [cc(c)] (type: &LLVMType) &LLVMValue;
 [extern] LLVMConstInt = fn [cc(c)] (type: &LLVMType, value: u64, is_signed: s32) &LLVMValue;
+[extern] LLVMConstRealOfStringAndSize = fn [cc(c)] (type: &LLVMType, pointer: &u8, length: u32) &LLVMValue;
+
 [extern] LLVMConstNeg = fn [cc(c)] (value: &LLVMValue) &LLVMValue;
 [extern] LLVMConstArray2 = fn [cc(c)] (element_type: &LLVMType, value_pointer: &&LLVMValue, value_count: u64) &LLVMValue;
 [extern] LLVMConstStringInContext2 = fn [cc(c)] (context: &LLVMContext, pointer: &u8, length: u64, dont_null_terminate: s32) &LLVMValue;
@@ -4105,6 +4187,8 @@ TokenId = enum
 
     assign,
     tilde,
+
+    float_string_literal,
 }
 
 TokenIntegerKind = enum
@@ -4177,6 +4261,7 @@ TokenContent = union
     operator_keyword: OperatorKeyword,
     identifier: []u8,
     string_literal: []u8,
+    float_string_literal: []u8,
 }
 
 Token = struct
@@ -4294,6 +4379,7 @@ resolve_alias = fn (module: &Module, type: &Type) &Type
         .union,
         .opaque,
         .forward_declaration,
+        .float,
         =>
         {
             result = type;
@@ -5148,6 +5234,8 @@ tokenize = fn (module: &Module) Token
             >next_ch = module.content[start_index + 1];
             >token_integer_kind: TokenIntegerKind = .decimal;
 
+            >inferred_decimal: u1 = 0;
+
             if (start_character == '0')
             {
                 switch (next_ch)
@@ -5159,7 +5247,7 @@ tokenize = fn (module: &Module) Token
                     else => { token_integer_kind = .decimal; },
                 }
 
-                >inferred_decimal = token_integer_kind == .decimal and next_ch != 'd';
+                inferred_decimal = token_integer_kind == .decimal and next_ch != 'd';
                 module.offset += 2 * @extend(token_integer_kind != .decimal or !inferred_decimal);
             }
 
@@ -5174,15 +5262,32 @@ tokenize = fn (module: &Module) Token
                 .character_literal => { report_error(module, "Invalid character literal format"); },
             }
 
-            token = {
-                .content = {
-                    .integer = {
-                        .value = value,
-                        .kind = token_integer_kind,
+            if (inferred_decimal and module.content[module.offset] == '.' and module.content[module.offset + 1] != '.')
+            {
+                module.offset += 1;
+                >mantissa = parse_decimal(module);
+
+                >float_string_literal = module.content[start_index..module.offset];
+
+                token = {
+                    .content = {
+                        .float_string_literal = float_string_literal,
                     },
-                },
-                .id = .integer,
-            };
+                    .id = .float_string_literal,
+                };
+            }
+            else
+            {
+                token = {
+                    .content = {
+                        .integer = {
+                            .value = value,
+                            .kind = token_integer_kind,
+                        },
+                    },
+                    .id = .integer,
+                };
+            }
         },
         '+',
         '-',
@@ -6025,6 +6130,17 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
 
             result.& = {
                 .id = id,
+                zero,
+            };
+        },
+        .float_string_literal =>
+        {
+            result = new_value(module);
+            result.& = {
+                .content = {
+                    .float_string_literal = token.content.float_string_literal,
+                },
+                .id = .float_string_literal,
                 zero,
             };
         },
@@ -8178,6 +8294,26 @@ resolve_type_in_place_abi = fn (module: &Module, type: &Type) void
                 >size = get_byte_size(type);
                 assert(llvm_size == size);
             },
+            .float =>
+            {
+                >bit_count = type.content.float.bit_count;
+
+                switch (bit_count)
+                {
+                    32 =>
+                    {
+                        result = LLVMFloatTypeInContext(module.llvm.context);
+                    },
+                    64 =>
+                    {
+                        result = LLVMDoubleTypeInContext(module.llvm.context);
+                    },
+                    else =>
+                    {
+                        report_error(module, "TODO: float type");
+                    },
+                }
+            },
             else =>
             {
                 @trap();
@@ -8206,6 +8342,7 @@ resolve_type_in_place_memory = fn (module: &Module, type: &Type) void
             .array,
             .struct,
             .enum_array,
+            .float,
             =>
             {
                 result = type.llvm.abi;
@@ -8298,6 +8435,14 @@ resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
                     {
                         dwarf_encoding = @select(type.content.integer.signed, .signed, .unsigned);
                     }
+
+                    >flags: LLVMDIFlags = zero;
+                    result = LLVMDIBuilderCreateBasicType(module.llvm.di_builder, type.name.pointer, type.name.length, bit_count, dwarf_encoding, flags);
+                },
+                .float =>
+                {
+                    >bit_count = type.content.float.bit_count;
+                    >dwarf_encoding: LLVMDwarfTypeEncoding = .float;
 
                     >flags: LLVMDIFlags = zero;
                     result = LLVMDIBuilderCreateBasicType(module.llvm.di_builder, type.name.pointer, type.name.length, bit_count, dwarf_encoding, flags);
@@ -12471,6 +12616,20 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
             value_type = void_type(module);
         },
+        .float_string_literal =>
+        {
+            if (!expected_type)
+            {
+                report_error(module, "float literal must have a result type");
+            }
+
+            if (expected_type.id != .float)
+            {
+                report_error(module, "float literal result type must be float");
+            }
+
+            value_type = expected_type;
+        },
         else =>
         {
             @trap();
@@ -12492,142 +12651,250 @@ emit_intrinsic_call = fn (module: &Module, index: LLVMIntrinsicIndex, argument_t
 
 emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &LLVMValue, right_type: &Type, id: BinaryId, resolved_value_type: &Type) &LLVMValue
 {
-    switch (resolved_value_type.id)
+    left_type = resolve_alias(module, left_type);
+    right_type = resolve_alias(module, right_type);
+
+    >is_boolean = binary_is_boolean(id);
+    >is_logical_boolean = binary_is_logical_boolean(id);
+    >left_signed = type_is_signed(left_type);
+    >right_signed = type_is_signed(left_type);
+    assert(left_signed == right_signed);
+    >signed = @select(is_boolean, left_signed, resolved_value_type.content.integer.signed);
+
+    if (is_boolean and !is_logical_boolean)
     {
-        .integer =>
+        assert(left_type == right_type);
+        >operand_type = left_type;
+
+        switch (operand_type.id)
         {
-            >is_boolean = binary_is_boolean(id);
-            >left_signed = type_is_signed(left_type);
-            >right_signed = type_is_signed(left_type);
-            assert(left_signed == right_signed);
-            >signed = @select(is_boolean, left_signed, resolved_value_type.content.integer.signed);
-
-            switch (id)
+            .integer, .pointer, .enum =>
             {
-                .max, .min =>
-                {
-                    >intrinsic_index: LLVMIntrinsicIndex = undefined;
+                >predicate: LLVMICmpPredicate = undefined;
 
-                    switch (resolved_value_type.id)
+                switch (id)
+                {
+                    .compare_equal => { predicate = .eq; },
+                    .compare_not_equal => { predicate = .ne; },
+                    .compare_less => { predicate = @select(signed, .slt, .ult); },
+                    .compare_less_equal => { predicate = @select(signed, .sle, .ule); },
+                    .compare_greater => { predicate = @select(signed, .sgt, .ugt); },
+                    .compare_greater_equal => { predicate = @select(signed, .sge, .uge); },
+                    else => { unreachable; },
+                }
+
+                return LLVMBuildICmp(module.llvm.builder, predicate, left, right, "");
+            },
+            .float =>
+            {
+                >predicate: LLVMFCmpPredicate = undefined;
+
+                switch (id)
+                {
+                    .compare_equal => { predicate = .oeq; },
+                    .compare_not_equal => { predicate = .une; },
+                    .compare_less => { predicate = .olt; },
+                    .compare_less_equal => { predicate = .ole; },
+                    .compare_greater => { predicate = .ogt; },
+                    .compare_greater_equal => { predicate = .oge; },
+                    else => { unreachable; },
+                }
+
+                return LLVMBuildFCmp(module.llvm.builder, predicate, left, right, "");
+            },
+            else => { report_error(module, "TODO: boolean binary expression"); },
+        }
+    }
+    else
+    {
+        switch (id)
+        {
+            .max, .min =>
+            {
+                >intrinsic_index: LLVMIntrinsicIndex = undefined;
+
+                switch (resolved_value_type.id)
+                {
+                    .integer =>
+                    {
+                        >signed = resolved_value_type.content.integer.signed;
+
+                        switch (id)
+                        {
+                            .max =>
+                            {
+                                intrinsic_index = @select(signed, ."llvm.smax", ."llvm.umax");
+                            },
+                            .min =>
+                            {
+                                intrinsic_index = @select(signed, ."llvm.smin", ."llvm.umin");
+                            },
+                            else => { unreachable; },
+                        }
+                    },
+                    else => { report_error(module, "TODO: max/min type"); },
+                }
+
+                >argument_types: [_]&LLVMType = [ resolved_value_type.llvm.abi ];
+                >argument_values: [_]&LLVMValue = [ left, right ];
+                >llvm_value = emit_intrinsic_call(module, intrinsic_index, argument_types[..], argument_values[..]);
+                return llvm_value;
+            },
+            .shift_right =>
+            {
+                if (signed)
+                {
+                    return LLVMBuildAShr(module.llvm.builder, left, right, "");
+                }
+                else
+                {
+                    return LLVMBuildLShr(module.llvm.builder, left, right, "");
+                }
+            },
+            .div =>
+            {
+                if (signed)
+                {
+                    return LLVMBuildSDiv(module.llvm.builder, left, right, "");
+                }
+                else
+                {
+                    return LLVMBuildUDiv(module.llvm.builder, left, right, "");
+                }
+            },
+            .rem =>
+            {
+                if (signed)
+                {
+                    return LLVMBuildSRem(module.llvm.builder, left, right, "");
+                }
+                else
+                {
+                    return LLVMBuildURem(module.llvm.builder, left, right, "");
+                }
+            },
+            .add =>
+            {
+                if (left_type.id == .pointer or right_type.id == .pointer)
+                {
+                    assert(resolved_value_type.id == .pointer);
+                    >element_type = resolved_value_type.content.pointer.element_type;
+                    resolve_type_in_place(module, element_type);
+
+                    >pointer: &LLVMValue = undefined;
+                    >index: &LLVMValue = undefined;
+
+                    if (left_type.id == .pointer)
+                    {
+                        if (right_type.id == .pointer)
+                        {
+                            report_error(module, "Cannot add two pointers");
+                        }
+
+                        pointer = left;
+                        index = right;
+                    }
+                    else
+                    {
+                        if (left_type.id == .pointer)
+                        {
+                            report_error(module, "Cannot add two pointers");
+                        }
+
+                        pointer = right;
+                        index = left;
+                    }
+
+                    return create_gep(module, {
+                        .type = element_type.llvm.abi,
+                        .pointer = pointer,
+                        .indices = [ index ][..],
+                        zero,
+                    });
+                }
+                else
+                {
+                    assert(left_type == right_type);
+                    switch (left_type.id)
                     {
                         .integer =>
                         {
-                            >signed = resolved_value_type.content.integer.signed;
-
-                            switch (id)
-                            {
-                                .max =>
-                                {
-                                    intrinsic_index = @select(signed, ."llvm.smax", ."llvm.umax");
-                                },
-                                .min =>
-                                {
-                                    intrinsic_index = @select(signed, ."llvm.smin", ."llvm.umin");
-                                },
-                                else => { unreachable; },
-                            }
+                            return LLVMBuildAdd(module.llvm.builder, left, right, "");
                         },
-                        else => { report_error(module, "TODO: max/min type"); },
+                        .float =>
+                        {
+                            @trap();
+                        },
+                        .pointer => { unreachable; },
+                        else => { report_error(module, "TODO: add"); },
+                    }
+                }
+            },
+            .sub =>
+            {
+                >left_pointer_integer_sub = left_type.id == .pointer and right_type.id != .pointer;
+                >right_pointer_integer_sub = right_type.id == .pointer and left_type.id != .pointer;
+
+                >pointer_integer_sub = left_pointer_integer_sub or right_pointer_integer_sub;
+
+                if (pointer_integer_sub)
+                {
+                    assert(resolved_value_type.id == .pointer);
+                    >element_type = resolved_value_type.content.pointer.element_type;
+                    resolve_type_in_place(module, element_type);
+
+                    >pointer: &LLVMValue = undefined;
+                    >index: &LLVMValue = undefined;
+
+                    if (left_pointer_integer_sub)
+                    {
+                        assert(left_type == resolved_value_type);
+
+                        pointer = left;
+                        index = right;
+                    }
+                    else
+                    {
+                        assert(right_pointer_integer_sub);
+                        assert(right_type == resolved_value_type);
+
+                        pointer = right;
+                        index = left;
                     }
 
-                    >argument_types: [_]&LLVMType = [ resolved_value_type.llvm.abi ];
-                    >argument_values: [_]&LLVMValue = [ left, right ];
-                    >llvm_value = emit_intrinsic_call(module, intrinsic_index, argument_types[..], argument_values[..]);
-                    return llvm_value;
-                },
-                .shift_right =>
-                {
-                    if (signed)
-                    {
-                        return LLVMBuildAShr(module.llvm.builder, left, right, "");
-                    }
-                    else
-                    {
-                        return LLVMBuildLShr(module.llvm.builder, left, right, "");
-                    }
-                },
-                .div =>
-                {
-                    if (signed)
-                    {
-                        return LLVMBuildSDiv(module.llvm.builder, left, right, "");
-                    }
-                    else
-                    {
-                        return LLVMBuildUDiv(module.llvm.builder, left, right, "");
-                    }
-                },
-                .rem =>
-                {
-                    if (signed)
-                    {
-                        return LLVMBuildSRem(module.llvm.builder, left, right, "");
-                    }
-                    else
-                    {
-                        return LLVMBuildURem(module.llvm.builder, left, right, "");
-                    }
-                },
-                .compare_equal,
-                .compare_not_equal,
-                .compare_less,
-                .compare_less_equal,
-                .compare_greater,
-                .compare_greater_equal,
-                =>
+                    index = LLVMBuildNeg(module.llvm.builder, index, "");
+
+                    return create_gep(module, {
+                        .type = element_type.llvm.abi,
+                        .pointer = pointer,
+                        .indices = [ index ][..],
+                        zero,
+                    });
+                }
+                else
                 {
                     assert(left_type == right_type);
 
-                    >predicate: LLVMICmpPredicate = undefined;
-
-                    switch (id)
+                    switch (left_type.id)
                     {
-                        .compare_equal => { predicate = .eq; },
-                        .compare_not_equal => { predicate = .ne; },
-                        .compare_less => { predicate = @select(signed, .slt, .ult); },
-                        .compare_less_equal => { predicate = @select(signed, .sle, .ule); },
-                        .compare_greater => { predicate = @select(signed, .sgt, .ugt); },
-                        .compare_greater_equal => { predicate = @select(signed, .sge, .uge); },
+                        .integer =>
+                        {
+                            return LLVMBuildSub(module.llvm.builder, left, right, "");
+                        },
+                        .pointer => { unreachable; },
+                        else => { unreachable; },
                     }
-
-                    return LLVMBuildICmp(module.llvm.builder, predicate, left, right, "");
-                },
-                .add => { return LLVMBuildAdd(module.llvm.builder, left, right, ""); },
-                .sub => { return LLVMBuildSub(module.llvm.builder, left, right, ""); },
-                .mul => { return LLVMBuildMul(module.llvm.builder, left, right, ""); },
-                .logical_and, .bitwise_and => { return LLVMBuildAnd(module.llvm.builder, left, right, ""); },
-                .logical_or, .bitwise_or => { return LLVMBuildOr(module.llvm.builder, left, right, ""); },
-                .bitwise_xor => { return LLVMBuildXor(module.llvm.builder, left, right, ""); },
-                .shift_left => { return LLVMBuildShl(module.llvm.builder, left, right, ""); },
-                else => { unreachable; },
-            }
-        },
-        .pointer =>
-        {
-            >element_type = resolved_value_type.content.pointer.element_type;
-            resolve_type_in_place(module, element_type);
-
-            if (id != .add and id != .sub)
+                }
+            },
+            .mul =>
             {
-                report_error(module, "Binary operation between pointers must either be add or sub");
-            }
-
-            >index = right;
-            if (id == .sub)
-            {
-                index = LLVMBuildNeg(module.llvm.builder, index, "");
-            }
-
-            return create_gep(module, {
-                .type = element_type.llvm.abi,
-                .pointer = left,
-                .indices = [ index ][..],
-                zero,
-            });
-        }
-        else =>
-        {
-            report_error(module, "TODO: binary");
+                return LLVMBuildMul(module.llvm.builder, left, right, "");
+            },
+            .logical_and, .bitwise_and => { return LLVMBuildAnd(module.llvm.builder, left, right, ""); },
+            .logical_or, .bitwise_or => { return LLVMBuildOr(module.llvm.builder, left, right, ""); },
+            .bitwise_xor => { return LLVMBuildXor(module.llvm.builder, left, right, ""); },
+            .shift_left => { return LLVMBuildShl(module.llvm.builder, left, right, ""); },
+            else => { unreachable; },
         }
     }
 }
@@ -15636,6 +15903,11 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
             >call = emit_intrinsic_call(module, ."llvm.debugtrap", zero, zero);
             llvm_value = call;
         },
+        .float_string_literal =>
+        {
+            >float_string_literal = value.content.float_string_literal;
+            llvm_value = LLVMConstRealOfStringAndSize(get_llvm_type(resolved_value_type, type_kind), float_string_literal.pointer, @truncate(float_string_literal.length));
+        },
         else =>
         {
             @trap();
@@ -18178,7 +18450,8 @@ compile = fn (arena: &Arena, options: CompileOptions) void
 
     >base_type_allocation = arena_allocate[Type](arena,
         i128_offset // Basic integer types
-        + 2 // u128, s128
+        + i128_type_count // u128, s128
+        + float_type_count // f32, f64
         + 2 // void, noreturn
     );
 
@@ -18243,12 +18516,43 @@ compile = fn (arena: &Arena, options: CompileOptions) void
         type_it += 1;
     }
 
+    >f32_type = type_it;
+    type_it += 1;
+    >f64_type = type_it;
+    type_it += 1;
+
     >void_type = type_it;
     type_it += 1;
     >noreturn_type = type_it;
     type_it += 1;
 
-    previous.next = void_type;
+    previous.next = f32_type;
+
+    f32_type.& = {
+        .content = {
+            .float = {
+                .bit_count = 32,
+            },
+        },
+        .id = .float,
+        .name = "f32",
+        .next = f64_type,
+        .scope = &module.scope,
+        zero,
+    };
+
+    f64_type.& = {
+        .content = {
+            .float = {
+                .bit_count = 64,
+            },
+        },
+        .id = .float,
+        .name = "f64",
+        .next = void_type,
+        .scope = &module.scope,
+        zero,
+    };
 
     void_type.& = {
         .id = .void,
@@ -18675,7 +18979,7 @@ names: [_][]u8 =
                 .build_mode = build_mode,
                 .host_cpu_model = is_host_cpu_model,
                 .has_debug_info = has_debug_info,
-                .silent = 1,
+                .silent = 0,
             }, envp);
         },
         .test =>
