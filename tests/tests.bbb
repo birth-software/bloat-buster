@@ -2130,6 +2130,12 @@ struct_arbitrary_int_abi = fn () void
     require(some_struct.g == 46);
 }
 
+basic_float = fn () u1
+{
+    >a: f32 = 0.0;
+    return a == 0.0;
+}
+
 [export] main = fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32
 {
     >rc = return_constant();
@@ -2396,6 +2402,8 @@ struct_arbitrary_int_abi = fn () void
     breakpoint();
 
     struct_arbitrary_int_abi();
+
+    require(basic_float());
 
     return 0;
 }
