@@ -2136,6 +2136,13 @@ basic_float = fn () u1
     return a == 0.0;
 }
 
+basic_vector = fn () u1
+{
+    >a: vector[4]u32 = [0, 0, 0, 0];
+    >b: vector[4]u32 = zero;
+    return @reduce(and, a == b);
+}
+
 [export] main = fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32
 {
     >rc = return_constant();
@@ -2404,6 +2411,8 @@ basic_float = fn () u1
     struct_arbitrary_int_abi();
 
     require(basic_float());
+
+    require(basic_vector());
 
     return 0;
 }
