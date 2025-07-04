@@ -893,6 +893,19 @@ LLVMIntrinsicIndex = enum u32
     "llvm.va_start",
     "llvm.va_end",
     "llvm.va_copy",
+    "llvm.vector.reduce.add",
+    "llvm.vector.reduce.fadd",
+    "llvm.vector.reduce.mul",
+    "llvm.vector.reduce.fmul",
+    "llvm.vector.reduce.and",
+    "llvm.vector.reduce.or",
+    "llvm.vector.reduce.xor",
+    "llvm.vector.reduce.smax",
+    "llvm.vector.reduce.smin",
+    "llvm.vector.reduce.umax",
+    "llvm.vector.reduce.umin",
+    "llvm.vector.reduce.fmax",
+    "llvm.vector.reduce.fmin",
 }
 
 LLVMAttributeIndex = enum u32
@@ -1509,6 +1522,13 @@ TypeUnion = struct
     line: u32,
 }
 
+TypeVector = struct
+{
+    element_type: &Type,
+    element_count: u64,
+    next: &Type,
+}
+
 TypeContent = union
 {
     integer: TypeInteger,
@@ -1522,6 +1542,7 @@ TypeContent = union
     bits: TypeBits,
     alias: TypeAlias,
     union: TypeUnion,
+    vector: TypeVector,
 }
 
 TypeLLVM = struct
@@ -1660,6 +1681,11 @@ type_is_signed = fn (type: &Type) u1
         {
             return 1;
         },
+        .vector =>
+        {
+            >element_type = type.content.vector.element_type;
+            return type_is_signed(element_type);
+        },
         else =>
         {
             @trap();
@@ -1683,6 +1709,7 @@ get_evaluation_kind = fn (type: &Type) EvaluationKind
         .bits,
         .enum,
         .float,
+        .vector,
         =>
         {
             return .scalar;
@@ -1770,6 +1797,8 @@ aligned_byte_count_from_bit_count = fn (bit_count: u64) u64
     return aligned_bit_count / 8;
 }
 
+get_bit_size = fn (type: &Type) u64;
+
 get_byte_size = fn (type: &Type) u64
 {
     switch (type.id)
@@ -1834,6 +1863,12 @@ get_byte_size = fn (type: &Type) u64
             assert(bit_count % 8 == 0);
             return bit_count / 8;
         },
+        .vector =>
+        {
+            >bit_size = get_bit_size(type);
+            assert(bit_size % 8 == 0);
+            return bit_size / 8;
+        },
         else =>
         {
             @trap();
@@ -1896,6 +1931,15 @@ get_byte_alignment = fn (type: &Type) u32
                 else => { unreachable; },
             }
         },
+        .vector =>
+        {
+            >bit_size = get_bit_size(type);
+            if (bit_size % 8 != 0)
+            {
+                bit_size = align_forward(bit_size, 8);
+            }
+            return @truncate(bit_size / 8);
+        },
         else =>
         {
             @trap();
@@ -1948,6 +1992,14 @@ get_bit_size = fn (type: &Type) u64
             assert(enum_type.id == .enum);
             >element_count = enum_type.content.enum.fields.length;
             return element_bit_size * element_count;
+        },
+        .vector =>
+        {
+            >element_type = type.content.vector.element_type;
+            >element_count = type.content.vector.element_count;
+            >element_bit_size = get_bit_size(element_type);
+            >result = element_bit_size * element_count;
+            return result;
         },
         else =>
         {
@@ -2063,6 +2115,7 @@ ValueId = enum
     build_mode,
     breakpoint,
     float_string_literal,
+    reduce,
 }
 
 ValueConstantInteger = struct
@@ -2350,6 +2403,23 @@ ValueFieldParentPointer = struct
     name: []u8,
 }
 
+ReduceOperationId = enum
+{
+    add,
+    mul,
+    and,
+    or,
+    xor,
+    max,
+    min
+}
+
+ValueReduce = struct
+{
+    value: &Value,
+    id: ReduceOperationId,
+}
+
 ValueContent = union
 {
     constant_integer: ValueConstantInteger,
@@ -2373,6 +2443,7 @@ ValueContent = union
     macro_instantiation: MacroInstantiation,
     field_parent_pointer: ValueFieldParentPointer,
     float_string_literal: []u8,
+    reduce: ValueReduce,
 }
 
 ValueKind = enum
@@ -2780,6 +2851,7 @@ LLVMFCmpPredicate = enum u32
 [extern] LLVMDoubleTypeInContext = fn [cc(c)] (context: &LLVMContext) &LLVMType;
 [extern] LLVMFunctionType = fn [cc(c)] (return_type: &LLVMType, argument_pointer: &&LLVMType, argument_count: u32, is_variable_argument: s32) &LLVMType;
 [extern] LLVMArrayType2 = fn [cc(c)] (element_type: &LLVMType, element_count: u64) &LLVMType;
+[extern] LLVMVectorType = fn [cc(c)] (element_type: &LLVMType, element_count: u32) &LLVMType;
 [extern] LLVMStructTypeInContext = fn [cc(c)] (context: &LLVMContext, type_pointer: &&LLVMType, type_count: u32, is_packed: s32) &LLVMType;
 
 [extern] LLVMStoreSizeOfType = fn [cc(c)] (target_data_layout: &LLVMTargetDataLayout, type: &LLVMType) u64;
@@ -2788,10 +2860,13 @@ LLVMFCmpPredicate = enum u32
 [extern] LLVMDIBuilderCreateFile = fn (di_builder: &LLVMDIBuilder, file_pointer: &u8, file_length: u64, directory_pointer: &u8, directory_length: u64) &LLVMMetadata;
 [extern] LLVMDIBuilderCreateCompileUnit = fn (di_builder: &LLVMDIBuilder, language: LLVMDwarfSourceLanguage, file: &LLVMMetadata, producer_name_pointer: &u8, producer_name_length: u64, is_optimized: s32, flags_pointer: &u8, flags_length: u64, runtime_version: u32, split_name_pointer: &u8, split_name_length: u64, emission_kind: LLVMDwarfEmissionKind, dwo_id: u32, split_debug_inlining: s32, debug_info_for_profiling: s32, sysroot_pointer: &u8, sysroot_length: u64, sdk_pointer: &u8, sdk_length: u64) &LLVMMetadata;
 
+[extern] LLVMDIBuilderGetOrCreateSubrange = fn [cc(c)] (di_builder: &LLVMDIBuilder, lower_bound: s64, element_count: s64) &LLVMMetadata;
+
 [extern] LLVMDIBuilderCreateBasicType = fn [cc(c)] (di_builder: &LLVMDIBuilder, name_pointer: &u8, name_length: u64, bit_size: u64, dwarf_encoding: LLVMDwarfTypeEncoding, flags: LLVMDIFlags) &LLVMMetadata;
 [extern] LLVMDIBuilderCreatePointerType = fn [cc(c)] (di_builder: &LLVMDIBuilder, element_type: &LLVMMetadata, bit_size: u64, bit_alignment: u32, address_space: u32, name_pointer: &u8, name_length: u64) &LLVMMetadata;
 [extern] LLVMDIBuilderCreateSubroutineType = fn [cc(c)] (di_builder: &LLVMDIBuilder, file: &LLVMMetadata, argument_type_pointer: &&LLVMMetadata, argument_type_count: u32, flags: LLVMDIFlags) &LLVMMetadata;
-[extern] LLVMDIBuilderCreateArrayType = fn [cc(c)] (di_builder: &LLVMDIBuilder, bit_size: u64, bit_alignment: u32, element_type: &LLVMMetadata, subscript_pointer: &LLVMMetadata, subscript_count: u32) &LLVMMetadata;
+[extern] LLVMDIBuilderCreateArrayType = fn [cc(c)] (di_builder: &LLVMDIBuilder, bit_size: u64, bit_alignment: u32, element_type: &LLVMMetadata, subscript_pointer: &&LLVMMetadata, subscript_count: u32) &LLVMMetadata;
+[extern] LLVMDIBuilderCreateVectorType = fn [cc(c)] (di_builder: &LLVMDIBuilder, bit_size: u64, bit_alignment: u32, element_type: &LLVMMetadata, subscript_pointer: &&LLVMMetadata, subscript_count: u32) &LLVMMetadata;
 [extern] LLVMDIBuilderCreateEnumerator = fn [cc(c)] (di_builder: &LLVMDIBuilder, name_pointer: &u8, name_length: u64, value: u64, sign_extend: s32) &LLVMMetadata;
 [extern] LLVMDIBuilderCreateEnumerationType = fn [cc(c)] (di_builder: &LLVMDIBuilder, scope: &LLVMMetadata, name_pointer: &u8, name_length: u64, file: &LLVMMetadata, line: u32, bit_size: u64, bit_alignment: u32, field_pointer: &&LLVMMetadata, field_count: u64, backing_type: &LLVMMetadata) &LLVMMetadata;
 [extern] LLVMDIBuilderCreateReplaceableCompositeType = fn [cc(c)] (di_builder: &LLVMDIBuilder, tag: u32, name_pointer: &u8, name_length: u64, scope: &LLVMMetadata, file: &LLVMMetadata, line: u32, runtime_language: u32, bit_size: u64, bit_alignment: u32, flags: LLVMDIFlags, unique_identifier_pointer: &u8, unique_identifier_length: u64) &LLVMMetadata;
@@ -2946,6 +3021,7 @@ llvm_create_global_variable = fn (module: &LLVMModule, type: &LLVMType, is_const
 
 [extern] LLVMConstNeg = fn [cc(c)] (value: &LLVMValue) &LLVMValue;
 [extern] LLVMConstArray2 = fn [cc(c)] (element_type: &LLVMType, value_pointer: &&LLVMValue, value_count: u64) &LLVMValue;
+[extern] LLVMConstVector = fn [cc(c)] (value_pointer: &&LLVMValue, value_count: u32) &LLVMValue;
 [extern] LLVMConstStringInContext2 = fn [cc(c)] (context: &LLVMContext, pointer: &u8, length: u64, dont_null_terminate: s32) &LLVMValue;
 [extern] LLVMConstNamedStruct = fn [cc(c)] (type: &LLVMType, constant_pointer: &&LLVMValue, constant_count: u32) &LLVMValue;
 [extern] LLVMConstStructInContext = fn [cc(c)] (context: &LLVMContext, constant_pointer: &&LLVMValue, constant_count: u32, packed: s32) &LLVMValue;
@@ -3059,6 +3135,7 @@ Module = struct
     first_slice_type: &Type,
     first_pair_struct_type: &Type,
     first_array_type: &Type,
+    first_vector_type: &Type,
     first_enum_array_type: &Type,
     first_function_type: &Type,
 
@@ -3485,12 +3562,19 @@ format_integer_decimal = fn (buffer: []u8, v: u64) u64
     return byte_count;
 }
 
-array_name = fn (module: &Module, element_type: &Type, element_count: u64) []u8
+array_name = fn (module: &Module, element_type: &Type, element_count: u64, vector: u1) []u8
 {
     >buffer: [512]u8 = undefined;
     >buffer_slice = buffer[..];
 
     >i: u64 = 0;
+
+    if (vector)
+    {
+        >vector_name = "vector";
+        memcpy(&buffer[i], vector_name.pointer, vector_name.length);
+        i += vector_name.length;
+    }
 
     buffer[i] = left_bracket;
     i += 1;
@@ -3547,7 +3631,7 @@ get_array_type = fn (module: &Module, element_type: &Type, element_count: u64) &
             },
         },
         .id = .array,
-        .name = array_name(module, element_type, element_count),
+        .name = array_name(module, element_type, element_count, 0),
         .scope = element_type.scope,
         zero,
     });
@@ -3559,6 +3643,62 @@ get_array_type = fn (module: &Module, element_type: &Type, element_count: u64) &
     else
     {
         module.first_array_type = result;
+    }
+
+    return result;
+}
+
+get_vector_type = fn (module: &Module, element_type: &Type, element_count: u64) &Type
+{
+    assert(element_type != zero);
+    assert(element_count != 0);
+
+    >vector_type = module.first_vector_type;
+
+    while (vector_type)
+    {
+        assert(vector_type.id == .vector);
+        >candidate_element_type = vector_type.content.vector.element_type;
+        >candidate_element_count = vector_type.content.vector.element_count;
+
+        if (candidate_element_type == element_type and candidate_element_count == element_count)
+        {
+            return vector_type;
+        }
+
+        >next = vector_type.content.vector.next;
+
+        if (!next)
+        {
+            break;
+        }
+
+        vector_type = next;
+    }
+
+    >last_vector_type = vector_type;
+
+    >result = new_type(module, {
+        .content = {
+            .vector = {
+                .element_type = element_type,
+                .element_count = element_count,
+                zero,
+            },
+        },
+        .id = .vector,
+        .name = array_name(module, element_type, element_count, 1),
+        .scope = element_type.scope,
+        zero,
+    });
+
+    if (last_vector_type != zero)
+    {
+        last_vector_type.content.vector.next = result;
+    }
+    else
+    {
+        module.first_vector_type = result;
     }
 
     return result;
@@ -3952,6 +4092,7 @@ TypeKeyword = enum
     noreturn,
     enum_array,
     fn,
+    vector,
 }
 
 type_is_slice = fn (type: &Type) u1
@@ -4234,6 +4375,7 @@ ValueIntrinsic = enum
     min,
     pointer_cast,
     pointer_from_int,
+    reduce,
     select,
     string_to_enum,
     trailing_zeroes,
@@ -4408,6 +4550,19 @@ resolve_alias = fn (module: &Module, type: &Type) &Type
             else
             {
                 result = get_array_type(module, resolved_element_type, type.content.array.element_count);
+            }
+        },
+        .vector =>
+        {
+            >element_type = type.content.vector.element_type;
+            >resolved_element_type = resolve_alias(module, element_type);
+            if (element_type == resolved_element_type)
+            {
+                result = type;
+            }
+            else
+            {
+                result = get_vector_type(module, resolved_element_type, type.content.vector.element_count);
             }
         },
         .struct =>
@@ -4699,6 +4854,73 @@ parse_function_header = fn (module: &Module, scope: &Scope, mandate_argument_nam
     };
 }
 
+ArrayLikeType = struct
+{
+    type: &Type,
+    count: u64, // 0 means that length is inferred
+}
+
+parse_array_like_type = fn (module: &Module, scope: &Scope) ArrayLikeType
+{
+    >checkpoint = get_checkpoint(module);
+    >length_inferred: u1 = 0;
+    if (consume_character_if_match(module, '_'))
+    {
+        skip_space(module);
+        length_inferred = consume_character_if_match(module, ']');
+    }
+
+    >element_count: u64 = 0;
+
+    if (!length_inferred)
+    {
+        set_checkpoint(module, checkpoint);
+
+        >resolved: u1 = 0;
+
+        >length_value = parse_value(module, scope, zero);
+        assert(length_value != zero);
+
+        if (!value_is_constant(length_value))
+        {
+            report_error(module, "Length not constant");
+        }
+
+        switch (length_value.id)
+        {
+            .constant_integer =>
+            {
+                element_count = length_value.content.constant_integer.value;
+
+                if (element_count == 0)
+                {
+                    report_error(module, "Array element count cannot be zero");
+                }
+
+                resolved = 1;
+            },
+            else =>
+            {
+                report_error(module, "Invalid value type");
+            },
+        }
+
+        skip_space(module);
+        expect_character(module, right_bracket);
+
+        if (!resolved)
+        {
+            report_error(module, "TODO: Array must be resolved?");
+        }
+    }
+
+    skip_space(module);
+
+    >element_type = parse_type(module, scope);
+
+    return { .type = element_type, .count = element_count };
+}
+
 TypeIntrinsic = enum
 {
     ReturnType,
@@ -4749,6 +4971,17 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
                     >function_header = parse_function_header(module, scope, mandate_argument_names);
                     >result = function_header.type;
                     return result;
+                },
+                .vector =>
+                {
+                    skip_space(module);
+                    expect_character(module, left_bracket);
+                    >array_like_type = parse_array_like_type(module, scope);
+                    >element_type = array_like_type.type;
+                    >element_count = array_like_type.count;
+
+                    >vector_type = get_vector_type(module, element_type, element_count);
+                    return vector_type;
                 },
                 else => { unreachable; },
             }
@@ -4850,60 +5083,14 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
         }
         else
         {
-            >checkpoint = get_checkpoint(module);
-            >length_inferred: u1 = 0;
-            if (consume_character_if_match(module, '_'))
-            {
-                skip_space(module);
-                length_inferred = consume_character_if_match(module, ']');
-            }
-
-            >length_value: &Value = zero;
-            >element_count: u64 = 0;
-            >resolved: u1 = 0;
-
-            if (!length_inferred)
-            {
-                set_checkpoint(module, checkpoint);
-
-                length_value = parse_value(module, scope, zero);
-                assert(length_value != zero);
-
-                if (!value_is_constant(length_value))
-                {
-                    report_error(module, "Length not constant");
-                }
-
-                switch (length_value.id)
-                {
-                    .constant_integer =>
-                    {
-                        element_count = length_value.content.constant_integer.value;
-
-                        if (element_count == 0)
-                        {
-                            report_error(module, "Array element count cannot be zero");
-                        }
-
-                        resolved = 1;
-                    },
-                    else =>
-                    {
-                        report_error(module, "Invalid value type");
-                    },
-                }
-
-                skip_space(module);
-                expect_character(module, right_bracket);
-            }
-
-            skip_space(module);
-
-            >element_type = parse_type(module, scope);
+            >array_like_type = parse_array_like_type(module, scope);
+            >element_type = array_like_type.type;
+            >element_count = array_like_type.count;
+            >length_inferred = element_count == 0;
 
             if (length_inferred)
             {
-                assert(!length_value);
+                assert(element_count == 0);
                 >result = new_type(module, {
                     .content = {
                         .array = {
@@ -4921,11 +5108,6 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
             }
             else
             {
-                if (!resolved)
-                {
-                    report_error(module, "TODO: Array must be resolved?");
-                }
-
                 assert(element_count != 0);
 
                 >array_type = get_array_type(module, element_type, element_count);
@@ -6008,6 +6190,40 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                             },
                         },
                         .id = .field_parent_pointer,
+                        zero,
+                    };
+                },
+                .reduce =>
+                {
+                    skip_space(module);
+                    expect_character(module, left_parenthesis);
+
+                    skip_space(module);
+                    >id_string = parse_identifier(module);
+                    >id_s2e = @string_to_enum(ReduceOperationId, id_string);
+                    if (!id_s2e.is_valid)
+                    {
+                        report_error(module, "Invalid reduce operation");
+                    }
+                    >id = id_s2e.enum_value;
+
+                    skip_space(module);
+                    expect_character(module, ',');
+                    skip_space(module);
+
+                    >value = parse_value(module, scope, zero);
+
+                    skip_space(module);
+                    expect_character(module, right_parenthesis);
+
+                    result.& = {
+                        .content = {
+                            .reduce = {
+                                .value = value,
+                                .id = id,
+                            },
+                        },
+                        .id = .reduce,
                         zero,
                     };
                 },
@@ -8225,6 +8441,15 @@ resolve_type_in_place_abi = fn (module: &Module, type: &Type) void
                 >array_type = LLVMArrayType2(element_type.llvm.memory, element_count);
                 result = array_type;
             },
+            .vector =>
+            {
+                >element_type = type.content.vector.element_type;
+                >element_count = type.content.vector.element_count;
+                assert(element_count != 0);
+                resolve_type_in_place_abi(module, element_type);
+                >vector_type = LLVMVectorType(element_type.llvm.abi, @truncate(element_count));
+                result = vector_type;
+            },
             .enum =>
             {
                 >backing_type = type.content.enum.backing_type;
@@ -8380,6 +8605,15 @@ resolve_type_in_place_memory = fn (module: &Module, type: &Type) void
                 >aliased = type.content.alias.type;
                 resolve_type_in_place_memory(module, aliased);
                 result = aliased.llvm.memory;
+            },
+            .vector =>
+            {
+                >element_type = type.content.vector.element_type;
+                >element_count = type.content.vector.element_count;
+                assert(element_count != 0);
+                resolve_type_in_place_memory(module, element_type);
+                >vector_type = LLVMVectorType(element_type.llvm.memory, @truncate(element_count));
+                result = vector_type;
             },
             else =>
             {
@@ -8607,6 +8841,19 @@ resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
                 .opaque =>
                 {
                     return;
+                },
+                .vector =>
+                {
+                    >element_type = type.content.vector.element_type;
+                    >element_count = type.content.vector.element_count;
+                    assert(element_count != 0);
+                    resolve_type_in_place_debug(module, element_type);
+
+                    >subrange = LLVMDIBuilderGetOrCreateSubrange(module.llvm.di_builder, 0, @extend(element_count));
+
+                    >bit_alignment = get_byte_alignment(type) * 8;
+                    >vector_type = LLVMDIBuilderCreateVectorType(module.llvm.di_builder, get_bit_size(type), bit_alignment, element_type.llvm.debug, &subrange, 1);
+                    result = vector_type;
                 },
                 else =>
                 {
@@ -10725,6 +10972,14 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             else if (is_boolean)
             {
                 value_type = uint1(module);
+                if (left.type.id == .vector)
+                {
+                    assert(right.type.id == .vector);
+                    assert(left.type.content.vector.element_type == right.type.content.vector.element_type);
+                    >element_count = left.type.content.vector.element_count;
+                    assert(element_count == right.type.content.vector.element_count);
+                    value_type = get_vector_type(module, value_type, element_count);
+                }
             }
             else
             {
@@ -11274,27 +11529,43 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
             if (expected_type != zero)
             {
-                if (expected_type.id != .array)
-                {
-                    report_error(module, "array initialization value must be of type array");
-                }
+                >element_count: u64 = 0;
+                >element_type: &Type = zero;
 
-                >element_type = expected_type.content.array.element_type;
-
-                if (expected_type.content.array.element_count == 0)
+                switch (expected_type.id)
                 {
-                    // TODO: use existing types?
-                    >element_count = values.length;
-                    expected_type.content.array.element_count = element_count;
-                    assert(string_equal(expected_type.name, ""));
-                    expected_type.name = array_name(module, element_type, element_count);
-                }
-                else
-                {
-                    if (expected_type.content.array.element_count != values.length)
+                    .array =>
                     {
-                        report_error(module, "element count mismatch");
-                    }
+                        element_type = expected_type.content.array.element_type;
+                        element_count = expected_type.content.array.element_count;
+
+                        if (element_count == 0)
+                        {
+                            element_count = values.length;
+                            expected_type.content.array.element_count = element_count;
+                            assert(string_equal(expected_type.name, ""));
+                            expected_type.name = array_name(module, element_type, element_count, 0);
+                        }
+                    },
+                    .vector =>
+                    {
+                        element_type = expected_type.content.vector.element_type;
+                        element_count = expected_type.content.vector.element_count;
+
+                        if (element_count == 0)
+                        {
+                            element_count = values.length;
+                            expected_type.content.vector.element_count = element_count;
+                            assert(string_equal(expected_type.name, ""));
+                            expected_type.name = array_name(module, element_type, element_count, 1);
+                        }
+                    },
+                    else => { report_error(module, "unexpected array initialization value type"); },
+                }
+
+                if (element_count != values.length)
+                {
+                    report_error(module, "element count mismatch");
                 }
 
                 >is_constant: u1 = 1;
@@ -12630,6 +12901,29 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
             value_type = expected_type;
         },
+        .reduce =>
+        {
+            >reduce_argument = value.content.reduce.value;
+            analyze_type(module, reduce_argument, zero, zero);
+            >reduce_argument_type = reduce_argument.type;
+
+            if (reduce_argument_type.id != .vector)
+            {
+                report_error(module, "Reduce argument must be of type vector");
+            }
+
+            >element_type = reduce_argument_type.content.vector.element_type;
+            >element_count = reduce_argument_type.content.vector.element_count;
+
+            if (element_count <= 1)
+            {
+                report_error(module, "Reduce must be performed on vectors of length 2 or greater");
+            }
+
+            value_type = element_type;
+
+            typecheck(module, expected_type, element_type);
+        },
         else =>
         {
             @trap();
@@ -12647,6 +12941,42 @@ emit_intrinsic_call = fn (module: &Module, index: LLVMIntrinsicIndex, argument_t
     >intrinsic_function_type = LLVMIntrinsicGetType(module.llvm.context, intrinsic_id, argument_types.pointer, argument_types.length);
     >call = LLVMBuildCall2(module.llvm.builder, intrinsic_function_type, intrinsic_function, argument_values.pointer, @truncate(argument_values.length), "");
     return call;
+}
+
+emit_integer_compare = fn (module: &Module, left: &LLVMValue, right: &LLVMValue, id: BinaryId, signed: u1) &LLVMValue
+{
+    >predicate: LLVMICmpPredicate = undefined;
+
+    switch (id)
+    {
+        .compare_equal => { predicate = .eq; },
+        .compare_not_equal => { predicate = .ne; },
+        .compare_less => { predicate = @select(signed, .slt, .ult); },
+        .compare_less_equal => { predicate = @select(signed, .sle, .ule); },
+        .compare_greater => { predicate = @select(signed, .sgt, .ugt); },
+        .compare_greater_equal => { predicate = @select(signed, .sge, .uge); },
+        else => { unreachable; },
+    }
+
+    return LLVMBuildICmp(module.llvm.builder, predicate, left, right, "");
+}
+
+emit_float_compare = fn (module: &Module, left: &LLVMValue, right: &LLVMValue, id: BinaryId) &LLVMValue
+{
+    >predicate: LLVMFCmpPredicate = undefined;
+
+    switch (id)
+    {
+        .compare_equal => { predicate = .oeq; },
+        .compare_not_equal => { predicate = .une; },
+        .compare_less => { predicate = .olt; },
+        .compare_less_equal => { predicate = .ole; },
+        .compare_greater => { predicate = .ogt; },
+        .compare_greater_equal => { predicate = .oge; },
+        else => { unreachable; },
+    }
+
+    return LLVMBuildFCmp(module.llvm.builder, predicate, left, right, "");
 }
 
 emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &LLVMValue, right_type: &Type, id: BinaryId, resolved_value_type: &Type) &LLVMValue
@@ -12670,37 +13000,27 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
         {
             .integer, .pointer, .enum =>
             {
-                >predicate: LLVMICmpPredicate = undefined;
-
-                switch (id)
-                {
-                    .compare_equal => { predicate = .eq; },
-                    .compare_not_equal => { predicate = .ne; },
-                    .compare_less => { predicate = @select(signed, .slt, .ult); },
-                    .compare_less_equal => { predicate = @select(signed, .sle, .ule); },
-                    .compare_greater => { predicate = @select(signed, .sgt, .ugt); },
-                    .compare_greater_equal => { predicate = @select(signed, .sge, .uge); },
-                    else => { unreachable; },
-                }
-
-                return LLVMBuildICmp(module.llvm.builder, predicate, left, right, "");
+                return emit_integer_compare(module, left, right, id, signed);
             },
             .float =>
             {
-                >predicate: LLVMFCmpPredicate = undefined;
-
-                switch (id)
+                return emit_float_compare(module, left, right, id);
+            },
+            .vector =>
+            {
+                >element_type = operand_type.content.vector.element_type;
+                switch (element_type.id)
                 {
-                    .compare_equal => { predicate = .oeq; },
-                    .compare_not_equal => { predicate = .une; },
-                    .compare_less => { predicate = .olt; },
-                    .compare_less_equal => { predicate = .ole; },
-                    .compare_greater => { predicate = .ogt; },
-                    .compare_greater_equal => { predicate = .oge; },
+                    .integer, .pointer, .enum =>
+                    {
+                        return emit_integer_compare(module, left, right, id, signed);
+                    },
+                    .float =>
+                    {
+                        return emit_float_compare(module, left, right, id);
+                    },
                     else => { unreachable; },
                 }
-
-                return LLVMBuildFCmp(module.llvm.builder, predicate, left, right, "");
             },
             else => { report_error(module, "TODO: boolean binary expression"); },
         }
@@ -15288,9 +15608,33 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
             if (value.content.array_initialization.is_constant)
             {
                 assert(value.kind == .right);
-                assert(resolved_value_type.id == .array);
-                >element_type = resolved_value_type.content.array.element_type;
-                llvm_value = emit_constant_array(module, values, element_type);
+                switch (resolved_value_type.id)
+                {
+                    .array =>
+                    {
+                        >element_type = resolved_value_type.content.array.element_type;
+                        llvm_value = emit_constant_array(module, values, element_type);
+                    },
+                    .vector =>
+                    {
+                        >value_buffer: [128]&LLVMValue = undefined;
+                        assert(values.length <= value_buffer.length);
+
+                        >element_type = resolved_value_type.content.vector.element_type;
+                        resolve_type_in_place(module, element_type);
+
+                        for (i: 0..values.length)
+                        {
+                            >v = values[i];
+                            emit_value(module, v, .abi, 1);
+                            value_buffer[i] = v.llvm;
+                        }
+
+                        >constant_vector = LLVMConstVector(&value_buffer[0], @truncate(values.length));
+                        llvm_value = constant_vector;
+                    },
+                    else => { unreachable; },
+                }
             }
             else
             {
@@ -15907,6 +16251,135 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
         {
             >float_string_literal = value.content.float_string_literal;
             llvm_value = LLVMConstRealOfStringAndSize(get_llvm_type(resolved_value_type, type_kind), float_string_literal.pointer, @truncate(float_string_literal.length));
+        },
+        .reduce =>
+        {
+            >id = value.content.reduce.id;
+            >argument = value.content.reduce.value;
+            >argument_type = argument.type;
+            assert(argument_type.id == .vector);
+            emit_value(module, argument, .abi, 0);
+            >element_type = argument_type.content.vector.element_type;
+
+            >intrinsic_index: LLVMIntrinsicIndex = undefined;
+
+            switch (id)
+            {
+                .add =>
+                {
+                    switch (element_type.id)
+                    {
+                        .integer =>
+                        {
+                            intrinsic_index = ."llvm.vector.reduce.add";
+                        },
+                        .float =>
+                        {
+                            intrinsic_index = ."llvm.vector.reduce.fadd";
+                        },
+                        else => { unreachable; },
+                    }
+                },
+                .mul =>
+                {
+                    switch (element_type.id)
+                    {
+                        .integer =>
+                        {
+                            intrinsic_index = ."llvm.vector.reduce.mul";
+                        },
+                        .float =>
+                        {
+                            intrinsic_index = ."llvm.vector.reduce.fmul";
+                        },
+                        else => { unreachable; },
+                    }
+                },
+                .and =>
+                {
+                    switch (element_type.id)
+                    {
+                        .integer =>
+                        {
+                            intrinsic_index = ."llvm.vector.reduce.and";
+                        },
+                        else => { unreachable; },
+                    }
+                },
+                .or =>
+                {
+                    switch (element_type.id)
+                    {
+                        .integer =>
+                        {
+                            intrinsic_index = ."llvm.vector.reduce.or";
+                        },
+                        else => { unreachable; },
+                    }
+                },
+                .xor =>
+                {
+                    switch (element_type.id)
+                    {
+                        .integer =>
+                        {
+                            intrinsic_index = ."llvm.vector.reduce.xor";
+                        },
+                        else => { unreachable; },
+                    }
+                },
+                .max =>
+                {
+                    switch (element_type.id)
+                    {
+                        .integer =>
+                        {
+                            if (element_type.content.integer.signed)
+                            {
+                                intrinsic_index = ."llvm.vector.reduce.smax";
+                            }
+                            else
+                            {
+                                intrinsic_index = ."llvm.vector.reduce.umax";
+                            }
+                        },
+                        .float =>
+                        {
+                            intrinsic_index = ."llvm.vector.reduce.fmax";
+                        },
+                        else => { unreachable; },
+                    }
+                },
+                .min =>
+                {
+                    switch (element_type.id)
+                    {
+                        .integer =>
+                        {
+                            if (element_type.content.integer.signed)
+                            {
+                                intrinsic_index = ."llvm.vector.reduce.smin";
+                            }
+                            else
+                            {
+                                intrinsic_index = ."llvm.vector.reduce.umin";
+                            }
+                        },
+                        .float =>
+                        {
+                            intrinsic_index = ."llvm.vector.reduce.fmin";
+                        },
+                        else => { unreachable; },
+                    }
+                },
+                else => { unreachable; },
+            }
+
+            >argument_types: [_]&LLVMType = [ argument_type.llvm.abi ];
+            >argument_values: [_]&LLVMValue = [ argument.llvm ];
+            >reduce_call = emit_intrinsic_call(module, intrinsic_index, argument_types[..], argument_values[..]);
+
+            llvm_value = reduce_call;
         },
         else =>
         {
