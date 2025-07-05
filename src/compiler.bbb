@@ -1028,9 +1028,6 @@ BuildMode = enum
 {
     debug_none,
     debug,
-    soft_optimize,
-    optimize_for_speed,
-    optimize_for_size,
     aggressively_optimize_for_speed,
     aggressively_optimize_for_size,
 }
@@ -18031,8 +18028,6 @@ emit = fn (module: &Module) void
     switch (module.build_mode)
     {
         .debug_none, .debug => { code_generation_optimization_level = .none; },
-        .soft_optimize => { code_generation_optimization_level = .less; },
-        .optimize_for_speed, .optimize_for_size => { code_generation_optimization_level = .default; },
         .aggressively_optimize_for_speed, .aggressively_optimize_for_size => { code_generation_optimization_level = .aggressive; },
     }
 
@@ -18881,18 +18876,6 @@ emit = fn (module: &Module) void
         .debug_none, .debug =>
         {
             optimization_level = .O0;
-        },
-        .soft_optimize =>
-        {
-            optimization_level = .O1;
-        },
-        .optimize_for_speed =>
-        {
-            optimization_level = .O2;
-        },
-        .optimize_for_size =>
-        {
-            optimization_level = .Os;
         },
         .aggressively_optimize_for_speed =>
         {
