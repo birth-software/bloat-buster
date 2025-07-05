@@ -105,6 +105,13 @@ errno = fn () Error
 [extern] execve = fn [cc(c)] (name: &u8, arguments: &&u8, environment: &&u8) s32;
 [extern] waitpid = fn [cc(c)] (pid: s32, wait_status: &u32, options: s32) s32;
 
+PtraceRequest = enum u32
+{
+    trace_me = 0,
+}
+
+[extern] ptrace = fn [cc(c)] (request: PtraceRequest, pid: s32, address: &u8, data: &u8) s64;
+
 assert = macro (ok: u1) void
 {
     if (!ok)
@@ -436,6 +443,21 @@ os_file_write = fn (fd: File, buffer: []u8) void
     }
 }
 
+os_is_debugger_present = fn () u1
+{
+    >result = ptrace(.trace_me, 0, zero, zero) == -1;
+    return result;
+}
+
+fail = fn () noreturn
+{
+    if (os_is_debugger_present())
+    {
+        @trap();
+    }
+    exit(1);
+}
+
 os_path_absolute_stack = fn (buffer: []u8, relative_file_path: &u8) []u8
 {
     >syscall_result = realpath(relative_file_path, buffer.pointer);
@@ -452,7 +474,7 @@ os_path_absolute_stack = fn (buffer: []u8, relative_file_path: &u8) []u8
         >error = errno();
         >cwd = getcwd(buffer.pointer, buffer.length);
         assert(cwd == buffer.pointer);
-        @trap();
+        fail();
     }
 
     return result;
@@ -674,7 +696,7 @@ os_execute = fn (arena: &Arena, arguments: []&u8, environment: &&u8, options: Ex
         {
             if (pipe(&pipes[i]) == -1)
             {
-                @trap();
+                fail();
             }
         }
     }
@@ -685,7 +707,7 @@ os_execute = fn (arena: &Arena, arguments: []&u8, environment: &&u8, options: Ex
     {
         -1 =>
         {
-            @trap();
+            fail();
         },
         0 =>
         {
@@ -717,7 +739,7 @@ os_execute = fn (arena: &Arena, arguments: []&u8, environment: &&u8, options: Ex
                 unreachable;
             }
 
-            @trap();
+            fail();
         },
         else =>
         {
@@ -790,11 +812,11 @@ os_execute = fn (arena: &Arena, arguments: []&u8, environment: &&u8, options: Ex
             }
             else if (waitpid_result == -1)
             {
-                @trap();
+                fail();
             }
             else
             {
-                @trap();
+                fail();
             }
         },
     }
@@ -845,11 +867,6 @@ global_state_initialize = fn () void
     global_state = {
         .arena = arena_initialize_default(2 * 1024 * 1024),
     };
-}
-
-fail = fn () noreturn
-{
-    exit(1);
 }
 
 LLVMError = opaque;
@@ -1228,9 +1245,18 @@ TypeInteger = struct
     signed: u1,
 }
 
+TypeFloatId = enum
+{
+    f16,
+    bf16,
+    f32,
+    f64,
+    f128,
+}
+
 TypeFloat = struct
 {
-    bit_count: u64,
+    id: TypeFloatId,
 }
 
 TypePointer = struct
@@ -1559,6 +1585,21 @@ Type = struct
     llvm: TypeLLVM,
 }
 
+float_bit_count = fn (type: &Type) u64
+{
+    assert(type.id == .float);
+
+    >id = type.content.float.id;
+    
+    switch (id)
+    {
+        .f16, .bf16 => { return 16; },
+        .f32 => { return 32; },
+        .f64 => { return 64; },
+        .f128 => { return 128; },
+    }
+}
+
 receives_type = fn (value: &Value) u1
 {
     switch (value.id)
@@ -1644,7 +1685,7 @@ receives_type = fn (value: &Value) u1
         },
         else =>
         {
-            @trap();
+            fail();
         },
     }
 }
@@ -1685,7 +1726,7 @@ type_is_signed = fn (type: &Type) u1
         },
         else =>
         {
-            @trap();
+            fail();
         },
     }
 }
@@ -1739,7 +1780,7 @@ is_illegal_vector_type = fn (type: &Type) u1
     {
         .vector =>
         {
-            @trap();
+            fail();
         }
         else => { return 0; },
     }
@@ -1856,7 +1897,7 @@ get_byte_size = fn (type: &Type) u64
         },
         .float =>
         {
-            >bit_count = type.content.float.bit_count;
+            >bit_count = float_bit_count(type);
             assert(bit_count % 8 == 0);
             return bit_count / 8;
         },
@@ -1868,7 +1909,7 @@ get_byte_size = fn (type: &Type) u64
         },
         else =>
         {
-            @trap();
+            fail();
         },
     }
 }
@@ -1919,14 +1960,9 @@ get_byte_alignment = fn (type: &Type) u32
         },
         .float =>
         {
-            >bit_count = type.content.float.bit_count;
-            switch (bit_count)
-            {
-                32 => { return 4; },
-                64 => { return 8; },
-                128 => { return 16; },
-                else => { unreachable; },
-            }
+            >bit_count = float_bit_count(type);
+            assert(bit_count % 8 == 0);
+            return @truncate(bit_count / 8);
         },
         .vector =>
         {
@@ -1939,7 +1975,7 @@ get_byte_alignment = fn (type: &Type) u32
         },
         else =>
         {
-            @trap();
+            fail();
         },
     }
 }
@@ -1998,9 +2034,13 @@ get_bit_size = fn (type: &Type) u64
             >result = element_bit_size * element_count;
             return result;
         },
+        .float =>
+        {
+            return float_bit_count(type);
+        },
         else =>
         {
-            @trap();
+            fail();
         },
     }
 }
@@ -2060,7 +2100,7 @@ is_promotable_integer_type_for_abi = fn (type: &Type) u1
         },
         else =>
         {
-            @trap();
+            fail();
         }
     }
 }
@@ -2539,7 +2579,7 @@ value_is_constant = fn (value: &Value) u1
         },
         else =>
         {
-            @trap();
+            fail();
         }
     }
 }
@@ -2547,7 +2587,7 @@ value_is_constant = fn (value: &Value) u1
 i128_type_count: u64 = 2;
 i128_offset: u64 = 64 * 2;
 float_offset: u64 = i128_offset + i128_type_count;
-float_type_count: u64 = 2;
+float_type_count: u64 = 5;
 void_offset: u64 = float_offset + float_type_count;
 
 MacroDeclaration = struct
@@ -2844,8 +2884,11 @@ LLVMFCmpPredicate = enum u32
 [extern] LLVMVoidTypeInContext = fn [cc(c)] (context: &LLVMContext) &LLVMType;
 [extern] LLVMPointerTypeInContext = fn [cc(c)] (context: &LLVMContext, address_space: u32) &LLVMType;
 [extern] LLVMIntTypeInContext = fn [cc(c)] (context: &LLVMContext, bit_count: u32) &LLVMType;
+[extern] LLVMHalfTypeInContext = fn [cc(c)] (context: &LLVMContext) &LLVMType;
+[extern] LLVMBFloatTypeInContext = fn [cc(c)] (context: &LLVMContext) &LLVMType;
 [extern] LLVMFloatTypeInContext = fn [cc(c)] (context: &LLVMContext) &LLVMType;
 [extern] LLVMDoubleTypeInContext = fn [cc(c)] (context: &LLVMContext) &LLVMType;
+[extern] LLVMFP128TypeInContext = fn [cc(c)] (context: &LLVMContext) &LLVMType;
 [extern] LLVMFunctionType = fn [cc(c)] (return_type: &LLVMType, argument_pointer: &&LLVMType, argument_count: u32, is_variable_argument: s32) &LLVMType;
 [extern] LLVMArrayType2 = fn [cc(c)] (element_type: &LLVMType, element_count: u64) &LLVMType;
 [extern] LLVMVectorType = fn [cc(c)] (element_type: &LLVMType, element_count: u32) &LLVMType;
@@ -2983,6 +3026,8 @@ llvm_create_global_variable = fn (module: &LLVMModule, type: &LLVMType, is_const
 [extern] LLVMBuildZExt = fn [cc(c)] (builder: &LLVMBuilder, value: &LLVMValue, type: &LLVMType, name: &u8) &LLVMValue;
 [extern] LLVMBuildTrunc = fn [cc(c)] (builder: &LLVMBuilder, value: &LLVMValue, type: &LLVMType, name: &u8) &LLVMValue;
 [extern] LLVMBuildNot = fn [cc(c)] (builder: &LLVMBuilder, value: &LLVMValue, name: &u8) &LLVMValue;
+
+[extern] LLVMBuildFNeg = fn [cc(c)] (builder: &LLVMBuilder, value: &LLVMValue, name: &u8) &LLVMValue;
 
 [extern] LLVMBuildICmp = fn [cc(c)] (builder: &LLVMBuilder, predicate: LLVMICmpPredicate, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
 [extern] LLVMBuildFCmp = fn [cc(c)] (builder: &LLVMBuilder, predicate: LLVMFCmpPredicate, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
@@ -3327,7 +3372,7 @@ report_error = fn (module: &Module, message: []u8) noreturn
     print("ERROR: ");
     print(message);
     print("\n");
-    @trap();
+    fail();
 }
 
 new_local = fn (module: &Module, scope: &Scope) &Local
@@ -3418,10 +3463,10 @@ new_type = fn (module: &Module, type: Type) &Type
     return result;
 }
 
-integer_type = fn (module: &Module, integer: TypeInteger) &Type
+get_integer_type = fn (module: &Module, integer: TypeInteger) &Type
 {
     assert(integer.bit_count != 0);
-    assert(integer.bit_count <= 64);
+    assert(integer.bit_count <= 64 or integer.bit_count == 128);
     >index = @select(integer.bit_count == 128, i128_offset + @extend(integer.signed), integer.bit_count - 1 + 64 * @extend(integer.signed));
     >result = module.scope.types.first + index;
     assert(result.id == .integer);
@@ -3430,34 +3475,43 @@ integer_type = fn (module: &Module, integer: TypeInteger) &Type
     return result;
 }
 
+get_float_type = fn (module: &Module, id: TypeFloatId) &Type
+{
+    >float_index = float_offset + @extend(@int_from_enum(id));
+    >result = module.scope.types.first + float_index;
+    assert(result.id == .float);
+    assert(result.content.float.id == id);
+    return result;
+}
+
 uint1 = fn (module: &Module) &Type
 {
-    return integer_type(module, { .bit_count = 1, .signed = 0 });
+    return get_integer_type(module, { .bit_count = 1, .signed = 0 });
 }
 
 uint8 = fn (module: &Module) &Type
 {
-    return integer_type(module, { .bit_count = 8, .signed = 0 });
+    return get_integer_type(module, { .bit_count = 8, .signed = 0 });
 }
 
 uint32 = fn (module: &Module) &Type
 {
-    return integer_type(module, { .bit_count = 32, .signed = 0 });
+    return get_integer_type(module, { .bit_count = 32, .signed = 0 });
 }
 
 uint64 = fn (module: &Module) &Type
 {
-    return integer_type(module, { .bit_count = 64, .signed = 0 });
+    return get_integer_type(module, { .bit_count = 64, .signed = 0 });
 }
 
 sint32 = fn (module: &Module) &Type
 {
-    return integer_type(module, { .bit_count = 32, .signed = 1 });
+    return get_integer_type(module, { .bit_count = 32, .signed = 1 });
 }
 
 sint64 = fn (module: &Module) &Type
 {
-    return integer_type(module, { .bit_count = 64, .signed = 1 });
+    return get_integer_type(module, { .bit_count = 64, .signed = 1 });
 }
 
 void_type = fn (module: &Module) &Type
@@ -3890,7 +3944,7 @@ escape_character = fn (ch: u8) u8
         'r' => { return '\r'; },
         '\'' => { return '\''; },
         '\\' => { return '\\'; },
-        else => { @trap(); },
+        else => { fail(); },
     }
 }
 
@@ -4260,7 +4314,7 @@ get_by_value_argument_pair = fn (module: &Module, low: &Type, high: &Type) &Type
 
     if (high_start != 8)
     {
-        @trap();
+        fail();
     }
 
     >result = get_anonymous_struct_pair(module, low, high);
@@ -4607,7 +4661,7 @@ resolve_alias = fn (module: &Module, type: &Type) &Type
         },
         else =>
         {
-            @trap();
+            fail();
         },
     }
 
@@ -4986,12 +5040,15 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
         else
         {
             >is_integer_type = identifier.length > 1 and (identifier[0] == 's' or identifier[0] == 'u');
+            >is_float_type = identifier.length > 1 and identifier[0] == 'f';
 
-            if (is_integer_type)
+            if (is_integer_type or is_float_type)
             {
                 for (ch: identifier[1..])
                 {
-                    is_integer_type = is_integer_type and is_decimal(ch);
+                    >is_decimal_ch = is_decimal(ch);
+                    is_integer_type = is_integer_type and is_decimal_ch;
+                    is_float_type = is_float_type and is_decimal_ch;
                 }
             }
 
@@ -5029,8 +5086,38 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
                     }
                 }
 
-                >result = integer_type(module, { .bit_count = bit_count, .signed = is_signed }); 
+                >result = get_integer_type(module, { .bit_count = bit_count, .signed = is_signed }); 
                 return result;
+            }
+            else if (is_float_type)
+            {
+                >bit_count = parse_integer_decimal_assume_valid(identifier[1..]);
+
+                >float_id: TypeFloatId = undefined;
+
+                switch (bit_count)
+                {
+                    16 =>
+                    {
+                        float_id = .f16;
+                    },
+                    32 =>
+                    {
+                        float_id = .f32;
+                    },
+                    64 =>
+                    {
+                        float_id = .f64;
+                    },
+                    128 =>
+                    {
+                        float_id = .f128;
+                    },
+                    else => { report_error(module, "Unknown float type"); },
+                }
+
+                >float_type = get_float_type(module, float_id);
+                return float_type;
             }
             else
             {
@@ -5413,7 +5500,7 @@ tokenize = fn (module: &Module) Token
             >next_ch = module.content[start_index + 1];
             >token_integer_kind: TokenIntegerKind = .decimal;
 
-            >inferred_decimal: u1 = 0;
+            >inferred_decimal: u1 = 1;
 
             if (start_character == '0')
             {
@@ -5703,7 +5790,7 @@ reference_identifier = fn (module: &Module, current_scope: &Scope, identifier: [
                 {
                     if (string_equal(identifier, constant_argument.name))
                     {
-                        @trap();
+                        fail();
                     }
                 }
 
@@ -6111,7 +6198,7 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                 // TODO
                 .va_copy =>
                 {
-                    @trap();
+                    fail();
                 },
                 .max, .min =>
                 {
@@ -6709,7 +6796,7 @@ parse_right = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                     {
                         .value =>
                         {
-                            @trap();
+                            fail();
                         },
                         .type =>
                         {
@@ -7018,7 +7105,7 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                     {
                         ._ =>
                         {
-                            @trap();
+                            fail();
                         },
                         .return =>
                         {
@@ -7137,7 +7224,7 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                                 }
                                 else
                                 {
-                                    @trap();
+                                    fail();
                                 }
 
                                 skip_space(module);
@@ -7743,7 +7830,7 @@ parse = fn (module: &Module) void
 
                         if (!backing_type)
                         {
-                            backing_type = integer_type(module, { .bit_count = bit_count, .signed = 0 });
+                            backing_type = get_integer_type(module, { .bit_count = bit_count, .signed = 0 });
                         }
 
                         if (backing_type.id != .integer)
@@ -7871,7 +7958,7 @@ parse = fn (module: &Module) void
 
                             if (!backing_type)
                             {
-                                backing_type = integer_type(module, { .bit_count = needed_bit_count, .signed = 0 });
+                                backing_type = get_integer_type(module, { .bit_count = needed_bit_count, .signed = 0 });
                             }
 
                             >enum_type = new_type(module, {
@@ -8031,7 +8118,7 @@ parse = fn (module: &Module) void
 
                                 if (has_value)
                                 {
-                                    @trap();
+                                    fail();
                                 }
                                 else
                                 {
@@ -8518,27 +8605,35 @@ resolve_type_in_place_abi = fn (module: &Module, type: &Type) void
             },
             .float =>
             {
-                >bit_count = type.content.float.bit_count;
+                >id = type.content.float.id;
 
-                switch (bit_count)
+                switch (id)
                 {
-                    32 =>
+                    .f16 =>
+                    {
+                        result = LLVMHalfTypeInContext(module.llvm.context);
+                    },
+                    .bf16 =>
+                    {
+                        result = LLVMBFloatTypeInContext(module.llvm.context);
+                    },
+                    .f32 =>
                     {
                         result = LLVMFloatTypeInContext(module.llvm.context);
                     },
-                    64 =>
+                    .f64 =>
                     {
                         result = LLVMDoubleTypeInContext(module.llvm.context);
                     },
-                    else =>
+                    .f128 =>
                     {
-                        report_error(module, "TODO: float type");
+                        result = LLVMFP128TypeInContext(module.llvm.context);
                     },
                 }
             },
             else =>
             {
-                @trap();
+                fail();
             },
         }
 
@@ -8614,7 +8709,7 @@ resolve_type_in_place_memory = fn (module: &Module, type: &Type) void
             },
             else =>
             {
-                @trap();
+                fail();
             },
         }
 
@@ -8628,7 +8723,7 @@ align_integer_type = fn (module: &Module, type: &Type) &Type
     >bit_count = get_bit_size(type);
     >abi_bit_count = align_bit_count(bit_count);
     >is_signed = type_is_signed(type);
-    >result = integer_type(module, { .bit_count = abi_bit_count, .signed = is_signed });
+    >result = get_integer_type(module, { .bit_count = abi_bit_count, .signed = is_signed });
     return result;
 }
 
@@ -8672,7 +8767,7 @@ resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
                 },
                 .float =>
                 {
-                    >bit_count = type.content.float.bit_count;
+                    >bit_count = float_bit_count(type);
                     >dwarf_encoding: LLVMDwarfTypeEncoding = .float;
 
                     >flags: LLVMDIFlags = zero;
@@ -8854,7 +8949,7 @@ resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
                 },
                 else =>
                 {
-                    @trap();
+                    fail();
                 },
             }
 
@@ -8938,7 +9033,7 @@ abi_system_v_classify_post_merge = fn (aggregate_size: u64, classes: [2]AbiSyste
 
     if (result[1] == .x87_up)
     {
-        @trap();
+        fail();
     }
 
     if (aggregate_size > 16 and (result[0] != .sse or result[1] != .sse_up))
@@ -8990,12 +9085,13 @@ abi_system_v_classify_type = fn (type: &Type, options: AbiSystemVClassifyArgumen
             }
             else if (bit_count == 128)
             {
-                @trap();
+                result[0] = .integer;
+                result[1] = .integer;
             }
             else
             {
                 print("TODO: unexpected bit count\n");
-                @trap();
+                fail();
             }
         },
         .struct,
@@ -9057,7 +9153,7 @@ abi_system_v_classify_type = fn (type: &Type, options: AbiSystemVClassifyArgumen
                         },
                         .union =>
                         {
-                            @trap();
+                            fail();
                         }
                         else => { unreachable; },
                     }
@@ -9120,9 +9216,22 @@ abi_system_v_classify_type = fn (type: &Type, options: AbiSystemVClassifyArgumen
         {
             return abi_system_v_classify_type(type.content.enum.backing_type, options);
         },
+        .float =>
+        {
+            >id = type.content.float.id;
+
+            if (id == .f128)
+            {
+                fail();
+            }
+            else
+            {
+                result[current_index] = .sse;
+            }
+        },
         else =>
         {
-            @trap();
+            fail();
         },
     }
 
@@ -9178,7 +9287,7 @@ contains_no_user_data = fn (type: &Type, start: u64, end: u64) u1
                     },
                     .enum_array =>
                     {
-                        @trap();
+                        fail();
                     },
                     else => { unreachable; },
                 }
@@ -9274,7 +9383,7 @@ abi_system_v_get_integer_type_at_offset = fn (module: &Module, type: &Type, offs
             }
             else
             {
-                @trap();
+                fail();
             }
         },
         .struct =>
@@ -9319,15 +9428,133 @@ abi_system_v_get_integer_type_at_offset = fn (module: &Module, type: &Type, offs
             >element_offset = (offset / element_size) * element_size;
             return abi_system_v_get_integer_type_at_offset(module, element_type, offset - element_offset, source_type, source_offset);
         },
-        else => { @trap(); },
+        else => { fail(); },
     }
 
     >source_size = get_byte_size(source_type);
     assert(source_size != source_offset);
     >byte_count = source_size - source_offset;
     >bit_count = @select(byte_count > 8, 64, byte_count * 8);
-    >result = integer_type(module, { .bit_count = bit_count, .signed = 0 });
+    >result = get_integer_type(module, { .bit_count = bit_count, .signed = 0 });
     return result;
+}
+
+struct_element_containing_offset = fn (type: &Type, offset: u64) u64
+{
+    assert(type.id == .struct);
+    >fields = type.content.struct.fields;
+
+    for (i: 0..fields.length)
+    {
+        >field = &fields[i];
+        if (field.offset == offset)
+        {
+            return i;
+        }
+
+        if (i > 0)
+        {
+            if (field.offset > offset)
+            {
+                return i - 1;
+            }
+        }
+    }
+
+    >byte_size = get_byte_size(type);
+    if (offset < byte_size)
+    {
+        return fields.length - 1;
+    }
+
+    fail();
+}
+
+get_fp_type_at_offset = fn (type: &Type, offset: u64) &Type
+{
+    if (offset == 0 and type.id == .float)
+    {
+        return type;
+    }
+
+    if (type.id == .struct)
+    {
+        >fields = type.content.struct.fields;
+        assert(fields.length != 0);
+        >field_index = struct_element_containing_offset(type, offset);
+        >field = &fields[field_index];
+        offset -= field.offset;
+        >result = get_fp_type_at_offset(field.type, offset);
+        return result;
+    }
+
+    if (type.id == .array)
+    {
+        fail();
+    }
+
+    return zero;
+}
+
+abi_system_v_get_sse_type_at_offset = fn (module: &Module, type: &Type, offset: u64, source_type: &Type, source_offset: u64) &Type
+{
+    >source_size = get_byte_size(source_type) - source_offset;
+    >t0 = get_fp_type_at_offset(type, offset);
+    >double_type = get_float_type(module, .f64);
+    if (t0 == zero or t0 == double_type)
+    {
+        return double_type;
+    }
+
+    >t1: &Type = zero;
+    >t0_size = get_byte_size(t0);
+
+    if (source_size > t0_size)
+    {
+        t1 = get_fp_type_at_offset(type, offset + t0_size);
+    }
+
+    if (!t1)
+    {
+        if (float_bit_count(t0) == 16 and source_size > 4)
+        {
+            t1 = get_fp_type_at_offset(type, offset + 4);
+        }
+
+        if (!t1)
+        {
+            return t0;
+        }
+    }
+
+    if (float_bit_count(t0) == 32 and float_bit_count(t1) == 32)
+    {
+        return get_vector_type(module, t0, 2);
+    }
+
+    if (float_bit_count(t0) == 16 and float_bit_count(t1) == 16)
+    {
+        >t2: &Type = zero;
+        if (source_size > 4)
+        {
+            t2 = get_fp_type_at_offset(type, offset + 4);
+        }
+        if (!t2)
+        {
+            return get_vector_type(module, t0, 2);
+        }
+        else
+        {
+            return get_vector_type(module, t0, 4);
+        }
+    }
+
+    if (float_bit_count(t0) == 16 or float_bit_count(t1) == 16)
+    {
+        return get_vector_type(module, get_float_type(module, .f16), 4);
+    }
+
+    return double_type;
 }
 
 AbiSystemVDirect = struct
@@ -9475,7 +9702,7 @@ abi_system_v_get_indirect_result = fn (module: &Module, type: &Type, free_gpr: u
         {
             return abi_system_v_get_direct(module, {
                 .semantic_type = type,
-                .type = integer_type(module, { .bit_count = size * 8, .signed = 0 }),
+                .type = get_integer_type(module, { .bit_count = size * 8, .signed = 0 }),
                 zero,
             });
         }
@@ -9522,7 +9749,7 @@ abi_system_v_get_indirect_return_result = fn (type: &Type) AbiInformation
     }
     else
     {
-        @trap();
+        fail();
     }
 }
 
@@ -9567,9 +9794,13 @@ abi_system_v_classify_return_type = fn (module: &Module, semantic_return_type: &
         {
             return abi_system_v_get_indirect_return_result(semantic_return_type);
         },
+        .sse =>
+        {
+            low_type = abi_system_v_get_sse_type_at_offset(module, semantic_return_type, 0, semantic_return_type, 0);
+        },
         else =>
         {
-            @trap();
+            fail();
         },
     }
 
@@ -9585,12 +9816,21 @@ abi_system_v_classify_return_type = fn (module: &Module, semantic_return_type: &
 
             if (classes[0] == .none)
             {
-                @trap();
+                fail();
+            }
+        },
+        .sse =>
+        {
+            high_type = abi_system_v_get_sse_type_at_offset(module, semantic_return_type, 8, semantic_return_type, 8);
+            
+            if (classes[0] == .none)
+            {
+                fail();
             }
         },
         else =>
         {
-            @trap();
+            fail();
         },
     }
 
@@ -9665,6 +9905,11 @@ abi_system_v_classify_argument_type = fn (module: &Module, semantic_argument_typ
                 .needed_registers = needed_registers,
             };
         },
+        .sse =>
+        {
+            needed_registers.sse += 1;
+            low_type = abi_system_v_get_sse_type_at_offset(module, semantic_argument_type, 0, semantic_argument_type, 0);
+        },
         else =>
         {
             unreachable;
@@ -9680,6 +9925,16 @@ abi_system_v_classify_argument_type = fn (module: &Module, semantic_argument_typ
         {
             needed_registers.gpr += 1;
             high_type = abi_system_v_get_integer_type_at_offset(module, semantic_argument_type, 8, semantic_argument_type, 8);
+
+            if (classes[0] == .none)
+            {
+                fail();
+            }
+        },
+        .sse =>
+        {
+            needed_registers.sse += 1;
+            high_type = abi_system_v_get_sse_type_at_offset(module, semantic_argument_type, 8, semantic_argument_type, 8);
 
             if (classes[0] == .none)
             {
@@ -9719,7 +9974,7 @@ abi_system_v_classify_argument = fn (module: &Module, available_registers: &AbiR
 
     if (options.register_call)
     {
-        @trap();
+        fail();
     }
 
     >result = abi_system_v_classify_argument_type(module, semantic_argument_type, {
@@ -9747,7 +10002,7 @@ abi_system_v_classify_argument = fn (module: &Module, available_registers: &AbiR
 
     if (abi_get_padding_type(&argument_abi))
     {
-        @trap();
+        fail();
     }
 
     argument_abi.abi_start = options.abi_start;
@@ -10508,7 +10763,7 @@ resolve_type = fn (module: &Module, type: &Type) &Type
         },
         else =>
         {
-            @trap();
+            fail();
         },
     }
 
@@ -10618,7 +10873,7 @@ clone_value = fn (module: &Module, scope: &Scope, old_value: &Value) &Value
             },
             else =>
             {
-                @trap();
+                fail();
             },
         }
     }
@@ -10721,7 +10976,7 @@ clone_statement = fn (module: &Module, scope: &Scope, old_statement: &Statement)
         },
         else =>
         {
-            @trap();
+            fail();
         },
     }
 
@@ -10782,7 +11037,7 @@ get_build_mode_enum = fn (module: &Module) &Type
             field_value += 1;
         }
 
-        >backing_type = integer_type(module, { .bit_count = enum_names.length, .signed = 0 });
+        >backing_type = get_integer_type(module, { .bit_count = enum_names.length, .signed = 0 });
 
         result = new_type(module, {
             .content = {
@@ -10810,7 +11065,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
     if (expected_type != zero and? expected_type.id == .unresolved)
     {
-        @trap();
+        fail();
     }
 
     >value_type: &Type = zero;
@@ -10852,14 +11107,18 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                             report_error(module, "Must not be signed");
                         }
 
-                        @trap();
+                        fail();
                     }
                     else
                     {
-                        >max_value = integer_max_value(type_bit_count, type_is_signed);
-                        if (value_constant > max_value)
+                        // TODO: check properly
+                        if (type_bit_count != 128)
                         {
-                            report_error(module, "Value bigger than type max value");
+                            >max_value = integer_max_value(type_bit_count, type_is_signed);
+                            if (value_constant > max_value)
+                            {
+                                report_error(module, "Value bigger than type max value");
+                            }
                         }
 
                         value_type = expected_type;
@@ -10959,7 +11218,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                 if (expected_type)
                 {
-                    @trap();
+                    fail();
                 }
                 else
                 {
@@ -11281,25 +11540,8 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     value_type = expected_type;
                 },
                 // Generic case
-                .minus,
-                =>
-                {
-                    >is_boolean = unary_is_boolean(unary_id);
-
-                    if (is_boolean)
-                    {
-                        analyze_type(module, unary_value, zero, { .must_be_constant = analysis.must_be_constant, zero });
-                        value_type = uint1(module);
-                    }
-                    else
-                    {
-                        analyze_type(module, unary_value, expected_type, { .must_be_constant = analysis.must_be_constant, zero });
-                        value_type = unary_value.type;
-                    }
-
-                    typecheck(module, expected_type, value_type);
-                },
                 // TODO: this is the default case
+                .minus,
                 .ampersand,
                 .exclamation,
                 .va_end,
@@ -11325,7 +11567,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 else =>
                 {
                     // TODO
-                    @trap();
+                    fail();
                 },
             }
         },
@@ -12712,7 +12954,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 {
                     .value =>
                     {
-                        @trap();
+                        fail();
                     },
                     .type =>
                     {
@@ -12854,7 +13096,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                         }
                     }
                 },
-                else => { @trap(); },
+                else => { fail(); },
             }
 
             if (!field_type)
@@ -12923,7 +13165,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
         },
         else =>
         {
-            @trap();
+            fail();
         },
     }
 
@@ -13140,7 +13382,7 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
                         },
                         .float =>
                         {
-                            @trap();
+                            fail();
                         },
                         .pointer => { unreachable; },
                         else => { report_error(module, "TODO: add"); },
@@ -13310,7 +13552,7 @@ enter_struct_pointer_for_coerced_access = fn (module: &Module, source_value: &LL
         >gep = LLVMBuildStructGEP2(module.llvm.builder, source_type.llvm.abi, source_value, 0, "coerce.dive");
         if (first_field_type.id == .struct)
         {
-            @trap();
+            fail();
         }
         else
         {
@@ -13327,7 +13569,7 @@ coerce_integer_or_pointer_to_integer_or_pointer = fn (module: &Module, source: &
 {
     if (source_type != destination_type)
     {
-        @trap();
+        fail();
     }
 
     return source;
@@ -13356,7 +13598,7 @@ create_coerced_store = fn (module: &Module, source_value: &LLVMValue, source_typ
 
         if (source_type.id == .integer and destination_type.id == .pointer and source_size == align_forward(destination_size, @extend(destination_alignment)))
         {
-            @trap();
+            fail();
         }
         else if (source_type.id == .struct)
         {
@@ -13389,7 +13631,7 @@ create_coerced_store = fn (module: &Module, source_value: &LLVMValue, source_typ
     }
     else if (type_is_integer_backing(source_type))
     {
-        >int_type = integer_type(module, { .bit_count = destination_size * 8, .signed = 0 });
+        >int_type = get_integer_type(module, { .bit_count = destination_size * 8, .signed = 0 });
         >value = coerce_integer_or_pointer_to_integer_or_pointer(module, source_value, source_type, int_type);
         create_store(module, {
             .source = value,
@@ -13431,7 +13673,7 @@ create_coerced_load = fn (module: &Module, source: &LLVMValue, source_type: &Typ
 
     if (type_is_abi_equal(module, source_type, destination_type))
     {
-        @trap();
+        fail();
     }
     else
     {
@@ -13474,7 +13716,7 @@ create_coerced_load = fn (module: &Module, source: &LLVMValue, source_type: &Typ
                 >scalable_vector_type: u1 = 0;
                 if (scalable_vector_type)
                 {
-                    @trap();
+                    fail();
                 }
                 else
                 {
@@ -13570,7 +13812,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
     >uses_in_alloca: u1 = 0;
     if (uses_in_alloca)
     {
-        @trap();
+        fail();
     }
 
     >llvm_indirect_return_value: &LLVMValue = zero;
@@ -13600,7 +13842,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
             }
             else
             {
-                @trap();
+                fail();
             }
 
             assert(pointer != zero);
@@ -13617,11 +13859,11 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
             }
             else if (return_abi.flags.kind == .in_alloca)
             {
-                @trap();
+                fail();
             }
             else
             {
-                @trap();
+                fail();
             }
         },
         else => {},
@@ -13676,7 +13918,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
 
         if (argument_abi.padding.type != zero)
         {
-            @trap();
+            fail();
         }
 
         assert(abi_argument_count == argument_abi.abi_start);
@@ -13700,13 +13942,13 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                     switch (evaluation_kind)
                     {
                         .scalar => { v = semantic_call_argument_value; },
-                        .aggregate => { @trap(); },
-                        .complex => { @trap(); },
+                        .aggregate => { fail(); },
+                        .complex => { fail(); },
                     }
 
                     if (!type_is_abi_equal(module, coerce_to_type, v.type))
                     {
-                        @trap();
+                        fail();
                     }
 
                     llvm_abi_argument_value_buffer[abi_argument_count] = v.llvm;
@@ -13716,13 +13958,13 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                 {
                     if (coerce_to_type.id == .struct and argument_abi.flags.kind == .direct and !argument_abi.flags.can_be_flattened)
                     {
-                        @trap();
+                        fail();
                     }
 
                     // TODO: fix this hack and collapse it into the generic path
                     if (coerce_to_type == uint8(module) and semantic_argument_type == uint1(module))
                     {
-                        @trap();
+                        fail();
                     }
                     else
                     {
@@ -13731,9 +13973,9 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
 
                         switch (evaluation_kind)
                         {
-                            .scalar => { @trap(); },
+                            .scalar => { fail(); },
                             .aggregate => { src = semantic_call_argument_value; },
-                            .complex => { @trap(); },
+                            .complex => { fail(); },
                         }
 
                         assert(src != zero);
@@ -13748,7 +13990,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                             >source_type_is_scalable: u1 = 0;
                             if (source_type_is_scalable)
                             {
-                                @trap();
+                                fail();
                             }
                             else
                             {
@@ -13767,7 +14009,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                             },
                                             else =>
                                             {
-                                                @trap();
+                                                fail();
                                             }
                                         }
                                     }
@@ -13812,7 +14054,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                             >maybe_undef: u1 = 0;
                                             if (maybe_undef)
                                             {
-                                                @trap();
+                                                fail();
                                             }
 
                                             >load = create_load(module, {
@@ -13862,7 +14104,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                                             >maybe_undef: u1 = 0;
                                                             if (maybe_undef)
                                                             {
-                                                                @trap();
+                                                                fail();
                                                             }
 
                                                             >load = create_load(module, {
@@ -13878,7 +14120,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                                     }
                                                     else
                                                     {
-                                                        @trap();
+                                                        fail();
                                                     }
                                                 }
                                                 .zero =>
@@ -13893,7 +14135,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                                 },
                                                 else =>
                                                 {
-                                                    @trap();
+                                                    fail();
                                                 },
                                             }
                                         }
@@ -13943,7 +14185,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                     }
                                     else
                                     {
-                                        @trap();
+                                        fail();
                                     }
 
                                     assert(pointer_type != zero);
@@ -13965,13 +14207,13 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                                     >is_cmse_ns_call: u1 = 0;
                                     if (is_cmse_ns_call)
                                     {
-                                        @trap();
+                                        fail();
                                     }
 
                                     >maybe_undef: u1 = 0;
                                     if (maybe_undef)
                                     {
-                                        @trap();
+                                        fail();
                                     }
 
                                     v = load;
@@ -14007,7 +14249,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
 
                     if (abi_argument_type == semantic_argument_type)
                     {
-                        @trap();
+                        fail();
                     }
                     else if (abi_argument_type.id == .pointer and abi_argument_type.content.pointer.element_type == semantic_argument_type)
                     {
@@ -14065,17 +14307,17 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                     }
                     else
                     {
-                        @trap();
+                        fail();
                     }
                 }
 
                 if (!do_continue)
                 {
-                    @trap();
+                    fail();
                 }
             },
             .ignore => { unreachable; },
-            else => { @trap(); }, // TODO
+            else => { fail(); }, // TODO
         }
 
         assert(abi_argument_count == argument_abi.abi_start + argument_abi.abi_count);
@@ -14142,7 +14384,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
             >fixed_vector_type: u1 = 0;
             if (fixed_vector_type)
             {
-                @trap();
+                fail();
             }
 
             >coerce_alloca: &LLVMValue = zero;
@@ -14166,7 +14408,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
 
             if (return_abi.attributes.direct.offset != 0)
             {
-                @trap();
+                fail();
             }
 
             >destination_type = return_abi.semantic_type;
@@ -14188,7 +14430,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                     }
                     else
                     {
-                        @trap();
+                        fail();
                     }
                 },
                 .array =>
@@ -14229,7 +14471,7 @@ emit_call = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_type
                             zero,
                         });
                     },
-                    .left => { @trap(); },
+                    .left => { fail(); },
                 }
             }
         },
@@ -14420,7 +14662,7 @@ emit_field_access = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, l
 
             if (left_llvm)
             {
-                @trap();
+                fail();
             }
 
             return trunc;
@@ -14592,7 +14834,7 @@ emit_slice_expresion = fn (module: &Module, value: &Value) [2]&LLVMValue
             >slice_length: &LLVMValue = zero;
             if (has_start)
             {
-                @trap();
+                fail();
             }
             else if (end != zero)
             {
@@ -14634,7 +14876,7 @@ emit_va_arg_from_memory = fn (module: &Module, va_list_pointer: &LLVMValue, va_l
 
     if (get_byte_alignment(argument_type) > 8)
     {
-        @trap();
+        fail();
     }
 
     >argument_type_size = get_byte_size(argument_type);
@@ -14727,7 +14969,7 @@ emit_va_arg = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_ty
         }
         else
         {
-            @trap();
+            fail();
         }
 
         >raw_in_regs = 48 - needed_registers.gpr * 8;
@@ -14742,7 +14984,7 @@ emit_va_arg = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_ty
         }
         else
         {
-            @trap();
+            fail();
         }
 
         if (needed_registers.gpr != 0)
@@ -14751,7 +14993,7 @@ emit_va_arg = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_ty
         }
         else
         {
-            @trap();
+            fail();
         }
 
         assert(in_regs != zero);
@@ -14759,25 +15001,25 @@ emit_va_arg = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_ty
         >fp_offset_pointer: &LLVMValue = zero;
         if (needed_registers.sse != 0)
         {
-            @trap();
+            fail();
         }
 
         >fp_offset: &LLVMValue = zero;
         if (needed_registers.sse != 0)
         {
-            @trap();
+            fail();
         }
 
         >raw_fits_in_fp = 176 - needed_registers.sse * 16;
         >fits_in_fp: &LLVMValue = zero;
         if (needed_registers.sse != 0)
         {
-            @trap();
+            fail();
         }
 
         if (needed_registers.sse != 0 and needed_registers.gpr != 0)
         {
-            @trap();
+            fail();
         }
 
         >in_reg_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "va_arg.in_reg");
@@ -14800,7 +15042,7 @@ emit_va_arg = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_ty
 
         if (needed_registers.gpr != 0 and needed_registers.sse != 0)
         {
-            @trap();
+            fail();
         }
         else if (needed_registers.gpr != 0)
         {
@@ -14816,11 +15058,11 @@ emit_va_arg = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_ty
         }
         else if (needed_registers.sse == 1)
         {
-            @trap();
+            fail();
         }
         else if (needed_registers.sse == 2)
         {
-            @trap();
+            fail();
         }
         else
         {
@@ -14841,7 +15083,7 @@ emit_va_arg = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_ty
 
         if (needed_registers.sse != 0)
         {
-            @trap();
+            fail();
         }
 
         LLVMBuildBr(module.llvm.builder, end_block);
@@ -14891,10 +15133,10 @@ emit_va_arg = fn (module: &Module, value: &Value, left_llvm: &LLVMValue, left_ty
             }
             else
             {
-                @trap();
+                fail();
             }
         },
-        .complex => { @trap(); },
+        .complex => { fail(); },
     }
 }
 
@@ -15108,11 +15350,11 @@ emit_macro_instantiation = fn (module: &Module, value: &Value) void
             },
             .aggregate =>
             {
-                @trap();
+                fail();
             },
             .complex =>
             {
-                @trap();
+                fail();
             },
         }
     }
@@ -15248,10 +15490,10 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                             {
                                 right_condition = right_llvm;
                             },
-                            else => { @trap(); },
+                            else => { fail(); },
                         }
                     },
-                    else => { @trap(); },
+                    else => { fail(); },
                 }
 
                 assert(right_condition != zero);
@@ -15326,13 +15568,26 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
             {
                 .minus =>
                 {
-                    if (value_is_constant(unary_value))
+                    assert(resolved_value_type == resolved_unary_type);
+
+                    switch (resolved_unary_type.id)
                     {
-                        llvm_value = LLVMConstNeg(llvm_unary_value);
-                    }
-                    else
-                    {
-                        llvm_value = LLVMBuildNeg(module.llvm.builder, llvm_unary_value, "");
+                        .integer =>
+                        {
+                            if (value_is_constant(unary_value))
+                            {
+                                llvm_value = LLVMConstNeg(llvm_unary_value);
+                            }
+                            else
+                            {
+                                llvm_value = LLVMBuildNeg(module.llvm.builder, llvm_unary_value, "");
+                            }
+                        },
+                        .float =>
+                        {
+                            llvm_value = LLVMBuildFNeg(module.llvm.builder, llvm_unary_value, "");
+                        },
+                        else => { report_error(module, "Unknown neg type"); },
                     }
                 },
                 .extend =>
@@ -15381,7 +15636,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                         },
                         .left =>
                         {
-                            @trap();
+                            fail();
                         }
                     }
                 },
@@ -15466,7 +15721,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                 {
                     llvm_value = llvm_unary_value;
                 },
-                else => { @trap(); },
+                else => { fail(); },
             }
         },
         .variable =>
@@ -15515,12 +15770,12 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                                         zero,
                                     });
                                 },
-                                .complex => { @trap(); },
+                                .complex => { fail(); },
                             }
                         }
                         else
                         {
-                            @trap();
+                            fail();
                         }
                     }
                 },
@@ -15639,7 +15894,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                 {
                     .right =>
                     {
-                        @trap();
+                        fail();
                     },
                     .left =>
                     {
@@ -15819,7 +16074,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                 },
                 else =>
                 {
-                    @trap();
+                    fail();
                 },
             }
         },
@@ -15954,7 +16209,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                         },
                         .union =>
                         {
-                            @trap();
+                            fail();
                         },
                         .bits =>
                         {
@@ -16096,10 +16351,10 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                     >bit_count = condition_type.content.integer.bit_count;
                     if (bit_count != 1)
                     {
-                        @trap();
+                        fail();
                     }
                 },
-                else => { @trap(); },
+                else => { fail(); },
             }
 
             emit_value(module, true_value, type_kind, must_be_constant);
@@ -16380,7 +16635,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
         },
         else =>
         {
-            @trap();
+            fail();
         },
     }
 
@@ -16643,7 +16898,7 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                             },
                             else =>
                             {
-                                @trap();
+                                fail();
                             },
                         }
                     }
@@ -16693,7 +16948,7 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                     {
                         .left =>
                         {
-                            @trap();
+                            fail();
                         },
                         .right =>
                         {
@@ -16788,13 +17043,13 @@ emit_assignment = fn (module: &Module, left_llvm: &LLVMValue, left_type: &Type, 
                 },
                 else =>
                 {
-                    @trap();
+                    fail();
                 },
             }
         },
         .complex =>
         {
-            @trap();
+            fail();
         },
     }
 }
@@ -17010,12 +17265,12 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
 
             if (!LLVMGetFirstUse(@pointer_cast(body_block)))
             {
-                @trap();
+                fail();
             }
 
             if (!LLVMGetFirstUse(@pointer_cast(exit_block)))
             {
-                @trap();
+                fail();
             }
 
             LLVMPositionBuilderAtEnd(module.llvm.builder, exit_block);
@@ -17566,7 +17821,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                                 }
                                 else
                                 {
-                                    @trap();
+                                    fail();
                                 }
                             },
                             .left =>
@@ -17642,7 +17897,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                                             >start_signed = start.content.constant_integer.signed;
                                             >end_signed = end.content.constant_integer.signed;
                                             >is_signed = !(!start_signed and !end_signed);
-                                            local_type = integer_type(module, { .bit_count = 64, .signed = is_signed });
+                                            local_type = get_integer_type(module, { .bit_count = 64, .signed = is_signed });
                                         },
                                         else =>
                                         {
@@ -17734,7 +17989,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                     else
                     {
                         // TODO: case for reverse range
-                        @trap();
+                        fail();
                     }
                 },
             }
@@ -17767,7 +18022,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
         },
         else =>
         {
-            @trap();
+            fail();
         },
     }
 }
@@ -17827,7 +18082,7 @@ generate_object = fn (module: &LLVMModule, target_machine: &LLVMTargetMachine, o
         if (error)
         {
             print("error running optimization passes\n");
-            @trap();
+            fail();
         }
     }
 
@@ -17837,7 +18092,7 @@ generate_object = fn (module: &LLVMModule, target_machine: &LLVMTargetMachine, o
     if (result != 0)
     {
         assert(error_message != zero);
-        @trap();
+        fail();
     }
     else
     {
@@ -17935,7 +18190,7 @@ link = fn (module: &Module) void
         print("\n");
         print(result.stderr);
         print("\n");
-        @trap();
+        report_error(module, "");
     }
 }
 
@@ -18017,7 +18272,7 @@ emit = fn (module: &Module) void
     }
     else
     {
-        @trap();
+        fail();
     }
 
     >target_machine_options = LLVMCreateTargetMachineOptions();
@@ -18202,7 +18457,7 @@ emit = fn (module: &Module) void
                         },
                         .win64 =>
                         {
-                            @trap();
+                            fail();
                         },
                     }
 
@@ -18422,19 +18677,19 @@ emit = fn (module: &Module) void
                             >indirect_argument_index = function_type.abi.return_abi.flags.sret_after_this;
                             if (function_type.abi.return_abi.flags.sret_after_this)
                             {
-                                @trap();
+                                fail();
                             }
 
                             global.variable.storage.content.function.llvm.return_alloca = llvm_abi_arguments[indirect_argument_index];
 
                             if (!function_type.abi.return_abi.flags.indirect_by_value)
                             {
-                                @trap();
+                                fail();
                             }
                         },
                         .in_alloca =>
                         {
-                            @trap();
+                            fail();
                         },
                         else =>
                         {
@@ -18476,12 +18731,12 @@ emit = fn (module: &Module) void
 
                                 if (coerce_to_type.llvm.abi != LLVMTypeOf(v))
                                 {
-                                    @trap();
+                                    fail();
                                 }
 
                                 if (is_promoted)
                                 {
-                                    @trap();
+                                    fail();
                                 }
 
                                 // TODO: this we can get rid of because we handle all of this inside `create_alloca`, load, stores, etc
@@ -18490,7 +18745,7 @@ emit = fn (module: &Module) void
                                     >bit_count = get_bit_size(argument_abi.semantic_type);
                                     >abi_bit_count = align_bit_count(bit_count);
                                     >is_signed = type_is_signed(argument_abi.semantic_type);
-                                    >destination_type = integer_type(module, { .bit_count = abi_bit_count, .signed = is_signed });
+                                    >destination_type = get_integer_type(module, { .bit_count = abi_bit_count, .signed = is_signed });
                                     >alloca = create_alloca(module, {
                                             .type = destination_type,
                                             .name = argument.variable.name,
@@ -18513,7 +18768,7 @@ emit = fn (module: &Module) void
                                     }
                                     else
                                     {
-                                        @trap();
+                                        fail();
                                     }
 
                                     create_store(module, {
@@ -18548,7 +18803,7 @@ emit = fn (module: &Module) void
                                 >is_fixed_vector_type: u1 = 0;
                                 if (is_fixed_vector_type)
                                 {
-                                    @trap();
+                                    fail();
                                 }
 
                                 if (coerce_to_type.id == .struct and coerce_to_type.content.struct.fields.length > 1 and argument_abi.flags.kind == .direct and !argument_abi.flags.can_be_flattened)
@@ -18556,7 +18811,7 @@ emit = fn (module: &Module) void
                                     >contains_homogeneous_scalable_vector_types: u1 = 0;
                                     if (contains_homogeneous_scalable_vector_types)
                                     {
-                                        @trap();
+                                        fail();
                                     }
                                 }
 
@@ -18571,7 +18826,7 @@ emit = fn (module: &Module) void
 
                                 if (argument_abi.attributes.direct.offset > 0)
                                 {
-                                    @trap();
+                                    fail();
                                 }
                                 else
                                 {
@@ -18587,7 +18842,7 @@ emit = fn (module: &Module) void
 
                                     if (is_scalable)
                                     {
-                                        @trap();
+                                        fail();
                                     }
                                     else
                                     {
@@ -18661,13 +18916,13 @@ emit = fn (module: &Module) void
                                     {
                                         if (argument_abi.flags.indirect_realign or argument_abi.flags.kind == .indirect_aliased)
                                         {
-                                            @trap();
+                                            fail();
                                         }
 
                                         >use_indirect_debug_address = !argument_abi.flags.indirect_by_value;
                                         if (use_indirect_debug_address)
                                         {
-                                            @trap();
+                                            fail();
                                         }
 
                                         >llvm_argument = argument_abi_arguments[0];
@@ -18675,7 +18930,7 @@ emit = fn (module: &Module) void
                                     },
                                     .scalar =>
                                     {
-                                        @trap();
+                                        fail();
                                     },
                                 }
                             },
@@ -18812,7 +19067,7 @@ emit = fn (module: &Module) void
                                 }
                                 else
                                 {
-                                    @trap();
+                                    fail();
                                 }
 
                                 assert(source != zero);
@@ -18828,9 +19083,9 @@ emit = fn (module: &Module) void
                                 >evaluation_kind = get_evaluation_kind(function_type.abi.return_abi.semantic_type);
                                 switch (evaluation_kind)
                                 {
-                                    .scalar => { @trap(); },
+                                    .scalar => { fail(); },
                                         .aggregate => {},
-                                        .complex => { @trap(); },
+                                        .complex => { fail(); },
                                 }
                             },
                     }
@@ -18907,7 +19162,7 @@ compile = fn (arena: &Arena, options: CompileOptions) void
     >base_type_allocation = arena_allocate[Type](arena,
         i128_offset // Basic integer types
         + i128_type_count // u128, s128
-        + float_type_count // f32, f64
+        + float_type_count // f16, bf16, f32, f64, f128
         + 2 // void, noreturn
     );
 
@@ -18972,22 +19227,59 @@ compile = fn (arena: &Arena, options: CompileOptions) void
         type_it += 1;
     }
 
+    >f16_type = type_it;
+    type_it += 1;
+
+    >bf16_type = type_it;
+    type_it += 1;
+
     >f32_type = type_it;
     type_it += 1;
+
     >f64_type = type_it;
+    type_it += 1;
+
+    >f128_type = type_it;
     type_it += 1;
 
     >void_type = type_it;
     type_it += 1;
+
     >noreturn_type = type_it;
     type_it += 1;
 
     previous.next = f32_type;
 
+    f16_type.& = {
+        .content = {
+            .float = {
+                .id = .f16,
+            },
+        },
+        .id = .float,
+        .name = "f16",
+        .next = bf16_type,
+        .scope = &module.scope,
+        zero,
+    };
+
+    bf16_type.& = {
+        .content = {
+            .float = {
+                .id = .bf16,
+            },
+        },
+        .id = .float,
+        .name = "bf16",
+        .next = f32_type,
+        .scope = &module.scope,
+        zero,
+    };
+
     f32_type.& = {
         .content = {
             .float = {
-                .bit_count = 32,
+                .id = .f32,
             },
         },
         .id = .float,
@@ -19000,11 +19292,24 @@ compile = fn (arena: &Arena, options: CompileOptions) void
     f64_type.& = {
         .content = {
             .float = {
-                .bit_count = 64,
+                .id = .f64,
             },
         },
         .id = .float,
         .name = "f64",
+        .next = f128_type,
+        .scope = &module.scope,
+        zero,
+    };
+
+    f128_type.& = {
+        .content = {
+            .float = {
+                .id = .f128,
+            },
+        },
+        .id = .float,
+        .name = "f128",
         .next = void_type,
         .scope = &module.scope,
         zero,
@@ -19201,7 +19506,7 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
         if (!success)
         {
             print("LLVM config failed\n");
-            @trap();
+            fail();
         }
 
         >stream = llvm_config.streams[0];
@@ -19211,7 +19516,7 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
         if (line == string_no_match)
         {
             print("Unexpected llvm-config output\n");
-            @trap();
+            fail();
         }
 
         library_directory = stream[..line];
@@ -19223,7 +19528,7 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
         if (line == string_no_match)
         {
             print("Unexpected llvm-config output 2\n");
-            @trap();
+            fail();
         }
 
         >llvm_library_stream = stream[..line];
@@ -19254,7 +19559,7 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
         if (line == string_no_match)
         {
             print("Unexpected llvm-config output 3\n");
-            @trap();
+            fail();
         }
 
         assert(line == stream.length - 1);
@@ -19435,7 +19740,7 @@ names: [_][]u8 =
                 .build_mode = build_mode,
                 .host_cpu_model = is_host_cpu_model,
                 .has_debug_info = has_debug_info,
-                .silent = 0,
+                .silent = 1,
             }, envp);
         },
         .test =>
@@ -19443,7 +19748,7 @@ names: [_][]u8 =
             if (arguments.length != 2)
             {
                 print("Test must have no arguments\n");
-                @trap();
+                fail();
             }
 
             for (name: names)
@@ -19479,7 +19784,7 @@ names: [_][]u8 =
                                 print("Failed to run test ");
                                 print(executable_path);
                                 print("\n");
-                                @trap();
+                                fail();
                             }
 
                             arena.position = position;
@@ -19524,7 +19829,7 @@ names: [_][]u8 =
                             print("Failed to reproduce ");
                             print(executable_path);
                             print("\n");
-                            @trap();
+                            fail();
                         }
 
                         arena.position = position;
