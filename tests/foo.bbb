@@ -1,0 +1,3 @@
+bb_vector_2_bool = fn [cc(c)] (vec: vector[2]u1) void
+{
+}
