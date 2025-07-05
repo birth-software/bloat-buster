@@ -19168,7 +19168,7 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
         }
     }
 
-    >object_array = [ output_object_path, arena_join_string(arena, [ base_cache_dir, "/c_abi.o" ][..]) ];
+    >object_array = [ output_object_path, arena_join_string(arena, [ base_cache_dir, "/c_abi_", @select(compile_options.host_cpu_model, "native", "generic"), ".o" ][..]) ];
     >objects = object_array[..1];
 
     >library_buffer: [256][]u8 = undefined;
