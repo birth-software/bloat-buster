@@ -835,6 +835,11 @@ BigStruct = struct
     e: u8,
 }
 
+BigUnion = struct
+{
+    a: BigStruct,
+}
+
 SmallPackedStruct = bits u8
 {
     a: u2,
@@ -906,7 +911,15 @@ ByVal = struct
     size: ByValSize,
 }
 
-[extern] run_c_tests = fn [cc(c)] () void;
+S128 = struct
+{
+    value: s128,
+}
+
+U128 = struct
+{
+    value: s128,
+}
 
 [extern] c_u8 = fn [cc(c)] (x: u8) void;
 [extern] c_u16 = fn [cc(c)] (x: u16) void;
@@ -918,10 +931,199 @@ ByVal = struct
 [extern] c_s32 = fn [cc(c)] (x: s32) void;
 [extern] c_s64 = fn [cc(c)] (x: s64) void;
 
-[extern] c_bool = fn [cc(c)] (x: u8) void;
+[extern] c_struct_u128 = fn [cc(c)] (x: U128) void;
+[extern] c_struct_i128 = fn [cc(c)] (x: S128) void;
 
 [extern] c_five_integers = fn [cc(c)] (a: s32, b: s32, c: s32, d: s32, e: s32) void;
+
+[extern] c_f32 = fn [cc(c)] (x: f32) void;
+[extern] c_f64 = fn [cc(c)] (x: f64) void;
+
+[extern] c_five_floats = fn [cc(c)] (a: f32, b: f32, c: f32, d: f32, e: f32) void;
+
+[extern] c_ptr = fn [cc(c)] (x: &u8) void;
+
+[extern] c_bool = fn [cc(c)] (x: u8) void;
+
+ComplexFloat = struct
+{
+    real: f32,
+    imaginary: f32,
+}
+
+ComplexDouble = struct
+{
+    real: f64,
+    imaginary: f64,
+}
+
+[extern] c_cmultf = fn [cc(c)] (a: ComplexFloat, b: ComplexFloat) ComplexFloat;
+[extern] c_cmultd = fn [cc(c)] (a: ComplexDouble, b: ComplexDouble) ComplexDouble;
+
+[extern] c_cmultf_comp = fn [cc(c)] (a_r: f32, a_i: f32, b_r: f32, b_i: f32) ComplexFloat;
+[extern] c_cmultd_comp = fn [cc(c)] (a_r: f64, a_i: f64, b_r: f64, b_i: f64) ComplexDouble;
+
 [extern] c_ret_struct_u64_u64 = fn [cc(c)] () Struct_u64_u64;
+
+Struct_i32_i32 = struct
+{
+    a: s32,
+    b: s32,
+}
+
+BigPackedStruct = bits
+{
+    a: u64,
+    b: u64,
+}
+
+MedStructMixed = struct
+{
+    a: u32,
+    b: f32,
+    c: f32,
+    d: u32,
+}
+
+SplitStructMixed = struct
+{
+    a: u64,
+    b: u8,
+    c: f32,
+}
+
+FloatRect = struct
+{
+    left: f32,
+    right: f32,
+    top: f32,
+    bottom: f32,
+}
+
+Struct_f32 = struct
+{
+    a: f32,
+}
+
+Struct_f64 = struct
+{
+    a: f64,
+}
+
+Struct_f32f32_f32_Struct = struct
+{
+    b: f32,
+    c: f32,
+}
+
+Struct_f32f32_f32 = struct
+{
+    a: Struct_f32f32_f32_Struct,
+    d: f32,
+}
+
+Struct_f32_f32f32_Struct = struct
+{
+    c: f32,
+    d: f32,
+}
+
+Struct_f32_f32f32 = struct
+{
+    a: f32,
+    b: Struct_f32_f32f32_Struct,
+}
+
+Struct_u32_Union_u32_u32u32_Union_Struct = struct
+{
+    d: u32,
+    e: u32,
+}
+
+Struct_u32_Union_u32_u32u32_Union = union
+{
+    c: Struct_u32_Union_u32_u32u32_Union_Struct,
+}
+
+Struct_u32_Union_u32_u32u32 = struct
+{
+    a: u32,
+    b: Struct_u32_Union_u32_u32u32_Union,
+};
+
+Vector3 = struct
+{
+    x: f32,
+    y: f32,
+    z: f32,
+}
+
+Vector5 = struct
+{
+    x: f32,
+    y: f32,
+    z: f32,
+    w: f32,
+    q: f32,
+}
+
+FloatArrayStructOrigin = struct
+{
+    x: f64,
+    y: f64,
+}
+
+FloatArrayStructSize = struct
+{
+    width: f64,
+    height: f64,
+}
+
+FloatArrayStruct = struct
+{
+    origin: FloatArrayStructOrigin,
+    size: FloatArrayStructSize,
+}
+
+SmallVec = typealias vector[2]u32;
+MediumVec = typealias vector[4]u64;
+BigVec = typealias vector[8]u64;
+
+Vector2 = struct
+{
+    x: f32,
+    y: f32,
+}
+
+DC = struct
+{
+    v1: f64,
+    v2: u8,
+}
+
+CFF = struct
+{
+    v1: u8,
+    v2: f32,
+    v3: f32,
+}
+
+PD = struct
+{
+    v1: &u8,
+    v2: f64,
+}
+
+f128_struct = struct
+{
+    a: f128,
+}
+
+f128_f128_struct = struct
+{
+    a: f128,
+    b: f128,
+}
 
 [extern] c_struct_u64_u64_0 = fn [cc(c)] (a: Struct_u64_u64) void;
 [extern] c_struct_u64_u64_1 = fn [cc(c)] (a: u64, b: Struct_u64_u64) void;
@@ -933,16 +1135,57 @@ ByVal = struct
 [extern] c_struct_u64_u64_7 = fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: Struct_u64_u64) void;
 [extern] c_struct_u64_u64_8 = fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u64, i: Struct_u64_u64) void;
 
+[extern] c_ret_struct_f32 = fn [cc(c)] () Struct_f32;
+[extern] c_struct_f32 = fn [cc(c)] (x: Struct_f32) void;
+
+[extern] c_ret_struct_f64 = fn [cc(c)] () Struct_f64;
+[extern] c_struct_f64 = fn [cc(c)] (x: Struct_f64) void;
+
+[extern] c_ret_struct_f32f32_f32 = fn [cc(c)] () Struct_f32f32_f32;
+[extern] c_struct_f32f32_f32 = fn [cc(c)] (x: Struct_f32f32_f32) void;
+
+[extern] c_ret_struct_f32_f32f32 = fn [cc(c)] () Struct_f32_f32f32;
+[extern] c_struct_f32_f32f32 = fn [cc(c)] (x: Struct_f32_f32f32) void;
+
+[extern] c_ret_struct_u32_union_u32_u32u32 = fn [cc(c)] () Struct_u32_Union_u32_u32u32;
+[extern] c_struct_u32_union_u32_u32u32 = fn [cc(c)] (x: Struct_u32_Union_u32_u32u32) void;
+
+[extern] c_mut_struct_i32_i32 = fn [cc(c)] (x: Struct_i32_i32) Struct_i32_i32;
+[extern] c_struct_i32_i32 = fn [cc(c)] (x: Struct_i32_i32) void;
+
 [extern] c_big_struct = fn [cc(c)] (x: BigStruct) void;
+[extern] c_big_union = fn [cc(c)] (x: BigUnion) void;
+
+[extern] c_med_struct_mixed = fn [cc(c)] (x: MedStructMixed) void;
+[extern] c_ret_med_struct_mixed = fn [cc(c)] () MedStructMixed;
+
 [extern] c_small_struct_ints = fn [cc(c)] (x: SmallStructInts) void;
 [extern] c_ret_small_struct_ints = fn [cc(c)] () SmallStructInts;
+
 [extern] c_med_struct_ints = fn [cc(c)] (x: MedStructInts) void;
 [extern] c_ret_med_struct_ints = fn [cc(c)] () MedStructInts;
+
 [extern] c_small_packed_struct = fn [cc(c)] (x: SmallPackedStruct) void;
 [extern] c_ret_small_packed_struct = fn [cc(c)] () SmallPackedStruct;
+
+[extern] c_big_packed_struct = fn [cc(c)] (x: BigPackedStruct) void;
+[extern] c_ret_big_packed_struct = fn [cc(c)] () BigPackedStruct;
+
 [extern] c_split_struct_ints = fn [cc(c)] (x: SplitStructInt) void;
+
+[extern] c_split_struct_mixed = fn [cc(c)] (x: SplitStructMixed) void;
+[extern] c_ret_split_struct_mixed = fn [cc(c)] () SplitStructMixed;
+
 [extern] c_big_struct_both = fn [cc(c)] (x: BigStruct) BigStruct;
+
+[extern] c_small_struct_floats = fn [cc(c)] (v: Vector3) void;
+[extern] c_small_struct_floats_extra = fn [cc(c)] (v: Vector3, e: &u8) void;
+
+[extern] c_big_struct_floats = fn [cc(c)] (v: Vector5) void;
+
 [extern] c_multiple_struct_ints = fn [cc(c)] (a: Rect, b: Rect) void;
+
+[extern] c_multiple_struct_floats = fn [cc(c)] (r1: FloatRect, r2: FloatRect) void;
 
 [extern] c_ret_bool = fn [cc(c)] () u8;
 
@@ -959,8 +1202,95 @@ ByVal = struct
 [extern] c_struct_with_array = fn [cc(c)] (x: StructWithArray) void;
 [extern] c_ret_struct_with_array = fn [cc(c)] () StructWithArray;
 
+[extern] c_float_array_struct = fn [cc(c)] (s: FloatArrayStruct) void;
+[extern] c_ret_float_array_struct = fn [cc(c)] () FloatArrayStruct;
+
+[extern] c_small_vec = fn [cc(c)] (v: SmallVec) void;
+[extern] c_ret_small_vec = fn [cc(c)] () SmallVec;
+
+[extern] c_medium_vec = fn [cc(c)] (v: MediumVec) void;
+[extern] c_ret_medium_vec = fn [cc(c)] () MediumVec;
+
+[extern] c_big_vec = fn [cc(c)] (v: BigVec) void;
+[extern] c_ret_big_vec = fn [cc(c)] () BigVec;
+
+[extern] c_vector_2_float = fn [cc(c)] (v: vector[2]f32) void;
+[extern] c_vector_4_float = fn [cc(c)] (v: vector[4]f32) void;
+[extern] c_vector_8_float = fn [cc(c)] (v: vector[8]f32) void;
+[extern] c_vector_16_float = fn [cc(c)] (v: vector[16]f32) void;
+
+[extern] c_vector_2_double = fn [cc(c)] (v: vector[2]f64) void;
+[extern] c_vector_4_double = fn [cc(c)] (v: vector[4]f64) void;
+[extern] c_vector_8_double = fn [cc(c)] (v: vector[8]f64) void;
+
+[extern] c_ret_vector_2_float = fn [cc(c)] () vector[2]f32;
+[extern] c_ret_vector_4_float = fn [cc(c)] () vector[4]f32;
+[extern] c_ret_vector_8_float = fn [cc(c)] () vector[8]f32;
+[extern] c_ret_vector_16_float = fn [cc(c)] () vector[16]f32;
+
+[extern] c_ret_vector_2_double = fn [cc(c)] () vector[2]f64;
+[extern] c_ret_vector_4_double = fn [cc(c)] () vector[4]f64;
+[extern] c_ret_vector_8_double = fn [cc(c)] () vector[8]f64;
+
+Vector2Bool = typealias vector[2]u1;
+Vector4Bool = typealias vector[4]u1;
+Vector8Bool = typealias vector[8]u1;
+Vector16Bool = typealias vector[16]u1;
+Vector32Bool = typealias vector[32]u1;
+Vector64Bool = typealias vector[64]u1;
+Vector128Bool = typealias vector[128]u1;
+Vector256Bool = typealias vector[256]u1;
+Vector512Bool = typealias vector[512]u1;
+
+[extern] c_vector_2_bool = fn [cc(c)] (v: Vector2Bool) void;
+[extern] c_vector_4_bool = fn [cc(c)] (v: Vector4Bool) void;
+[extern] c_vector_8_bool = fn [cc(c)] (v: Vector8Bool) void;
+[extern] c_vector_16_bool = fn [cc(c)] (v: Vector16Bool) void;
+[extern] c_vector_32_bool = fn [cc(c)] (v: Vector32Bool) void;
+[extern] c_vector_64_bool = fn [cc(c)] (v: Vector64Bool) void;
+[extern] c_vector_128_bool = fn [cc(c)] (v: Vector128Bool) void;
+[extern] c_vector_256_bool = fn [cc(c)] (v: Vector256Bool) void;
+[extern] c_vector_512_bool = fn [cc(c)] (v: Vector512Bool) void;
+
+[extern] c_ret_vector_2_bool = fn [cc(c)] () Vector2Bool;
+[extern] c_ret_vector_4_bool = fn [cc(c)] () Vector4Bool;
+[extern] c_ret_vector_8_bool = fn [cc(c)] () Vector8Bool;
+[extern] c_ret_vector_16_bool = fn [cc(c)] () Vector16Bool;
+[extern] c_ret_vector_32_bool = fn [cc(c)] () Vector32Bool;
+[extern] c_ret_vector_64_bool = fn [cc(c)] () Vector64Bool;
+[extern] c_ret_vector_128_bool = fn [cc(c)] () Vector128Bool;
+[extern] c_ret_vector_256_bool = fn [cc(c)] () Vector256Bool;
+[extern] c_ret_vector_512_bool = fn [cc(c)] () Vector512Bool;
+
+[extern] c_ptr_size_float_struct = fn [cc(c)] (v: Vector2) void;
+[extern] c_ret_ptr_size_float_struct = fn [cc(c)] () Vector2;
+
+[extern] c_assert_DC = fn [cc(c)] (lv: DC) s32;
+[extern] c_assert_ret_DC = fn [cc(c)] () s32;
+[extern] c_send_DC = fn [cc(c)] () s32;
+[extern] c_ret_DC = fn [cc(c)] () DC;
+
+[extern] c_assert_CFF = fn [cc(c)] (lv: CFF) s32;
+[extern] c_assert_ret_CFF = fn [cc(c)] () s32;
+[extern] c_send_CFF = fn [cc(c)] () s32;
+[extern] c_ret_CFF = fn [cc(c)] () CFF;
+
+[extern] c_assert_PD = fn [cc(c)] (lv: PD) s32;
+[extern] c_assert_ret_PD = fn [cc(c)] () s32;
+[extern] c_send_PD = fn [cc(c)] () s32;
+[extern] c_ret_PD = fn [cc(c)] () PD;
+
 [extern] c_modify_by_ref_param = fn [cc(c)] (x: ByRef) ByRef;
-[extern] c_func_ptr_byval = fn [cc(c)] (a: u64, b: u64, c: ByVal, d: u64, e: u64, f: u64) void;
+[extern] c_func_ptr_byval = fn [cc(c)] (a: &u8, b: &u8, c: ByVal, d: u64, e: &u8, f: u64) void;
+
+[extern] c_f128 = fn [cc(c)] (x: f128) f128;
+[extern] c_f128_struct = fn [cc(c)] (x: f128_struct) f128_struct;
+[extern] c_f128_f128_struct = fn [cc(c)] (x: f128_f128_struct) f128_f128_struct;
+
+[export] bb_panic = fn [cc(c)] () noreturn
+{
+    @trap();
+}
 
 [export] bb_u8 = fn [cc(c)] (x: u8) void
 {
@@ -1002,9 +1332,14 @@ ByVal = struct
     require(x == -4);
 }
 
-[export] bb_ptr = fn [cc(c)] (x: &u8) void
+[export] bb_struct_s128 = fn [cc(c)] (a: S128) void
 {
-    require(@int_from_pointer(x) == 0xdeadbeef);
+    require(a.value == -6);
+}
+
+[export] bb_struct_u128 = fn [cc(c)] (a: U128) void
+{
+    require(a.value == 0xfffffffffffffffc);
 }
 
 [export] bb_five_integers = fn [cc(c)] (a: s32, b: s32, c: s32, d: s32, e: s32) void
@@ -1016,14 +1351,78 @@ ByVal = struct
     require(e == 90);
 }
 
-[export] bb_bool = fn [cc(c)] (x: u8) void
+[export] bb_f32 = fn [cc(c)] (x: f32) void
 {
-    require(@truncate(x));
+    require(x == 12.34);
+}
+
+[export] bb_f64 = fn [cc(c)] (x: f64) void
+{
+    require(x == 56.78);
+}
+
+[export] bb_five_floats = fn [cc(c)] (a: f32, b: f32, c: f32, d: f32, e: f32) void
+{
+    require(a == 1.0);
+    require(b == 2.0);
+    require(c == 3.0);
+    require(d == 4.0);
+    require(e == 5.0);
+}
+
+[export] bb_ptr = fn [cc(c)] (x: &u8) void
+{
+    require(@int_from_pointer(x) == 0xdeadbeef);
+}
+
+[export] bb_bool = fn [cc(c)] (x: u1) void
+{
+    require(x);
+}
+
+[export] bb_cmultf = fn [cc(c)] (a: ComplexFloat, b: ComplexFloat) ComplexFloat
+{
+    require(a.real == 1.25);
+    require(a.imaginary == 2.6);
+    require(b.real == 11.3);
+    require(b.imaginary == -1.5);
+
+    return { .real = 1.5, .imaginary = 13.5 };
+}
+
+[export] bb_cmultd = fn [cc(c)] (a: ComplexDouble, b: ComplexDouble) ComplexDouble
+{
+    require(a.real == 1.25);
+    require(a.imaginary == 2.6);
+    require(b.real == 11.3);
+    require(b.imaginary == -1.5);
+
+    return { .real = 1.5, .imaginary = 13.5 };
+}
+
+[export] bb_cmultf_comp = fn [cc(c)] (a_r: f32, a_i: f32, b_r: f32, b_i: f32) ComplexFloat
+{
+    require(a_r == 1.25);
+    require(a_i == 2.6);
+    require(b_r == 11.3);
+    require(b_i == -1.5);
+
+    return { .real = 1.5, .imaginary = 13.5 };
+}
+
+[export] bb_cmultd_comp = fn [cc(c)] (a_r: f64, a_i: f64, b_r: f64, b_i: f64) ComplexDouble
+{
+    require(a_r == 1.25);
+    require(a_i == 2.6);
+    require(b_r == 11.3);
+    require(b_i == -1.5);
+
+    return { .real = 1.5, .imaginary = 13.5 };
 }
 
 [export] bb_ret_struct_u64_u64 = fn [cc(c)] () Struct_u64_u64
 {
-    return { .a = 1, .b = 2, };
+    return { .a = 1, .b = 2 };
 }
 
 [export] bb_struct_u64_u64_0 = fn [cc(c)] (s: Struct_u64_u64) void
@@ -1080,6 +1479,68 @@ ByVal = struct
     require(s.b == 20);
 }
 
+[export] bb_ret_struct_f32 = fn [cc(c)] () Struct_f32
+{
+    return { .a = 2.5 };
+}
+
+[export] bb_struct_f32 = fn [cc(c)] (s: Struct_f32) void
+{
+    require(s.a == 2.5);
+}
+
+[export] bb_ret_struct_f64 = fn [cc(c)] () Struct_f64
+{
+    return { .a = 2.5 };
+}
+
+[export] bb_struct_f64 = fn [cc(c)] (s: Struct_f64) void
+{
+    require(s.a == 2.5);
+}
+
+[export] bb_ret_struct_f32f32_f32 = fn [cc(c)] () Struct_f32f32_f32
+{
+    return { .a = { .b = 1.0, .c = 2.0 }, .d = 3.0 };
+}
+
+[export] bb_struct_f32f32_f32 = fn [cc(c)] (s: Struct_f32f32_f32) void
+{
+    require(s.a.b == 1.0);
+    require(s.a.c == 2.0);
+    require(s.d == 3.0);
+}
+
+[export] bb_ret_struct_f32_f32f32 = fn [cc(c)] () Struct_f32_f32f32
+{
+    return { .a = 1.0, .b = { .c = 2.0, .d = 3.0 } };
+}
+
+[export] bb_struct_f32_f32f32 = fn [cc(c)] (s: Struct_f32_f32f32) void
+{
+    require(s.a == 1.0);
+    require(s.b.c == 2.0);
+    require(s.b.d == 3.0);
+}
+
+[export] bb_ret_struct_u32_union_u32_u32u32 = fn [cc(c)] () Struct_u32_Union_u32_u32u32
+{
+    return { .a = 1, .b = { .c = { .d = 2, .e = 3 } } };
+}
+
+[export] bb_struct_u32_union_u32_u32u32 = fn [cc(c)] (s: Struct_u32_Union_u32_u32u32) void
+{
+    require(s.a == 1);
+    require(s.b.c.d == 2);
+    require(s.b.c.e == 3);
+}
+
+[export] bb_struct_i32_i32 = fn [cc(c)] (s: Struct_i32_i32) void
+{
+    require(s.a == 1);
+    require(s.b == 2);
+}
+
 [export] bb_big_struct = fn [cc(c)] (x: BigStruct) void
 {
     require(x.a == 1);
@@ -1087,6 +1548,27 @@ ByVal = struct
     require(x.c == 3);
     require(x.d == 4);
     require(x.e == 5);
+}
+
+[export] bb_small_struct_ints = fn [cc(c)] (x: SmallStructInts) void
+{
+    require(x.a == 1);
+    require(x.b == 2);
+    require(x.c == 3);
+    require(x.d == 4);
+}
+
+[export] bb_med_struct_ints = fn [cc(c)] (s: MedStructInts) void
+{
+    require(s.x == 1);
+    require(s.y == 2);
+    require(s.z == 3);
+}
+
+[export] bb_big_packed_struct = fn [cc(c)] (x: BigPackedStruct) void
+{
+    require(x.a == 1);
+    require(x.b == 2);
 }
 
 [export] bb_small_packed_struct = fn [cc(c)] (x: SmallPackedStruct) void
@@ -1102,6 +1584,20 @@ ByVal = struct
     require(x.a == 1234);
     require(x.b == 100);
     require(x.c == 1337);
+}
+
+[export] bb_med_struct_mixed = fn [cc(c)] (x: MedStructMixed) void
+{
+    require(x.a == 1234);
+    require(x.b == 100.0);
+    require(x.c == 1337.0);
+}
+
+[export] bb_split_struct_mixed = fn [cc(c)] (x: SplitStructMixed) void
+{
+    require(x.a == 1234);
+    require(x.b == 100);
+    require(x.c == 1337.0);
 }
 
 [export] bb_big_struct_both = fn [cc(c)] (x: BigStruct) BigStruct
@@ -1121,7 +1617,31 @@ ByVal = struct
     return s;
 }
 
-[export] bb_ret_bool = fn [cc(c)] () u8
+[export] bb_multiple_struct_ints = fn [cc(c)] (x: Rect, y: Rect) void
+{
+    require(x.left == 1);
+    require(x.right == 21);
+    require(x.top == 16);
+    require(x.bottom == 4);
+    require(y.left == 178);
+    require(y.right == 189);
+    require(y.top == 21);
+    require(y.bottom == 15);
+}
+
+[export] bb_multiple_struct_floats = fn [cc(c)] (x: FloatRect, y: FloatRect) void
+{
+    require(x.left == 1.0);
+    require(x.right == 21.0);
+    require(x.top == 16.0);
+    require(x.bottom == 4.0);
+    require(y.left == 178.0);
+    require(y.right == 189.0);
+    require(y.top == 21.0);
+    require(y.bottom == 15.0);
+}
+
+[export] bb_ret_bool = fn [cc(c)] () u1
 {
     return 1;
 }
@@ -1166,6 +1686,2140 @@ ByVal = struct
     return -1;
 }
 
+[export] bb_vector_2_bool = fn [cc(c)] (vec: Vector2Bool) void
+{
+    require(vec[0] == 0);
+    require(vec[1] == 1);
+}
+
+[export] bb_vector_4_bool = fn [cc(c)] (vec: Vector4Bool) void
+{
+    require(vec[0] == 0);
+    require(vec[1] == 0);
+    require(vec[2] == 0);
+    require(vec[3] == 0);
+}
+
+[export] bb_vector_8_bool = fn [cc(c)] (vec: Vector8Bool) void
+{
+    require(vec[0] == 1);
+    require(vec[1] == 1);
+    require(vec[2] == 0);
+    require(vec[3] == 1);
+    require(vec[4] == 0);
+    require(vec[5] == 1);
+    require(vec[6] == 1);
+    require(vec[7] == 0);
+}
+
+[export] bb_vector_16_bool = fn [cc(c)] (vec: Vector16Bool) void
+{
+    require(vec[0] == 1);
+    require(vec[1] == 0);
+    require(vec[2] == 1);
+    require(vec[3] == 1);
+    require(vec[4] == 1);
+    require(vec[5] == 0);
+    require(vec[6] == 0);
+    require(vec[7] == 0);
+    require(vec[8] == 1);
+    require(vec[9] == 1);
+    require(vec[10] == 1);
+    require(vec[11] == 1);
+    require(vec[12] == 0);
+    require(vec[13] == 0);
+    require(vec[14] == 0);
+    require(vec[15] == 1);
+}
+
+[export] bb_vector_32_bool = fn [cc(c)] (vec: Vector32Bool) void
+{
+    require(vec[0] == 0);
+    require(vec[1] == 0);
+    require(vec[2] == 0);
+    require(vec[3] == 1);
+    require(vec[4] == 1);
+    require(vec[5] == 0);
+    require(vec[6] == 0);
+    require(vec[7] == 1);
+    require(vec[8] == 0);
+    require(vec[9] == 1);
+    require(vec[10] == 1);
+    require(vec[11] == 1);
+    require(vec[12] == 0);
+    require(vec[13] == 0);
+    require(vec[14] == 1);
+    require(vec[15] == 1);
+    require(vec[16] == 1);
+    require(vec[17] == 1);
+    require(vec[18] == 1);
+    require(vec[19] == 0);
+    require(vec[20] == 1);
+    require(vec[21] == 1);
+    require(vec[22] == 1);
+    require(vec[23] == 0);
+    require(vec[24] == 0);
+    require(vec[25] == 1);
+    require(vec[26] == 1);
+    require(vec[27] == 0);
+    require(vec[28] == 1);
+    require(vec[29] == 1);
+    require(vec[30] == 0);
+    require(vec[31] == 1);
+}
+
+[export] bb_vector_64_bool = fn [cc(c)] (vec: Vector64Bool) void
+{
+    require(vec[0] == 1);
+    require(vec[1] == 1);
+    require(vec[2] == 0);
+    require(vec[3] == 1);
+    require(vec[4] == 0);
+    require(vec[5] == 1);
+    require(vec[6] == 0);
+    require(vec[7] == 0);
+    require(vec[8] == 1);
+    require(vec[9] == 1);
+    require(vec[10] == 1);
+    require(vec[11] == 1);
+    require(vec[12] == 1);
+    require(vec[13] == 1);
+    require(vec[14] == 1);
+    require(vec[15] == 0);
+    require(vec[16] == 0);
+    require(vec[17] == 1);
+    require(vec[18] == 1);
+    require(vec[19] == 0);
+    require(vec[20] == 1);
+    require(vec[21] == 1);
+    require(vec[22] == 1);
+    require(vec[23] == 1);
+    require(vec[24] == 0);
+    require(vec[25] == 0);
+    require(vec[26] == 1);
+    require(vec[27] == 0);
+    require(vec[28] == 0);
+    require(vec[29] == 1);
+    require(vec[30] == 0);
+    require(vec[31] == 1);
+    require(vec[32] == 0);
+    require(vec[33] == 1);
+    require(vec[34] == 1);
+    require(vec[35] == 0);
+    require(vec[36] == 1);
+    require(vec[37] == 1);
+    require(vec[38] == 0);
+    require(vec[39] == 0);
+    require(vec[40] == 1);
+    require(vec[41] == 1);
+    require(vec[42] == 1);
+    require(vec[43] == 1);
+    require(vec[44] == 1);
+    require(vec[45] == 0);
+    require(vec[46] == 1);
+    require(vec[47] == 0);
+    require(vec[48] == 0);
+    require(vec[49] == 0);
+    require(vec[50] == 0);
+    require(vec[51] == 0);
+    require(vec[52] == 1);
+    require(vec[53] == 0);
+    require(vec[54] == 0);
+    require(vec[55] == 1);
+    require(vec[56] == 1);
+    require(vec[57] == 0);
+    require(vec[58] == 0);
+    require(vec[59] == 0);
+    require(vec[60] == 1);
+    require(vec[61] == 1);
+    require(vec[62] == 1);
+    require(vec[63] == 1);
+}
+
+[export] bb_vector_128_bool = fn [cc(c)] (vec: Vector128Bool) void
+{
+    require(vec[0] == 1);
+    require(vec[1] == 1);
+    require(vec[2] == 0);
+    require(vec[3] == 1);
+    require(vec[4] == 1);
+    require(vec[5] == 0);
+    require(vec[6] == 0);
+    require(vec[7] == 1);
+    require(vec[8] == 1);
+    require(vec[9] == 1);
+    require(vec[10] == 1);
+    require(vec[11] == 1);
+    require(vec[12] == 0);
+    require(vec[13] == 0);
+    require(vec[14] == 0);
+    require(vec[15] == 1);
+    require(vec[16] == 0);
+    require(vec[17] == 1);
+    require(vec[18] == 0);
+    require(vec[19] == 0);
+    require(vec[20] == 1);
+    require(vec[21] == 0);
+    require(vec[22] == 1);
+    require(vec[23] == 0);
+    require(vec[24] == 0);
+    require(vec[25] == 0);
+    require(vec[26] == 1);
+    require(vec[27] == 0);
+    require(vec[28] == 1);
+    require(vec[29] == 1);
+    require(vec[30] == 0);
+    require(vec[31] == 1);
+    require(vec[32] == 0);
+    require(vec[33] == 1);
+    require(vec[34] == 1);
+    require(vec[35] == 0);
+    require(vec[36] == 0);
+    require(vec[37] == 0);
+    require(vec[38] == 0);
+    require(vec[39] == 1);
+    require(vec[40] == 1);
+    require(vec[41] == 0);
+    require(vec[42] == 1);
+    require(vec[43] == 0);
+    require(vec[44] == 0);
+    require(vec[45] == 1);
+    require(vec[46] == 0);
+    require(vec[47] == 0);
+    require(vec[48] == 1);
+    require(vec[49] == 1);
+    require(vec[50] == 0);
+    require(vec[51] == 0);
+    require(vec[52] == 1);
+    require(vec[53] == 0);
+    require(vec[54] == 0);
+    require(vec[55] == 1);
+    require(vec[56] == 1);
+    require(vec[57] == 1);
+    require(vec[58] == 1);
+    require(vec[59] == 1);
+    require(vec[60] == 1);
+    require(vec[61] == 1);
+    require(vec[62] == 1);
+    require(vec[63] == 0);
+    require(vec[64] == 0);
+    require(vec[65] == 1);
+    require(vec[66] == 0);
+    require(vec[67] == 1);
+    require(vec[68] == 1);
+    require(vec[69] == 1);
+    require(vec[70] == 1);
+    require(vec[71] == 0);
+    require(vec[72] == 0);
+    require(vec[73] == 0);
+    require(vec[74] == 1);
+    require(vec[75] == 1);
+    require(vec[76] == 0);
+    require(vec[77] == 1);
+    require(vec[78] == 1);
+    require(vec[79] == 1);
+    require(vec[80] == 1);
+    require(vec[81] == 0);
+    require(vec[82] == 1);
+    require(vec[83] == 1);
+    require(vec[84] == 1);
+    require(vec[85] == 1);
+    require(vec[86] == 1);
+    require(vec[87] == 1);
+    require(vec[88] == 0);
+    require(vec[89] == 1);
+    require(vec[90] == 1);
+    require(vec[91] == 1);
+    require(vec[92] == 1);
+    require(vec[93] == 1);
+    require(vec[94] == 1);
+    require(vec[95] == 0);
+    require(vec[96] == 0);
+    require(vec[97] == 0);
+    require(vec[98] == 1);
+    require(vec[99] == 1);
+    require(vec[100] == 1);
+    require(vec[101] == 1);
+    require(vec[102] == 1);
+    require(vec[103] == 1);
+    require(vec[104] == 1);
+    require(vec[105] == 0);
+    require(vec[106] == 0);
+    require(vec[107] == 0);
+    require(vec[108] == 0);
+    require(vec[109] == 0);
+    require(vec[110] == 1);
+    require(vec[111] == 1);
+    require(vec[112] == 1);
+    require(vec[113] == 0);
+    require(vec[114] == 0);
+    require(vec[115] == 0);
+    require(vec[116] == 0);
+    require(vec[117] == 0);
+    require(vec[118] == 1);
+    require(vec[119] == 0);
+    require(vec[120] == 0);
+    require(vec[121] == 0);
+    require(vec[122] == 0);
+    require(vec[123] == 1);
+    require(vec[124] == 1);
+    require(vec[125] == 0);
+    require(vec[126] == 1);
+    require(vec[127] == 0);
+}
+
+[export] bb_vector_256_bool = fn [cc(c)] (vec: Vector256Bool) void
+{
+    require(vec[0] == 0);
+    require(vec[1] == 0);
+    require(vec[2] == 0);
+    require(vec[3] == 0);
+    require(vec[4] == 1);
+    require(vec[5] == 1);
+    require(vec[6] == 0);
+    require(vec[7] == 0);
+    require(vec[8] == 0);
+    require(vec[9] == 1);
+    require(vec[10] == 1);
+    require(vec[11] == 0);
+    require(vec[12] == 1);
+    require(vec[13] == 0);
+    require(vec[14] == 0);
+    require(vec[15] == 0);
+    require(vec[16] == 0);
+    require(vec[17] == 1);
+    require(vec[18] == 1);
+    require(vec[19] == 1);
+    require(vec[20] == 0);
+    require(vec[21] == 1);
+    require(vec[22] == 1);
+    require(vec[23] == 0);
+    require(vec[24] == 1);
+    require(vec[25] == 0);
+    require(vec[26] == 0);
+    require(vec[27] == 1);
+    require(vec[28] == 1);
+    require(vec[29] == 1);
+    require(vec[30] == 0);
+    require(vec[31] == 1);
+    require(vec[32] == 0);
+    require(vec[33] == 1);
+    require(vec[34] == 0);
+    require(vec[35] == 0);
+    require(vec[36] == 0);
+    require(vec[37] == 1);
+    require(vec[38] == 0);
+    require(vec[39] == 0);
+    require(vec[40] == 1);
+    require(vec[41] == 1);
+    require(vec[42] == 0);
+    require(vec[43] == 1);
+    require(vec[44] == 1);
+    require(vec[45] == 0);
+    require(vec[46] == 1);
+    require(vec[47] == 0);
+    require(vec[48] == 1);
+    require(vec[49] == 0);
+    require(vec[50] == 1);
+    require(vec[51] == 0);
+    require(vec[52] == 1);
+    require(vec[53] == 1);
+    require(vec[54] == 1);
+    require(vec[55] == 0);
+    require(vec[56] == 0);
+    require(vec[57] == 1);
+    require(vec[58] == 1);
+    require(vec[59] == 0);
+    require(vec[60] == 0);
+    require(vec[61] == 1);
+    require(vec[62] == 1);
+    require(vec[63] == 0);
+    require(vec[64] == 0);
+    require(vec[65] == 0);
+    require(vec[66] == 1);
+    require(vec[67] == 1);
+    require(vec[68] == 0);
+    require(vec[69] == 1);
+    require(vec[70] == 0);
+    require(vec[71] == 1);
+    require(vec[72] == 0);
+    require(vec[73] == 1);
+    require(vec[74] == 0);
+    require(vec[75] == 0);
+    require(vec[76] == 1);
+    require(vec[77] == 0);
+    require(vec[78] == 0);
+    require(vec[79] == 0);
+    require(vec[80] == 0);
+    require(vec[81] == 0);
+    require(vec[82] == 1);
+    require(vec[83] == 0);
+    require(vec[84] == 0);
+    require(vec[85] == 0);
+    require(vec[86] == 1);
+    require(vec[87] == 1);
+    require(vec[88] == 1);
+    require(vec[89] == 0);
+    require(vec[90] == 1);
+    require(vec[91] == 0);
+    require(vec[92] == 1);
+    require(vec[93] == 0);
+    require(vec[94] == 1);
+    require(vec[95] == 1);
+    require(vec[96] == 1);
+    require(vec[97] == 1);
+    require(vec[98] == 0);
+    require(vec[99] == 1);
+    require(vec[100] == 0);
+    require(vec[101] == 1);
+    require(vec[102] == 1);
+    require(vec[103] == 0);
+    require(vec[104] == 0);
+    require(vec[105] == 1);
+    require(vec[106] == 0);
+    require(vec[107] == 1);
+    require(vec[108] == 0);
+    require(vec[109] == 0);
+    require(vec[110] == 0);
+    require(vec[111] == 0);
+    require(vec[112] == 0);
+    require(vec[113] == 0);
+    require(vec[114] == 0);
+    require(vec[115] == 0);
+    require(vec[116] == 0);
+    require(vec[117] == 0);
+    require(vec[118] == 0);
+    require(vec[119] == 0);
+    require(vec[120] == 0);
+    require(vec[121] == 0);
+    require(vec[122] == 1);
+    require(vec[123] == 1);
+    require(vec[124] == 0);
+    require(vec[125] == 0);
+    require(vec[126] == 0);
+    require(vec[127] == 1);
+    require(vec[128] == 1);
+    require(vec[129] == 1);
+    require(vec[130] == 1);
+    require(vec[131] == 0);
+    require(vec[132] == 0);
+    require(vec[133] == 0);
+    require(vec[134] == 1);
+    require(vec[135] == 1);
+    require(vec[136] == 0);
+    require(vec[137] == 0);
+    require(vec[138] == 1);
+    require(vec[139] == 1);
+    require(vec[140] == 1);
+    require(vec[141] == 1);
+    require(vec[142] == 1);
+    require(vec[143] == 0);
+    require(vec[144] == 1);
+    require(vec[145] == 1);
+    require(vec[146] == 1);
+    require(vec[147] == 0);
+    require(vec[148] == 0);
+    require(vec[149] == 0);
+    require(vec[150] == 0);
+    require(vec[151] == 0);
+    require(vec[152] == 0);
+    require(vec[153] == 0);
+    require(vec[154] == 1);
+    require(vec[155] == 0);
+    require(vec[156] == 0);
+    require(vec[157] == 0);
+    require(vec[158] == 1);
+    require(vec[159] == 1);
+    require(vec[160] == 0);
+    require(vec[161] == 1);
+    require(vec[162] == 0);
+    require(vec[163] == 0);
+    require(vec[164] == 0);
+    require(vec[165] == 1);
+    require(vec[166] == 0);
+    require(vec[167] == 1);
+    require(vec[168] == 0);
+    require(vec[169] == 0);
+    require(vec[170] == 0);
+    require(vec[171] == 0);
+    require(vec[172] == 1);
+    require(vec[173] == 1);
+    require(vec[174] == 1);
+    require(vec[175] == 1);
+    require(vec[176] == 1);
+    require(vec[177] == 1);
+    require(vec[178] == 0);
+    require(vec[179] == 1);
+    require(vec[180] == 1);
+    require(vec[181] == 0);
+    require(vec[182] == 1);
+    require(vec[183] == 0);
+    require(vec[184] == 1);
+    require(vec[185] == 0);
+    require(vec[186] == 1);
+    require(vec[187] == 0);
+    require(vec[188] == 1);
+    require(vec[189] == 0);
+    require(vec[190] == 0);
+    require(vec[191] == 0);
+    require(vec[192] == 0);
+    require(vec[193] == 1);
+    require(vec[194] == 1);
+    require(vec[195] == 1);
+    require(vec[196] == 0);
+    require(vec[197] == 0);
+    require(vec[198] == 1);
+    require(vec[199] == 0);
+    require(vec[200] == 0);
+    require(vec[201] == 1);
+    require(vec[202] == 1);
+    require(vec[203] == 0);
+    require(vec[204] == 1);
+    require(vec[205] == 0);
+    require(vec[206] == 1);
+    require(vec[207] == 0);
+    require(vec[208] == 0);
+    require(vec[209] == 0);
+    require(vec[210] == 1);
+    require(vec[211] == 1);
+    require(vec[212] == 0);
+    require(vec[213] == 0);
+    require(vec[214] == 0);
+    require(vec[215] == 1);
+    require(vec[216] == 0);
+    require(vec[217] == 1);
+    require(vec[218] == 1);
+    require(vec[219] == 1);
+    require(vec[220] == 0);
+    require(vec[221] == 1);
+    require(vec[222] == 0);
+    require(vec[223] == 1);
+    require(vec[224] == 0);
+    require(vec[225] == 0);
+    require(vec[226] == 0);
+    require(vec[227] == 1);
+    require(vec[228] == 1);
+    require(vec[229] == 0);
+    require(vec[230] == 0);
+    require(vec[231] == 0);
+    require(vec[232] == 0);
+    require(vec[233] == 0);
+    require(vec[234] == 1);
+    require(vec[235] == 0);
+    require(vec[236] == 0);
+    require(vec[237] == 0);
+    require(vec[238] == 1);
+    require(vec[239] == 0);
+    require(vec[240] == 1);
+    require(vec[241] == 1);
+    require(vec[242] == 1);
+    require(vec[243] == 0);
+    require(vec[244] == 0);
+    require(vec[245] == 1);
+    require(vec[246] == 0);
+    require(vec[247] == 0);
+    require(vec[248] == 0);
+    require(vec[249] == 1);
+    require(vec[250] == 0);
+    require(vec[251] == 0);
+    require(vec[252] == 1);
+    require(vec[253] == 1);
+    require(vec[254] == 1);
+    require(vec[255] == 1);
+}
+
+[export] bb_vector_512_bool = fn [cc(c)] (vec: Vector512Bool) void
+{
+    require(vec[0] == 0);
+    require(vec[1] == 1);
+    require(vec[2] == 1);
+    require(vec[3] == 0);
+    require(vec[4] == 1);
+    require(vec[5] == 0);
+    require(vec[6] == 1);
+    require(vec[7] == 0);
+    require(vec[8] == 0);
+    require(vec[9] == 0);
+    require(vec[10] == 0);
+    require(vec[11] == 0);
+    require(vec[12] == 1);
+    require(vec[13] == 0);
+    require(vec[14] == 1);
+    require(vec[15] == 0);
+    require(vec[16] == 0);
+    require(vec[17] == 0);
+    require(vec[18] == 1);
+    require(vec[19] == 1);
+    require(vec[20] == 1);
+    require(vec[21] == 1);
+    require(vec[22] == 0);
+    require(vec[23] == 0);
+    require(vec[24] == 0);
+    require(vec[25] == 1);
+    require(vec[26] == 1);
+    require(vec[27] == 0);
+    require(vec[28] == 1);
+    require(vec[29] == 1);
+    require(vec[30] == 0);
+    require(vec[31] == 0);
+    require(vec[32] == 1);
+    require(vec[33] == 1);
+    require(vec[34] == 0);
+    require(vec[35] == 0);
+    require(vec[36] == 0);
+    require(vec[37] == 0);
+    require(vec[38] == 0);
+    require(vec[39] == 0);
+    require(vec[40] == 0);
+    require(vec[41] == 1);
+    require(vec[42] == 1);
+    require(vec[43] == 1);
+    require(vec[44] == 0);
+    require(vec[45] == 1);
+    require(vec[46] == 1);
+    require(vec[47] == 1);
+    require(vec[48] == 1);
+    require(vec[49] == 1);
+    require(vec[50] == 0);
+    require(vec[51] == 1);
+    require(vec[52] == 1);
+    require(vec[53] == 1);
+    require(vec[54] == 0);
+    require(vec[55] == 1);
+    require(vec[56] == 0);
+    require(vec[57] == 0);
+    require(vec[58] == 1);
+    require(vec[59] == 0);
+    require(vec[60] == 1);
+    require(vec[61] == 1);
+    require(vec[62] == 0);
+    require(vec[63] == 0);
+    require(vec[64] == 0);
+    require(vec[65] == 1);
+    require(vec[66] == 1);
+    require(vec[67] == 1);
+    require(vec[68] == 1);
+    require(vec[69] == 0);
+    require(vec[70] == 0);
+    require(vec[71] == 1);
+    require(vec[72] == 1);
+    require(vec[73] == 0);
+    require(vec[74] == 1);
+    require(vec[75] == 1);
+    require(vec[76] == 0);
+    require(vec[77] == 0);
+    require(vec[78] == 1);
+    require(vec[79] == 0);
+    require(vec[80] == 0);
+    require(vec[81] == 0);
+    require(vec[82] == 1);
+    require(vec[83] == 1);
+    require(vec[84] == 1);
+    require(vec[85] == 0);
+    require(vec[86] == 0);
+    require(vec[87] == 1);
+    require(vec[88] == 0);
+    require(vec[89] == 1);
+    require(vec[90] == 0);
+    require(vec[91] == 0);
+    require(vec[92] == 1);
+    require(vec[93] == 0);
+    require(vec[94] == 0);
+    require(vec[95] == 1);
+    require(vec[96] == 1);
+    require(vec[97] == 0);
+    require(vec[98] == 0);
+    require(vec[99] == 0);
+    require(vec[100] == 0);
+    require(vec[101] == 1);
+    require(vec[102] == 0);
+    require(vec[103] == 0);
+    require(vec[104] == 0);
+    require(vec[105] == 0);
+    require(vec[106] == 0);
+    require(vec[107] == 0);
+    require(vec[108] == 1);
+    require(vec[109] == 1);
+    require(vec[110] == 1);
+    require(vec[111] == 1);
+    require(vec[112] == 1);
+    require(vec[113] == 0);
+    require(vec[114] == 0);
+    require(vec[115] == 0);
+    require(vec[116] == 0);
+    require(vec[117] == 1);
+    require(vec[118] == 1);
+    require(vec[119] == 0);
+    require(vec[120] == 1);
+    require(vec[121] == 1);
+    require(vec[122] == 0);
+    require(vec[123] == 0);
+    require(vec[124] == 1);
+    require(vec[125] == 0);
+    require(vec[126] == 0);
+    require(vec[127] == 0);
+    require(vec[128] == 0);
+    require(vec[129] == 1);
+    require(vec[130] == 1);
+    require(vec[131] == 1);
+    require(vec[132] == 1);
+    require(vec[133] == 0);
+    require(vec[134] == 0);
+    require(vec[135] == 0);
+    require(vec[136] == 0);
+    require(vec[137] == 1);
+    require(vec[138] == 0);
+    require(vec[139] == 0);
+    require(vec[140] == 0);
+    require(vec[141] == 0);
+    require(vec[142] == 1);
+    require(vec[143] == 1);
+    require(vec[144] == 0);
+    require(vec[145] == 1);
+    require(vec[146] == 0);
+    require(vec[147] == 1);
+    require(vec[148] == 0);
+    require(vec[149] == 0);
+    require(vec[150] == 1);
+    require(vec[151] == 1);
+    require(vec[152] == 0);
+    require(vec[153] == 1);
+    require(vec[154] == 1);
+    require(vec[155] == 0);
+    require(vec[156] == 0);
+    require(vec[157] == 0);
+    require(vec[158] == 1);
+    require(vec[159] == 0);
+    require(vec[160] == 0);
+    require(vec[161] == 0);
+    require(vec[162] == 0);
+    require(vec[163] == 1);
+    require(vec[164] == 1);
+    require(vec[165] == 0);
+    require(vec[166] == 0);
+    require(vec[167] == 1);
+    require(vec[168] == 0);
+    require(vec[169] == 1);
+    require(vec[170] == 1);
+    require(vec[171] == 0);
+    require(vec[172] == 0);
+    require(vec[173] == 0);
+    require(vec[174] == 0);
+    require(vec[175] == 0);
+    require(vec[176] == 0);
+    require(vec[177] == 1);
+    require(vec[178] == 0);
+    require(vec[179] == 0);
+    require(vec[180] == 0);
+    require(vec[181] == 0);
+    require(vec[182] == 0);
+    require(vec[183] == 0);
+    require(vec[184] == 1);
+    require(vec[185] == 0);
+    require(vec[186] == 0);
+    require(vec[187] == 0);
+    require(vec[188] == 0);
+    require(vec[189] == 1);
+    require(vec[190] == 0);
+    require(vec[191] == 0);
+    require(vec[192] == 0);
+    require(vec[193] == 0);
+    require(vec[194] == 0);
+    require(vec[195] == 0);
+    require(vec[196] == 1);
+    require(vec[197] == 1);
+    require(vec[198] == 1);
+    require(vec[199] == 0);
+    require(vec[200] == 1);
+    require(vec[201] == 1);
+    require(vec[202] == 0);
+    require(vec[203] == 0);
+    require(vec[204] == 0);
+    require(vec[205] == 0);
+    require(vec[206] == 0);
+    require(vec[207] == 1);
+    require(vec[208] == 1);
+    require(vec[209] == 0);
+    require(vec[210] == 0);
+    require(vec[211] == 0);
+    require(vec[212] == 1);
+    require(vec[213] == 0);
+    require(vec[214] == 0);
+    require(vec[215] == 1);
+    require(vec[216] == 1);
+    require(vec[217] == 1);
+    require(vec[218] == 0);
+    require(vec[219] == 0);
+    require(vec[220] == 1);
+    require(vec[221] == 0);
+    require(vec[222] == 1);
+    require(vec[223] == 1);
+    require(vec[224] == 1);
+    require(vec[225] == 1);
+    require(vec[226] == 0);
+    require(vec[227] == 1);
+    require(vec[228] == 0);
+    require(vec[229] == 0);
+    require(vec[230] == 0);
+    require(vec[231] == 1);
+    require(vec[232] == 0);
+    require(vec[233] == 0);
+    require(vec[234] == 0);
+    require(vec[235] == 0);
+    require(vec[236] == 0);
+    require(vec[237] == 0);
+    require(vec[238] == 0);
+    require(vec[239] == 1);
+    require(vec[240] == 0);
+    require(vec[241] == 0);
+    require(vec[242] == 0);
+    require(vec[243] == 1);
+    require(vec[244] == 1);
+    require(vec[245] == 1);
+    require(vec[246] == 1);
+    require(vec[247] == 0);
+    require(vec[248] == 1);
+    require(vec[249] == 1);
+    require(vec[250] == 0);
+    require(vec[251] == 0);
+    require(vec[252] == 0);
+    require(vec[253] == 1);
+    require(vec[254] == 0);
+    require(vec[255] == 0);
+    require(vec[256] == 1);
+    require(vec[257] == 1);
+    require(vec[258] == 0);
+    require(vec[259] == 1);
+    require(vec[260] == 0);
+    require(vec[261] == 1);
+    require(vec[262] == 1);
+    require(vec[263] == 0);
+    require(vec[264] == 0);
+    require(vec[265] == 0);
+    require(vec[266] == 0);
+    require(vec[267] == 1);
+    require(vec[268] == 0);
+    require(vec[269] == 1);
+    require(vec[270] == 1);
+    require(vec[271] == 0);
+    require(vec[272] == 0);
+    require(vec[273] == 1);
+    require(vec[274] == 1);
+    require(vec[275] == 1);
+    require(vec[276] == 0);
+    require(vec[277] == 1);
+    require(vec[278] == 0);
+    require(vec[279] == 0);
+    require(vec[280] == 1);
+    require(vec[281] == 1);
+    require(vec[282] == 0);
+    require(vec[283] == 1);
+    require(vec[284] == 0);
+    require(vec[285] == 1);
+    require(vec[286] == 1);
+    require(vec[287] == 1);
+    require(vec[288] == 1);
+    require(vec[289] == 1);
+    require(vec[290] == 1);
+    require(vec[291] == 1);
+    require(vec[292] == 1);
+    require(vec[293] == 1);
+    require(vec[294] == 1);
+    require(vec[295] == 0);
+    require(vec[296] == 1);
+    require(vec[297] == 0);
+    require(vec[298] == 1);
+    require(vec[299] == 0);
+    require(vec[300] == 1);
+    require(vec[301] == 1);
+    require(vec[302] == 0);
+    require(vec[303] == 1);
+    require(vec[304] == 0);
+    require(vec[305] == 1);
+    require(vec[306] == 0);
+    require(vec[307] == 1);
+    require(vec[308] == 1);
+    require(vec[309] == 0);
+    require(vec[310] == 1);
+    require(vec[311] == 1);
+    require(vec[312] == 1);
+    require(vec[313] == 0);
+    require(vec[314] == 0);
+    require(vec[315] == 0);
+    require(vec[316] == 0);
+    require(vec[317] == 1);
+    require(vec[318] == 1);
+    require(vec[319] == 1);
+    require(vec[320] == 1);
+    require(vec[321] == 1);
+    require(vec[322] == 1);
+    require(vec[323] == 1);
+    require(vec[324] == 1);
+    require(vec[325] == 1);
+    require(vec[326] == 0);
+    require(vec[327] == 1);
+    require(vec[328] == 0);
+    require(vec[329] == 0);
+    require(vec[330] == 1);
+    require(vec[331] == 0);
+    require(vec[332] == 0);
+    require(vec[333] == 0);
+    require(vec[334] == 0);
+    require(vec[335] == 0);
+    require(vec[336] == 0);
+    require(vec[337] == 0);
+    require(vec[338] == 0);
+    require(vec[339] == 0);
+    require(vec[340] == 0);
+    require(vec[341] == 0);
+    require(vec[342] == 1);
+    require(vec[343] == 1);
+    require(vec[344] == 0);
+    require(vec[345] == 0);
+    require(vec[346] == 0);
+    require(vec[347] == 0);
+    require(vec[348] == 0);
+    require(vec[349] == 1);
+    require(vec[350] == 1);
+    require(vec[351] == 1);
+    require(vec[352] == 1);
+    require(vec[353] == 0);
+    require(vec[354] == 0);
+    require(vec[355] == 0);
+    require(vec[356] == 0);
+    require(vec[357] == 1);
+    require(vec[358] == 1);
+    require(vec[359] == 0);
+    require(vec[360] == 0);
+    require(vec[361] == 0);
+    require(vec[362] == 1);
+    require(vec[363] == 1);
+    require(vec[364] == 0);
+    require(vec[365] == 0);
+    require(vec[366] == 0);
+    require(vec[367] == 0);
+    require(vec[368] == 0);
+    require(vec[369] == 1);
+    require(vec[370] == 1);
+    require(vec[371] == 0);
+    require(vec[372] == 1);
+    require(vec[373] == 1);
+    require(vec[374] == 0);
+    require(vec[375] == 1);
+    require(vec[376] == 1);
+    require(vec[377] == 0);
+    require(vec[378] == 1);
+    require(vec[379] == 1);
+    require(vec[380] == 0);
+    require(vec[381] == 1);
+    require(vec[382] == 1);
+    require(vec[383] == 0);
+    require(vec[384] == 1);
+    require(vec[385] == 0);
+    require(vec[386] == 1);
+    require(vec[387] == 1);
+    require(vec[388] == 1);
+    require(vec[389] == 1);
+    require(vec[390] == 0);
+    require(vec[391] == 0);
+    require(vec[392] == 0);
+    require(vec[393] == 1);
+    require(vec[394] == 1);
+    require(vec[395] == 1);
+    require(vec[396] == 1);
+    require(vec[397] == 0);
+    require(vec[398] == 1);
+    require(vec[399] == 1);
+    require(vec[400] == 1);
+    require(vec[401] == 0);
+    require(vec[402] == 0);
+    require(vec[403] == 1);
+    require(vec[404] == 0);
+    require(vec[405] == 0);
+    require(vec[406] == 0);
+    require(vec[407] == 1);
+    require(vec[408] == 1);
+    require(vec[409] == 1);
+    require(vec[410] == 0);
+    require(vec[411] == 1);
+    require(vec[412] == 0);
+    require(vec[413] == 0);
+    require(vec[414] == 0);
+    require(vec[415] == 1);
+    require(vec[416] == 0);
+    require(vec[417] == 0);
+    require(vec[418] == 1);
+    require(vec[419] == 1);
+    require(vec[420] == 1);
+    require(vec[421] == 1);
+    require(vec[422] == 0);
+    require(vec[423] == 1);
+    require(vec[424] == 1);
+    require(vec[425] == 0);
+    require(vec[426] == 0);
+    require(vec[427] == 0);
+    require(vec[428] == 1);
+    require(vec[429] == 0);
+    require(vec[430] == 1);
+    require(vec[431] == 1);
+    require(vec[432] == 0);
+    require(vec[433] == 0);
+    require(vec[434] == 0);
+    require(vec[435] == 0);
+    require(vec[436] == 1);
+    require(vec[437] == 0);
+    require(vec[438] == 1);
+    require(vec[439] == 0);
+    require(vec[440] == 0);
+    require(vec[441] == 0);
+    require(vec[442] == 0);
+    require(vec[443] == 1);
+    require(vec[444] == 0);
+    require(vec[445] == 0);
+    require(vec[446] == 1);
+    require(vec[447] == 1);
+    require(vec[448] == 1);
+    require(vec[449] == 0);
+    require(vec[450] == 1);
+    require(vec[451] == 1);
+    require(vec[452] == 0);
+    require(vec[453] == 1);
+    require(vec[454] == 0);
+    require(vec[455] == 1);
+    require(vec[456] == 0);
+    require(vec[457] == 0);
+    require(vec[458] == 0);
+    require(vec[459] == 1);
+    require(vec[460] == 0);
+    require(vec[461] == 0);
+    require(vec[462] == 0);
+    require(vec[463] == 1);
+    require(vec[464] == 1);
+    require(vec[465] == 1);
+    require(vec[466] == 1);
+    require(vec[467] == 1);
+    require(vec[468] == 0);
+    require(vec[469] == 0);
+    require(vec[470] == 0);
+    require(vec[471] == 0);
+    require(vec[472] == 0);
+    require(vec[473] == 0);
+    require(vec[474] == 1);
+    require(vec[475] == 1);
+    require(vec[476] == 1);
+    require(vec[477] == 1);
+    require(vec[478] == 1);
+    require(vec[479] == 0);
+    require(vec[480] == 1);
+    require(vec[481] == 1);
+    require(vec[482] == 0);
+    require(vec[483] == 1);
+    require(vec[484] == 0);
+    require(vec[485] == 1);
+    require(vec[486] == 0);
+    require(vec[487] == 1);
+    require(vec[488] == 0);
+    require(vec[489] == 0);
+    require(vec[490] == 0);
+    require(vec[491] == 1);
+    require(vec[492] == 0);
+    require(vec[493] == 0);
+    require(vec[494] == 0);
+    require(vec[495] == 1);
+    require(vec[496] == 1);
+    require(vec[497] == 0);
+    require(vec[498] == 0);
+    require(vec[499] == 1);
+    require(vec[500] == 0);
+    require(vec[501] == 1);
+    require(vec[502] == 0);
+    require(vec[503] == 0);
+    require(vec[504] == 0);
+    require(vec[505] == 1);
+    require(vec[506] == 1);
+    require(vec[507] == 1);
+    require(vec[508] == 1);
+    require(vec[509] == 0);
+    require(vec[510] == 0);
+    require(vec[511] == 1);
+}
+
+[export] bb_ret_vector_2_bool = fn [cc(c)] () Vector2Bool
+{
+    return [
+        0,
+        0,
+    ];
+}
+
+[export] bb_ret_vector_4_bool = fn [cc(c)] () Vector4Bool
+{
+    return [
+        0,
+        1,
+        1,
+        1,
+    ];
+}
+
+[export] bb_ret_vector_8_bool = fn [cc(c)] () Vector8Bool
+{
+    return [
+        0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+    ];
+}
+
+[export] bb_ret_vector_16_bool = fn [cc(c)] () Vector16Bool
+{
+    return [
+        0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+    ];
+}
+
+[export] bb_ret_vector_32_bool = fn [cc(c)] () Vector32Bool
+{
+    return [
+        0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+    ];
+}
+
+[export] bb_ret_vector_64_bool = fn [cc(c)] () Vector64Bool
+{
+    return [
+        1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+    ];
+}
+
+[export] bb_ret_vector_128_bool = fn [cc(c)] () Vector128Bool
+{
+    return [
+        1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+    ];
+}
+
+[export] bb_ret_vector_256_bool = fn [cc(c)] () Vector256Bool
+{
+    return [
+        1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+    ];
+}
+
+[export] bb_ret_vector_512_bool = fn [cc(c)] () Vector512Bool
+{
+    return [
+        1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+    ];
+}
+
 [export] bb_ret_small_struct_ints = fn [cc(c)] () SmallStructInts
 {
     return {
@@ -1185,147 +3839,495 @@ ByVal = struct
     };
 }
 
-[export] bb_multiple_struct_ints = fn [cc(c)] (x: Rect, y: Rect) void
+[export] bb_ret_med_struct_mixed = fn [cc(c)] () MedStructMixed
 {
-    require(x.left == 1);
-    require(x.right == 21);
-    require(x.top == 16);
-    require(x.bottom == 4);
-    require(y.left == 178);
-    require(y.right == 189);
-    require(y.top == 21);
-    require(y.bottom == 15);
+    return {
+        .a = 1234,
+        .b = 100.0,
+        .c = 1337.0,
+        .d = 0,
+    };
 }
 
-[export] bb_small_struct_ints = fn [cc(c)] (x: SmallStructInts) void
+[export] bb_ret_split_struct_mixed = fn [cc(c)] () SplitStructMixed
 {
-    require(x.a == 1);
-    require(x.b == 2);
-    require(x.c == 3);
-    require(x.d == 4);
+    return {
+        .a = 1234,
+        .b = 100,
+        .c = 1337.0,
+    };
 }
 
-[export] bb_med_struct_ints = fn [cc(c)] (s: MedStructInts) void
+[export] bb_assert_DC = fn [cc(c)] (lv: DC) s32
 {
-    require(s.x == 1);
-    require(s.y == 2);
-    require(s.z == 3);
+    >err: s32 = 0;
+
+    if (lv.v1 != -0.25)
+    {
+        err = 1;
+    }
+
+    if (lv.v2 != 15)
+    {
+        err = 2;
+    }
+
+    return err;
 }
+
+[export] bb_ret_DC = fn [cc(c)] () DC
+{
+    return { .v1 = -0.25, .v2 = 15 };
+}
+
+[export] bb_assert_CFF = fn [cc(c)] (lv: CFF) s32
+{
+    >err: s32 = 0;
+    if (lv.v1 != 39)
+    {
+        err = 1;
+    }
+
+    if (lv.v2 != 0.875)
+    {
+        err = 2;
+    }
+
+    if (lv.v3 != 1.0)
+    {
+        err = 3;
+    }
+
+    return err;
+}
+
+[export] bb_ret_CFF = fn [cc(c)] () CFF
+{
+    return { .v1 = 39, .v2 = 0.875, .v3 = 1.0 };
+}
+
+[export] bb_c_assert_PD = fn [cc(c)] (lv: PD) s32
+{
+    >err: s32 = 0;
+
+    if (lv.v1 != zero)
+    {
+        err = 1;
+    }
+
+    if (lv.v2 != 0.5)
+    {
+        err = 2;
+    }
+
+    return err;
+}
+
+[export] bb_ret_PD = fn [cc(c)] () PD
+{
+    return { .v1 = zero, .v2 = 0.5 };
+}
+
+[export] bb_assert_PD = fn [cc(c)] (lv: PD) s32
+{
+    >err: s32 = 0;
+
+    if (lv.v1 != zero)
+    {
+        err = 1;
+    }
+    if (lv.v2 != 0.5)
+    {
+        err = 2;
+    }
+
+    return err;
+}
+
+[export] bb_f128 = fn [cc(c)] (x: f128) f128
+{
+    require(x == 12.0);
+    return 34.0;
+}
+
+[export] bb_f128_struct = fn [cc(c)] (a: f128_struct) f128_struct
+{
+    require(a.a == 12345.0);
+    return { .a = 98765.0 };
+}
+
+[export] bb_f128_f128_struct = fn [cc(c)] (a: f128_f128_struct) f128_f128_struct
+{
+    require(a.a == 13.0);
+    require(a.b == 57.0);
+    return { .a = 24.0, .b = 68.0 };
+}
+
+[extern] run_c_tests = fn [cc(c)] () void;
 
 c_abi_tests = fn () void
 {
     run_c_tests();
+    
+    // C ABI integers
+
     c_u8(0xff);
     c_u16(0xfffe);
     c_u32(0xfffffffd);
     c_u64(0xfffffffffffffffc);
 
-    //if (has_i128) {
-    //    c_struct_u128({ .value = 0xfffffffffffffffc, });
-    //}
+    c_struct_u128({ .value = 0xfffffffffffffffc });
 
     c_s8(-1);
     c_s16(-2);
     c_s32(-3);
     c_s64(-4);
 
-    //if (has_i128) {
-    //    c_struct_i128({ .value = -6, });
-    //}
-
-    c_bool(1);
+    c_struct_i128({ .value = -6 });
 
     c_five_integers(12, 34, 56, 78, 90);
 
-    >s = c_ret_struct_u64_u64();
-    require(s.a == 21);
-    require(s.b == 22);
-    c_struct_u64_u64_0({ .a = 23, .b = 24, });
-    c_struct_u64_u64_1(0, { .a = 25, .b = 26, });
-    c_struct_u64_u64_2(0, 1, { .a = 27, .b = 28, });
-    c_struct_u64_u64_3(0, 1, 2, { .a = 29, .b = 30, });
-    c_struct_u64_u64_4(0, 1, 2, 3, { .a = 31, .b = 32, });
-    c_struct_u64_u64_5(0, 1, 2, 3, 4, { .a = 33, .b = 34, });
-    c_struct_u64_u64_6(0, 1, 2, 3, 4, 5, { .a = 35, .b = 36, });
-    c_struct_u64_u64_7(0, 1, 2, 3, 4, 5, 6, { .a = 37, .b = 38, });
-    c_struct_u64_u64_8(0, 1, 2, 3, 4, 5, 6, 7, { .a = 39, .b = 40, });
+    // C ABI floats
 
-    >big_struct: BigStruct = {
-        .a = 1,
-        .b = 2,
-        .c = 3,
-        .d = 4,
-        .e = 5,
-    };
-    c_big_struct(big_struct);
+    c_f32(12.34);
+    c_f64(56.78);
+    c_five_floats(1.0, 2.0, 3.0, 4.0, 5.0);
 
-    >small: SmallStructInts = {
-        .a = 1,
-        .b = 2,
-        .c = 3,
-        .d = 4,
-    };
-    c_small_struct_ints(small);
-    >small2 = c_ret_small_struct_ints();
-    require(small2.a == 1);
-    require(small2.b == 2);
-    require(small2.c == 3);
-    require(small2.d == 4);
+    // TODO: long double?
 
-    >med: MedStructInts = {
-        .x = 1,
-        .y = 2,
-        .z = 3,
-    };
-    c_med_struct_ints(med);
-    >med2 = c_ret_med_struct_ints();
-    require(med2.x == 1);
-    require(med2.y == 2);
-    require(med2.z == 3);
+    {
+        >ptr_int: u64 = 0xdeadbeef;
+        c_ptr(@pointer_from_int(ptr_int));
+    }
 
-    >p: SmallPackedStruct = { .a = 0, .b = 1, .c = 2, .d = 3, };
-    c_small_packed_struct(p);
-    >p2 = c_ret_small_packed_struct();
-    require(p2.a == 0);
-    require(p2.b == 1);
-    require(p2.c == 2);
-    require(p2.d == 3);
+    c_bool(1);
 
-    >split: SplitStructInt = {
-        .a = 1234,
-        .b = 100,
-        .c = 1337,
-    };
-    c_split_struct_ints(split);
+    // C ABI complex float
+    {
+        >a: ComplexFloat = { .real = 1.25, .imaginary = 2.6 };
+        >b: ComplexFloat = { .real = 11.3, .imaginary = -1.5 };
 
-    > big: BigStruct = {
-        .a = 1,
-        .b = 2,
-        .c = 3,
-        .d = 4,
-        .e = 5,
-    };
-    >big2 = c_big_struct_both(big);
-    require(big2.a == 10);
-    require(big2.b == 11);
-    require(big2.c == 12);
-    require(big2.d == 13);
-    require(big2.e == 14);
+        >z = c_cmultf(a, b);
 
-    >r1: Rect = {
-        .left = 1,
-        .right = 21,
-        .top = 16,
-        .bottom = 4,
-    };
-    >r2: Rect = {
-        .left = 178,
-        .right = 189,
-        .top = 21,
-        .bottom = 15,
-    };
-    c_multiple_struct_ints(r1, r2);
+        require(z.real == 1.5);
+        require(z.imaginary == 13.5);
+    }
 
+    // C ABI complex float by component
+    {
+        >a: ComplexFloat = { .real = 1.25, .imaginary = 2.6 };
+        >b: ComplexFloat = { .real = 11.3, .imaginary = -1.5 };
+
+        >z = c_cmultf_comp(a.real, a.imaginary, b.real, b.imaginary);
+
+        require(z.real == 1.5);
+        require(z.imaginary == 13.5);
+    }
+
+    // C ABI complex double
+    {
+        >a: ComplexDouble = { .real = 1.25, .imaginary = 2.6 };
+        >b: ComplexDouble = { .real = 11.3, .imaginary = -1.5 };
+
+        >z = c_cmultd(a, b);
+
+        require(z.real == 1.5);
+        require(z.imaginary == 13.5);
+    }
+
+    // C ABI complex double by component
+    {
+        >a: ComplexDouble = { .real = 1.25, .imaginary = 2.6 };
+        >b: ComplexDouble = { .real = 11.3, .imaginary = -1.5 };
+
+        >z2 = c_cmultd_comp(a.real, a.imaginary, b.real, b.imaginary);
+
+        require(z2.real == 1.5);
+        require(z2.imaginary == 13.5);
+    }
+
+    // C ABI struct u64 u64
+    {
+        >s = c_ret_struct_u64_u64();
+
+        require(s.a == 21);
+        require(s.b == 22);
+
+        c_struct_u64_u64_0({ .a = 23, .b = 24 });
+        c_struct_u64_u64_1(0, { .a = 25, .b = 26 });
+        c_struct_u64_u64_2(0, 1, { .a = 27, .b = 28 });
+        c_struct_u64_u64_3(0, 1, 2, { .a = 29, .b = 30 });
+        c_struct_u64_u64_4(0, 1, 2, 3, { .a = 31, .b = 32 });
+        c_struct_u64_u64_5(0, 1, 2, 3, 4, { .a = 33, .b = 34 });
+        c_struct_u64_u64_6(0, 1, 2, 3, 4, 5, { .a = 35, .b = 36 });
+        c_struct_u64_u64_7(0, 1, 2, 3, 4, 5, 6, { .a = 37, .b = 38 });
+        c_struct_u64_u64_8(0, 1, 2, 3, 4, 5, 6, 7, { .a = 39, .b = 40 });
+    }
+
+    // C ABI struct f32
+    {
+        >s = c_ret_struct_f32();
+        require(s.a == 2.5);
+
+        c_struct_f32({ .a = 2.5 });
+    }
+
+    // C ABI struct f64
+    {
+        >s = c_ret_struct_f64();
+        require(s.a == 2.5);
+
+        c_struct_f64({ .a = 2.5 });
+    }
+
+    // C ABI struct {f32, f32} f32
+    {
+        >s = c_ret_struct_f32f32_f32();
+        require(s.a.b == 1.0);
+        require(s.a.c == 2.0);
+        require(s.d == 3.0);
+
+        c_struct_f32f32_f32({ .a = { .b = 1.0, .c = 2.0 }, .d = 3.0 });
+    }
+
+    // C ABI struct f32, {f32, f32}
+    {
+        >s = c_ret_struct_f32_f32f32();
+        require(s.a == 1.0);
+        require(s.b.c == 2.0);
+        require(s.b.d == 3.0);
+        c_struct_f32_f32f32({ .a = 1.0, .b = { .c = 2.0, .d = 3.0 } });
+    }
+
+    // C ABI struct {u32, union{u32, struct{u32, u32}}}
+    {
+        > s = c_ret_struct_u32_union_u32_u32u32();
+        require(s.a == 1);
+        require(s.b.c.d == 2);
+        require(s.b.c.e == 3);
+        c_struct_u32_union_u32_u32u32({ .a = 1, .b = { .c = { .d = 2, .e = 3 } } });
+    }
+
+    // C ABI struct i32 i32
+    {
+        >s: Struct_i32_i32 = {
+            .a = 1,
+            .b = 2,
+        };
+        >mut_res = c_mut_struct_i32_i32(s);
+        require(s.a == 1);
+        require(s.b == 2);
+        require(mut_res.a == 101);
+        require(mut_res.b == 252);
+        c_struct_i32_i32(s);
+    }
+
+    // C ABI big struct
+    {
+        >s: BigStruct = {
+            .a = 1,
+            .b = 2,
+            .c = 3,
+            .d = 4,
+            .e = 5,
+        };
+
+        c_big_struct(s);
+    }
+
+    // C ABI big union
+    {
+        >x: BigUnion = {
+            .a = {
+                .a = 1,
+                .b = 2,
+                .c = 3,
+                .d = 4,
+                .e = 5,
+            }
+        };
+
+        c_big_union(x);
+    }
+
+    // C ABI medium struct of ints and floats
+    {
+        >s: MedStructMixed = {
+            .a = 1234,
+            .b = 100.0,
+            .c = 1337.0,
+            .d = 0,
+        };
+        c_med_struct_mixed(s);
+
+        >s2 = c_ret_med_struct_mixed();
+
+        require(s2.a == 1234);
+        require(s2.b == 100.0);
+        require(s2.c == 1337.0);
+    }
+
+    // C ABI small struct of ints
+    {
+        >s: SmallStructInts = {
+            .a = 1,
+            .b = 2,
+            .c = 3,
+            .d = 4,
+        };
+        c_small_struct_ints(s);
+
+        >s2 = c_ret_small_struct_ints();
+        require(s2.a == 1);
+        require(s2.b == 2);
+        require(s2.c == 3);
+        require(s2.d == 4);
+    }
+
+    // C ABI medium struct of ints
+    {
+        >s: MedStructInts = {
+            .x = 1,
+            .y = 2,
+            .z = 3,
+        };
+        c_med_struct_ints(s);
+
+        >s2 = c_ret_med_struct_ints();
+        require(s2.x == 1);
+        require(s2.y == 2);
+        require(s2.z == 3);
+    }
+
+    // C ABI small packed struct
+    {
+        >s: SmallPackedStruct = { .a = 0, .b = 1, .c = 2, .d = 3 };
+        c_small_packed_struct(s);
+
+        >s2 = c_ret_small_packed_struct();
+        require(s2.a == 0);
+        require(s2.b == 1);
+        require(s2.c == 2);
+        require(s2.d == 3);
+    }
+
+
+    // C ABI big packed struct
+    {
+        // TODO
+        //>s: BigPackedStruct = { .a = 1, .b = 2 };
+        //c_big_packed_struct(s);
+
+        //>s2 = c_ret_big_packed_struct();
+        //require(s2.a == 1);
+        //require(s2.b == 2);
+    }
+
+    // C ABI split struct of ints
+    {
+        >s: SplitStructInt = {
+            .a = 1234,
+            .b = 100,
+            .c = 1337,
+        };
+        c_split_struct_ints(s);
+    }
+
+    // C ABI split struct of ints and floats
+    {
+        >s: SplitStructMixed = {
+            .a = 1234,
+            .b = 100,
+            .c = 1337.0,
+        };
+        c_split_struct_mixed(s);
+
+        >s2 = c_ret_split_struct_mixed();
+        require(s2.a == 1234);
+        require(s2.b == 100);
+        require(s2.c == 1337.0);
+    }
+
+    // C ABI sret and byval together
+    {
+        >s: BigStruct = {
+            .a = 1,
+            .b = 2,
+            .c = 3,
+            .d = 4,
+            .e = 5,
+        };
+
+        >y = c_big_struct_both(s);
+
+        require(y.a == 10);
+        require(y.b == 11);
+        require(y.c == 12);
+        require(y.d == 13);
+        require(y.e == 14);
+    }
+
+    // C ABI structs of floats as parameter
+    {
+        >v3: Vector3 = {
+            .x = 3.0,
+            .y = 6.0,
+            .z = 12.0,
+        };
+
+        c_small_struct_floats(v3);
+        c_small_struct_floats_extra(v3, "hello");
+
+        >v5: Vector5 = {
+            .x = 76.0,
+            .y = -1.0,
+            .z = -12.0,
+            .w = 69.0,
+            .q = 55.0,
+        };
+
+        c_big_struct_floats(v5);
+    }
+
+    // C ABI structs of ints as multiple parameters
+    {
+        >r1: Rect = {
+            .left = 1,
+            .right = 21,
+            .top = 16,
+            .bottom = 4,
+        };
+
+        >r2: Rect = {
+            .left = 178,
+            .right = 189,
+            .top = 21,
+            .bottom = 15,
+        };
+
+        c_multiple_struct_ints(r1, r2);
+    }
+
+    // C ABI structs of floats as multiple parameters
+    {
+        >r1: FloatRect = {
+            .left = 1.0,
+            .right = 21.0,
+            .top = 16.0,
+            .bottom = 4.0,
+        };
+
+        >r2: FloatRect = {
+            .left = 178.0,
+            .right = 189.0,
+            .top = 21.0,
+            .bottom = 15.0,
+        };
+
+        c_multiple_struct_floats(r1, r2);
+    }
+
+    // C ABI integer return types
     require(c_ret_bool() == 1);
 
     require(c_ret_u8() == 0xff);
@@ -1338,17 +4340,2307 @@ c_abi_tests = fn () void
     require(c_ret_s32() == -1);
     require(c_ret_s64() == -1);
 
-    c_struct_with_array({ .a = 1, .padding = [0, 0, 0, 0], .b = 2, });
+    // C ABI struct with array as padding
+    {
+        c_struct_with_array({ .a = 1, .padding = undefined, .b = 2 });
 
-    >x = c_ret_struct_with_array();
-    require(x.a == 4);
-    require(x.b == 155);
+        >x = c_ret_struct_with_array();
+        require(x.a == 4);
+        require(x.b == 155);
+    }
 
-    >res = c_modify_by_ref_param({ .val = 1, .arr = [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ] });
-    require(res.val == 42);
+    {
+        c_float_array_struct({
+            .origin = {
+                .x = 5.0,
+                .y = 6.0,
+            },
+            .size = {
+                .width = 7.0,
+                .height = 8.0,
+            },
+        });
 
-    >function_pointer = &c_func_ptr_byval;
-    function_pointer(1, 2, { .origin = { .x = 9, .y = 10, .z = 11, }, .size = { .width = 12, .height = 13, .depth = 14, }, }, 3, 4, 5);
+        >x = c_ret_float_array_struct();
+
+        require(x.origin.x == 1.0);
+        require(x.origin.y == 2.0);
+        require(x.size.width == 3.0);
+        require(x.size.height == 4.0);
+    }
+
+    // C ABI small vector
+    {
+        c_small_vec([ 1, 2 ]);
+
+        >x = c_ret_small_vec();
+        require(x[0] == 3);
+        require(x[1] == 4);
+    }
+
+    // C ABI medium vector
+    {
+        c_medium_vec([ 1, 2, 3, 4]);
+
+        >x = c_ret_medium_vec();
+        require(x[0] == 5);
+        require(x[1] == 6);
+        require(x[2] == 7);
+        require(x[3] == 8);
+    }
+
+    // C ABI big vector
+    {
+        c_big_vec([ 1, 2, 3, 4, 5, 6, 7, 8 ]);
+
+        >x = c_ret_big_vec();
+
+        require(x[0] == 9);
+        require(x[1] == 10);
+        require(x[2] == 11);
+        require(x[3] == 12);
+        require(x[4] == 13);
+        require(x[5] == 14);
+        require(x[6] == 15);
+        require(x[7] == 16);
+    }
+
+    // C ABI float vectors
+    {
+        c_vector_2_float([ 1.0, 2.0 ]);
+        c_vector_4_float([ 1.0, 2.0, 3.0, 4.0 ]);
+        c_vector_8_float([ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 ]);
+        c_vector_16_float([ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0 ]);
+
+        c_vector_2_double([ 1.0, 2.0 ]);
+        c_vector_4_double([ 1.0, 2.0, 3.0, 4.0 ]);
+        c_vector_8_double([ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 ]);
+
+        >vf2 = c_ret_vector_2_float();
+        require(vf2[0] == 1.0);
+        require(vf2[1] == 2.0);
+
+        >vf4 = c_ret_vector_4_float();
+        require(vf4[0] == 1.0);
+        require(vf4[1] == 2.0);
+        require(vf4[2] == 3.0);
+        require(vf4[3] == 4.0);
+
+        >vf8 = c_ret_vector_8_float();
+        require(vf8[0] == 1.0);
+        require(vf8[1] == 2.0);
+        require(vf8[2] == 3.0);
+        require(vf8[3] == 4.0);
+        require(vf8[4] == 5.0);
+        require(vf8[5] == 6.0);
+        require(vf8[6] == 7.0);
+        require(vf8[7] == 8.0);
+
+        >vf16 = c_ret_vector_16_float();
+        require(vf16[0] == 1.0);
+        require(vf16[1] == 2.0);
+        require(vf16[2] == 3.0);
+        require(vf16[3] == 4.0);
+        require(vf16[4] == 5.0);
+        require(vf16[5] == 6.0);
+        require(vf16[6] == 7.0);
+        require(vf16[7] == 8.0);
+        require(vf16[8] == 9.0);
+        require(vf16[9] == 10.0);
+        require(vf16[10] == 11.0);
+        require(vf16[11] == 12.0);
+        require(vf16[12] == 13.0);
+        require(vf16[13] == 14.0);
+        require(vf16[14] == 15.0);
+        require(vf16[15] == 16.0);
+
+        >vd2 = c_ret_vector_2_double();
+        require(vd2[0] == 1.0);
+        require(vd2[1] == 2.0);
+
+        >vd4 = c_ret_vector_4_double();
+        require(vd4[0] == 1.0);
+        require(vd4[1] == 2.0);
+        require(vd4[2] == 3.0);
+        require(vd4[3] == 4.0);
+
+        >vd8 = c_ret_vector_8_double();
+        require(vd8[0] == 1.0);
+        require(vd8[1] == 2.0);
+        require(vd8[2] == 3.0);
+        require(vd8[3] == 4.0);
+        require(vd8[4] == 5.0);
+        require(vd8[5] == 6.0);
+        require(vd8[6] == 7.0);
+        require(vd8[7] == 8.0);
+    }
+
+    // C ABI bool vectors
+    {
+        c_vector_2_bool([1, 1]);
+
+        >vec2 = c_ret_vector_2_bool();
+
+        require(vec2[0] == 1);
+        require(vec2[1] == 0);
+
+        c_vector_4_bool([1, 1, 0, 1]);
+
+        >vec4 = c_ret_vector_4_bool();
+
+        require(vec4[0] == 1);
+        require(vec4[1] == 0);
+        require(vec4[2] == 1);
+        require(vec4[3] == 0);
+
+        c_vector_8_bool([
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+        ]);
+
+        >vec8 = c_ret_vector_8_bool();
+        require(vec8[0] == 0);
+        require(vec8[1] == 1);
+        require(vec8[2] == 0);
+        require(vec8[3] == 0);
+        require(vec8[4] == 1);
+        require(vec8[5] == 0);
+        require(vec8[6] == 0);
+        require(vec8[7] == 1);
+
+        c_vector_16_bool([
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+        ]);
+
+        >vec16 = c_ret_vector_16_bool();
+        require(vec16[0] == 1);
+        require(vec16[1] == 1);
+        require(vec16[2] == 0);
+        require(vec16[3] == 0);
+        require(vec16[4] == 0);
+        require(vec16[5] == 0);
+        require(vec16[6] == 1);
+        require(vec16[7] == 0);
+        require(vec16[8] == 1);
+        require(vec16[9] == 0);
+        require(vec16[10] == 0);
+        require(vec16[11] == 1);
+        require(vec16[12] == 1);
+        require(vec16[13] == 0);
+        require(vec16[14] == 1);
+        require(vec16[15] == 1);
+
+        c_vector_32_bool([
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+        ]);
+
+        >vec32 = c_ret_vector_32_bool();
+        require(vec32[0] == 1);
+        require(vec32[1] == 0);
+        require(vec32[2] == 1);
+        require(vec32[3] == 1);
+        require(vec32[4] == 1);
+        require(vec32[5] == 0);
+        require(vec32[6] == 1);
+        require(vec32[7] == 0);
+        require(vec32[8] == 1);
+        require(vec32[9] == 1);
+        require(vec32[10] == 1);
+        require(vec32[11] == 0);
+        require(vec32[12] == 1);
+        require(vec32[13] == 1);
+        require(vec32[14] == 0);
+        require(vec32[15] == 0);
+        require(vec32[16] == 1);
+        require(vec32[17] == 0);
+        require(vec32[18] == 0);
+        require(vec32[19] == 0);
+        require(vec32[20] == 0);
+        require(vec32[21] == 1);
+        require(vec32[22] == 1);
+        require(vec32[23] == 1);
+        require(vec32[24] == 0);
+        require(vec32[25] == 1);
+        require(vec32[26] == 0);
+        require(vec32[27] == 0);
+        require(vec32[28] == 1);
+        require(vec32[29] == 0);
+        require(vec32[30] == 0);
+        require(vec32[31] == 0);
+
+        c_vector_64_bool([
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+        ]);
+
+        >vec64 = c_ret_vector_64_bool();
+        require(vec64[0] == 0);
+        require(vec64[1] == 1);
+        require(vec64[2] == 0);
+        require(vec64[3] == 1);
+        require(vec64[4] == 1);
+        require(vec64[5] == 1);
+        require(vec64[6] == 0);
+        require(vec64[7] == 1);
+        require(vec64[8] == 1);
+        require(vec64[9] == 1);
+        require(vec64[10] == 1);
+        require(vec64[11] == 1);
+        require(vec64[12] == 1);
+        require(vec64[13] == 0);
+        require(vec64[14] == 1);
+        require(vec64[15] == 1);
+        require(vec64[16] == 1);
+        require(vec64[17] == 0);
+        require(vec64[18] == 0);
+        require(vec64[19] == 0);
+        require(vec64[20] == 1);
+        require(vec64[21] == 1);
+        require(vec64[22] == 0);
+        require(vec64[23] == 1);
+        require(vec64[24] == 0);
+        require(vec64[25] == 1);
+        require(vec64[26] == 0);
+        require(vec64[27] == 1);
+        require(vec64[28] == 0);
+        require(vec64[29] == 1);
+        require(vec64[30] == 0);
+        require(vec64[31] == 1);
+        require(vec64[32] == 0);
+        require(vec64[33] == 0);
+        require(vec64[34] == 1);
+        require(vec64[35] == 1);
+        require(vec64[36] == 0);
+        require(vec64[37] == 0);
+        require(vec64[38] == 0);
+        require(vec64[39] == 1);
+        require(vec64[40] == 1);
+        require(vec64[41] == 1);
+        require(vec64[42] == 1);
+        require(vec64[43] == 0);
+        require(vec64[44] == 0);
+        require(vec64[45] == 0);
+        require(vec64[46] == 1);
+        require(vec64[47] == 1);
+        require(vec64[48] == 0);
+        require(vec64[49] == 0);
+        require(vec64[50] == 1);
+        require(vec64[51] == 0);
+        require(vec64[52] == 0);
+        require(vec64[53] == 0);
+        require(vec64[54] == 0);
+        require(vec64[55] == 1);
+        require(vec64[56] == 0);
+        require(vec64[57] == 0);
+        require(vec64[58] == 0);
+        require(vec64[59] == 1);
+        require(vec64[60] == 1);
+        require(vec64[61] == 1);
+        require(vec64[62] == 1);
+        require(vec64[63] == 1);
+
+        c_vector_128_bool([
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+        ]);
+
+        >vec128 = c_ret_vector_128_bool();
+        require(vec128[0] == 0);
+        require(vec128[1] == 1);
+        require(vec128[2] == 1);
+        require(vec128[3] == 0);
+        require(vec128[4] == 1);
+        require(vec128[5] == 0);
+        require(vec128[6] == 0);
+        require(vec128[7] == 1);
+        require(vec128[8] == 1);
+        require(vec128[9] == 0);
+        require(vec128[10] == 1);
+        require(vec128[11] == 0);
+        require(vec128[12] == 0);
+        require(vec128[13] == 0);
+        require(vec128[14] == 1);
+        require(vec128[15] == 0);
+        require(vec128[16] == 1);
+        require(vec128[17] == 0);
+        require(vec128[18] == 0);
+        require(vec128[19] == 1);
+        require(vec128[20] == 0);
+        require(vec128[21] == 1);
+        require(vec128[22] == 0);
+        require(vec128[23] == 0);
+        require(vec128[24] == 0);
+        require(vec128[25] == 1);
+        require(vec128[26] == 1);
+        require(vec128[27] == 1);
+        require(vec128[28] == 0);
+        require(vec128[29] == 0);
+        require(vec128[30] == 0);
+        require(vec128[31] == 0);
+        require(vec128[32] == 1);
+        require(vec128[33] == 1);
+        require(vec128[34] == 1);
+        require(vec128[35] == 0);
+        require(vec128[36] == 1);
+        require(vec128[37] == 1);
+        require(vec128[38] == 0);
+        require(vec128[39] == 0);
+        require(vec128[40] == 0);
+        require(vec128[41] == 0);
+        require(vec128[42] == 1);
+        require(vec128[43] == 1);
+        require(vec128[44] == 1);
+        require(vec128[45] == 0);
+        require(vec128[46] == 0);
+        require(vec128[47] == 0);
+        require(vec128[48] == 0);
+        require(vec128[49] == 1);
+        require(vec128[50] == 0);
+        require(vec128[51] == 0);
+        require(vec128[52] == 1);
+        require(vec128[53] == 0);
+        require(vec128[54] == 0);
+        require(vec128[55] == 0);
+        require(vec128[56] == 0);
+        require(vec128[57] == 0);
+        require(vec128[58] == 1);
+        require(vec128[59] == 1);
+        require(vec128[60] == 1);
+        require(vec128[61] == 0);
+        require(vec128[62] == 1);
+        require(vec128[63] == 1);
+        require(vec128[64] == 0);
+        require(vec128[65] == 0);
+        require(vec128[66] == 0);
+        require(vec128[67] == 0);
+        require(vec128[68] == 0);
+        require(vec128[69] == 0);
+        require(vec128[70] == 0);
+        require(vec128[71] == 0);
+        require(vec128[72] == 1);
+        require(vec128[73] == 1);
+        require(vec128[74] == 1);
+        require(vec128[75] == 1);
+        require(vec128[76] == 1);
+        require(vec128[77] == 0);
+        require(vec128[78] == 0);
+        require(vec128[79] == 0);
+        require(vec128[80] == 0);
+        require(vec128[81] == 0);
+        require(vec128[82] == 0);
+        require(vec128[83] == 1);
+        require(vec128[84] == 0);
+        require(vec128[85] == 1);
+        require(vec128[86] == 0);
+        require(vec128[87] == 1);
+        require(vec128[88] == 0);
+        require(vec128[89] == 1);
+        require(vec128[90] == 0);
+        require(vec128[91] == 1);
+        require(vec128[92] == 1);
+        require(vec128[93] == 1);
+        require(vec128[94] == 1);
+        require(vec128[95] == 0);
+        require(vec128[96] == 0);
+        require(vec128[97] == 1);
+        require(vec128[98] == 0);
+        require(vec128[99] == 0);
+        require(vec128[100] == 1);
+        require(vec128[101] == 1);
+        require(vec128[102] == 1);
+        require(vec128[103] == 1);
+        require(vec128[104] == 0);
+        require(vec128[105] == 1);
+        require(vec128[106] == 1);
+        require(vec128[107] == 1);
+        require(vec128[108] == 0);
+        require(vec128[109] == 0);
+        require(vec128[110] == 1);
+        require(vec128[111] == 0);
+        require(vec128[112] == 0);
+        require(vec128[113] == 1);
+        require(vec128[114] == 1);
+        require(vec128[115] == 0);
+        require(vec128[116] == 1);
+        require(vec128[117] == 0);
+        require(vec128[118] == 1);
+        require(vec128[119] == 1);
+        require(vec128[120] == 1);
+        require(vec128[121] == 1);
+        require(vec128[122] == 1);
+        require(vec128[123] == 0);
+        require(vec128[124] == 0);
+        require(vec128[125] == 1);
+        require(vec128[126] == 0);
+        require(vec128[127] == 1);
+
+        c_vector_256_bool([
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+        ]);
+
+        >vec256 = c_ret_vector_256_bool();
+        require(vec256[0] == 1);
+        require(vec256[1] == 0);
+        require(vec256[2] == 1);
+        require(vec256[3] == 1);
+        require(vec256[4] == 0);
+        require(vec256[5] == 0);
+        require(vec256[6] == 0);
+        require(vec256[7] == 0);
+        require(vec256[8] == 0);
+        require(vec256[9] == 1);
+        require(vec256[10] == 0);
+        require(vec256[11] == 1);
+        require(vec256[12] == 0);
+        require(vec256[13] == 1);
+        require(vec256[14] == 0);
+        require(vec256[15] == 0);
+        require(vec256[16] == 1);
+        require(vec256[17] == 1);
+        require(vec256[18] == 1);
+        require(vec256[19] == 0);
+        require(vec256[20] == 0);
+        require(vec256[21] == 0);
+        require(vec256[22] == 1);
+        require(vec256[23] == 0);
+        require(vec256[24] == 1);
+        require(vec256[25] == 0);
+        require(vec256[26] == 0);
+        require(vec256[27] == 1);
+        require(vec256[28] == 1);
+        require(vec256[29] == 1);
+        require(vec256[30] == 0);
+        require(vec256[31] == 0);
+        require(vec256[32] == 1);
+        require(vec256[33] == 1);
+        require(vec256[34] == 1);
+        require(vec256[35] == 0);
+        require(vec256[36] == 1);
+        require(vec256[37] == 1);
+        require(vec256[38] == 1);
+        require(vec256[39] == 0);
+        require(vec256[40] == 1);
+        require(vec256[41] == 0);
+        require(vec256[42] == 1);
+        require(vec256[43] == 1);
+        require(vec256[44] == 0);
+        require(vec256[45] == 1);
+        require(vec256[46] == 0);
+        require(vec256[47] == 1);
+        require(vec256[48] == 1);
+        require(vec256[49] == 0);
+        require(vec256[50] == 0);
+        require(vec256[51] == 1);
+        require(vec256[52] == 1);
+        require(vec256[53] == 0);
+        require(vec256[54] == 0);
+        require(vec256[55] == 1);
+        require(vec256[56] == 0);
+        require(vec256[57] == 1);
+        require(vec256[58] == 1);
+        require(vec256[59] == 1);
+        require(vec256[60] == 0);
+        require(vec256[61] == 1);
+        require(vec256[62] == 1);
+        require(vec256[63] == 0);
+        require(vec256[64] == 1);
+        require(vec256[65] == 1);
+        require(vec256[66] == 0);
+        require(vec256[67] == 1);
+        require(vec256[68] == 0);
+        require(vec256[69] == 1);
+        require(vec256[70] == 1);
+        require(vec256[71] == 1);
+        require(vec256[72] == 0);
+        require(vec256[73] == 1);
+        require(vec256[74] == 1);
+        require(vec256[75] == 0);
+        require(vec256[76] == 1);
+        require(vec256[77] == 1);
+        require(vec256[78] == 1);
+        require(vec256[79] == 1);
+        require(vec256[80] == 0);
+        require(vec256[81] == 1);
+        require(vec256[82] == 0);
+        require(vec256[83] == 1);
+        require(vec256[84] == 1);
+        require(vec256[85] == 1);
+        require(vec256[86] == 0);
+        require(vec256[87] == 1);
+        require(vec256[88] == 0);
+        require(vec256[89] == 1);
+        require(vec256[90] == 0);
+        require(vec256[91] == 0);
+        require(vec256[92] == 1);
+        require(vec256[93] == 0);
+        require(vec256[94] == 0);
+        require(vec256[95] == 0);
+        require(vec256[96] == 1);
+        require(vec256[97] == 1);
+        require(vec256[98] == 0);
+        require(vec256[99] == 0);
+        require(vec256[100] == 0);
+        require(vec256[101] == 1);
+        require(vec256[102] == 1);
+        require(vec256[103] == 1);
+        require(vec256[104] == 0);
+        require(vec256[105] == 0);
+        require(vec256[106] == 0);
+        require(vec256[107] == 1);
+        require(vec256[108] == 0);
+        require(vec256[109] == 1);
+        require(vec256[110] == 1);
+        require(vec256[111] == 1);
+        require(vec256[112] == 1);
+        require(vec256[113] == 1);
+        require(vec256[114] == 1);
+        require(vec256[115] == 1);
+        require(vec256[116] == 1);
+        require(vec256[117] == 0);
+        require(vec256[118] == 1);
+        require(vec256[119] == 0);
+        require(vec256[120] == 1);
+        require(vec256[121] == 0);
+        require(vec256[122] == 0);
+        require(vec256[123] == 1);
+        require(vec256[124] == 1);
+        require(vec256[125] == 0);
+        require(vec256[126] == 1);
+        require(vec256[127] == 0);
+        require(vec256[128] == 0);
+        require(vec256[129] == 0);
+        require(vec256[130] == 0);
+        require(vec256[131] == 1);
+        require(vec256[132] == 0);
+        require(vec256[133] == 0);
+        require(vec256[134] == 1);
+        require(vec256[135] == 0);
+        require(vec256[136] == 0);
+        require(vec256[137] == 0);
+        require(vec256[138] == 0);
+        require(vec256[139] == 0);
+        require(vec256[140] == 0);
+        require(vec256[141] == 1);
+        require(vec256[142] == 0);
+        require(vec256[143] == 1);
+        require(vec256[144] == 0);
+        require(vec256[145] == 1);
+        require(vec256[146] == 1);
+        require(vec256[147] == 1);
+        require(vec256[148] == 0);
+        require(vec256[149] == 1);
+        require(vec256[150] == 1);
+        require(vec256[151] == 0);
+        require(vec256[152] == 1);
+        require(vec256[153] == 1);
+        require(vec256[154] == 0);
+        require(vec256[155] == 1);
+        require(vec256[156] == 1);
+        require(vec256[157] == 1);
+        require(vec256[158] == 1);
+        require(vec256[159] == 1);
+        require(vec256[160] == 1);
+        require(vec256[161] == 1);
+        require(vec256[162] == 0);
+        require(vec256[163] == 0);
+        require(vec256[164] == 0);
+        require(vec256[165] == 1);
+        require(vec256[166] == 0);
+        require(vec256[167] == 0);
+        require(vec256[168] == 1);
+        require(vec256[169] == 0);
+        require(vec256[170] == 1);
+        require(vec256[171] == 1);
+        require(vec256[172] == 1);
+        require(vec256[173] == 0);
+        require(vec256[174] == 0);
+        require(vec256[175] == 1);
+        require(vec256[176] == 1);
+        require(vec256[177] == 1);
+        require(vec256[178] == 1);
+        require(vec256[179] == 0);
+        require(vec256[180] == 1);
+        require(vec256[181] == 1);
+        require(vec256[182] == 0);
+        require(vec256[183] == 1);
+        require(vec256[184] == 0);
+        require(vec256[185] == 0);
+        require(vec256[186] == 0);
+        require(vec256[187] == 1);
+        require(vec256[188] == 1);
+        require(vec256[189] == 1);
+        require(vec256[190] == 1);
+        require(vec256[191] == 1);
+        require(vec256[192] == 1);
+        require(vec256[193] == 1);
+        require(vec256[194] == 1);
+        require(vec256[195] == 0);
+        require(vec256[196] == 0);
+        require(vec256[197] == 1);
+        require(vec256[198] == 0);
+        require(vec256[199] == 0);
+        require(vec256[200] == 0);
+        require(vec256[201] == 1);
+        require(vec256[202] == 1);
+        require(vec256[203] == 1);
+        require(vec256[204] == 1);
+        require(vec256[205] == 1);
+        require(vec256[206] == 1);
+        require(vec256[207] == 0);
+        require(vec256[208] == 0);
+        require(vec256[209] == 0);
+        require(vec256[210] == 1);
+        require(vec256[211] == 1);
+        require(vec256[212] == 1);
+        require(vec256[213] == 0);
+        require(vec256[214] == 1);
+        require(vec256[215] == 0);
+        require(vec256[216] == 1);
+        require(vec256[217] == 0);
+        require(vec256[218] == 1);
+        require(vec256[219] == 0);
+        require(vec256[220] == 1);
+        require(vec256[221] == 1);
+        require(vec256[222] == 1);
+        require(vec256[223] == 0);
+        require(vec256[224] == 1);
+        require(vec256[225] == 0);
+        require(vec256[226] == 1);
+        require(vec256[227] == 0);
+        require(vec256[228] == 1);
+        require(vec256[229] == 0);
+        require(vec256[230] == 1);
+        require(vec256[231] == 0);
+        require(vec256[232] == 0);
+        require(vec256[233] == 1);
+        require(vec256[234] == 0);
+        require(vec256[235] == 1);
+        require(vec256[236] == 1);
+        require(vec256[237] == 0);
+        require(vec256[238] == 0);
+        require(vec256[239] == 1);
+        require(vec256[240] == 0);
+        require(vec256[241] == 0);
+        require(vec256[242] == 0);
+        require(vec256[243] == 1);
+        require(vec256[244] == 1);
+        require(vec256[245] == 0);
+        require(vec256[246] == 0);
+        require(vec256[247] == 0);
+        require(vec256[248] == 0);
+        require(vec256[249] == 0);
+        require(vec256[250] == 1);
+        require(vec256[251] == 0);
+        require(vec256[252] == 1);
+        require(vec256[253] == 0);
+        require(vec256[254] == 0);
+        require(vec256[255] == 0);
+
+        c_vector_512_bool([
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            1,
+        ]);
+
+        >vec512 = c_ret_vector_512_bool();
+        require(vec512[0] == 0);
+        require(vec512[1] == 1);
+        require(vec512[2] == 0);
+        require(vec512[3] == 0);
+        require(vec512[4] == 0);
+        require(vec512[5] == 1);
+        require(vec512[6] == 0);
+        require(vec512[7] == 0);
+        require(vec512[8] == 0);
+        require(vec512[9] == 1);
+        require(vec512[10] == 0);
+        require(vec512[11] == 0);
+        require(vec512[12] == 0);
+        require(vec512[13] == 1);
+        require(vec512[14] == 0);
+        require(vec512[15] == 1);
+        require(vec512[16] == 0);
+        require(vec512[17] == 0);
+        require(vec512[18] == 0);
+        require(vec512[19] == 0);
+        require(vec512[20] == 0);
+        require(vec512[21] == 0);
+        require(vec512[22] == 1);
+        require(vec512[23] == 1);
+        require(vec512[24] == 0);
+        require(vec512[25] == 0);
+        require(vec512[26] == 0);
+        require(vec512[27] == 0);
+        require(vec512[28] == 1);
+        require(vec512[29] == 1);
+        require(vec512[30] == 0);
+        require(vec512[31] == 1);
+        require(vec512[32] == 0);
+        require(vec512[33] == 1);
+        require(vec512[34] == 1);
+        require(vec512[35] == 1);
+        require(vec512[36] == 0);
+        require(vec512[37] == 0);
+        require(vec512[38] == 1);
+        require(vec512[39] == 1);
+        require(vec512[40] == 0);
+        require(vec512[41] == 0);
+        require(vec512[42] == 0);
+        require(vec512[43] == 0);
+        require(vec512[44] == 0);
+        require(vec512[45] == 1);
+        require(vec512[46] == 0);
+        require(vec512[47] == 1);
+        require(vec512[48] == 1);
+        require(vec512[49] == 0);
+        require(vec512[50] == 1);
+        require(vec512[51] == 1);
+        require(vec512[52] == 1);
+        require(vec512[53] == 1);
+        require(vec512[54] == 0);
+        require(vec512[55] == 0);
+        require(vec512[56] == 0);
+        require(vec512[57] == 1);
+        require(vec512[58] == 1);
+        require(vec512[59] == 0);
+        require(vec512[60] == 0);
+        require(vec512[61] == 0);
+        require(vec512[62] == 0);
+        require(vec512[63] == 1);
+        require(vec512[64] == 1);
+        require(vec512[65] == 1);
+        require(vec512[66] == 1);
+        require(vec512[67] == 1);
+        require(vec512[68] == 0);
+        require(vec512[69] == 0);
+        require(vec512[70] == 0);
+        require(vec512[71] == 0);
+        require(vec512[72] == 0);
+        require(vec512[73] == 1);
+        require(vec512[74] == 0);
+        require(vec512[75] == 1);
+        require(vec512[76] == 0);
+        require(vec512[77] == 0);
+        require(vec512[78] == 1);
+        require(vec512[79] == 1);
+        require(vec512[80] == 0);
+        require(vec512[81] == 0);
+        require(vec512[82] == 0);
+        require(vec512[83] == 1);
+        require(vec512[84] == 0);
+        require(vec512[85] == 1);
+        require(vec512[86] == 1);
+        require(vec512[87] == 1);
+        require(vec512[88] == 0);
+        require(vec512[89] == 1);
+        require(vec512[90] == 0);
+        require(vec512[91] == 0);
+        require(vec512[92] == 1);
+        require(vec512[93] == 1);
+        require(vec512[94] == 0);
+        require(vec512[95] == 1);
+        require(vec512[96] == 1);
+        require(vec512[97] == 0);
+        require(vec512[98] == 1);
+        require(vec512[99] == 0);
+        require(vec512[100] == 1);
+        require(vec512[101] == 1);
+        require(vec512[102] == 0);
+        require(vec512[103] == 1);
+        require(vec512[104] == 1);
+        require(vec512[105] == 0);
+        require(vec512[106] == 0);
+        require(vec512[107] == 0);
+        require(vec512[108] == 1);
+        require(vec512[109] == 0);
+        require(vec512[110] == 0);
+        require(vec512[111] == 0);
+        require(vec512[112] == 1);
+        require(vec512[113] == 1);
+        require(vec512[114] == 1);
+        require(vec512[115] == 0);
+        require(vec512[116] == 1);
+        require(vec512[117] == 0);
+        require(vec512[118] == 1);
+        require(vec512[119] == 0);
+        require(vec512[120] == 1);
+        require(vec512[121] == 1);
+        require(vec512[122] == 0);
+        require(vec512[123] == 1);
+        require(vec512[124] == 0);
+        require(vec512[125] == 1);
+        require(vec512[126] == 1);
+        require(vec512[127] == 1);
+        require(vec512[128] == 0);
+        require(vec512[129] == 1);
+        require(vec512[130] == 0);
+        require(vec512[131] == 0);
+        require(vec512[132] == 0);
+        require(vec512[133] == 0);
+        require(vec512[134] == 0);
+        require(vec512[135] == 0);
+        require(vec512[136] == 1);
+        require(vec512[137] == 0);
+        require(vec512[138] == 1);
+        require(vec512[139] == 0);
+        require(vec512[140] == 1);
+        require(vec512[141] == 1);
+        require(vec512[142] == 0);
+        require(vec512[143] == 1);
+        require(vec512[144] == 0);
+        require(vec512[145] == 0);
+        require(vec512[146] == 1);
+        require(vec512[147] == 0);
+        require(vec512[148] == 0);
+        require(vec512[149] == 1);
+        require(vec512[150] == 0);
+        require(vec512[151] == 1);
+        require(vec512[152] == 0);
+        require(vec512[153] == 1);
+        require(vec512[154] == 0);
+        require(vec512[155] == 0);
+        require(vec512[156] == 1);
+        require(vec512[157] == 0);
+        require(vec512[158] == 1);
+        require(vec512[159] == 1);
+        require(vec512[160] == 1);
+        require(vec512[161] == 0);
+        require(vec512[162] == 0);
+        require(vec512[163] == 1);
+        require(vec512[164] == 0);
+        require(vec512[165] == 0);
+        require(vec512[166] == 0);
+        require(vec512[167] == 1);
+        require(vec512[168] == 1);
+        require(vec512[169] == 1);
+        require(vec512[170] == 0);
+        require(vec512[171] == 1);
+        require(vec512[172] == 0);
+        require(vec512[173] == 0);
+        require(vec512[174] == 0);
+        require(vec512[175] == 0);
+        require(vec512[176] == 0);
+        require(vec512[177] == 1);
+        require(vec512[178] == 1);
+        require(vec512[179] == 0);
+        require(vec512[180] == 0);
+        require(vec512[181] == 1);
+        require(vec512[182] == 0);
+        require(vec512[183] == 0);
+        require(vec512[184] == 0);
+        require(vec512[185] == 0);
+        require(vec512[186] == 0);
+        require(vec512[187] == 1);
+        require(vec512[188] == 1);
+        require(vec512[189] == 0);
+        require(vec512[190] == 0);
+        require(vec512[191] == 0);
+        require(vec512[192] == 0);
+        require(vec512[193] == 0);
+        require(vec512[194] == 0);
+        require(vec512[195] == 1);
+        require(vec512[196] == 1);
+        require(vec512[197] == 0);
+        require(vec512[198] == 1);
+        require(vec512[199] == 1);
+        require(vec512[200] == 1);
+        require(vec512[201] == 1);
+        require(vec512[202] == 1);
+        require(vec512[203] == 1);
+        require(vec512[204] == 0);
+        require(vec512[205] == 0);
+        require(vec512[206] == 0);
+        require(vec512[207] == 0);
+        require(vec512[208] == 1);
+        require(vec512[209] == 0);
+        require(vec512[210] == 1);
+        require(vec512[211] == 1);
+        require(vec512[212] == 1);
+        require(vec512[213] == 1);
+        require(vec512[214] == 0);
+        require(vec512[215] == 0);
+        require(vec512[216] == 0);
+        require(vec512[217] == 1);
+        require(vec512[218] == 1);
+        require(vec512[219] == 0);
+        require(vec512[220] == 1);
+        require(vec512[221] == 1);
+        require(vec512[222] == 0);
+        require(vec512[223] == 0);
+        require(vec512[224] == 0);
+        require(vec512[225] == 1);
+        require(vec512[226] == 1);
+        require(vec512[227] == 1);
+        require(vec512[228] == 1);
+        require(vec512[229] == 0);
+        require(vec512[230] == 1);
+        require(vec512[231] == 0);
+        require(vec512[232] == 1);
+        require(vec512[233] == 1);
+        require(vec512[234] == 1);
+        require(vec512[235] == 1);
+        require(vec512[236] == 0);
+        require(vec512[237] == 1);
+        require(vec512[238] == 0);
+        require(vec512[239] == 1);
+        require(vec512[240] == 0);
+        require(vec512[241] == 1);
+        require(vec512[242] == 0);
+        require(vec512[243] == 0);
+        require(vec512[244] == 0);
+        require(vec512[245] == 1);
+        require(vec512[246] == 1);
+        require(vec512[247] == 0);
+        require(vec512[248] == 1);
+        require(vec512[249] == 0);
+        require(vec512[250] == 0);
+        require(vec512[251] == 0);
+        require(vec512[252] == 1);
+        require(vec512[253] == 1);
+        require(vec512[254] == 1);
+        require(vec512[255] == 1);
+        require(vec512[256] == 1);
+        require(vec512[257] == 0);
+        require(vec512[258] == 1);
+        require(vec512[259] == 1);
+        require(vec512[260] == 1);
+        require(vec512[261] == 1);
+        require(vec512[262] == 0);
+        require(vec512[263] == 1);
+        require(vec512[264] == 0);
+        require(vec512[265] == 0);
+        require(vec512[266] == 1);
+        require(vec512[267] == 0);
+        require(vec512[268] == 1);
+        require(vec512[269] == 0);
+        require(vec512[270] == 0);
+        require(vec512[271] == 1);
+        require(vec512[272] == 1);
+        require(vec512[273] == 0);
+        require(vec512[274] == 1);
+        require(vec512[275] == 0);
+        require(vec512[276] == 0);
+        require(vec512[277] == 1);
+        require(vec512[278] == 0);
+        require(vec512[279] == 0);
+        require(vec512[280] == 1);
+        require(vec512[281] == 1);
+        require(vec512[282] == 1);
+        require(vec512[283] == 0);
+        require(vec512[284] == 0);
+        require(vec512[285] == 1);
+        require(vec512[286] == 1);
+        require(vec512[287] == 1);
+        require(vec512[288] == 0);
+        require(vec512[289] == 0);
+        require(vec512[290] == 0);
+        require(vec512[291] == 0);
+        require(vec512[292] == 0);
+        require(vec512[293] == 0);
+        require(vec512[294] == 1);
+        require(vec512[295] == 0);
+        require(vec512[296] == 1);
+        require(vec512[297] == 0);
+        require(vec512[298] == 1);
+        require(vec512[299] == 1);
+        require(vec512[300] == 0);
+        require(vec512[301] == 0);
+        require(vec512[302] == 0);
+        require(vec512[303] == 0);
+        require(vec512[304] == 1);
+        require(vec512[305] == 1);
+        require(vec512[306] == 1);
+        require(vec512[307] == 1);
+        require(vec512[308] == 1);
+        require(vec512[309] == 0);
+        require(vec512[310] == 1);
+        require(vec512[311] == 1);
+        require(vec512[312] == 1);
+        require(vec512[313] == 1);
+        require(vec512[314] == 1);
+        require(vec512[315] == 0);
+        require(vec512[316] == 1);
+        require(vec512[317] == 1);
+        require(vec512[318] == 1);
+        require(vec512[319] == 0);
+        require(vec512[320] == 1);
+        require(vec512[321] == 0);
+        require(vec512[322] == 1);
+        require(vec512[323] == 1);
+        require(vec512[324] == 1);
+        require(vec512[325] == 0);
+        require(vec512[326] == 0);
+        require(vec512[327] == 1);
+        require(vec512[328] == 1);
+        require(vec512[329] == 1);
+        require(vec512[330] == 0);
+        require(vec512[331] == 0);
+        require(vec512[332] == 1);
+        require(vec512[333] == 1);
+        require(vec512[334] == 0);
+        require(vec512[335] == 1);
+        require(vec512[336] == 1);
+        require(vec512[337] == 1);
+        require(vec512[338] == 1);
+        require(vec512[339] == 1);
+        require(vec512[340] == 1);
+        require(vec512[341] == 0);
+        require(vec512[342] == 1);
+        require(vec512[343] == 0);
+        require(vec512[344] == 1);
+        require(vec512[345] == 0);
+        require(vec512[346] == 0);
+        require(vec512[347] == 0);
+        require(vec512[348] == 0);
+        require(vec512[349] == 1);
+        require(vec512[350] == 1);
+        require(vec512[351] == 1);
+        require(vec512[352] == 1);
+        require(vec512[353] == 0);
+        require(vec512[354] == 1);
+        require(vec512[355] == 0);
+        require(vec512[356] == 1);
+        require(vec512[357] == 1);
+        require(vec512[358] == 0);
+        require(vec512[359] == 1);
+        require(vec512[360] == 0);
+        require(vec512[361] == 0);
+        require(vec512[362] == 1);
+        require(vec512[363] == 0);
+        require(vec512[364] == 0);
+        require(vec512[365] == 0);
+        require(vec512[366] == 0);
+        require(vec512[367] == 0);
+        require(vec512[368] == 0);
+        require(vec512[369] == 0);
+        require(vec512[370] == 1);
+        require(vec512[371] == 0);
+        require(vec512[372] == 1);
+        require(vec512[373] == 1);
+        require(vec512[374] == 0);
+        require(vec512[375] == 0);
+        require(vec512[376] == 1);
+        require(vec512[377] == 0);
+        require(vec512[378] == 0);
+        require(vec512[379] == 1);
+        require(vec512[380] == 0);
+        require(vec512[381] == 0);
+        require(vec512[382] == 1);
+        require(vec512[383] == 0);
+        require(vec512[384] == 0);
+        require(vec512[385] == 0);
+        require(vec512[386] == 0);
+        require(vec512[387] == 1);
+        require(vec512[388] == 1);
+        require(vec512[389] == 1);
+        require(vec512[390] == 1);
+        require(vec512[391] == 1);
+        require(vec512[392] == 1);
+        require(vec512[393] == 1);
+        require(vec512[394] == 0);
+        require(vec512[395] == 1);
+        require(vec512[396] == 1);
+        require(vec512[397] == 0);
+        require(vec512[398] == 0);
+        require(vec512[399] == 0);
+        require(vec512[400] == 1);
+        require(vec512[401] == 0);
+        require(vec512[402] == 1);
+        require(vec512[403] == 1);
+        require(vec512[404] == 0);
+        require(vec512[405] == 1);
+        require(vec512[406] == 1);
+        require(vec512[407] == 1);
+        require(vec512[408] == 1);
+        require(vec512[409] == 0);
+        require(vec512[410] == 0);
+        require(vec512[411] == 0);
+        require(vec512[412] == 1);
+        require(vec512[413] == 1);
+        require(vec512[414] == 0);
+        require(vec512[415] == 1);
+        require(vec512[416] == 0);
+        require(vec512[417] == 1);
+        require(vec512[418] == 0);
+        require(vec512[419] == 0);
+        require(vec512[420] == 0);
+        require(vec512[421] == 0);
+        require(vec512[422] == 1);
+        require(vec512[423] == 1);
+        require(vec512[424] == 1);
+        require(vec512[425] == 0);
+        require(vec512[426] == 1);
+        require(vec512[427] == 0);
+        require(vec512[428] == 0);
+        require(vec512[429] == 0);
+        require(vec512[430] == 1);
+        require(vec512[431] == 1);
+        require(vec512[432] == 0);
+        require(vec512[433] == 1);
+        require(vec512[434] == 0);
+        require(vec512[435] == 0);
+        require(vec512[436] == 1);
+        require(vec512[437] == 1);
+        require(vec512[438] == 1);
+        require(vec512[439] == 1);
+        require(vec512[440] == 1);
+        require(vec512[441] == 1);
+        require(vec512[442] == 0);
+        require(vec512[443] == 0);
+        require(vec512[444] == 0);
+        require(vec512[445] == 1);
+        require(vec512[446] == 1);
+        require(vec512[447] == 1);
+        require(vec512[448] == 0);
+        require(vec512[449] == 0);
+        require(vec512[450] == 0);
+        require(vec512[451] == 0);
+        require(vec512[452] == 0);
+        require(vec512[453] == 0);
+        require(vec512[454] == 0);
+        require(vec512[455] == 0);
+        require(vec512[456] == 0);
+        require(vec512[457] == 0);
+        require(vec512[458] == 0);
+        require(vec512[459] == 1);
+        require(vec512[460] == 0);
+        require(vec512[461] == 0);
+        require(vec512[462] == 0);
+        require(vec512[463] == 1);
+        require(vec512[464] == 0);
+        require(vec512[465] == 0);
+        require(vec512[466] == 0);
+        require(vec512[467] == 0);
+        require(vec512[468] == 1);
+        require(vec512[469] == 1);
+        require(vec512[470] == 1);
+        require(vec512[471] == 1);
+        require(vec512[472] == 1);
+        require(vec512[473] == 0);
+        require(vec512[474] == 0);
+        require(vec512[475] == 1);
+        require(vec512[476] == 1);
+        require(vec512[477] == 1);
+        require(vec512[478] == 0);
+        require(vec512[479] == 1);
+        require(vec512[480] == 1);
+        require(vec512[481] == 1);
+        require(vec512[482] == 0);
+        require(vec512[483] == 1);
+        require(vec512[484] == 0);
+        require(vec512[485] == 1);
+        require(vec512[486] == 0);
+        require(vec512[487] == 1);
+        require(vec512[488] == 0);
+        require(vec512[489] == 1);
+        require(vec512[490] == 1);
+        require(vec512[491] == 1);
+        require(vec512[492] == 1);
+        require(vec512[493] == 0);
+        require(vec512[494] == 1);
+        require(vec512[495] == 1);
+        require(vec512[496] == 0);
+        require(vec512[497] == 1);
+        require(vec512[498] == 0);
+        require(vec512[499] == 0);
+        require(vec512[500] == 0);
+        require(vec512[501] == 0);
+        require(vec512[502] == 0);
+        require(vec512[503] == 0);
+        require(vec512[504] == 0);
+        require(vec512[505] == 0);
+        require(vec512[506] == 0);
+        require(vec512[507] == 1);
+        require(vec512[508] == 1);
+        require(vec512[509] == 0);
+        require(vec512[510] == 1);
+        require(vec512[511] == 0);
+    }
+
+    // C ABI pointer sized float struct
+    {
+        c_ptr_size_float_struct({ .x = 1.0, .y = 2.0 });
+
+        >x = c_ret_ptr_size_float_struct();
+        require(x.x == 3.0);
+        require(x.y == 4.0);
+    }
+
+    // C ABI {double, char}
+    {
+        require(c_assert_DC({ .v1 = -0.25, .v2 = 15 }) == 0);
+        require(c_assert_ret_DC() == 0);
+        require(c_send_DC() == 0);
+        >dc = c_ret_DC();
+        require(dc.v1 == -0.25);
+        require(dc.v2 == 15);
+    }
+
+    // C ABI CFF
+    {
+        require(c_assert_CFF({ .v1 = 39, .v2 = 0.875, .v3 = 1.0 }) == 0);
+        require(c_assert_ret_CFF() == 0);
+        require(c_send_CFF() == 0);
+        >cff = c_ret_CFF();
+        require(cff.v1 == 39);
+        require(cff.v2 == 0.875);
+        require(cff.v3 == 1.0);
+    }
+
+    // C ABI {pointer, double}
+    {
+        require(c_assert_PD({ .v1 = zero, .v2 = 0.5 }) == 0);
+        require(c_assert_ret_PD() == 0);
+        require(c_send_PD() == 0);
+        >pd = c_ret_PD();
+        require(pd.v1 == zero);
+        require(pd.v2 == 0.5);
+    }
+
+    // C ABI modify by reference parameter
+    {
+        >res = c_modify_by_ref_param({ .val = 1, .arr = undefined });
+        require(res.val == 42);
+    }
+
+    // C ABI function that takes byval struct called via function pointer
+    {
+        >fn_ptr = &c_func_ptr_byval;
+        >p1: u64 = 1;
+        >p2: u64 = 2;
+        >p4: u64 = 4;
+        fn_ptr(
+            @pointer_from_int(p1),
+            @pointer_from_int(p2),
+            {
+                .origin = { .x = 9, .y = 10, .z = 11 },
+                .size = { .width = 12, .height = 13, .depth = 14 },
+            },
+            3,
+            @pointer_from_int(p4),
+            5,
+        );
+    }
+
+    // C ABI f128
+    {
+        >a = c_f128(12.34);
+        require(a == 56.78);
+    }
+
+    // C ABI f128 struct
+    {
+        >a = c_f128_struct({ .a = 12.34 });
+        require(a.a == 56.78);
+
+        >b = c_f128_f128_struct({ .a = 12.34, .b = 87.65 });
+        require(b.a == 56.78);
+        require(b.b == 43.21);
+    }
 }
 
 S2Enum = enum
