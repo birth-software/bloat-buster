@@ -13259,6 +13259,21 @@ invalidate_analysis = fn (module: &Module, value: &Value) void
         {
             invalidate_analysis(module, value.content.unary.value);
         },
+        .call =>
+        {
+            invalidate_analysis(module, value.content.call.callable);
+
+            for (argument: value.content.call.arguments)
+            {
+                invalidate_analysis(module, argument);
+            }
+
+            value.content.call.function_type = zero;
+        },
+        else =>
+        {
+            report_error(module, "TODO: invalidate_analysis");
+        },
     }
 
     value.type = zero;
