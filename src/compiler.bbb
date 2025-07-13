@@ -1661,7 +1661,9 @@ type_is_signed = fn (type: &Type) u1
         {
             return type_is_signed(type.content.enum.backing_type);
         },
-        .pointer =>
+        .struct,
+        .pointer,
+        =>
         {
             return 0;
         },
