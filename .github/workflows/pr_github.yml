@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+
+env:
+  BB_CI: 1
+  CLANG_PATH: clang-19
+  CLANGXX_PATH: clang++-19
+  LLVM_VERSION: 20.1.7
+  BB_CACHE_DIR: bb-cache
+
+jobs:
+  ci:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-24.04 ]
+        BIRTH_CMAKE_BUILD_TYPE: [ Release-assertions ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download the compiler
+        uses: robinraju/release-downloader@v1
+        with:
+          latest: true
+          fileName: 'compiler_generic_debug'
+      - name: Download LLVM
+        uses: robinraju/release-downloader@v1
+        with:
+          repository: 'birth-software/llvm'
+          fileName: 'llvm_20.1.7_x86_64-linux-Release.7z'
+          tag: 'v20.1.7'
+      - name: Download LLVM (macos)
+        uses: robinraju/release-downloader@v1
+        with:
+          repository: 'birth-software/llvm'
+          fileName: 'llvm_20.1.7_aarch64-macos-Release.7z'
+          tag: 'v20.1.7'
+      - name: Install system dependencies
+        shell: bash
+        run: |
+          ls -lasR
+          sudo apt install clang-19
+          chmod +x compiler_generic_debug
+          7z x llvm_20.1.7_x86_64-linux-Release.7z
+          lscpu
+      - name: Build and test (Packaged LLVM)
+        shell: bash
+        env:
+          CMAKE_BUILD_TYPE: ${{matrix.BIRTH_CMAKE_BUILD_TYPE}}
+        run: |
+          set -eux
+          ./generate.sh
+          BB_SKIP_LLVM_CONFIG=1 BB_TARGET_TRIPLE=aarch64-macos BB_NO_LINK=1 CMAKE_PREFIX_PATH=./llvm_${LLVM_VERSION}_aarch64-macos-Release ./compiler_generic_debug compile src/compiler.bbb
+          tree bb-cache
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          path: bb-cache/debug_none_di_native/compiler.o
