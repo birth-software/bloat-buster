@@ -1054,12 +1054,15 @@ base_cache_dir = "bb-cache";
 
 CPUArchitecture = enum
 {
+    aarch64,
     x86_64,
 }
 
 OperatingSystem = enum
 {
     linux,
+    macos,
+    windows,
 }
 
 Target = struct
@@ -1104,6 +1107,7 @@ CompileOptions = struct
     library_paths: [][]u8,
     link_libc: u1,
     link_libcpp: u1,
+    link: u1,
     target: Target,
     build_mode: BuildMode,
     has_debug_info: u1,
@@ -2568,6 +2572,13 @@ macro_declaration_is_generic = fn (declaration: &MacroDeclaration) u1
     return declaration.constant_arguments.length != 0;
 }
 
+[extern] LLVMInitializeAArch64TargetInfo = fn [cc(c)] () void;
+[extern] LLVMInitializeAArch64Target = fn [cc(c)] () void;
+[extern] LLVMInitializeAArch64TargetMC = fn [cc(c)] () void;
+[extern] LLVMInitializeAArch64AsmPrinter = fn [cc(c)] () void;
+[extern] LLVMInitializeAArch64AsmParser = fn [cc(c)] () void;
+[extern] LLVMInitializeAArch64Disassembler = fn [cc(c)] () void;
+
 [extern] LLVMInitializeX86TargetInfo = fn [cc(c)] () void;
 [extern] LLVMInitializeX86Target = fn [cc(c)] () void;
 [extern] LLVMInitializeX86TargetMC = fn [cc(c)] () void;
@@ -2589,6 +2600,13 @@ llvm_initialize_targets = fn () void
 {
     if (!llvm_targets_initialized)
     {
+        LLVMInitializeAArch64TargetInfo();
+        LLVMInitializeAArch64Target();
+        LLVMInitializeAArch64TargetMC();
+        LLVMInitializeAArch64AsmPrinter();
+        LLVMInitializeAArch64AsmParser();
+        LLVMInitializeAArch64Disassembler();
+
         LLVMInitializeX86TargetInfo();
         LLVMInitializeX86Target();
         LLVMInitializeX86TargetMC();
@@ -3163,6 +3181,7 @@ Module = struct
     library_paths: [][]u8,
     link_libc: u1,
     link_libcpp: u1,
+    link: u1,
 
     target: Target,
     build_mode: BuildMode,
@@ -18017,24 +18036,46 @@ emit = fn (module: &Module) void
     >cpu_model: &u8 = zero;
     >cpu_features: &u8 = zero;
 
-    if (target_compare(module.target, target_get_native(module.target.host_cpu_model)))
+    >target = module.target;
+
+    >is_host_triple = target_compare(target, target_get_native(target.host_cpu_model));
+
+    if (is_host_triple)
     {
         target_triple = host_target_triple;
-
-        if (module.target.host_cpu_model)
-        {
-            cpu_model = host_cpu_model;
-            cpu_features = host_cpu_features;
-        }
-        else
-        {
-            cpu_model = "generic";
-            cpu_features = "";
-        }
     }
     else
     {
-        @trap();
+        switch (target.os)
+        {
+            .macos =>
+            {
+                >target_triple_slice = arena_join_string(module.arena, [ @enum_name(target.cpu), "-apple-macosx15.0.0" ][..]);
+                target_triple = target_triple_slice.pointer;
+            },
+            else =>
+            {
+                @trap();
+            },
+        }
+    }
+
+    >is_host_cpu_model = target.host_cpu_model;
+
+    if (is_host_cpu_model)
+    {
+        cpu_model = host_cpu_model;
+        cpu_features = host_cpu_features;
+    }
+    else
+    {
+        cpu_model = "generic";
+        cpu_features = "";
+
+        if (target.cpu == .aarch64 and target.os == .macos)
+        {
+            cpu_model = "apple-m1";
+        }
     }
 
     >target_machine_options = LLVMCreateTargetMachineOptions();
@@ -18050,9 +18091,9 @@ emit = fn (module: &Module) void
 
     LLVMTargetMachineOptionsSetCodeGenOptLevel(target_machine_options, code_generation_optimization_level);
 
-    >target: &LLVMTarget = zero;
+    >llvm_target: &LLVMTarget = zero;
     >error_message: &u8 = zero;
-    >result = LLVMGetTargetFromTriple(target_triple, &target, &error_message);
+    >result = LLVMGetTargetFromTriple(target_triple, &llvm_target, &error_message);
     if (result != 0)
     {
         report_error(module, "LLVM target not found");
@@ -18060,7 +18101,7 @@ emit = fn (module: &Module) void
 
     assert(!error_message);
 
-    >target_machine = LLVMCreateTargetMachineWithOptions(target, target_triple, target_machine_options);
+    >target_machine = LLVMCreateTargetMachineWithOptions(llvm_target, target_triple, target_machine_options);
 
     >target_data_layout = LLVMCreateTargetDataLayout(target_machine);
     LLVMSetModuleDataLayout(m, target_data_layout);
@@ -19062,12 +19103,14 @@ compile = fn (arena: &Arena, options: CompileOptions) void
         .library_paths = options.library_paths,
         .link_libc = options.link_libc,
         .link_libcpp = options.link_libcpp,
+        .link = options.link,
         .target = options.target,
         .build_mode = options.build_mode,
         .has_debug_info = options.has_debug_info,
         .silent = options.silent,
         zero,
     };
+
     module.scope.types.first = base_type_allocation;
     module.scope.types.last = noreturn_type;
 
@@ -19105,6 +19148,26 @@ compile = fn (arena: &Arena, options: CompileOptions) void
 
     parse(&module);
     emit(&module);
+}
+
+parse_target_triple = fn (target_triple: []u8) Target
+{
+    >cpu_arch_end = string_first_character(target_triple, '-');
+    >cpu_string = target_triple[..cpu_arch_end];
+    >os_string = target_triple[cpu_arch_end + 1..];
+
+    >cpu_s2e = @string_to_enum(CPUArchitecture, cpu_string);
+    >os_s2e = @string_to_enum(OperatingSystem, os_string);
+
+    if (!cpu_s2e.is_valid or !os_s2e.is_valid)
+    {
+        @trap();
+    }
+
+    >cpu = cpu_s2e.enum_value;
+    >os = os_s2e.enum_value;
+
+    return { .cpu = cpu, .os = os, zero };
 }
 
 compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
@@ -19330,6 +19393,22 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
         objects = object_array[..];
     }
 
+    >target = target_get_native(compile_options.host_cpu_model);
+
+    >target_triple_c = getenv("BB_TARGET_TRIPLE");
+    if (target_triple_c)
+    {
+        >target_triple = c_string_to_slice(target_triple_c);
+        target = parse_target_triple(target_triple);
+    }
+
+    >link: u1 = 1;
+
+    if (getenv("BB_NO_LINK"))
+    {
+        link = 0;
+    }
+
     >options: CompileOptions = {
         .executable = output_executable_path,
         .definitions = definitions,
@@ -19339,12 +19418,13 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
         .library_paths = library_paths,
         .link_libc = 1,
         .link_libcpp = is_compiler,
+        .link = link,
         .name = base_name,
         .build_mode = compile_options.build_mode,
         .content = file_content,
         .path = file_path,
         .has_debug_info = compile_options.has_debug_info,
-        .target = target_get_native(compile_options.host_cpu_model),
+        .target = target,
         .silent = compile_options.silent,
     };
 
