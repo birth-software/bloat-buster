@@ -19232,21 +19232,35 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
     >file_content = file_read(arena, relative_file_path);
     >file_path = path_absolute(arena, relative_file_path.pointer);
 
+    >target = target_get_native(compile_options.host_cpu_model);
+
+    >target_triple_c = getenv("BB_TARGET_TRIPLE");
+    if (target_triple_c)
+    {
+        >target_triple = c_string_to_slice(target_triple_c);
+        target = parse_target_triple(target_triple);
+    }
+
     >definitions: []Definition = zero;
     >cmake_prefix_path_definition: Definition = {
         .name = "CMAKE_PREFIX_PATH",
         .value = CMAKE_PREFIX_PATH,
     };
 
+    >cmake_prefix_path_cstr: &u8 = zero;
+
     if (is_compiler)
     {
-        >cmake_prefix_path_cstr = getenv("CMAKE_PREFIX_PATH");
+        cmake_prefix_path_cstr = getenv("CMAKE_PREFIX_PATH");
+
         if (cmake_prefix_path_cstr)
         {
             >cmake_prefix_path_value = c_string_to_slice(cmake_prefix_path_cstr);
             cmake_prefix_path_definition.value = cmake_prefix_path_value;
         }
     }
+
+    >link: u1 = 1;
 
     >object_array = [ output_object_path, arena_join_string(arena, [ base_cache_dir, "/c_abi_", @select(compile_options.host_cpu_model, "native", "generic"), ".o" ][..]) ];
     >objects = object_array[..1];
@@ -19258,112 +19272,248 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
     >library_names: [][]u8 = zero;
     >library_paths: [][]u8 = zero;
 
+    >library_count: u64 = 0;
+
     if (is_compiler)
     {
         definitions = { .pointer = &cmake_prefix_path_definition, .length = 1 };
 
-        >builder: ArgumentBuilder = zero;
-
-        add_argument(&builder, arena_join_string(arena, [ cmake_prefix_path_definition.value, "/bin/llvm-config"][..]));
-        add_argument(&builder, "--libdir");
-        add_argument(&builder, "--libs");
-        add_argument(&builder, "--system-libs");
-
-        >arguments = flush_arguments(&builder);
-
-        >llvm_config = os_execute(arena, arguments, envp, {
-            .policies = [ .pipe, .ignore ],
-            zero,
-        });
-
-        >success = llvm_config.termination_kind == .exit and llvm_config.termination_code == 0;
-
-        if (!success)
+        if (getenv("BB_SKIP_LLVM_CONFIG"))
         {
-            print("LLVM config failed\n");
-            @trap();
-        }
-
-        >stream = llvm_config.streams[0];
-
-        >line = string_first_character(stream, '\n');
-
-        if (line == string_no_match)
-        {
-            print("Unexpected llvm-config output\n");
-            @trap();
-        }
-
-        library_directory = stream[..line];
-        library_directories = { .pointer = &library_directory, .length = 1 };
-
-        stream = stream[line + 1..];
-
-        line = string_first_character(stream, '\n');
-        if (line == string_no_match)
-        {
-            print("Unexpected llvm-config output 2\n");
-            @trap();
-        }
-
-        >llvm_library_stream = stream[..line];
-
-        stream = stream[line + 1..];
-
-        >library_count: u64 = 0;
-
-        while (1)
-        {
-            >space = string_first_character(llvm_library_stream, ' ');
-            if (space == string_no_match)
+            if (!cmake_prefix_path_cstr)
             {
-                >library_argument = llvm_library_stream;
-                library_buffer[library_count] = library_argument[2..];
-                library_count += 1;
-                break;
+                @trap();
             }
 
-            // Omit the first two characters: "-l"
-            >library_argument = llvm_library_stream[2..space];
-            library_buffer[library_count] = library_argument;
-            library_count += 1;
-            llvm_library_stream = llvm_library_stream[space + 1..];
-        }
+            library_directory = arena_join_string(arena, [ cmake_prefix_path_definition.value, "/lib" ][..]);
+            library_directories = { .pointer = &library_directory, .length = 1 };
 
-        line = string_first_character(stream, '\n');
-        if (line == string_no_match)
-        {
-            print("Unexpected llvm-config output 3\n");
-            @trap();
-        }
+            >llvm_libraries: [_][]u8 = [
+                "LLVMWindowsManifest",
+                "LLVMXRay",
+                "LLVMLibDriver",
+                "LLVMDlltoolDriver",
+                "LLVMTelemetry",
+                "LLVMTextAPIBinaryReader",
+                "LLVMCoverage",
+                "LLVMLineEditor",
+                "LLVMAArch64Disassembler",
+                "LLVMAArch64AsmParser",
+                "LLVMAArch64CodeGen",
+                "LLVMAArch64Desc",
+                "LLVMAArch64Utils",
+                "LLVMAArch64Info",
+                "LLVMX86TargetMCA",
+                "LLVMX86Disassembler",
+                "LLVMX86AsmParser",
+                "LLVMX86CodeGen",
+                "LLVMX86Desc",
+                "LLVMX86Info",
+                "LLVMOrcDebugging",
+                "LLVMOrcJIT",
+                "LLVMWindowsDriver",
+                "LLVMMCJIT",
+                "LLVMJITLink",
+                "LLVMInterpreter",
+                "LLVMExecutionEngine",
+                "LLVMRuntimeDyld",
+                "LLVMOrcTargetProcess",
+                "LLVMOrcShared",
+                "LLVMDWP",
+                "LLVMDebugInfoLogicalView",
+                "LLVMDebugInfoGSYM",
+                "LLVMOption",
+                "LLVMObjectYAML",
+                "LLVMObjCopy",
+                "LLVMMCA",
+                "LLVMMCDisassembler",
+                "LLVMLTO",
+                "LLVMPasses",
+                "LLVMHipStdPar",
+                "LLVMCFGuard",
+                "LLVMCoroutines",
+                "LLVMipo",
+                "LLVMVectorize",
+                "LLVMSandboxIR",
+                "LLVMLinker",
+                "LLVMInstrumentation",
+                "LLVMFrontendOpenMP",
+                "LLVMFrontendOffloading",
+                "LLVMFrontendOpenACC",
+                "LLVMFrontendHLSL",
+                "LLVMFrontendDriver",
+                "LLVMFrontendAtomic",
+                "LLVMExtensions",
+                "LLVMDWARFLinkerParallel",
+                "LLVMDWARFLinkerClassic",
+                "LLVMDWARFLinker",
+                "LLVMGlobalISel",
+                "LLVMMIRParser",
+                "LLVMAsmPrinter",
+                "LLVMSelectionDAG",
+                "LLVMCodeGen",
+                "LLVMTarget",
+                "LLVMObjCARCOpts",
+                "LLVMCodeGenTypes",
+                "LLVMCGData",
+                "LLVMIRPrinter",
+                "LLVMInterfaceStub",
+                "LLVMFileCheck",
+                "LLVMFuzzMutate",
+                "LLVMScalarOpts",
+                "LLVMInstCombine",
+                "LLVMAggressiveInstCombine",
+                "LLVMTransformUtils",
+                "LLVMBitWriter",
+                "LLVMAnalysis",
+                "LLVMProfileData",
+                "LLVMSymbolize",
+                "LLVMDebugInfoBTF",
+                "LLVMDebugInfoPDB",
+                "LLVMDebugInfoMSF",
+                "LLVMDebugInfoCodeView",
+                "LLVMDebugInfoDWARF",
+                "LLVMObject",
+                "LLVMTextAPI",
+                "LLVMMCParser",
+                "LLVMIRReader",
+                "LLVMAsmParser",
+                "LLVMMC",
+                "LLVMBitReader",
+                "LLVMFuzzerCLI",
+                "LLVMCore",
+                "LLVMRemarks",
+                "LLVMBitstreamReader",
+                "LLVMBinaryFormat",
+                "LLVMTargetParser",
+                "LLVMTableGen",
+                "LLVMSupport",
+                "LLVMDemangle",
+            ];
 
-        assert(line == stream.length - 1);
-
-        >system_library_stream = stream[..line];
-
-        while (1)
-        {
-            >space = string_first_character(system_library_stream, ' ');
-            if (space == string_no_match)
+            for (lib: llvm_libraries)
             {
-                >library_argument = system_library_stream;
-                library_buffer[library_count] = library_argument[2..];
+                library_buffer[library_count] = lib;
                 library_count += 1;
-                break;
             }
 
-            // Omit the first two characters: "-l"
-            >library_argument = system_library_stream[2..space];
-            library_buffer[library_count] = library_argument;
-            library_count += 1;
-            system_library_stream = system_library_stream[space + 1..];
+            >system_libraries: [_][]u8 = [
+                "m",
+                "z",
+            ];
+
+            for (lib: system_libraries)
+            {
+                library_buffer[library_count] = lib;
+                library_count += 1;
+            }
+        }
+        else
+        {
+            >builder: ArgumentBuilder = zero;
+
+            add_argument(&builder, arena_join_string(arena, [ cmake_prefix_path_definition.value, "/bin/llvm-config"][..]));
+            add_argument(&builder, "--libdir");
+            add_argument(&builder, "--libs");
+            add_argument(&builder, "--system-libs");
+
+            >arguments = flush_arguments(&builder);
+
+            >llvm_config = os_execute(arena, arguments, envp, {
+                    .policies = [ .pipe, .ignore ],
+                    zero,
+                    });
+
+            >success = llvm_config.termination_kind == .exit and llvm_config.termination_code == 0;
+
+            if (!success)
+            {
+                print("LLVM config failed\n");
+                @trap();
+            }
+
+            >stream = llvm_config.streams[0];
+
+            >line = string_first_character(stream, '\n');
+
+            if (line == string_no_match)
+            {
+                print("Unexpected llvm-config output\n");
+                @trap();
+            }
+
+            library_directory = stream[..line];
+            library_directories = { .pointer = &library_directory, .length = 1 };
+
+            stream = stream[line + 1..];
+
+            line = string_first_character(stream, '\n');
+            if (line == string_no_match)
+            {
+                print("Unexpected llvm-config output 2\n");
+                @trap();
+            }
+
+            >llvm_library_stream = stream[..line];
+
+            stream = stream[line + 1..];
+
+            while (1)
+            {
+                >space = string_first_character(llvm_library_stream, ' ');
+                if (space == string_no_match)
+                {
+                    >library_argument = llvm_library_stream;
+                    library_buffer[library_count] = library_argument[2..];
+                    library_count += 1;
+                    break;
+                }
+
+                // Omit the first two characters: "-l"
+                >library_argument = llvm_library_stream[2..space];
+                library_buffer[library_count] = library_argument;
+                library_count += 1;
+                llvm_library_stream = llvm_library_stream[space + 1..];
+            }
+
+            line = string_first_character(stream, '\n');
+            if (line == string_no_match)
+            {
+                print("Unexpected llvm-config output 3\n");
+                @trap();
+            }
+
+            assert(line == stream.length - 1);
+
+            >system_library_stream = stream[..line];
+
+            while (1)
+            {
+                >space = string_first_character(system_library_stream, ' ');
+                if (space == string_no_match)
+                {
+                    >library_argument = system_library_stream;
+                    library_buffer[library_count] = library_argument[2..];
+                    library_count += 1;
+                    break;
+                }
+
+                // Omit the first two characters: "-l"
+                >library_argument = system_library_stream[2..space];
+                library_buffer[library_count] = library_argument;
+                library_count += 1;
+                system_library_stream = system_library_stream[space + 1..];
+            }
         }
 
-        library_buffer[library_count] = "gcc";
-        library_count += 1;
+        if (target.os == .linux)
+        {
+            library_buffer[library_count] = "gcc";
+            library_count += 1;
 
-        library_buffer[library_count] = "gcc_s";
-        library_count += 1;
+            library_buffer[library_count] = "gcc_s";
+            library_count += 1;
+        }
 
         library_buffer[library_count] = "lldCommon";
         library_count += 1;
@@ -19392,17 +19542,6 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
     {
         objects = object_array[..];
     }
-
-    >target = target_get_native(compile_options.host_cpu_model);
-
-    >target_triple_c = getenv("BB_TARGET_TRIPLE");
-    if (target_triple_c)
-    {
-        >target_triple = c_string_to_slice(target_triple_c);
-        target = parse_target_triple(target_triple);
-    }
-
-    >link: u1 = 1;
 
     if (getenv("BB_NO_LINK"))
     {
