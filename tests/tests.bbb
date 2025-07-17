@@ -4214,13 +4214,12 @@ c_abi_tests = fn () void
 
     // C ABI big packed struct
     {
-        // TODO
-        //>s: BigPackedStruct = { .a = 1, .b = 2 };
-        //c_big_packed_struct(s);
+        >s: BigPackedStruct = { .a = 1, .b = 2 };
+        c_big_packed_struct(s);
 
-        //>s2 = c_ret_big_packed_struct();
-        //require(s2.a == 1);
-        //require(s2.b == 2);
+        >s2 = c_ret_big_packed_struct();
+        require(s2.a == 1);
+        require(s2.b == 2);
     }
 
     // C ABI split struct of ints
