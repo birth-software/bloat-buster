@@ -20549,6 +20549,35 @@ names: [_][]u8 =
     "tests",
 ];
 
+Configuration = struct
+{
+    build_mode: BuildMode
+    has_debug_info: u1,
+}
+
+default_configurations: [_]Configuration = [
+    {
+        .build_mode = .debug_none,
+        .has_debug_info = 1,
+    },
+    {
+        .build_mode = .debug,
+        .has_debug_info = 1,
+    },
+    {
+        .build_mode = .aggressively_optimize_for_size,
+        .has_debug_info = 0,
+    },
+    {
+        .build_mode = .aggressively_optimize_for_speed,
+        .has_debug_info = 1,
+    },
+    {
+        .build_mode = .aggressively_optimize_for_speed,
+        .has_debug_info = 0,
+    },
+];
+
 [export] main = fn [cc(c)] (argument_count: u32, argv: &&u8, envp: &&u8) s32
 {
     global_state_initialize();
@@ -20643,7 +20672,7 @@ names: [_][]u8 =
                 .build_mode = build_mode,
                 .host_cpu_model = is_host_cpu_model,
                 .has_debug_info = has_debug_info,
-                .silent = 0,
+                .silent = 1,
             }, envp);
         },
         .test =>
@@ -20658,68 +20687,24 @@ names: [_][]u8 =
             {
                 for (is_host_cpu_model: is_host_cpu_model_array)
                 {
-                    for (build_mode: @enum_values(BuildMode))
+                    for (&default_configuration: default_configurations)
                     {
-                        for (has_debug_info: debug_info_array)
-                        {
-                            >position = arena.position;
+                        >build_mode = default_configuration.build_mode;
+                        >has_debug_info = default_configuration.has_debug_info;
 
-                            >relative_file_path = arena_join_string(arena, [ "tests/", name, ".bbb" ][..]);
-                            >executable_path = compile_file(arena, {
-                                    .relative_file_path = relative_file_path,
-                                    .build_mode = build_mode,
-                                    .has_debug_info = has_debug_info,
-                                    .host_cpu_model = is_host_cpu_model,
-                                    .silent = 1,
-                                    }, envp);
-
-                            >arguments: [_]&u8 = [
-                                executable_path.pointer,
-                                zero,
-                            ];
-                            >args = arguments[..arguments.length - 1];
-                            >execution = os_execute(arena, args, envp, zero);
-
-                            >success = execution.termination_kind == .exit and execution.termination_code == 0;
-
-                            if (!success)
-                            {
-                                print("Failed to run test ");
-                                print(executable_path);
-                                print("\n");
-                                fail();
-                            }
-
-                            arena.position = position;
-                        }
-                    }
-                }
-            }
-        },
-        .reproduce =>
-        {
-            for (is_host_cpu_model: is_host_cpu_model_array)
-            {
-                for (build_mode: @enum_values(BuildMode))
-                {
-                    for (has_debug_info: debug_info_array)
-                    {
                         >position = arena.position;
 
-                        // Produce the compiler
-                        >relative_file_path = "src/compiler.bbb";
+                        >relative_file_path = arena_join_string(arena, [ "tests/", name, ".bbb" ][..]);
                         >executable_path = compile_file(arena, {
                                 .relative_file_path = relative_file_path,
-                                .host_cpu_model = is_host_cpu_model,
                                 .build_mode = build_mode,
                                 .has_debug_info = has_debug_info,
+                                .host_cpu_model = is_host_cpu_model,
                                 .silent = 1,
                                 }, envp);
 
-                        // Test the compiler
                         >arguments: [_]&u8 = [
                             executable_path.pointer,
-                            "test",
                             zero,
                         ];
                         >args = arguments[..arguments.length - 1];
@@ -20729,7 +20714,7 @@ names: [_][]u8 =
 
                         if (!success)
                         {
-                            print("Failed to reproduce ");
+                            print("Failed to run test ");
                             print(executable_path);
                             print("\n");
                             fail();
@@ -20737,6 +20722,50 @@ names: [_][]u8 =
 
                         arena.position = position;
                     }
+                }
+            }
+        },
+        .reproduce =>
+        {
+            for (is_host_cpu_model: is_host_cpu_model_array)
+            {
+                for (&default_configuration: default_configurations)
+                {
+                    >build_mode = default_configuration.build_mode;
+                    >has_debug_info = default_configuration.has_debug_info;
+
+                    >position = arena.position;
+
+                    // Produce the compiler
+                    >relative_file_path = "src/compiler.bbb";
+                    >executable_path = compile_file(arena, {
+                            .relative_file_path = relative_file_path,
+                            .host_cpu_model = is_host_cpu_model,
+                            .build_mode = build_mode,
+                            .has_debug_info = has_debug_info,
+                            .silent = 1,
+                            }, envp);
+
+                    // Test the compiler
+                    >arguments: [_]&u8 = [
+                        executable_path.pointer,
+                        "test",
+                        zero,
+                    ];
+                    >args = arguments[..arguments.length - 1];
+                    >execution = os_execute(arena, args, envp, zero);
+
+                    >success = execution.termination_kind == .exit and execution.termination_code == 0;
+
+                    if (!success)
+                    {
+                        print("Failed to reproduce ");
+                        print(executable_path);
+                        print("\n");
+                        fail();
+                    }
+
+                    arena.position = position;
                 }
             }
         },
