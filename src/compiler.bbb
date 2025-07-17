@@ -3158,6 +3158,8 @@ llvm_create_global_variable = fn (module: &LLVMModule, type: &LLVMType, is_const
 
 [extern] LLVMConstNull = fn [cc(c)] (type: &LLVMType) &LLVMValue;
 [extern] LLVMConstInt = fn [cc(c)] (type: &LLVMType, value: u64, is_signed: s32) &LLVMValue;
+[extern] LLVMConstIntOfArbitraryPrecision = fn [cc(c)] (type: &LLVMType, word_count: u32, word_pointer: &u64) &LLVMValue;
+
 [extern] LLVMConstRealOfStringAndSize = fn [cc(c)] (type: &LLVMType, pointer: &u8, length: u32) &LLVMValue;
 
 [extern] LLVMConstNeg = fn [cc(c)] (value: &LLVMValue) &LLVMValue;
@@ -16834,11 +16836,14 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                             >bitfield_type = get_llvm_type(resolved_value_type, type_kind);
                             assert(abi_type == bitfield_type);
 
-                            assert(get_bit_size(backing_type) <= 64);
+                            if (get_bit_size(backing_type) > 128)
+                            {
+                                report_error(module, "Bits is too big");
+                            }
 
                             if (is_constant)
                             {
-                                >bits_value: u64 = 0;
+                                >bits_value: u128 = 0;
 
                                 for (&initialization_element: elements)
                                 {
@@ -16857,13 +16862,13 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
 
                                     assert(result_field != zero);
 
-                                    >field_value: u64 = 0;
+                                    >field_value: u128 = 0;
 
                                     switch (value.id)
                                     {
                                         .constant_integer =>
                                         {
-                                            field_value = value.content.constant_integer.value;
+                                            field_value = @extend(value.content.constant_integer.value);
                                         },
                                         .enum_literal =>
                                         {
@@ -16885,15 +16890,27 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
 
                                             assert(result_enum_field != zero);
 
-                                            field_value = result_enum_field.value;
+                                            field_value = @extend(result_enum_field.value);
                                         },
                                         else => { report_error(module, "TODO: constant bits value id"); },
                                     }
 
-                                    bits_value |= field_value << result_field.offset;
+                                    bits_value |= field_value << @extend(result_field.offset);
                                 }
 
-                                llvm_value = LLVMConstInt(abi_type, bits_value, 0);
+                                if (get_bit_size(backing_type) <= 64)
+                                {
+                                    llvm_value = LLVMConstInt(abi_type, @truncate(bits_value), 0);
+                                }
+                                else
+                                {
+                                    assert(get_bit_size(backing_type) == 128);
+                                    >words: [2]u64 = zero;
+                                    words[0] = @truncate(bits_value);
+                                    words[1] = @truncate(bits_value >> 64);
+
+                                    llvm_value = LLVMConstIntOfArbitraryPrecision(abi_type, words.length, &words[0]);
+                                }
                             }
                             else
                             {
