@@ -7434,6 +7434,114 @@ basic_vector = fn () u1
     return @reduce(and, a == b);
 }
 
+float_operations = fn () void
+{
+    {
+        >a: f32 = 1.0;
+        >b: f32 = 2.0;
+        require(a + b == 3.0);
+    }
+
+    {
+        >a: f64 = 1.0;
+        >b: f64 = 2.0;
+        require(a + b == 3.0);
+    }
+
+    {
+        >a: f128 = 1.0;
+        >b: f128 = 2.0;
+        require(a + b == 3.0);
+    }
+
+    {
+        >a: f32 = 2.0;
+        >b: f32 = 1.0;
+        require(a - b == 1.0);
+    }
+
+    {
+        >a: f64 = 2.0;
+        >b: f64 = 1.0;
+        require(a - b == 1.0);
+    }
+
+    {
+        >a: f128 = 2.0;
+        >b: f128 = 1.0;
+        require(a - b == 1.0);
+    }
+
+    {
+        >a: f32 = 2.0;
+        >b: f32 = 3.0;
+        require(a * b == 6.0);
+    }
+
+    {
+        >a: f64 = 2.0;
+        >b: f64 = 3.0;
+        require(a * b == 6.0);
+    }
+
+    {
+        >a: f128 = 2.0;
+        >b: f128 = 3.0;
+        require(a * b == 6.0);
+    }
+
+    {
+        >a: f32 = 4.0;
+        >b: f32 = 2.0;
+        require(a / b == 2.0);
+    }
+
+    {
+        >a: f64 = 4.0;
+        >b: f64 = 2.0;
+        require(a / b == 2.0);
+    }
+
+    {
+        >a: f128 = 4.0;
+        >b: f128 = 2.0;
+        require(a / b == 2.0);
+    }
+
+    {
+        >a: f32 = 4.0;
+        >b: f32 = 2.0;
+        require(a % b == 0.0);
+    }
+
+    {
+        >a: f64 = 4.0;
+        >b: f64 = 2.0;
+        require(a % b == 0.0);
+    }
+
+    {
+        >a: f128 = 4.0;
+        >b: f128 = 2.0;
+        require(a % b == 0.0);
+    }
+
+    {
+        >a: f32 = 1.0;
+        require(-a == -1.0);
+    }
+
+    {
+        >a: f64 = 1.0;
+        require(-a == -1.0);
+    }
+
+    {
+        >a: f128 = 1.0;
+        require(-a == -1.0);
+    }
+}
+
 [export] main = fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32
 {
     >rc = return_constant();
