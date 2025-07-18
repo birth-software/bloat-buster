@@ -13746,13 +13746,19 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
             assert(resolved_value_type == right_type);
         }
 
+        >element_type = resolved_value_type;
+        if (element_type.id == .vector)
+        {
+            element_type = element_type.content.vector.element_type;
+        }
+
         switch (id)
         {
             .max, .min =>
             {
                 >intrinsic_index: LLVMIntrinsicIndex = undefined;
 
-                switch (resolved_value_type.id)
+                switch (element_type.id)
                 {
                     .integer =>
                     {
@@ -13792,7 +13798,7 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
             },
             .div =>
             {
-                switch (resolved_value_type.id)
+                switch (element_type.id)
                 {
                     .integer =>
                     {
@@ -13818,7 +13824,7 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
             },
             .rem =>
             {
-                switch (resolved_value_type.id)
+                switch (element_type.id)
                 {
                     .integer =>
                     {
@@ -13883,7 +13889,7 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
                 }
                 else
                 {
-                    switch (left_type.id)
+                    switch (element_type.id)
                     {
                         .integer =>
                         {
@@ -13936,7 +13942,7 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
                 }
                 else
                 {
-                    switch (left_type.id)
+                    switch (element_type.id)
                     {
                         .integer =>
                         {
@@ -13953,7 +13959,7 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
             },
             .mul =>
             {
-                switch (left_type.id)
+                switch (element_type.id)
                 {
                     .integer =>
                     {
@@ -17985,7 +17991,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
             >right = statement.content.assignment.right;
             >id = statement.content.assignment.id;
 
-            analyze_value(module, left, zero, .memory, 0);
+            analyze_type(module, left, zero, zero);
 
             >left_type = left.type;
             if (left_type.id != .pointer)
@@ -17993,35 +17999,88 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                 report_error(module, "left type must be pointer");
             }
 
-            >address: Address = {
-                .pointer = left.llvm,
-                .element_type = resolve_alias(module, left_type.content.pointer.element_type),
-                .alignment = get_pointer_alignment(left_type),
-                .offset = zero,
-            };
+            >element_type = resolve_alias(module, left_type.content.pointer.element_type);
+            >is_storing_to_vector_element = left.id == .array_expression;
+            >array_like = left.content.array_expression.array_like;
+            >index = left.content.array_expression.index;
+            >vector_type: &Type = zero;
+            >vector_load: &LLVMValue = zero;
+
+            if (is_storing_to_vector_element)
+            {
+                vector_type = array_like.type.content.pointer.element_type;
+                is_storing_to_vector_element = vector_type.id == .vector;
+
+                if (is_storing_to_vector_element)
+                {
+                    emit_value(module, array_like, .abi, 0);
+                    emit_value(module, index, .abi, 0);
+
+                    vector_load = create_load(module, {
+                        .type = vector_type,
+                        .pointer = array_like.llvm,
+                        zero,
+                    });
+                }
+            }
+
+            if (!is_storing_to_vector_element)
+            {
+                emit_value(module, left, .memory, 0);
+            }
 
             switch (id)
             {
                 .assign =>
                 {
-                    analyze_type(module, right, address.element_type, zero);
-                    emit_assignment(module, right, address);
+                    analyze_type(module, right, element_type, zero);
+
+                    if (is_storing_to_vector_element)
+                    {
+                        emit_value(module, right, .abi, 0);
+
+                        >insert_element = LLVMBuildInsertElement(module.llvm.builder, vector_load, right.llvm, index.llvm, "");
+                        create_store(module, {
+                            .source = insert_element,
+                            .destination = array_like.llvm,
+                            .type = vector_type,
+                            zero,
+                        });
+                    }
+                    else
+                    {
+                        >address: Address = {
+                            .pointer = left.llvm,
+                            .element_type = element_type,
+                            .alignment = get_pointer_alignment(left_type),
+                            .offset = zero,
+                        };
+                        emit_assignment(module, right, address);
+                    }
                 },
                 else =>
                 {
-                    >evaluation_kind = get_evaluation_kind(address.element_type);
+                    >evaluation_kind = get_evaluation_kind(element_type);
                     assert(evaluation_kind == .scalar);
 
-                    >load = create_load(module, {
-                        .type = address.element_type,
-                        .pointer = address.pointer,
-                        .kind = .abi,
-                        zero,
-                    });
+                    >a: &LLVMValue = zero;
 
-                    analyze_value(module, right, address.element_type, .abi, 0);
+                    if (is_storing_to_vector_element)
+                    {
+                        a = LLVMBuildExtractElement(module.llvm.builder, vector_load, index.llvm, "");
+                    }
+                    else
+                    {
+                        a = create_load(module, {
+                                .type = element_type,
+                                .pointer = left.llvm,
+                                .kind = .abi,
+                                zero,
+                                });
+                    }
 
-                    >a = load;
+                    analyze_value(module, right, element_type, .abi, 0);
+
                     >b = right.llvm;
 
                     >binary_id: BinaryId = undefined;
@@ -18040,14 +18099,33 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                         .assign => { unreachable; },
                     }
 
-                    >result = emit_binary(module, a, address.element_type, b, right.type, binary_id, address.element_type);
+                    >result = emit_binary(module, a, element_type, b, right.type, binary_id, element_type);
 
-                    create_store(module, {
-                        .source = result,
-                        .destination = address.pointer,
-                        .type = address.element_type,
-                        zero,
-                    });
+                    if (is_storing_to_vector_element)
+                    {
+                        >insert_element = LLVMBuildInsertElement(module.llvm.builder, vector_load, result, index.llvm, "");
+                        create_store(module, {
+                            .source = insert_element,
+                            .destination = array_like.llvm,
+                            .type = vector_type,
+                            zero,
+                        });
+                    }
+                    else
+                    {
+                        >address: Address = {
+                            .pointer = left.llvm,
+                            .element_type = element_type,
+                            .alignment = get_pointer_alignment(left_type),
+                            .offset = zero,
+                        };
+                        create_store(module, {
+                                .source = result,
+                                .destination = address.pointer,
+                                .type = element_type,
+                                zero,
+                                });
+                    }
                 },
             }
         },
