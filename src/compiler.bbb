@@ -3140,6 +3140,12 @@ llvm_create_global_variable = fn (module: &LLVMModule, type: &LLVMType, is_const
 [extern] LLVMBuildSRem = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
 [extern] LLVMBuildURem = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
 
+[extern] LLVMBuildFAdd = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
+[extern] LLVMBuildFSub = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
+[extern] LLVMBuildFMul = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
+[extern] LLVMBuildFDiv = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
+[extern] LLVMBuildFRem = fn [cc(c)] (builder: &LLVMBuilder, left: &LLVMValue, right: &LLVMValue, name: &u8) &LLVMValue;
+
 [extern] LLVMBuildExtractElement = fn [cc(c)] (builder: &LLVMBuilder, vector_value: &LLVMValue, index: &LLVMValue, name: &u8) &LLVMValue;
 [extern] LLVMBuildInsertElement = fn [cc(c)] (builder: &LLVMBuilder, vector_value: &LLVMValue, element_value: &LLVMValue, index: &LLVMValue, name: &u8) &LLVMValue;
 
@@ -11609,7 +11615,6 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             {
                 assert(left.type == right.type);
 
-                >u64_type = uint64(module);
                 >s64_type = sint64(module);
 
                 >left_int_from_pointer = new_value(module);
@@ -11620,7 +11625,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                             .id = .int_from_pointer,
                         },
                     },
-                    .type = u64_type,
+                    .type = s64_type,
                     .id = .unary,
                     zero,
                 };
@@ -11633,7 +11638,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                             .id = .int_from_pointer,
                         },
                     },
-                    .type = u64_type,
+                    .type = s64_type,
                     .id = .unary,
                     zero,
                 };
@@ -12928,7 +12933,8 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                             report_error(module, "field not found");
                         }
 
-                        >declaration_index: u64 = @extend(result_field - fields.pointer);
+                        >declaration_index_s64 = result_field - fields.pointer;
+                        >declaration_index: u64 = @extend(declaration_index_s64);
                         >mask = 1 << declaration_index;
                         >current_mask = field_mask;
                         if (current_mask & mask)
@@ -13728,6 +13734,18 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
     }
     else
     {
+        >left_pointer_integer_sub = id == .sub and left_type.id == .pointer and right_type.id != .pointer;
+        >right_pointer_integer_sub = id == .sub and right_type.id == .pointer and left_type.id != .pointer;
+
+        >pointer_integer_sub = id == .sub and (left_pointer_integer_sub or right_pointer_integer_sub);
+        >pointer_add = id == .add and (left_type.id == .pointer or right_type.id == .pointer);
+
+        if (!is_boolean and !pointer_integer_sub and !pointer_add)
+        {
+            assert(left_type == right_type);
+            assert(resolved_value_type == right_type);
+        }
+
         switch (id)
         {
             .max, .min =>
@@ -13774,29 +13792,59 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
             },
             .div =>
             {
-                if (signed)
+                switch (resolved_value_type.id)
                 {
-                    return LLVMBuildSDiv(module.llvm.builder, left, right, "");
-                }
-                else
-                {
-                    return LLVMBuildUDiv(module.llvm.builder, left, right, "");
+                    .integer =>
+                    {
+                        if (signed)
+                        {
+                            return LLVMBuildSDiv(module.llvm.builder, left, right, "");
+                        }
+                        else
+                        {
+                            return LLVMBuildUDiv(module.llvm.builder, left, right, "");
+                        }
+                    },
+                    .float =>
+                    {
+                        return LLVMBuildFDiv(module.llvm.builder, left, right, "");
+                    },
+                    .pointer =>
+                    {
+                        unreachable;
+                    },
+                    else => { unreachable; },
                 }
             },
             .rem =>
             {
-                if (signed)
+                switch (resolved_value_type.id)
                 {
-                    return LLVMBuildSRem(module.llvm.builder, left, right, "");
-                }
-                else
-                {
-                    return LLVMBuildURem(module.llvm.builder, left, right, "");
+                    .integer =>
+                    {
+                        if (signed)
+                        {
+                            return LLVMBuildSRem(module.llvm.builder, left, right, "");
+                        }
+                        else
+                        {
+                            return LLVMBuildURem(module.llvm.builder, left, right, "");
+                        }
+                    },
+                    .float =>
+                    {
+                        return LLVMBuildFRem(module.llvm.builder, left, right, "");
+                    },
+                    .pointer =>
+                    {
+                        unreachable;
+                    },
+                    else => { unreachable; },
                 }
             },
             .add =>
             {
-                if (left_type.id == .pointer or right_type.id == .pointer)
+                if (pointer_add)
                 {
                     assert(resolved_value_type.id == .pointer);
                     >element_type = resolved_value_type.content.pointer.element_type;
@@ -13835,7 +13883,6 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
                 }
                 else
                 {
-                    assert(left_type == right_type);
                     switch (left_type.id)
                     {
                         .integer =>
@@ -13844,7 +13891,7 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
                         },
                         .float =>
                         {
-                            fail();
+                            return LLVMBuildFAdd(module.llvm.builder, left, right, "");
                         },
                         .pointer => { unreachable; },
                         else => { report_error(module, "TODO: add"); },
@@ -13853,11 +13900,6 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
             },
             .sub =>
             {
-                >left_pointer_integer_sub = left_type.id == .pointer and right_type.id != .pointer;
-                >right_pointer_integer_sub = right_type.id == .pointer and left_type.id != .pointer;
-
-                >pointer_integer_sub = left_pointer_integer_sub or right_pointer_integer_sub;
-
                 if (pointer_integer_sub)
                 {
                     assert(resolved_value_type.id == .pointer);
@@ -13894,13 +13936,15 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
                 }
                 else
                 {
-                    assert(left_type == right_type);
-
                     switch (left_type.id)
                     {
                         .integer =>
                         {
                             return LLVMBuildSub(module.llvm.builder, left, right, "");
+                        },
+                        .float =>
+                        {
+                            return LLVMBuildFSub(module.llvm.builder, left, right, "");
                         },
                         .pointer => { unreachable; },
                         else => { unreachable; },
@@ -13909,12 +13953,36 @@ emit_binary = fn (module: &Module, left: &LLVMValue, left_type: &Type, right: &L
             },
             .mul =>
             {
-                return LLVMBuildMul(module.llvm.builder, left, right, "");
+                switch (left_type.id)
+                {
+                    .integer =>
+                    {
+                        return LLVMBuildMul(module.llvm.builder, left, right, "");
+                    },
+                    .float =>
+                    {
+                        return LLVMBuildFMul(module.llvm.builder, left, right, "");
+                    },
+                    .pointer => { unreachable; },
+                    else => { unreachable; },
+                }
             },
-            .logical_and, .bitwise_and => { return LLVMBuildAnd(module.llvm.builder, left, right, ""); },
-            .logical_or, .bitwise_or => { return LLVMBuildOr(module.llvm.builder, left, right, ""); },
-            .bitwise_xor => { return LLVMBuildXor(module.llvm.builder, left, right, ""); },
-            .shift_left => { return LLVMBuildShl(module.llvm.builder, left, right, ""); },
+            .logical_and, .bitwise_and =>
+            {
+                return LLVMBuildAnd(module.llvm.builder, left, right, "");
+            },
+            .logical_or, .bitwise_or =>
+            {
+                return LLVMBuildOr(module.llvm.builder, left, right, "");
+            },
+            .bitwise_xor =>
+            {
+                return LLVMBuildXor(module.llvm.builder, left, right, "");
+            },
+            .shift_left =>
+            {
+                return LLVMBuildShl(module.llvm.builder, left, right, "");
+            },
             else => { unreachable; },
         }
     }
@@ -20531,6 +20599,9 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
         objects = object_array[..];
 
         library_buffer[library_count] = "gcc";
+        library_count += 1;
+
+        library_buffer[library_count] = "m";
         library_count += 1;
     }
 
