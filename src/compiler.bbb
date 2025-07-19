@@ -1028,7 +1028,7 @@ LLVMCallingConvention = enum u32
     amdgpu_es = 96
 }
 
-LLVMOrdering = enum u32
+LLVMAtomicOrdering = enum u32
 {
     not_atomic = 0,
     unordered = 1,
@@ -1037,6 +1037,29 @@ LLVMOrdering = enum u32
     release = 5,
     acquire_release = 6,
     sequentially_consistent = 7,
+}
+
+LLVMAtomicRmwOperation = enum u32
+{
+    xchg,
+    add,
+    sub,
+    and,
+    nand,
+    or,
+    xor,
+    max,
+    min,
+    umax,
+    umin,
+    fadd,
+    fsub,
+    fmax,
+    fmin,
+    uinc_wrap,
+    udec_wrap,
+    usub_cond,
+    usub_sat,
 }
 
 LLVMVerifyFailureAction = enum u32
@@ -1630,6 +1653,7 @@ receives_type = fn (value: &Value) u1
         },
         .array_expression,
         .call,
+        .atomic_load,
         =>
         {
             return 0;
@@ -2194,6 +2218,11 @@ ValueId = enum
     breakpoint,
     float_string_literal,
     reduce,
+    atomic_load,
+    atomic_store,
+    atomic_rmw,
+    fence,
+    compare_and_swap,
 }
 
 ValueConstantInteger = struct
@@ -2506,6 +2535,78 @@ ValueReduce = struct
     id: ReduceOperationId,
 }
 
+AtomicOrdering = enum
+{
+    unordered,
+    monotonic,
+    acquire,
+    release,
+    acquire_release,
+    sequentially_consistent,
+}
+
+atomic_ordering_to_llvm = fn (ordering: AtomicOrdering) LLVMAtomicOrdering
+{
+    switch (ordering)
+    {
+       .unordered => { return .unordered; },
+       .monotonic => { return .monotonic; },
+       .acquire => { return .acquire; },
+       .release => { return .release; },
+       .acquire_release => { return .acquire_release; },
+       .sequentially_consistent => { return .sequentially_consistent; },
+    }
+}
+
+AtomicRmwOperation = enum
+{
+    xchg,
+    add,
+    sub,
+    and,
+    nand,
+    or,
+    xor,
+    max,
+    min,
+}
+
+ValueAtomicLoad = struct
+{
+    pointer: &Value,
+    ordering: AtomicOrdering,
+}
+
+ValueAtomicStore = struct
+{
+    pointer: &Value,
+    value: &Value,
+    ordering: AtomicOrdering,
+}
+
+ValueAtomicRmw = struct
+{
+    pointer: &Value,
+    value: &Value,
+    operation: AtomicRmwOperation,
+    ordering: AtomicOrdering,
+}
+
+ValueFence = struct
+{
+    ordering: AtomicOrdering,
+}
+
+ValueCompareAndSwap = struct
+{
+    pointer: &Value,
+    expected_value: &Value,
+    new_value: &Value,
+    success_ordering: AtomicOrdering,
+    failure_ordering: AtomicOrdering,
+    is_strong: u1,
+}
+
 ValueContent = union
 {
     constant_integer: ValueConstantInteger,
@@ -2530,6 +2631,11 @@ ValueContent = union
     field_parent_pointer: ValueFieldParentPointer,
     float_string_literal: []u8,
     reduce: ValueReduce,
+    atomic_load: ValueAtomicLoad,
+    atomic_store: ValueAtomicStore,
+    atomic_rmw: ValueAtomicRmw,
+    fence: ValueFence,
+    compare_and_swap: ValueCompareAndSwap,
 }
 
 ValueKind = enum
@@ -2633,6 +2739,10 @@ value_is_constant = fn (value: &Value) u1
         .undefined =>
         {
             return 1;
+        },
+        .atomic_load =>
+        {
+            return 0;
         },
         else =>
         {
@@ -3034,7 +3144,7 @@ LLVMFCmpPredicate = enum u32
 
 [extern] LLVMSetAlignment = fn [cc(c)] (value: &LLVMValue, alignment: u32) void;
 [extern] LLVMSetVolatile = fn [cc(c)] (value: &LLVMValue, is_volatile: u32) void;
-[extern] LLVMSetOrdering = fn [cc(c)] (value: &LLVMValue, ordering: LLVMOrdering) void;
+[extern] LLVMSetOrdering = fn [cc(c)] (value: &LLVMValue, ordering: LLVMAtomicOrdering) void;
 [extern] LLVMBuildAlloca = fn [cc(c)] (builder: &LLVMBuilder, type: &LLVMType, name: &u8) &LLVMValue;
 
 llvm_create_alloca = fn (builder: &LLVMBuilder, type: &LLVMType, alignment: u32, name: []u8) &LLVMValue
@@ -3048,16 +3158,18 @@ llvm_create_alloca = fn (builder: &LLVMBuilder, type: &LLVMType, alignment: u32,
 [extern] LLVMBuildStore = fn [cc(c)] (builder: &LLVMBuilder, source: &LLVMValue, destination: &LLVMValue) &LLVMValue;
 [extern] LLVMBuildLoad2 = fn [cc(c)] (builder: &LLVMBuilder, type: &LLVMType, pointer: &LLVMValue, name: &u8) &LLVMValue;
 
-llvm_create_store = fn (builder: &LLVMBuilder, source: &LLVMValue, destination: &LLVMValue, alignment: u32, is_volatile: u1, ordering: LLVMOrdering) void
+llvm_create_store = fn (builder: &LLVMBuilder, source: &LLVMValue, destination: &LLVMValue, alignment: u32, is_volatile: u1, ordering: LLVMAtomicOrdering) &LLVMValue
 {
     >store = LLVMBuildStore(builder, source, destination);
 
     LLVMSetAlignment(store, alignment);
     LLVMSetVolatile(store, @extend(is_volatile));
     LLVMSetOrdering(store, ordering);
+
+    return store;
 }
 
-llvm_create_load = fn (builder: &LLVMBuilder, type: &LLVMType, pointer: &LLVMValue, alignment: u32, name: []u8, is_volatile: u1, ordering: LLVMOrdering) &LLVMValue
+llvm_create_load = fn (builder: &LLVMBuilder, type: &LLVMType, pointer: &LLVMValue, alignment: u32, name: []u8, is_volatile: u1, ordering: LLVMAtomicOrdering) &LLVMValue
 {
     if (name.pointer)
     {
@@ -3169,6 +3281,10 @@ llvm_create_global_variable = fn (module: &LLVMModule, type: &LLVMType, is_const
 
 [extern] LLVMBuildMemCpy = fn [cc(c)] (builder: &LLVMBuilder, destination: &LLVMValue, destination_alignment: u32, source: &LLVMValue, source_alignment: u32, size: &LLVMValue) &LLVMValue;
 [extern] LLVMBuildMemSet = fn [cc(c)] (builder: &LLVMBuilder, pointer: &LLVMValue, value: &LLVMValue, byte_count: &LLVMValue, alignment: u32) &LLVMValue;
+
+[extern] LLVMBuildAtomicRMW = fn [cc(c)] (builder: &LLVMBuilder, operation: LLVMAtomicRmwOperation, pointer: &LLVMValue, value: &LLVMValue, ordering: LLVMAtomicOrdering, single_thread: s32) &LLVMValue;
+[extern] LLVMBuildAtomicCmpXchg = fn [cc(c)] (builder: &LLVMBuilder, pointer: &LLVMValue, expected_value: &LLVMValue, new_value: &LLVMValue, success_ordering: LLVMAtomicOrdering, failure_ordering: LLVMAtomicOrdering, single_thread: s32) &LLVMValue;
+[extern] LLVMBuildFence = fn [cc(c)] (builder: &LLVMBuilder, ordering: LLVMAtomicOrdering, single_thread: s32, name: &u8) &LLVMValue;
 
 [extern] LLVMGetInsertBlock = fn [cc(c)] (builder: &LLVMBuilder) &LLVMBasicBlock;
 [extern] LLVMGetBasicBlockTerminator = fn [cc(c)] (basic_block: &LLVMBasicBlock) &LLVMValue;
@@ -4622,14 +4738,19 @@ ValueKeyword = enum
 ValueIntrinsic = enum
 {
     align_of,
+    atomic_load,
+    atomic_rmw,
+    atomic_store,
     breakpoint,
     build_mode,
     byte_size,
+    compare_and_swap,
     enum_from_int,
     enum_name,
     enum_names,
     enum_values,
     extend,
+    fence,
     field_parent_pointer,
     has_debug_info,
     integer_max,
@@ -4980,14 +5101,14 @@ parse_function_header = fn (module: &Module, scope: &Scope, mandate_argument_nam
             >function_identifier = parse_identifier(module);
             >function_keyword_s2e = @string_to_enum(FunctionKeyword, function_identifier);
 
-            if (!function_keyword_s2e.is_valid)
+            if (!function_keyword_s2e.success)
             {
                 report_error(module, "Invalid function keyword");
             }
 
             skip_space(module);
 
-            >function_keyword = function_keyword_s2e.enum_value;
+            >function_keyword = function_keyword_s2e.value;
             switch (function_keyword)
             {
                 .cc =>
@@ -4997,12 +5118,12 @@ parse_function_header = fn (module: &Module, scope: &Scope, mandate_argument_nam
                     >calling_convention_string = parse_identifier(module);
                     >calling_convention_s2e = @string_to_enum(CallingConvention, calling_convention_string);
 
-                    if (!calling_convention_s2e.is_valid)
+                    if (!calling_convention_s2e.success)
                     {
                         report_error(module, "Invalid calling convention");
                     }
 
-                    >candidate_calling_convention = calling_convention_s2e.enum_value;
+                    >candidate_calling_convention = calling_convention_s2e.value;
 
                     calling_convention = candidate_calling_convention;
 
@@ -5201,9 +5322,9 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
 
         >type_keyword_s2e = @string_to_enum(TypeKeyword, identifier);
 
-        if (type_keyword_s2e.is_valid)
+        if (type_keyword_s2e.success)
         {
-            >type_keyword = type_keyword_s2e.enum_value;
+            >type_keyword = type_keyword_s2e.value;
 
             switch (type_keyword)
             {
@@ -5419,12 +5540,12 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
 
         >identifier = parse_identifier(module);
         >intrinsic_s2e = @string_to_enum(TypeIntrinsic, identifier);
-        if (!intrinsic_s2e.is_valid)
+        if (!intrinsic_s2e.success)
         {
             report_error(module, "Invalid intrinsic");
         }
 
-        >intrinsic = intrinsic_s2e.enum_value;
+        >intrinsic = intrinsic_s2e.value;
         switch (intrinsic)
         {
             .ReturnType =>
@@ -5546,9 +5667,9 @@ tokenize = fn (module: &Module) Token
                 >identifier = parse_identifier(module);
 
                 >value_intrinsic_s2e = @string_to_enum(ValueIntrinsic, identifier);
-                if (value_intrinsic_s2e.is_valid)
+                if (value_intrinsic_s2e.success)
                 {
-                    >value_intrinsic = value_intrinsic_s2e.enum_value;
+                    >value_intrinsic = value_intrinsic_s2e.value;
                     token = {
                         .content = {
                             .value_intrinsic = value_intrinsic,
@@ -5826,9 +5947,9 @@ tokenize = fn (module: &Module) Token
             {
                 >identifier = parse_identifier(module);
                 >value_keyword_s2e = @string_to_enum(ValueKeyword, identifier);
-                if (value_keyword_s2e.is_valid)
+                if (value_keyword_s2e.success)
                 {
-                    >value_keyword = value_keyword_s2e.enum_value;
+                    >value_keyword = value_keyword_s2e.value;
                     token = {
                         .content = {
                             .value_keyword = value_keyword,
@@ -5844,9 +5965,9 @@ tokenize = fn (module: &Module) Token
 
                     >operator_keyword_s2e = @string_to_enum(OperatorKeyword, identifier);
 
-                    if (operator_keyword_s2e.is_valid)
+                    if (operator_keyword_s2e.success)
                     {
-                        >operator_keyword = operator_keyword_s2e.enum_value;
+                        >operator_keyword = operator_keyword_s2e.value;
 
                         token = {
                             .content = {
@@ -6141,6 +6262,23 @@ parse_aggregate_initialization = fn (module: &Module, scope: &Scope, builder: Va
     };
 
     return result;
+}
+
+parse_ordering = fn (module: &Module) AtomicOrdering
+{
+    expect_character(module, '.');
+    >ordering_identifier = parse_identifier(module);
+
+    >ordering_s2e = @string_to_enum(AtomicOrdering, ordering_identifier);
+
+    if (!ordering_s2e.success)
+    {
+        report_error(module, "Invalid atomic ordering");
+    }
+
+    >ordering = ordering_s2e.value;
+
+    return ordering;
 }
 
 parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
@@ -6499,11 +6637,11 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                     skip_space(module);
                     >id_string = parse_identifier(module);
                     >id_s2e = @string_to_enum(ReduceOperationId, id_string);
-                    if (!id_s2e.is_valid)
+                    if (!id_s2e.success)
                     {
                         report_error(module, "Invalid reduce operation");
                     }
-                    >id = id_s2e.enum_value;
+                    >id = id_s2e.value;
 
                     skip_space(module);
                     expect_character(module, ',');
@@ -6522,6 +6660,209 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                             },
                         },
                         .id = .reduce,
+                        zero,
+                    };
+                },
+                .atomic_load =>
+                {
+                    skip_space(module);
+                    expect_character(module, left_parenthesis);
+
+                    >pointer = parse_value(module, scope, zero);
+
+                    skip_space(module);
+                    expect_character(module, ',');
+                    skip_space(module);
+
+                    >ordering = parse_ordering(module);
+
+                    skip_space(module);
+                    expect_character(module, right_parenthesis);
+
+                    result.& = {
+                        .content = {
+                            .atomic_load = {
+                                .pointer = pointer,
+                                .ordering = ordering,
+                            },
+                        },
+                        .id = .atomic_load,
+                        zero,
+                    };
+                },
+                .atomic_store =>
+                {
+                    skip_space(module);
+                    expect_character(module, left_parenthesis);
+
+                    >pointer = parse_value(module, scope, zero);
+
+                    skip_space(module);
+                    expect_character(module, ',');
+                    skip_space(module);
+
+                    >value = parse_value(module, scope, zero);
+
+                    skip_space(module);
+                    expect_character(module, ',');
+                    skip_space(module);
+
+                    >ordering = parse_ordering(module);
+
+                    skip_space(module);
+                    expect_character(module, right_parenthesis);
+
+                    result.& = {
+                        .content = {
+                            .atomic_store = {
+                                .pointer = pointer,
+                                .value = value,
+                                .ordering = ordering,
+                            },
+                        },
+                        .id = .atomic_store,
+                        zero,
+                    };
+                },
+                .atomic_rmw =>
+                {
+                    skip_space(module);
+                    expect_character(module, left_parenthesis);
+                    skip_space(module);
+
+                    expect_character(module, '.');
+                    >operation_identifier = parse_identifier(module);
+                    >operation_s2e = @string_to_enum(AtomicRmwOperation, operation_identifier);
+                    if (!operation_s2e.success)
+                    {
+                        report_error(module, "Invalid atomic read-modify-write operation");
+                    }
+                    >operation = operation_s2e.value;
+
+                    skip_space(module);
+                    expect_character(module, ',');
+                    skip_space(module);
+
+                    >pointer = parse_value(module, scope, zero);
+
+                    skip_space(module);
+                    expect_character(module, ',');
+                    skip_space(module);
+
+                    >value = parse_value(module, scope, zero);
+
+                    skip_space(module);
+                    expect_character(module, ',');
+                    skip_space(module);
+
+                    >ordering = parse_ordering(module);
+
+                    skip_space(module);
+                    expect_character(module, right_parenthesis);
+
+                    result.& = {
+                        .content = {
+                            .atomic_rmw = {
+                                .pointer = pointer,
+                                .value = value,
+                                .operation = operation,
+                                .ordering = ordering,
+                            },
+                        },
+                        .id = .atomic_rmw,
+                        zero,
+                    };
+                },
+                .fence =>
+                {
+                    skip_space(module);
+                    expect_character(module, left_parenthesis);
+                    skip_space(module);
+
+                    >ordering = parse_ordering(module);
+
+                    skip_space(module);
+                    expect_character(module, right_parenthesis);
+
+                    result.& = {
+                        .content = {
+                            .fence = {
+                                .ordering = ordering,
+                            },
+                        },
+                        .id = .fence,
+                        zero,
+                    };
+                },
+                .compare_and_swap =>
+                {
+                    skip_space(module);
+                    expect_character(module, left_parenthesis);
+                    skip_space(module);
+
+                    expect_character(module, '.');
+                    >weakness_identifier = parse_identifier(module);
+
+                    >is_strong: u1 = 0;
+
+                    if (string_equal(weakness_identifier, "strong"))
+                    {
+                        is_strong = 1;
+                    }
+                    else if (string_equal(weakness_identifier, "weak"))
+                    {
+                        is_strong = 0;
+                    }
+                    else
+                    {
+                        report_error(module, "Invalid weakness specifier for compare_and_swap");
+                    }
+
+                    skip_space(module);
+                    expect_character(module, ',');
+                    skip_space(module);
+
+                    >pointer = parse_value(module, scope, zero);
+
+                    skip_space(module);
+                    expect_character(module, ',');
+                    skip_space(module);
+
+                    >expected_value = parse_value(module, scope, zero);
+
+                    skip_space(module);
+                    expect_character(module, ',');
+                    skip_space(module);
+
+                    >new_value = parse_value(module, scope, zero);
+
+                    skip_space(module);
+                    expect_character(module, ',');
+                    skip_space(module);
+
+                    >success_ordering = parse_ordering(module);
+
+                    skip_space(module);
+                    expect_character(module, ',');
+                    skip_space(module);
+
+                    >failure_ordering = parse_ordering(module);
+
+                    skip_space(module);
+                    expect_character(module, right_parenthesis);
+
+                    result.& = {
+                        .content = {
+                            .compare_and_swap = {
+                                .pointer = pointer,
+                                .expected_value = expected_value,
+                                .new_value = new_value,
+                                .success_ordering = success_ordering,
+                                .failure_ordering = failure_ordering,
+                                .is_strong = is_strong,
+                            },
+                        },
+                        .id = .compare_and_swap,
                         zero,
                     };
                 },
@@ -7311,9 +7652,9 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                 skip_space(module);
 
                 >statement_start_keyword_s2e = @string_to_enum(StatementStartKeyword, statement_start_identifier);
-                if (statement_start_keyword_s2e.is_valid)
+                if (statement_start_keyword_s2e.success)
                 {
-                    >statement_start_keyword = statement_start_keyword_s2e.enum_value;
+                    >statement_start_keyword = statement_start_keyword_s2e.value;
 
                     switch (statement_start_keyword)
                     {
@@ -7845,12 +8186,12 @@ parse = fn (module: &Module) void
             {
                 >global_attribute_keyword_string = parse_identifier(module);
                 >global_attribute_keyword_s2e = @string_to_enum(GlobalAttributeKeyword, global_attribute_keyword_string);
-                if (!global_attribute_keyword_s2e.is_valid)
+                if (!global_attribute_keyword_s2e.success)
                 {
                     report_error(module, "Invalid global attribute keyword");
                 }
 
-                >global_attribute_keyword = global_attribute_keyword_s2e.enum_value;
+                >global_attribute_keyword = global_attribute_keyword_s2e.value;
                 switch (global_attribute_keyword)
                 {
                     .export =>
@@ -7963,11 +8304,11 @@ parse = fn (module: &Module) void
 
             >global_keyword_s2e = @string_to_enum(GlobalKeyword, global_keyword_string);
 
-            is_global_keyword = global_keyword_s2e.is_valid;
+            is_global_keyword = global_keyword_s2e.success;
 
             if (is_global_keyword)
             {
-                >global_keyword = global_keyword_s2e.enum_value;
+                >global_keyword = global_keyword_s2e.value;
 
                 if (global_forward_declaration != zero and global_keyword != .fn)
                 {
@@ -10832,11 +11173,11 @@ StoreOptions = struct
     destination: &LLVMValue,
     type: &Type,
     alignment: u32,
-    ordering: LLVMOrdering,
+    ordering: LLVMAtomicOrdering,
     is_volatile: u1,
 }
 
-create_store = fn (module: &Module, options: StoreOptions) void
+create_store = fn (module: &Module, options: StoreOptions) &LLVMValue
 {
     assert(options.source != zero);
     assert(options.destination != zero);
@@ -10859,7 +11200,7 @@ create_store = fn (module: &Module, options: StoreOptions) void
         alignment = get_byte_alignment(resolved_type);
     }
 
-    llvm_create_store(module.llvm.builder, source_value, options.destination, alignment, options.is_volatile, options.ordering);
+    return llvm_create_store(module.llvm.builder, source_value, options.destination, alignment, options.is_volatile, options.ordering);
 }
 
 memory_to_abi = fn (module: &Module, value: &LLVMValue, type: &Type) &LLVMValue
@@ -10878,7 +11219,7 @@ LoadOptions = struct
     pointer: &LLVMValue,
     name: []u8,
     alignment: u32,
-    ordering: LLVMOrdering,
+    ordering: LLVMAtomicOrdering,
     kind: TypeKind,
     use_abi: u1,
     is_volatile: u1,
@@ -11574,13 +11915,13 @@ get_optional_type = fn (module: &Module, type: &Type) &Type
     >type_alignment = get_byte_alignment(type);
 
     fields[0] = {
-        .name = "enum_value",
+        .name = "value",
         .type = type,
         zero,
     };
 
     fields[1] = {
-        .name = "is_valid",
+        .name = "result",
         .type = uint1(module),
         .offset = get_byte_size(type),
         zero,
@@ -13138,6 +13479,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     value_constant_buffer[i] = global_value;
                 }
 
+                >enum_alignment = get_byte_alignment(enum_type);
                 >value_array = LLVMConstArray2(enum_value_type, &value_constant_buffer[0], array_element_count);
                 >value_array_variable_type = LLVMArrayType2(enum_value_type, array_element_count);
                 >is_constant: u1 = 1;
@@ -13690,7 +14032,81 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
             value_type = element_type;
 
-            typecheck(module, expected_type, element_type);
+            typecheck(module, expected_type, value_type);
+        },
+        .atomic_load =>
+        {
+            >pointer = value.content.atomic_load.pointer;
+            analyze_type(module, pointer, zero, zero);
+
+            >pointer_type = pointer.type;
+            if (pointer_type.id != .pointer)
+            {
+                report_error(module, "Atomic store pointer value must be of type pointer");
+            }
+
+            value_type = pointer_type.content.pointer.element_type;
+            typecheck(module, expected_type, value_type);
+        },
+        .atomic_store =>
+        {
+            >pointer = value.content.atomic_store.pointer;
+            >value = value.content.atomic_store.value;
+
+            analyze_type(module, pointer, zero, zero);
+            >pointer_type = pointer.type;
+            if (pointer_type.id != .pointer)
+            {
+                report_error(module, "Atomic store pointer value must be of type pointer");
+            }
+
+            >element_type = pointer_type.content.pointer.element_type;
+            analyze_type(module, value, element_type, zero);
+
+            value_type = void_type(module);
+        },
+        .atomic_rmw =>
+        {
+            >pointer = value.content.atomic_rmw.pointer;
+
+            analyze_type(module, pointer, zero, zero);
+            >pointer_type = pointer.type;
+            if (pointer_type.id != .pointer)
+            {
+                report_error(module, "Atomic store pointer value must be of type pointer");
+            }
+
+            >element_type = pointer_type.content.pointer.element_type;
+
+            >value = value.content.atomic_rmw.value;
+            analyze_type(module, value, element_type, zero);
+
+            value_type = element_type;
+            typecheck(module, expected_type, value_type);
+        },
+        .fence =>
+        {
+            value_type = void_type(module);
+        },
+        .compare_and_swap =>
+        {
+            >pointer = value.content.compare_and_swap.pointer;
+
+            analyze_type(module, pointer, zero, zero);
+
+            >pointer_type = pointer.type;
+
+            if (pointer_type.id != .pointer)
+            {
+                report_error(module, "Atomic store pointer value must be of type pointer");
+            }
+
+            >element_type = pointer_type.content.pointer.element_type;
+
+            analyze_type(module, value.content.compare_and_swap.expected_value, element_type, zero);
+            analyze_type(module, value.content.compare_and_swap.new_value, element_type, zero);
+
+            value_type = get_optional_type(module, element_type);
         },
         else =>
         {
@@ -14191,14 +14607,14 @@ coerce_integer_or_pointer_to_integer_or_pointer = fn (module: &Module, source: &
 
 address_create_store = fn (module: &Module, value: &LLVMValue, address: Address, is_volatile: u1) void
 {
-    >ordering: LLVMOrdering = .not_atomic;
+    >ordering: LLVMAtomicOrdering = .not_atomic;
     llvm_create_store(module.llvm.builder, value, address.pointer, address.alignment, is_volatile, ordering);
 }
 
 address_create_load = fn (module: &Module, address: Address, name: []u8, is_volatile: u1) &LLVMValue
 {
     resolve_type_in_place(module, address.element_type);
-    >ordering: LLVMOrdering = .not_atomic;
+    >ordering: LLVMAtomicOrdering = .not_atomic;
     >result = llvm_create_load(module.llvm.builder, address.element_type.llvm.abi, address.pointer, address.alignment, name, is_volatile, ordering);
     return result;
 }
@@ -17398,6 +17814,177 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
 
             llvm_value = reduce_call;
         },
+        .atomic_store =>
+        {
+            >p = value.content.atomic_store.pointer;
+            >v = value.content.atomic_store.value;
+
+            emit_value(module, p, .memory, 0);
+            emit_value(module, v, .memory, 0);
+
+            >ordering = atomic_ordering_to_llvm(value.content.atomic_store.ordering);
+
+            llvm_value = create_store(module, {
+                .source = v.llvm,
+                .destination = p.llvm,
+                .type = v.type,
+                .ordering = ordering,
+                zero,
+            });
+        },
+        .atomic_load =>
+        {
+            >p = value.content.atomic_store.pointer;
+
+            emit_value(module, p, .memory, 0);
+
+            >ordering = atomic_ordering_to_llvm(value.content.atomic_load.ordering);
+
+            llvm_value = create_load(module, {
+                .type = resolved_value_type,
+                .pointer = p.llvm,
+                .ordering = ordering,
+                zero,
+            });
+        },
+        .atomic_rmw =>
+        {
+            >operation: LLVMAtomicRmwOperation = zero;
+
+            switch (value.content.atomic_rmw.operation)
+            {
+                .xchg =>
+                {
+                    switch (resolved_value_type.id)
+                    {
+                        .integer =>
+                        {
+                            operation = .xchg;
+                        },
+                        else => { report_error(module, "Invalid atomic_rmw operation"); },
+                    }
+                },
+                .add =>
+                {
+                    switch (resolved_value_type.id)
+                    {
+                        .integer =>
+                        {
+                            operation = .add;
+                        },
+                        .float =>
+                        {
+                            operation = .fadd;
+                        },
+                        else => { report_error(module, "Invalid atomic_rmw operation"); },
+                    }
+                },
+                .sub =>
+                {
+                    switch (resolved_value_type.id)
+                    {
+                        .integer =>
+                        {
+                            operation = .sub;
+                        },
+                        .float =>
+                        {
+                            operation = .fsub;
+                        },
+                        else => { report_error(module, "Invalid atomic_rmw operation"); },
+                    }
+                },
+                .and =>
+                {
+                    switch (resolved_value_type.id)
+                    {
+                        .integer =>
+                        {
+                            operation = .and;
+                        },
+                        else => { report_error(module, "Invalid atomic_rmw operation"); },
+                    }
+                },
+                .nand =>
+                {
+                    switch (resolved_value_type.id)
+                    {
+                        .integer =>
+                        {
+                            operation = .nand;
+                        },
+                        else => { report_error(module, "Invalid atomic_rmw operation"); },
+                    }
+                },
+                .or =>
+                {
+                    switch (resolved_value_type.id)
+                    {
+                        .integer =>
+                        {
+                            operation = .or;
+                        },
+                        else => { report_error(module, "Invalid atomic_rmw operation"); },
+                    }
+                },
+                .xor =>
+                {
+                    switch (resolved_value_type.id)
+                    {
+                        .integer =>
+                        {
+                            operation = .xor;
+                        },
+                        else => { report_error(module, "Invalid atomic_rmw operation"); },
+                    }
+                },
+                .max =>
+                {
+                    switch (resolved_value_type.id)
+                    {
+                        .integer =>
+                        {
+                            operation = @select(type_is_signed(resolved_value_type), .max, .umax);
+                        },
+                        .float =>
+                        {
+                            operation = .fmax;
+                        },
+                        else => { report_error(module, "Invalid atomic_rmw operation"); },
+                    }
+                },
+                .min =>
+                {
+                    switch (resolved_value_type.id)
+                    {
+                        .integer =>
+                        {
+                            operation = @select(type_is_signed(resolved_value_type), .min, .umin);
+                        },
+                        .float =>
+                        {
+                            operation = .fmin;
+                        },
+                        else => { report_error(module, "Invalid atomic_rmw operation"); },
+                    }
+                },
+            }
+
+            >p = value.content.atomic_rmw.pointer;
+            >v = value.content.atomic_rmw.value;
+
+            emit_value(module, p, .memory, 0);
+            emit_value(module, v, .memory, 0);
+
+            >ordering = atomic_ordering_to_llvm(value.content.atomic_rmw.ordering);
+
+            llvm_value = LLVMBuildAtomicRMW(module.llvm.builder, operation, p.llvm, v.llvm, ordering, 0);
+        },
+        .fence =>
+        {
+            >ordering = atomic_ordering_to_llvm(value.content.fence.ordering);
+            llvm_value = LLVMBuildFence(module.llvm.builder, ordering, 0, "");
+        },
         else =>
         {
             fail();
@@ -17804,6 +18391,31 @@ emit_assignment = fn (module: &Module, right: &Value, address: Address) void
                             });
                         },
                         else => { unreachable; },
+                    }
+                },
+                .compare_and_swap =>
+                {
+                    >pointer = right.content.compare_and_swap.pointer;
+                    >expected_value = right.content.compare_and_swap.expected_value;
+                    >new_value = right.content.compare_and_swap.new_value;
+
+                    emit_value(module, pointer, .memory, 0);
+                    emit_value(module, expected_value, .memory, 0);
+                    emit_value(module, new_value, .memory, 0);
+
+                    >success_ordering = atomic_ordering_to_llvm(right.content.compare_and_swap.success_ordering);
+                    >failure_ordering = atomic_ordering_to_llvm(right.content.compare_and_swap.failure_ordering);
+
+                    >compare_and_swap = LLVMBuildAtomicCmpXchg(module.llvm.builder, pointer.llvm, expected_value.llvm, new_value.llvm, success_ordering, failure_ordering, 0);
+
+                    for (i: 0..2)
+                    {
+                        >gep = address_create_struct_gep(module, address, @truncate(i));
+
+                        >field = LLVMBuildExtractValue(module.llvm.builder, compare_and_swap, @truncate(i), "");
+
+                        >is_volatile: u1 = 0;
+                        address_create_store(module, field, gep, is_volatile);
                     }
                 },
                 else =>
@@ -20357,13 +20969,13 @@ parse_target_triple = fn (target_triple: []u8) Target
     >cpu_s2e = @string_to_enum(CPUArchitecture, cpu_string);
     >os_s2e = @string_to_enum(OperatingSystem, os_string);
 
-    if (!cpu_s2e.is_valid or !os_s2e.is_valid)
+    if (!cpu_s2e.success or !os_s2e.success)
     {
         @trap();
     }
 
-    >cpu = cpu_s2e.enum_value;
-    >os = os_s2e.enum_value;
+    >cpu = cpu_s2e.value;
+    >os = os_s2e.value;
 
     return { .cpu = cpu, .os = os, zero };
 }
@@ -20825,7 +21437,7 @@ default_configurations: [_]Configuration = [
     >command_string = c_string_to_slice(arguments[1]);
 
     >command_string_to_enum = @string_to_enum(CompilerCommand, command_string);
-    if (!command_string_to_enum.is_valid)
+    if (!command_string_to_enum.success)
     {
         return 1;
     }
@@ -20833,7 +21445,7 @@ default_configurations: [_]Configuration = [
     >debug_info_array: [_]u1 = [1, 0];
     >is_host_cpu_model_array: [_]u1 = [1, 0];
 
-    >command = command_string_to_enum.enum_value;
+    >command = command_string_to_enum.value;
 
     switch (command)
     {
@@ -20851,11 +21463,11 @@ default_configurations: [_]Configuration = [
             if (argument_count >= 4)
             {
                 >build_mode_string_to_enum = @string_to_enum(BuildMode, c_string_to_slice(arguments[3]));
-                if (!build_mode_string_to_enum.is_valid)
+                if (!build_mode_string_to_enum.success)
                 {
                     return 1;
                 }
-                build_mode = build_mode_string_to_enum.enum_value;
+                build_mode = build_mode_string_to_enum.value;
             }
 
             if (argument_count >= 5)
