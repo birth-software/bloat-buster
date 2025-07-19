@@ -1526,6 +1526,7 @@ TypeStruct = struct
     byte_alignment: u32,
     line: u32,
     is_slice: u1,
+    is_optional: u1,
     next: &Type,
 }
 
@@ -1698,6 +1699,10 @@ receives_type = fn (value: &Value) u1
         .float_string_literal =>
         {
             return 1;
+        },
+        .optional_value, .optional_result =>
+        {
+            return 0;
         },
         else =>
         {
@@ -2194,6 +2199,8 @@ ValueId = enum
     breakpoint,
     float_string_literal,
     reduce,
+    optional_result,
+    optional_value,
 }
 
 ValueConstantInteger = struct
@@ -2530,6 +2537,8 @@ ValueContent = union
     field_parent_pointer: ValueFieldParentPointer,
     float_string_literal: []u8,
     reduce: ValueReduce,
+    optional_result: &Value,
+    optional_value: &Value,
 }
 
 ValueKind = enum
@@ -2633,6 +2642,10 @@ value_is_constant = fn (value: &Value) u1
         .undefined =>
         {
             return 1;
+        },
+        .optional_value, .optional_result =>
+        {
+            return 0;
         },
         else =>
         {
@@ -4365,6 +4378,11 @@ type_is_slice = fn (type: &Type) u1
     return type.id == .struct and type.content.struct.is_slice;
 }
 
+type_is_optional = fn (type: &Type) u1
+{
+    return type.id == .struct and type.content.struct.is_optional;
+}
+
 get_slice_type = fn (module: &Module, element_type: &Type) &Type
 {
     >slice_type = module.first_slice_type;
@@ -4557,6 +4575,7 @@ TokenId = enum
     bar,
     ampersand,
     exclamation,
+    question,
 
     assign_plus,
     assign_dash,
@@ -4590,6 +4609,7 @@ TokenId = enum
     triple_dot,
 
     pointer_dereference,
+    optional_value,
 
     assign,
     tilde,
@@ -5639,6 +5659,7 @@ tokenize = fn (module: &Module) Token
             {
                 else => { id = .dot; },
                 '&' => { id = .pointer_dereference; },
+                '?' => { id = .optional_value; },
                 '.' =>
                 {
                     switch (module.content[start_index + 2])
@@ -5654,7 +5675,7 @@ tokenize = fn (module: &Module) Token
             switch (id)
             {
                 .dot => { add = 1; },
-                .double_dot, .pointer_dereference => { add = 2; },
+                .double_dot, .pointer_dereference, .optional_value => { add = 2; },
                 .triple_dot => { add = 3; },
                 else => { unreachable; },
             }
@@ -5819,6 +5840,11 @@ tokenize = fn (module: &Module) Token
             token.id = id;
 
             module.offset += @extend(next_ch == '=') + 1;
+        },
+        '?' =>
+        {
+            token.id = .question;
+            module.offset += 1;
         },
         else =>
         {
@@ -6758,6 +6784,8 @@ get_token_precedence = fn (token: Token) Precedence
         .left_parenthesis,
         .left_bracket,
         .dot,
+        .question,
+        .optional_value,
         =>
         {
             return .postfix;
@@ -7145,6 +7173,28 @@ parse_right = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                 },
                 .id = .field_access,
                 .kind = builder.kind,
+                zero,
+            };
+        },
+        .question =>
+        {
+            result = new_value(module);
+            result.& = {
+                .content = {
+                    .optional_result = left,
+                },
+                .id = .optional_result,
+                zero,
+            };
+        },
+        .optional_value =>
+        {
+            result = new_value(module);
+            result.& = {
+                .content = {
+                    .optional_value = left,
+                },
+                .id = .optional_value,
                 zero,
             };
         },
@@ -8548,8 +8598,7 @@ parse = fn (module: &Module) void
                                     .byte_size = byte_size,
                                     .byte_alignment = byte_alignment,
                                     .line = global_line,
-                                    .is_slice = 0,
-                                    .next = zero,
+                                    zero,
                                 },
                             };
                             struct_type.id = .struct;
@@ -11548,6 +11597,7 @@ get_optional_type = fn (module: &Module, type: &Type) &Type
     while (optional_type)
     {
         assert(optional_type.id == .struct);
+        assert(optional_type.content.struct.is_optional);
         >fields = optional_type.content.struct.fields;
         >candidate_element_type = fields[0].type;
 
@@ -11593,6 +11643,7 @@ get_optional_type = fn (module: &Module, type: &Type) &Type
                 .fields = fields,
                 .byte_size = byte_size,
                 .byte_alignment = type_alignment,
+                .is_optional = 1,
                 zero,
             },
         },
@@ -13691,6 +13742,34 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             value_type = element_type;
 
             typecheck(module, expected_type, element_type);
+        },
+        .optional_result =>
+        {
+            >optional_argument = value.content.optional_result;
+            analyze_type(module, optional_argument, zero, zero);
+            >optional_argument_type = optional_argument.type;
+
+            if (!type_is_optional(optional_argument_type))
+            {
+                report_error(module, "Optional result expression must take an optional argument");
+            }
+
+            value_type = uint1(module);
+            typecheck(module, expected_type, value_type);
+        },
+        .optional_value =>
+        {
+            >optional_argument = value.content.optional_value;
+            analyze_type(module, optional_argument, zero, zero);
+            >optional_argument_type = optional_argument.type;
+
+            if (!type_is_optional(optional_argument_type))
+            {
+                report_error(module, "Optional result expression must take an optional argument");
+            }
+
+            value_type = optional_argument_type.content.struct.fields[0].type;
+            typecheck(module, expected_type, value_type);
         },
         else =>
         {
@@ -17397,6 +17476,22 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
             >reduce_call = emit_intrinsic_call(module, intrinsic_index, argument_types[..], argument_values[..]);
 
             llvm_value = reduce_call;
+        },
+        .optional_result =>
+        {
+            >optional_argument = value.content.optional_result;
+            assert(optional_argument.kind == .right);
+            emit_value(module, optional_argument, .memory, 0);
+            llvm_value = LLVMBuildExtractValue(module.llvm.builder, optional_argument.llvm, 1, "");
+            llvm_value = LLVMBuildTrunc(module.llvm.builder, llvm_value, uint1(module).llvm.abi, "");
+        },
+        .optional_value =>
+        {
+            >optional_argument = value.content.optional_value;
+            assert(optional_argument.kind == .right);
+            emit_value(module, optional_argument, .memory, 0);
+            llvm_value = LLVMBuildExtractValue(module.llvm.builder, optional_argument.llvm, 0, "");
+            llvm_value = LLVMBuildTrunc(module.llvm.builder, llvm_value, resolved_value_type.llvm.abi, "");
         },
         else =>
         {
