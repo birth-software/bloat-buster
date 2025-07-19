@@ -27,5 +27,5 @@ jobs:
         run: |
           set -eux
           ./generate.sh
-          CMAKE_PREFIX_PATH=$HOME/dev/llvm/install/llvm_${LLVM_VERSION}_x86_64-linux-${CMAKE_BUILD_TYPE} $HOME/bloat-buster-artifacts/releases/main/compiler_generic_debug compile src/compiler.bbb
-          bb-cache/debug_none_di_native/compiler reproduce 
+          CMAKE_PREFIX_PATH=$HOME/dev/llvm/install/llvm_${LLVM_VERSION}_x86_64-linux-${CMAKE_BUILD_TYPE} $HOME/bloat-buster-artifacts/releases/main/compiler_generic_debug compile src/compiler.bbb debug true true
+          bb-cache/x86_64_linux_debug_di_native/compiler reproduce 
