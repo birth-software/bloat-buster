@@ -1044,17 +1044,17 @@ CompilerCommand = enum
 
 BuildMode = enum
 {
-    debug_none,
+    development,
     debug,
-    aggressively_optimize_for_speed,
-    aggressively_optimize_for_size,
+    speed,
+    size,
 }
 
 build_mode_is_optimized = fn (build_mode: BuildMode) u1
 {
     switch (build_mode)
     {
-        .debug_none, .debug => { return 0; },
+        .development, .debug => { return 0; },
         else => { return 1; },
     }
 }
@@ -19163,8 +19163,8 @@ emit = fn (module: &Module) void
     >code_generation_optimization_level: LLVMCodeGenerationOptimizationLevel = undefined;
     switch (module.build_mode)
     {
-        .debug_none, .debug => { code_generation_optimization_level = .none; },
-        .aggressively_optimize_for_speed, .aggressively_optimize_for_size => { code_generation_optimization_level = .aggressive; },
+        .development, .debug => { code_generation_optimization_level = .none; },
+        .speed, .size => { code_generation_optimization_level = .aggressive; },
     }
 
     LLVMTargetMachineOptionsSetCodeGenOptLevel(target_machine_options, code_generation_optimization_level);
@@ -19969,15 +19969,15 @@ emit = fn (module: &Module) void
 
     switch (module.build_mode)
     {
-        .debug_none, .debug =>
+        .development, .debug =>
         {
             optimization_level = .O0;
         },
-        .aggressively_optimize_for_speed =>
+        .speed =>
         {
             optimization_level = .O3;
         },
-        .aggressively_optimize_for_size =>
+        .size =>
         {
             optimization_level = .Oz;
         },
@@ -19986,7 +19986,7 @@ emit = fn (module: &Module) void
     >object_generation_result = generate_object(module.llvm.module, module.llvm.target_machine, {
         .path = module.objects[0],
         .optimization_level = optimization_level,
-        .run_optimization_passes = module.build_mode != .debug_none,
+        .run_optimization_passes = module.build_mode != .development,
         .has_debug_info = module.has_debug_info,
     });
 
@@ -20335,6 +20335,15 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
 
     >is_compiler = string_equal(relative_file_path, "src/compiler.bbb");
 
+    >target = target_get_native();
+
+    >target_triple_c = getenv("BB_TARGET_TRIPLE");
+    if (target_triple_c)
+    {
+        >target_triple = c_string_to_slice(target_triple_c);
+        target = parse_target_triple(target_triple);
+    }
+
     >base_cache_dir_env = getenv("BB_CACHE_DIR");
     if (base_cache_dir_env)
     {
@@ -20350,6 +20359,10 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
     >outputh_path_dir = arena_join_string(arena, [
         base_dir,
         "/",
+        @enum_name(target.cpu),
+        "_",
+        @enum_name(target.os),
+        "_",
         @enum_name(compile_options.build_mode),
         "_",
         @select(compile_options.has_debug_info, "di", "nodi"),
@@ -20366,15 +20379,6 @@ compile_file = fn (arena: &Arena, compile_options: CompileFile, envp: &&u8) []u8
 
     >file_content = file_read(arena, relative_file_path);
     >file_path = path_absolute(arena, relative_file_path.pointer);
-
-    >target = target_get_native();
-
-    >target_triple_c = getenv("BB_TARGET_TRIPLE");
-    if (target_triple_c)
-    {
-        >target_triple = c_string_to_slice(target_triple_c);
-        target = parse_target_triple(target_triple);
-    }
 
     >definitions: []Definition = zero;
     >cmake_prefix_path_definition: Definition = {
@@ -20723,7 +20727,7 @@ Configuration = struct
 
 default_configurations: [_]Configuration = [
     {
-        .build_mode = .debug_none,
+        .build_mode = .development,
         .has_debug_info = 1,
     },
     {
@@ -20731,15 +20735,15 @@ default_configurations: [_]Configuration = [
         .has_debug_info = 1,
     },
     {
-        .build_mode = .aggressively_optimize_for_size,
+        .build_mode = .size,
         .has_debug_info = 0,
     },
     {
-        .build_mode = .aggressively_optimize_for_speed,
+        .build_mode = .speed,
         .has_debug_info = 1,
     },
     {
-        .build_mode = .aggressively_optimize_for_speed,
+        .build_mode = .speed,
         .has_debug_info = 0,
     },
 ];
@@ -20777,7 +20781,7 @@ default_configurations: [_]Configuration = [
                 return 1;
             }
 
-            >build_mode: BuildMode = .debug_none;
+            >build_mode: BuildMode = .development;
             >has_debug_info: u1 = 1;
             >is_host_cpu_model: u1 = 1;
 
