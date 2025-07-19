@@ -7993,6 +7993,13 @@ vector_operations = fn () void
     }
 }
 
+optional_syntax_sugar = fn () void
+{
+    >r = @string_to_enum(BasicEnum, "three");
+    require(r?);
+    require(r.? == .three);
+}
+
 [export] main = fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32
 {
     >rc = return_constant();
@@ -8267,6 +8274,8 @@ vector_operations = fn () void
     float_operations();
 
     vector_operations();
+
+    optional_syntax_sugar();
 
     return 0;
 }
