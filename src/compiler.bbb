@@ -1028,6 +1028,17 @@ LLVMCallingConvention = enum u32
     amdgpu_es = 96
 }
 
+LLVMOrdering = enum u32
+{
+    not_atomic = 0,
+    unordered = 1,
+    monotonic = 2,
+    acquire = 4,
+    release = 5,
+    acquire_release = 6,
+    sequentially_consistent = 7,
+}
+
 LLVMVerifyFailureAction = enum u32
 {
     abort,
@@ -3023,6 +3034,7 @@ LLVMFCmpPredicate = enum u32
 
 [extern] LLVMSetAlignment = fn [cc(c)] (value: &LLVMValue, alignment: u32) void;
 [extern] LLVMSetVolatile = fn [cc(c)] (value: &LLVMValue, is_volatile: u32) void;
+[extern] LLVMSetOrdering = fn [cc(c)] (value: &LLVMValue, ordering: LLVMOrdering) void;
 [extern] LLVMBuildAlloca = fn [cc(c)] (builder: &LLVMBuilder, type: &LLVMType, name: &u8) &LLVMValue;
 
 llvm_create_alloca = fn (builder: &LLVMBuilder, type: &LLVMType, alignment: u32, name: []u8) &LLVMValue
@@ -3036,15 +3048,16 @@ llvm_create_alloca = fn (builder: &LLVMBuilder, type: &LLVMType, alignment: u32,
 [extern] LLVMBuildStore = fn [cc(c)] (builder: &LLVMBuilder, source: &LLVMValue, destination: &LLVMValue) &LLVMValue;
 [extern] LLVMBuildLoad2 = fn [cc(c)] (builder: &LLVMBuilder, type: &LLVMType, pointer: &LLVMValue, name: &u8) &LLVMValue;
 
-llvm_create_store = fn (builder: &LLVMBuilder, source: &LLVMValue, destination: &LLVMValue, alignment: u32, is_volatile: u1) void
+llvm_create_store = fn (builder: &LLVMBuilder, source: &LLVMValue, destination: &LLVMValue, alignment: u32, is_volatile: u1, ordering: LLVMOrdering) void
 {
     >store = LLVMBuildStore(builder, source, destination);
 
     LLVMSetAlignment(store, alignment);
     LLVMSetVolatile(store, @extend(is_volatile));
+    LLVMSetOrdering(store, ordering);
 }
 
-llvm_create_load = fn (builder: &LLVMBuilder, type: &LLVMType, pointer: &LLVMValue, alignment: u32, name: []u8, is_volatile: u1) &LLVMValue
+llvm_create_load = fn (builder: &LLVMBuilder, type: &LLVMType, pointer: &LLVMValue, alignment: u32, name: []u8, is_volatile: u1, ordering: LLVMOrdering) &LLVMValue
 {
     if (name.pointer)
     {
@@ -3059,6 +3072,7 @@ llvm_create_load = fn (builder: &LLVMBuilder, type: &LLVMType, pointer: &LLVMVal
 
     LLVMSetAlignment(result, alignment);
     LLVMSetVolatile(result, @extend(is_volatile));
+    LLVMSetOrdering(result, ordering);
 
     return result;
 }
@@ -10817,6 +10831,7 @@ StoreOptions = struct
     destination: &LLVMValue,
     type: &Type,
     alignment: u32,
+    ordering: LLVMOrdering,
     is_volatile: u1,
 }
 
@@ -10843,7 +10858,7 @@ create_store = fn (module: &Module, options: StoreOptions) void
         alignment = get_byte_alignment(resolved_type);
     }
 
-    llvm_create_store(module.llvm.builder, source_value, options.destination, alignment, options.is_volatile);
+    llvm_create_store(module.llvm.builder, source_value, options.destination, alignment, options.is_volatile, options.ordering);
 }
 
 memory_to_abi = fn (module: &Module, value: &LLVMValue, type: &Type) &LLVMValue
@@ -10862,6 +10877,7 @@ LoadOptions = struct
     pointer: &LLVMValue,
     name: []u8,
     alignment: u32,
+    ordering: LLVMOrdering,
     kind: TypeKind,
     use_abi: u1,
     is_volatile: u1,
@@ -10877,7 +10893,7 @@ create_load = fn (module: &Module, options: LoadOptions) &LLVMValue
     }
 
     >type = get_llvm_type(options.type, @select(options.use_abi, .abi, .memory));
-    >result = llvm_create_load(module.llvm.builder, type, options.pointer, alignment, options.name, options.is_volatile);
+    >result = llvm_create_load(module.llvm.builder, type, options.pointer, alignment, options.name, options.is_volatile, options.ordering);
 
     if (!options.use_abi)
     {
@@ -14130,13 +14146,15 @@ coerce_integer_or_pointer_to_integer_or_pointer = fn (module: &Module, source: &
 
 address_create_store = fn (module: &Module, value: &LLVMValue, address: Address, is_volatile: u1) void
 {
-    llvm_create_store(module.llvm.builder, value, address.pointer, address.alignment, is_volatile);
+    >ordering: LLVMOrdering = .not_atomic;
+    llvm_create_store(module.llvm.builder, value, address.pointer, address.alignment, is_volatile, ordering);
 }
 
 address_create_load = fn (module: &Module, address: Address, name: []u8, is_volatile: u1) &LLVMValue
 {
     resolve_type_in_place(module, address.element_type);
-    >result = llvm_create_load(module.llvm.builder, address.element_type.llvm.abi, address.pointer, address.alignment, name, is_volatile);
+    >ordering: LLVMOrdering = .not_atomic;
+    >result = llvm_create_load(module.llvm.builder, address.element_type.llvm.abi, address.pointer, address.alignment, name, is_volatile, ordering);
     return result;
 }
 
