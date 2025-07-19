@@ -12,7 +12,7 @@ if [[ -z "${BB_BUILD_NATIVE:-}" ]]; then
 fi
 
 if [[ "$BB_BUILD_DEBUG" == "1" ]]; then
-    cp $HOME/bloat-buster-artifacts/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/Release-assertions/cache/x86_64_linux_development_di_generic/compiler $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/compiler_generic_debug
+    cp $HOME/bloat-buster-artifacts/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/Release-assertions/cache/x86_64_linux_debug_di_generic/compiler $HOME/bloat-buster-artifacts/releases/$(git rev-parse --abbrev-ref HEAD)/$(git rev-parse HEAD)/compiler_generic_debug
 fi
 
 if [[ "$BB_BUILD_NATIVE" == "1" ]]; then

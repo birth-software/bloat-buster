@@ -3308,6 +3308,7 @@ Module = struct
     first_vector_type: &Type,
     first_enum_array_type: &Type,
     first_function_type: &Type,
+    first_optional_type: &Type,
 
     va_list_type: &Type,
     build_mode_enum: &Type,
@@ -11538,6 +11539,81 @@ get_build_mode_enum = fn (module: &Module) &Type
     return result;
 }
 
+get_optional_type = fn (module: &Module, type: &Type) &Type
+{
+    assert(type != zero);
+
+    >optional_type = module.first_optional_type;
+
+    while (optional_type)
+    {
+        assert(optional_type.id == .struct);
+        >fields = optional_type.content.struct.fields;
+        >candidate_element_type = fields[0].type;
+
+        if (candidate_element_type == type)
+        {
+            return optional_type;
+        }
+
+        >next = optional_type.content.struct.next;
+
+        if (!next)
+        {
+            break;
+        }
+
+        optional_type = next;
+    }
+
+    >last_optional_type = optional_type;
+
+    >fields = arena_allocate_slice[Field](module.arena, 2);
+
+    >type_size = get_byte_size(type);
+    >type_alignment = get_byte_alignment(type);
+
+    fields[0] = {
+        .name = "enum_value",
+        .type = type,
+        zero,
+    };
+
+    fields[1] = {
+        .name = "is_valid",
+        .type = uint1(module),
+        .offset = get_byte_size(type),
+        zero,
+    };
+    >byte_size = align_forward(type_size + 1, @extend(type_alignment));
+
+    >result = new_type(module, {
+        .content = {
+            .struct = {
+                .fields = fields,
+                .byte_size = byte_size,
+                .byte_alignment = type_alignment,
+                zero,
+            },
+        },
+        .id = .struct,
+        .name = arena_join_string(module.arena, [ "?", type.name ][..]),
+        .scope = type.scope,
+        zero,
+    });
+
+    if (last_optional_type != zero)
+    {
+        last_optional_type.content.struct.next = result;
+    }
+    else
+    {
+        module.first_optional_type = result;
+    }
+
+    return result;
+}
+
 analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysis: TypeAnalysis) void
 {
     assert(!value.type);
@@ -13039,39 +13115,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 
                 >u64_zero = LLVMConstNull(u64_type.llvm.abi);
 
-                >enum_alignment = get_byte_alignment(enum_type);
-                >enum_size = get_byte_size(enum_type);
-                >byte_size = align_forward(enum_size + 1, @extend(enum_alignment));
-
-                >struct_fields = arena_allocate_slice[Field](module.arena, 2);
-
-                struct_fields[0] = {
-                    .name = "enum_value",
-                    .type = enum_type,
-                    zero,
-                };
-
-                struct_fields[1] = {
-                    .name = "is_valid",
-                    .type = u1_type,
-                    .offset = enum_size,
-                    zero,
-                };
-
-                >struct_type = new_type(module, {
-                    .content = {
-                        .struct = {
-                            .fields = struct_fields,
-                            .byte_size = byte_size,
-                            .byte_alignment = enum_alignment,
-                            zero,
-                        },
-                    },
-                    .id = .struct,
-                    .name = "string_to_enum",
-                    .scope = enum_type.scope,
-                    zero,
-                });
+                >struct_type = get_optional_type(module, enum_type);
                 resolve_type_in_place(module, struct_type);
 
                 >argument_types: [_]&LLVMType = [ module.llvm.pointer_type, u64_type.llvm.abi ];
@@ -13099,6 +13143,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 >is_constant: u1 = 1;
                 >thread_local_mode: LLVMThreadLocalMode = .none;
                 >externally_initialized: u1 = 0;
+                >enum_alignment = get_byte_alignment(enum_type);
                 >value_array_variable = llvm_create_global_variable(module.llvm.module, value_array_variable_type, is_constant, .internal, value_array, "value.array.enum", thread_local_mode, externally_initialized, enum_alignment, .global);
 
                 >entry_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "entry");
