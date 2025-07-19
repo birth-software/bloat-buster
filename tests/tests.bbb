@@ -8000,6 +8000,20 @@ optional_syntax_sugar = fn () void
     require(r.? == .three);
 }
 
+atomic_operations = fn () void
+{
+    >a: s32 = 0;
+    @atomic_store(&a, 1, .sequentially_consistent);
+    require(@atomic_load(&a, .sequentially_consistent) == 1);
+    @atomic_rmw(.add, &a, 1, .sequentially_consistent);
+    require(@atomic_load(&a, .sequentially_consistent) == 2);
+    @fence(.sequentially_consistent);
+    >cas = @compare_and_swap(.strong, &a, 2, 3, .sequentially_consistent, .sequentially_consistent);
+    require(cas?);
+    require(cas.? == 2);
+    require(@atomic_load(&a, .sequentially_consistent) == 3);
+}
+
 [export] main = fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32
 {
     >rc = return_constant();
@@ -8276,6 +8290,8 @@ optional_syntax_sugar = fn () void
     vector_operations();
 
     optional_syntax_sugar();
+
+    atomic_operations();
 
     return 0;
 }
