@@ -6655,9 +6655,9 @@ string_to_enum = fn () s32
     >s2e = @string_to_enum(S2Enum, e);
     >result: s32 = 1;
 
-    if (s2e.is_valid)
+    if (s2e?)
     {
-        result = @extend(s2e.enum_value != .dsa);
+        result = @extend(s2e.? != .dsa);
     }
 
     return result;

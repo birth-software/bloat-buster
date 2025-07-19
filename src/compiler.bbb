@@ -5000,14 +5000,14 @@ parse_function_header = fn (module: &Module, scope: &Scope, mandate_argument_nam
             >function_identifier = parse_identifier(module);
             >function_keyword_s2e = @string_to_enum(FunctionKeyword, function_identifier);
 
-            if (!function_keyword_s2e.is_valid)
+            if (!function_keyword_s2e?)
             {
                 report_error(module, "Invalid function keyword");
             }
 
             skip_space(module);
 
-            >function_keyword = function_keyword_s2e.enum_value;
+            >function_keyword = function_keyword_s2e.?;
             switch (function_keyword)
             {
                 .cc =>
@@ -5017,12 +5017,12 @@ parse_function_header = fn (module: &Module, scope: &Scope, mandate_argument_nam
                     >calling_convention_string = parse_identifier(module);
                     >calling_convention_s2e = @string_to_enum(CallingConvention, calling_convention_string);
 
-                    if (!calling_convention_s2e.is_valid)
+                    if (!calling_convention_s2e?)
                     {
                         report_error(module, "Invalid calling convention");
                     }
 
-                    >candidate_calling_convention = calling_convention_s2e.enum_value;
+                    >candidate_calling_convention = calling_convention_s2e.?;
 
                     calling_convention = candidate_calling_convention;
 
@@ -5221,9 +5221,9 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
 
         >type_keyword_s2e = @string_to_enum(TypeKeyword, identifier);
 
-        if (type_keyword_s2e.is_valid)
+        if (type_keyword_s2e?)
         {
-            >type_keyword = type_keyword_s2e.enum_value;
+            >type_keyword = type_keyword_s2e.?;
 
             switch (type_keyword)
             {
@@ -5439,12 +5439,12 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
 
         >identifier = parse_identifier(module);
         >intrinsic_s2e = @string_to_enum(TypeIntrinsic, identifier);
-        if (!intrinsic_s2e.is_valid)
+        if (!intrinsic_s2e?)
         {
             report_error(module, "Invalid intrinsic");
         }
 
-        >intrinsic = intrinsic_s2e.enum_value;
+        >intrinsic = intrinsic_s2e.?;
         switch (intrinsic)
         {
             .ReturnType =>
@@ -5566,9 +5566,9 @@ tokenize = fn (module: &Module) Token
                 >identifier = parse_identifier(module);
 
                 >value_intrinsic_s2e = @string_to_enum(ValueIntrinsic, identifier);
-                if (value_intrinsic_s2e.is_valid)
+                if (value_intrinsic_s2e?)
                 {
-                    >value_intrinsic = value_intrinsic_s2e.enum_value;
+                    >value_intrinsic = value_intrinsic_s2e.?;
                     token = {
                         .content = {
                             .value_intrinsic = value_intrinsic,
@@ -5852,9 +5852,9 @@ tokenize = fn (module: &Module) Token
             {
                 >identifier = parse_identifier(module);
                 >value_keyword_s2e = @string_to_enum(ValueKeyword, identifier);
-                if (value_keyword_s2e.is_valid)
+                if (value_keyword_s2e?)
                 {
-                    >value_keyword = value_keyword_s2e.enum_value;
+                    >value_keyword = value_keyword_s2e.?;
                     token = {
                         .content = {
                             .value_keyword = value_keyword,
@@ -5870,9 +5870,9 @@ tokenize = fn (module: &Module) Token
 
                     >operator_keyword_s2e = @string_to_enum(OperatorKeyword, identifier);
 
-                    if (operator_keyword_s2e.is_valid)
+                    if (operator_keyword_s2e?)
                     {
-                        >operator_keyword = operator_keyword_s2e.enum_value;
+                        >operator_keyword = operator_keyword_s2e.?;
 
                         token = {
                             .content = {
@@ -6525,11 +6525,11 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                     skip_space(module);
                     >id_string = parse_identifier(module);
                     >id_s2e = @string_to_enum(ReduceOperationId, id_string);
-                    if (!id_s2e.is_valid)
+                    if (!id_s2e?)
                     {
                         report_error(module, "Invalid reduce operation");
                     }
-                    >id = id_s2e.enum_value;
+                    >id = id_s2e.?;
 
                     skip_space(module);
                     expect_character(module, ',');
@@ -7361,9 +7361,9 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                 skip_space(module);
 
                 >statement_start_keyword_s2e = @string_to_enum(StatementStartKeyword, statement_start_identifier);
-                if (statement_start_keyword_s2e.is_valid)
+                if (statement_start_keyword_s2e?)
                 {
-                    >statement_start_keyword = statement_start_keyword_s2e.enum_value;
+                    >statement_start_keyword = statement_start_keyword_s2e.?;
 
                     switch (statement_start_keyword)
                     {
@@ -7895,12 +7895,12 @@ parse = fn (module: &Module) void
             {
                 >global_attribute_keyword_string = parse_identifier(module);
                 >global_attribute_keyword_s2e = @string_to_enum(GlobalAttributeKeyword, global_attribute_keyword_string);
-                if (!global_attribute_keyword_s2e.is_valid)
+                if (!global_attribute_keyword_s2e?)
                 {
                     report_error(module, "Invalid global attribute keyword");
                 }
 
-                >global_attribute_keyword = global_attribute_keyword_s2e.enum_value;
+                >global_attribute_keyword = global_attribute_keyword_s2e.?;
                 switch (global_attribute_keyword)
                 {
                     .export =>
@@ -8013,11 +8013,11 @@ parse = fn (module: &Module) void
 
             >global_keyword_s2e = @string_to_enum(GlobalKeyword, global_keyword_string);
 
-            is_global_keyword = global_keyword_s2e.is_valid;
+            is_global_keyword = global_keyword_s2e?;
 
             if (is_global_keyword)
             {
-                >global_keyword = global_keyword_s2e.enum_value;
+                >global_keyword = global_keyword_s2e.?;
 
                 if (global_forward_declaration != zero and global_keyword != .fn)
                 {
@@ -20452,13 +20452,13 @@ parse_target_triple = fn (target_triple: []u8) Target
     >cpu_s2e = @string_to_enum(CPUArchitecture, cpu_string);
     >os_s2e = @string_to_enum(OperatingSystem, os_string);
 
-    if (!cpu_s2e.is_valid or !os_s2e.is_valid)
+    if (!cpu_s2e? or !os_s2e?)
     {
         @trap();
     }
 
-    >cpu = cpu_s2e.enum_value;
-    >os = os_s2e.enum_value;
+    >cpu = cpu_s2e.?;
+    >os = os_s2e.?;
 
     return { .cpu = cpu, .os = os, zero };
 }
@@ -20920,7 +20920,7 @@ default_configurations: [_]Configuration = [
     >command_string = c_string_to_slice(arguments[1]);
 
     >command_string_to_enum = @string_to_enum(CompilerCommand, command_string);
-    if (!command_string_to_enum.is_valid)
+    if (!command_string_to_enum?)
     {
         return 1;
     }
@@ -20928,7 +20928,7 @@ default_configurations: [_]Configuration = [
     >debug_info_array: [_]u1 = [1, 0];
     >is_host_cpu_model_array: [_]u1 = [1, 0];
 
-    >command = command_string_to_enum.enum_value;
+    >command = command_string_to_enum.?;
 
     switch (command)
     {
@@ -20946,11 +20946,11 @@ default_configurations: [_]Configuration = [
             if (argument_count >= 4)
             {
                 >build_mode_string_to_enum = @string_to_enum(BuildMode, c_string_to_slice(arguments[3]));
-                if (!build_mode_string_to_enum.is_valid)
+                if (!build_mode_string_to_enum?)
                 {
                     return 1;
                 }
-                build_mode = build_mode_string_to_enum.enum_value;
+                build_mode = build_mode_string_to_enum.?;
             }
 
             if (argument_count >= 5)
