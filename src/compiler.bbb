@@ -1243,6 +1243,7 @@ Global = struct
     initial_value: &Value,
     next: &Global,
     linkage: Linkage,
+    analyzed: u1,
     emitted: u1,
 }
 
@@ -3417,6 +3418,14 @@ X86VectorExtension = enum
     avx512,
 }
 
+Phase = enum
+{
+    parsing,
+    analysis,
+    emission,
+    linkage,
+}
+
 Module = struct
 {
     arena: &Arena,
@@ -3460,10 +3469,14 @@ Module = struct
     link_libc: u1,
     link_libcpp: u1,
     link: u1,
+    target_triple: &u8,
+    cpu_model: &u8,
+    cpu_features: &u8,
     target: Target,
     host_cpu_model: u1,
     x86_vector_extension: X86VectorExtension,
     build_mode: BuildMode,
+    phase: Phase,
     has_debug_info: u1,
     silent: u1,
 }
@@ -3539,6 +3552,7 @@ Block = struct
     last_local: &Local,
     first_statement: &Statement,
     scope: Scope,
+    analyzed: u1,
 }
 
 StatementWhile = struct
@@ -3615,6 +3629,7 @@ Statement = struct
     line: u32,
     column: u32,
     id: StatementId,
+    analyzed: u1,
 }
 
 scope_to_for = fn (scope: &Scope) &StatementFor
@@ -8660,9 +8675,16 @@ parse = fn (module: &Module) void
                                 >line = header_argument.line;
                                 >type = semantic_argument_types[i];
 
+                                >argument_storage = new_value(module);
+                                argument_storage.& = {
+                                    .type = get_pointer_type(module, type),
+                                    .id = .argument,
+                                    zero,
+                                };
+
                                 argument.& = {
                                     .variable = {
-                                        .storage = zero,
+                                        .storage = argument_storage,
                                         .type = type,
                                         .scope = &global.variable.storage.content.function.scope,
                                         .name = name,
@@ -9107,6 +9129,8 @@ parse = fn (module: &Module) void
 
 resolve_type_in_place_abi = fn (module: &Module, type: &Type) void
 {
+    assert(module.phase == .emission);
+
     if (!type.llvm.abi)
     {
         >result: &LLVMType = zero;
@@ -9257,6 +9281,8 @@ resolve_type_in_place_abi = fn (module: &Module, type: &Type) void
 
 resolve_type_in_place_memory = fn (module: &Module, type: &Type) void
 {
+    assert(module.phase == .emission);
+
     if (!type.llvm.memory)
     {
         resolve_type_in_place_abi(module, type);
@@ -9334,6 +9360,8 @@ align_integer_type = fn (module: &Module, type: &Type) &Type
 
 resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
 {
+    assert(module.phase == .emission);
+
     if (module.has_debug_info)
     {
         if (!type.llvm.debug)
@@ -10304,13 +10332,13 @@ abi_system_v_get_direct = fn (module: &Module, direct: AbiSystemVDirect) AbiInfo
         zero,
     };
 
-    resolve_type_in_place(module, direct.semantic_type);
-    resolve_type_in_place(module, direct.type);
-
-    if (direct.padding)
-    {
-        resolve_type_in_place(module, direct.padding);
-    }
+//    resolve_type_in_place(module, direct.semantic_type);
+//    resolve_type_in_place(module, direct.type);
+//
+//    if (direct.padding)
+//    {
+//        resolve_type_in_place(module, direct.padding);
+//    }
 
     abi_set_coerce_to_type(&result, direct.type);
     abi_set_padding_type(&result, direct.padding);
@@ -10323,7 +10351,7 @@ abi_system_v_get_direct = fn (module: &Module, direct: AbiSystemVDirect) AbiInfo
 
 abi_system_v_get_ignore = fn (module: &Module, semantic_type: &Type) AbiInformation
 {
-    resolve_type_in_place(module, semantic_type);
+    //resolve_type_in_place(module, semantic_type);
 
     return {
         .semantic_type = semantic_type,
@@ -10824,7 +10852,9 @@ AbiSystemVClassifyArgumentOptions = struct
     register_call: u1,
 }
 
-abi_system_v_classify_argument = fn (module: &Module, available_registers: &AbiRegisterCountSystemV, llvm_abi_argument_type_buffer: []&LLVMType, abi_argument_type_buffer: []&Type, options: AbiSystemVClassifyArgumentOptions) AbiInformation
+abi_system_v_classify_argument = fn (module: &Module, available_registers: &AbiRegisterCountSystemV,
+//llvm_abi_argument_type_buffer: []&LLVMType,
+abi_argument_type_buffer: []&Type, options: AbiSystemVClassifyArgumentOptions) AbiInformation
 {
     >semantic_argument_type = options.type;
 
@@ -10874,7 +10904,7 @@ abi_system_v_classify_argument = fn (module: &Module, available_registers: &AbiR
         =>
         {
             >coerce_to_type = abi_get_coerce_to_type(&argument_abi);
-            resolve_type_in_place(module, coerce_to_type);
+            //resolve_type_in_place(module, coerce_to_type);
 
             >is_flattened_struct = argument_abi.flags.kind == .direct and abi_get_can_be_flattened(&argument_abi) and coerce_to_type.id == .struct;
 
@@ -10886,7 +10916,7 @@ abi_system_v_classify_argument = fn (module: &Module, available_registers: &AbiR
                     >field = &fields[i];
                     >field_type = field.type;
 
-                    llvm_abi_argument_type_buffer[abi_start + i] = field_type.llvm.abi;
+                    //llvm_abi_argument_type_buffer[abi_start + i] = field_type.llvm.abi;
                     abi_argument_type_buffer[abi_start + i] = field_type;
                 }
 
@@ -10894,7 +10924,7 @@ abi_system_v_classify_argument = fn (module: &Module, available_registers: &AbiR
             }
             else
             {
-                llvm_abi_argument_type_buffer[abi_start] = coerce_to_type.llvm.abi;
+                //llvm_abi_argument_type_buffer[abi_start] = coerce_to_type.llvm.abi;
                 abi_argument_type_buffer[abi_start] = coerce_to_type;
                 count = 1;
             }
@@ -10904,8 +10934,8 @@ abi_system_v_classify_argument = fn (module: &Module, available_registers: &AbiR
             >indirect_type = get_pointer_type(module, argument_abi.semantic_type);
             >abi_index = argument_abi.abi_start;
             abi_argument_type_buffer[abi_index] = indirect_type;
-            resolve_type_in_place(module, indirect_type);
-            llvm_abi_argument_type_buffer[abi_index] = indirect_type.llvm.abi;
+            //resolve_type_in_place(module, indirect_type);
+            //llvm_abi_argument_type_buffer[abi_index] = indirect_type.llvm.abi;
             count = 1;
         },
         else => { unreachable; },
@@ -11363,14 +11393,10 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
 emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_constant: u1) void;
 emit_assignment = fn (module: &Module, right: &Value, address: Address) void;
 
-analyze_value = fn (module: &Module, value: &Value, expected_type: &Type, type_kind: TypeKind, must_be_constant: u1) void
-{
-    analyze_type(module, value, expected_type, { .must_be_constant = must_be_constant, zero });
-    emit_value(module, value, type_kind, must_be_constant);
-}
-
 analyze_binary_type = fn (module: &Module, left: &Value, right: &Value, is_boolean: u1, expected_type: &Type, must_be_constant: u1, is_sub: u1) void
 {
+    assert(module.phase == .analysis);
+
     >left_constant = value_is_constant(left);
     >right_constant = value_is_constant(right);
     >left_receives_type = receives_type(left);
@@ -12013,6 +12039,8 @@ get_optional_type = fn (module: &Module, type: &Type) &Type
 
 analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysis: TypeAnalysis) void
 {
+    assert(module.phase == .analysis);
+
     assert(!value.type);
     assert(!value.llvm);
 
@@ -12040,7 +12068,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 report_error(module, "Constant integer expects a type");
             }
 
-            resolve_type_in_place(module, expected_type);
+            //resolve_type_in_place(module, expected_type);
             >resolved_type = resolve_alias(module, expected_type);
 
             >value_constant = value.content.constant_integer.value;
@@ -12329,110 +12357,6 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     {
                         report_error(module, "enum_name value must be enum");
                     }
-
-                    resolve_type_in_place(module, enum_type);
-
-                    >enum_to_string_function = enum_type.content.enum.enum_to_string_function;
-
-                    if (!enum_to_string_function)
-                    {
-                        >current_block = LLVMGetInsertBlock(module.llvm.builder);
-                        >enum_name_array_global = get_enum_name_array_global(module, enum_type);
-                        >argument_types: [_]&LLVMType = [ enum_type.llvm.abi ];
-                        >llvm_function_type = LLVMFunctionType(string_type.llvm.memory, &argument_types[0], argument_types.length, 0);
-                        >function_name = arena_join_string(module.arena, [ "enum_to_string.", enum_type.name ][..]);
-                        >llvm_function = llvm_module_create_function(module.llvm.module, llvm_function_type, .internal, function_name);
-                        LLVMSetFunctionCallConv(llvm_function, .fast);
-
-                        >llvm_argument: &LLVMValue = zero;
-                        //assert(argument_types.length == 1); TODO: constant evaluation
-                        LLVMGetParams(llvm_function, &llvm_argument);
-
-                        >entry_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "entry");
-                        LLVMPositionBuilderAtEnd(module.llvm.builder, entry_block);
-
-                        >u32_type = uint32(module);
-                        resolve_type_in_place(module, u32_type);
-
-                        >current_function = get_current_function(module);
-                        >old_alloca_insertion_point = current_function.variable.storage.content.function.llvm.alloca_insertion_point;
-                        current_function.variable.storage.content.function.llvm.alloca_insertion_point = LLVMBuildAlloca(module.llvm.builder, u32_type.llvm.abi, "alloca.insertion.point");
-
-                        >alloca = create_alloca(module, {
-                            .type = string_type,
-                            .name = "return_value",
-                            zero,
-                        });
-
-                        >return_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "return_block");
-                        >else_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "else_block");
-
-                        >enum_fields = enum_type.content.enum.fields;
-
-                        >switch_instruction = LLVMBuildSwitch(module.llvm.builder, llvm_argument, else_block, @truncate(enum_fields.length));
-                        >backing_type = enum_type.llvm.abi;
-                        assert(backing_type != zero);
-                        
-                        >u64_type = uint64(module).llvm.abi;
-                        assert(u64_type != zero);
-
-                        for (i: 0..enum_fields.length)
-                        {
-                            >field = &enum_fields[i];
-                            >case_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "case_block");
-                            >case_value = LLVMConstInt(backing_type, field.value, 0);
-
-                            LLVMAddCase(switch_instruction, case_value, case_block);
-                            LLVMPositionBuilderAtEnd(module.llvm.builder, case_block);
-
-                            >case_value_result_pointer = create_gep(module, {
-                                .type = enum_name_array_global.variable.type.llvm.memory,
-                                .pointer = enum_name_array_global.variable.storage.llvm,
-                                .indices = [ LLVMConstNull(u64_type), LLVMConstInt(u64_type, i, 0) ][..],
-                                zero,
-                            });
-
-                            >case_value_result = create_load(module, {
-                                .type = string_type,
-                                .pointer = case_value_result_pointer,
-                                zero,
-                            });
-
-                            create_store(module, {
-                                .source = case_value_result,
-                                .destination = alloca,
-                                .type = string_type,
-                                zero,
-                            });
-
-                            LLVMBuildBr(module.llvm.builder, return_block);
-                        }
-
-                        LLVMPositionBuilderAtEnd(module.llvm.builder, else_block);
-                        LLVMBuildUnreachable(module.llvm.builder);
-
-                        LLVMPositionBuilderAtEnd(module.llvm.builder, return_block);
-
-                        >function_result = create_load(module, {
-                            .type = string_type,
-                            .pointer = alloca,
-                            zero,
-                        });
-
-                        LLVMBuildRet(module.llvm.builder, function_result);
-
-                        if (current_block)
-                        {
-                            LLVMPositionBuilderAtEnd(module.llvm.builder, current_block);
-                        }
-
-                        enum_to_string_function = llvm_function;
-                        enum_type.content.enum.enum_to_string_function = enum_to_string_function;
-
-                        current_function.variable.storage.content.function.llvm.alloca_insertion_point = old_alloca_insertion_point;
-                    }
-
-                    assert(enum_to_string_function != zero);
 
                     value_type = string_type;
                 },
@@ -13494,298 +13418,13 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 report_error(module, "string_to_enum type must be enum");
             }
 
-            if (!enum_type.content.enum.string_to_enum_function)
+            >struct_type = enum_type.content.enum.string_to_enum_struct_type;
+            if (struct_type == zero)
             {
-                resolve_type_in_place(module, enum_type);
-
-                >fields = enum_type.content.enum.fields;
-                >array_element_count = fields.length;
-
-                >insert_block = LLVMGetInsertBlock(module.llvm.builder);
-
-                >u1_type = uint1(module);
-                >u8_type = uint8(module);
-                >u64_type = uint64(module);
-                resolve_type_in_place(module, u1_type);
-                resolve_type_in_place(module, u8_type);
-                resolve_type_in_place(module, u64_type);
-
-                >u64_zero = LLVMConstNull(u64_type.llvm.abi);
-
-                >struct_type = get_optional_type(module, enum_type);
-                resolve_type_in_place(module, struct_type);
-
-                >argument_types: [_]&LLVMType = [ module.llvm.pointer_type, u64_type.llvm.abi ];
-                >llvm_function_type = LLVMFunctionType(struct_type.llvm.abi, &argument_types[0], argument_types.length, 0);
-                >slice_struct_type = get_slice_type(module, u8_type);
-
-                >function_name = arena_join_string(module.arena, [ "string_to_enum.", enum_type.name ][..]);
-                >llvm_function = llvm_module_create_function(module.llvm.module, llvm_function_type, .internal, function_name);
-                LLVMSetFunctionCallConv(llvm_function, .fast);
-
-                >name_array_global = get_enum_name_array_global(module, enum_type);
-
-                >enum_value_type = enum_type.llvm.memory;
-
-                >value_constant_buffer: [64]&LLVMValue = undefined;
-                for (i: 0..fields.length)
-                {
-                    >field = &fields[i];
-                    >global_value = LLVMConstInt(enum_value_type, field.value, 0);
-                    value_constant_buffer[i] = global_value;
-                }
-
-                >enum_alignment = get_byte_alignment(enum_type);
-                >value_array = LLVMConstArray2(enum_value_type, &value_constant_buffer[0], array_element_count);
-                >value_array_variable_type = LLVMArrayType2(enum_value_type, array_element_count);
-                >is_constant: u1 = 1;
-                >thread_local_mode: LLVMThreadLocalMode = .none;
-                >externally_initialized: u1 = 0;
-                >enum_alignment = get_byte_alignment(enum_type);
-                >value_array_variable = llvm_create_global_variable(module.llvm.module, value_array_variable_type, is_constant, .internal, value_array, "value.array.enum", thread_local_mode, externally_initialized, enum_alignment, .global);
-
-                >entry_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "entry");
-                >return_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "return_block");
-                >loop_entry_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "loop.entry");
-                >loop_body_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "loop.body");
-                >loop_exit_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "loop.exit");
-
-                LLVMPositionBuilderAtEnd(module.llvm.builder, entry_block);
-
-                >current_function = get_current_function(module);
-                >old_alloca_insertion_point = current_function.variable.storage.content.function.llvm.alloca_insertion_point;
-
-                >u32_type = uint32(module);
-                resolve_type_in_place(module, u32_type);
-
-                current_function.variable.storage.content.function.llvm.alloca_insertion_point = LLVMBuildAlloca(module.llvm.builder, u32_type.llvm.abi, "alloca.insertion.point");
-
-                >arguments: [2]&LLVMValue = undefined;
-                LLVMGetParams(llvm_function, &arguments[0]);
-
-                >return_value_alloca = create_alloca(module, {
-                    .type = enum_type,
-                    .name = "return_value",
-                    zero,
-                });
-
-                >return_boolean_alloca = create_alloca(module, {
-                    .type = u8_type,
-                    .name = "return_bool",
-                    zero,
-                });
-
-                >index_alloca = create_alloca(module, {
-                    .type = u64_type,
-                    .name = "index",
-                    zero,
-                });
-
-                create_store(module, {
-                    .source = u64_zero,
-                    .destination = index_alloca,
-                    .type = u64_type,
-                    zero,
-                });
-
-                >slice_pointer = arguments[0];
-                >slice_length = arguments[1];
-                LLVMBuildBr(module.llvm.builder, loop_entry_block);
-
-                LLVMPositionBuilderAtEnd(module.llvm.builder, loop_entry_block);
-                >index_load = create_load(module, {
-                    .type = u64_type,
-                    .pointer = index_alloca,
-                    zero,
-                });
-                >loop_compare = LLVMBuildICmp(module.llvm.builder, .ult, index_load, LLVMConstInt(u64_type.llvm.abi, array_element_count, 0), "");
-                LLVMBuildCondBr(module.llvm.builder, loop_compare, loop_body_block, loop_exit_block);
-
-                LLVMPositionBuilderAtEnd(module.llvm.builder, loop_body_block);
-                >body_index_load = create_load(module, {
-                    .type = u64_type,
-                    .pointer = index_alloca,
-                    zero,
-                });
-
-                >array_element_pointer = create_gep(module, {
-                    .type = name_array_global.variable.type.llvm.memory,
-                    .pointer = name_array_global.variable.storage.llvm,
-                    .indices = [ u64_zero, body_index_load ][..],
-                    zero,
-                });
-
-                >element_length_pointer = LLVMBuildStructGEP2(module.llvm.builder, slice_struct_type.llvm.abi, array_element_pointer, 1, "length");
-                >element_length = create_load(module, {
-                    .type = u64_type,
-                    .pointer = element_length_pointer,
-                    zero,
-                });
-
-                >length_comparison = LLVMBuildICmp(module.llvm.builder, .eq, slice_length, element_length, "");
-
-                >length_match_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "length.match");
-                >length_mismatch_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "length.mismatch");
-                LLVMBuildCondBr(module.llvm.builder, length_comparison, length_match_block, length_mismatch_block);
-
-                LLVMPositionBuilderAtEnd(module.llvm.builder, length_match_block);
-
-                >s32_type = sint32(module);
-                resolve_type_in_place(module, s32_type);
-
-                >memcmp = module.llvm.memcmp;
-                if (!memcmp)
-                {
-                    memcmp = LLVMGetNamedFunction(module.llvm.module, "memcmp");
-                    if (!memcmp)
-                    {
-                        >arguments: [_]&LLVMType = [
-                            module.llvm.pointer_type,
-                            module.llvm.pointer_type,
-                            u64_type.llvm.abi,
-                        ];
-                        >llvm_function_type = LLVMFunctionType(s32_type.llvm.abi, &arguments[0], arguments.length, 0);
-                        >llvm_function = llvm_module_create_function(module.llvm.module, llvm_function_type, .external, "memcmp");
-                        memcmp = llvm_function;
-                    }
-
-                    module.llvm.memcmp = memcmp;
-                }
-
-                assert(memcmp != zero);
-                assert(module.llvm.memcmp != zero);
-
-                >length_index_load = create_load(module, {
-                    .type = u64_type,
-                    .pointer = index_alloca,
-                    zero,
-                });
-
-                >length_array_element_pointer = create_gep(module, {
-                    .type = name_array_global.variable.type.llvm.memory,
-                    .pointer = name_array_global.variable.storage.llvm,
-                    .indices = [ u64_zero, length_index_load ][..],
-                    zero,
-                });
-
-                >element_pointer_pointer = LLVMBuildStructGEP2(module.llvm.builder, slice_struct_type.llvm.abi, length_array_element_pointer, 0, "pointer");
-                >element_pointer = create_load(module, {
-                    .type = get_pointer_type(module, u8_type),
-                    .pointer = element_pointer_pointer,
-                    zero,
-                });
-
-                >memcmp_arguments: [_]&LLVMValue = [
-                    slice_pointer,
-                    element_pointer,
-                    slice_length,
-                ];
-                >memcmp_return_result = LLVMBuildCall2(module.llvm.builder, LLVMGlobalGetValueType(memcmp), memcmp, &memcmp_arguments[0], memcmp_arguments.length, "");
-                >content_comparison = LLVMBuildICmp(module.llvm.builder, .eq, memcmp_return_result, LLVMConstNull(s32_type.llvm.abi), "");
-                >content_match_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "content.match");
-                LLVMBuildCondBr(module.llvm.builder, content_comparison, content_match_block, length_mismatch_block);
-
-                LLVMPositionBuilderAtEnd(module.llvm.builder, content_match_block);
-
-                >content_index_load = create_load(module, {
-                    .type = u64_type,
-                    .pointer = index_alloca,
-                    zero,
-                });
-
-                >value_array_element_pointer = create_gep(module, {
-                    .type = value_array_variable_type,
-                    .pointer = value_array_variable,
-                    .indices = [ u64_zero, content_index_load ][..],
-                    zero,
-                });
-
-                >enum_value_load = create_load(module, {
-                    .type = enum_type,
-                    .pointer = value_array_element_pointer,
-                    zero,
-                });
-
-                create_store(module, {
-                    .source = enum_value_load,
-                    .destination = return_value_alloca,
-                    .type = enum_type,
-                    zero,
-                });
-
-                create_store(module, {
-                    .source = LLVMConstInt(u8_type.llvm.abi, 1, 0),
-                    .destination = return_boolean_alloca,
-                    .type = u8_type,
-                    zero,
-                });
-
-                LLVMBuildBr(module.llvm.builder, return_block);
-
-                LLVMPositionBuilderAtEnd(module.llvm.builder, length_mismatch_block);
-
-                >inc_index_load = create_load(module, {
-                    .type = u64_type,
-                    .pointer = index_alloca,
-                    zero,
-                });
-
-                >inc = LLVMBuildAdd(module.llvm.builder, inc_index_load, LLVMConstInt(u64_type.llvm.abi, 1, 0), "");
-
-                create_store(module, {
-                    .source = inc,
-                    .destination = index_alloca,
-                    .type = u64_type,
-                    zero,
-                });
-
-                LLVMBuildBr(module.llvm.builder, loop_entry_block);
-
-                LLVMPositionBuilderAtEnd(module.llvm.builder, loop_exit_block);
-
-                create_store(module, {
-                    .source = LLVMConstNull(enum_type.llvm.memory),
-                    .destination = return_value_alloca,
-                    .type = enum_type,
-                    zero,
-                });
-                create_store(module, {
-                    .source = LLVMConstNull(u8_type.llvm.abi),
-                    .destination = return_boolean_alloca,
-                    .type = u8_type,
-                    zero,
-                });
-                LLVMBuildBr(module.llvm.builder, return_block);
-
-                LLVMPositionBuilderAtEnd(module.llvm.builder, return_block);
-                >value_load = create_load(module, {
-                    .type = enum_type,
-                    .pointer = return_value_alloca,
-                    .kind = .memory,
-                    zero,
-                });
-
-                >return_value = LLVMBuildInsertValue(module.llvm.builder, LLVMGetPoison(struct_type.llvm.memory), value_load, 0, "");
-                >bool_load = create_load(module, {
-                    .type = u8_type,
-                    .pointer = return_boolean_alloca,
-                    zero,
-                });
-
-                return_value = LLVMBuildInsertValue(module.llvm.builder, return_value, bool_load, 1, "");
-
-                LLVMBuildRet(module.llvm.builder, return_value);
-
-                // End of scope
-                LLVMPositionBuilderAtEnd(module.llvm.builder, insert_block);
-
-                enum_type.content.enum.string_to_enum_function = llvm_function;
+                struct_type = get_optional_type(module, enum_type);
                 enum_type.content.enum.string_to_enum_struct_type = struct_type;
-
-                current_function.variable.storage.content.function.llvm.alloca_insertion_point = old_alloca_insertion_point;
             }
 
-            >struct_type = enum_type.content.enum.string_to_enum_struct_type;
             assert(struct_type != zero);
 
             typecheck(module, expected_type, struct_type);
@@ -13833,19 +13472,6 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             >declaration_arguments = declaration.arguments;
             >instantiation_declaration_arguments = arena_allocate_slice[Argument](module.arena, declaration_arguments.length);
             macro_instantiation.declaration_arguments = instantiation_declaration_arguments;
-
-            >subprogram: &LLVMMetadata = zero;
-            if (module.has_debug_info)
-            {
-                >subroutine_type: &LLVMMetadata = zero;
-                >is_local_to_unit: u1 = 1;
-                >is_definition: u1 = 1;
-                >flags: LLVMDIFlags = zero;
-                >is_optimized = build_mode_is_optimized(module.build_mode);
-                subprogram = LLVMDIBuilderCreateFunction(module.llvm.di_builder, module.scope.llvm, declaration.name.pointer, declaration.name.length, declaration.name.pointer, declaration.name.length, module.llvm.file, macro_instantiation.scope.line, subroutine_type, @extend(is_local_to_unit), @extend(is_definition), macro_instantiation.scope.line, flags, @extend(is_optimized));
-            }
-
-            macro_instantiation.scope.llvm = subprogram;
 
             // First copy
             for (i: 0..declaration_arguments.length)
@@ -13918,45 +13544,19 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             for (&argument: macro_instantiation.declaration_arguments)
             {
                 argument.variable.type = resolve_type(module, argument.variable.type);
+                >storage = new_value(module);
+                storage.& = {
+                    .type = get_pointer_type(module, argument.variable.type),
+                    .id = .argument,
+                    zero,
+                };
+                argument.variable.storage = storage;
             }
 
             >instantiation_arguments = macro_instantiation.instantiation_arguments;
             if (instantiation_arguments.length != instantiation_declaration_arguments.length)
             {
                 report_error(module, "instantiation argument count must match declaration argument count");
-            }
-
-            if (module.has_debug_info)
-            {
-                for (i: 0..instantiation_arguments.length)
-                {
-                    >instantiation_argument = instantiation_arguments[i];
-                    >declaration_argument = &instantiation_declaration_arguments[i];
-
-                    >argument_type = declaration_argument.variable.type;
-                    assert(argument_type != zero);
-                    analyze_type(module, instantiation_argument, argument_type, { .must_be_constant = analysis.must_be_constant, zero });
-                }
-
-                >type_buffer: [64]&LLVMMetadata = undefined;
-                >type_count = instantiation_arguments.length + 1;
-
-                resolve_type_in_place_debug(module, value_type);
-                type_buffer[0] = value_type.llvm.debug;
-
-                for (i: 0..instantiation_declaration_arguments.length)
-                {
-                    >declaration_argument = &instantiation_declaration_arguments[i];
-                    >type = declaration_argument.variable.type;
-                    resolve_type_in_place_debug(module, type);
-                    type_buffer[i + 1] = type.llvm.debug;
-                }
-
-                LLVMSetCurrentDebugLocation2(module.llvm.builder, zero);
-                >flags: LLVMDIFlags = zero;
-                >subroutine_type = LLVMDIBuilderCreateSubroutineType(module.llvm.di_builder, module.llvm.file, &type_buffer[0], @truncate(type_count), flags);
-                assert(macro_instantiation.scope.llvm != zero);
-                llvm_subprogram_replace_type(subprogram, subroutine_type);
             }
 
             assert(!macro_instantiation.block);
@@ -13967,21 +13567,20 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                 .destination = macro_instantiation.block,
             });
 
-            resolve_type_in_place(module, value_type);
+            //resolve_type_in_place(module, value_type);
             typecheck(module, expected_type, value_type);
 
-            if (!module.has_debug_info)
+            for (i: 0..instantiation_arguments.length)
             {
-                for (i: 0..instantiation_arguments.length)
-                {
-                    >instantiation_argument = instantiation_arguments[i];
-                    >declaration_argument = &instantiation_declaration_arguments[i];
+                >instantiation_argument = instantiation_arguments[i];
+                >declaration_argument = &instantiation_declaration_arguments[i];
 
-                    >argument_type = declaration_argument.variable.type;
-                    assert(argument_type != zero);
-                    analyze_type(module, instantiation_argument, argument_type, { .must_be_constant = analysis.must_be_constant, zero });
-                }
+                >argument_type = declaration_argument.variable.type;
+                assert(argument_type != zero);
+                analyze_type(module, instantiation_argument, argument_type, { .must_be_constant = analysis.must_be_constant, zero });
             }
+
+            analyze_block(module, macro_instantiation.block);
 
             // END OF SCOPE
             module.current_macro_instantiation = current_macro_instantiation;
@@ -14563,6 +14162,8 @@ type_is_abi_equal = fn (module: &Module, a: &Type, b: &Type) u1
     >result = a == b;
     if (!result)
     {
+        assert(a.llvm.abi != zero);
+        assert(b.llvm.abi != zero);
         result = a.llvm.abi == b.llvm.abi;
     }
 
@@ -15300,7 +14901,9 @@ emit_call = fn (module: &Module, value: &Value, address: Address) &LLVMValue
         else
         {
             semantic_argument_type = semantic_call_argument_value.type;
-            argument_abi = abi_system_v_classify_argument(module, &available_registers.system_v, llvm_abi_argument_type_buffer_slice, abi_argument_type_buffer_slice, {
+            argument_abi = abi_system_v_classify_argument(module, &available_registers.system_v,
+            //llvm_abi_argument_type_buffer_slice,
+            abi_argument_type_buffer_slice, {
                 .type = resolve_alias(module, semantic_argument_type),
                 .abi_start = abi_argument_count,
                 .is_named_argument = 0,
@@ -15475,7 +15078,10 @@ emit_call = fn (module: &Module, value: &Value, address: Address) &LLVMValue
             {
                 if (semantic_call_argument_value.kind == .right and semantic_call_argument_value.id == .variable)
                 {
+                    // TODO: change
+                    module.phase = .analysis;
                     reanalyze_type_as_left_value(module, semantic_call_argument_value);
+                    module.phase = .emission;
                 }
 
                 >evaluation_kind = get_evaluation_kind(semantic_argument_type);
@@ -16106,7 +15712,7 @@ emit_va_arg_from_memory = fn (module: &Module, va_list_pointer: &LLVMValue, va_l
     return overflow_arg_area;
 }
 
-emit_block = fn (module: &Module, basic_block: &LLVMBasicBlock) void
+llvm_emit_block = fn (module: &Module, basic_block: &LLVMBasicBlock) void
 {
     >current_basic_block = LLVMGetInsertBlock(module.llvm.builder);
     if (current_basic_block)
@@ -16232,7 +15838,7 @@ emit_va_arg = fn (module: &Module, value: &Value, result_address: Address, llvm_
 
         LLVMBuildCondBr(module.llvm.builder, in_regs, in_reg_block, in_mem_block);
 
-        emit_block(module, in_reg_block);
+        llvm_emit_block(module, in_reg_block);
 
         >reg_save_area_type = va_list_struct.content.struct.fields[3].type;
         >reg_save_area = create_load(module, {
@@ -16292,11 +15898,11 @@ emit_va_arg = fn (module: &Module, value: &Value, result_address: Address, llvm_
 
         LLVMBuildBr(module.llvm.builder, end_block);
 
-        emit_block(module, in_mem_block);
+        llvm_emit_block(module, in_mem_block);
 
         >memory_address = emit_va_arg_from_memory(module, va_list_value_llvm, va_list_struct, va_arg_type);
 
-        emit_block(module, end_block);
+        llvm_emit_block(module, end_block);
 
         >phi = LLVMBuildPhi(module.llvm.builder, module.llvm.pointer_type, "");
 
@@ -16387,13 +15993,13 @@ emit_string_literal = fn (module: &Module, value: &Value) [2]&LLVMValue
 
 emit_local_storage = fn (module: &Module, variable: &Variable) void
 {
-    assert(!variable.storage);
+    assert(variable.storage != zero);
+    assert(variable.storage.type != zero);
     assert(variable.name.pointer != zero);
     assert(variable.name.length != zero);
 
     >value_type = variable.type;
     resolve_type_in_place(module, value_type);
-    >pointer_type = get_pointer_type(module, value_type);
 
     >alloca = create_alloca(module, {
         .type = value_type,
@@ -16401,15 +16007,7 @@ emit_local_storage = fn (module: &Module, variable: &Variable) void
         zero,
     });
 
-    >storage = new_value(module);
-    storage.& = {
-        .type = pointer_type,
-        .id = .local,
-        .llvm = alloca,
-        zero,
-    };
-
-    variable.storage = storage;
+    variable.storage.llvm = alloca;
 }
 
 null_expression = fn (module: &Module) &LLVMMetadata
@@ -16466,6 +16064,8 @@ emit_argument = fn (module: &Module, argument: &Argument) void
     }
 }
 
+emit_block = fn (module: &Module, block: &Block) void;
+
 emit_macro_instantiation = fn (module: &Module, value: &Value) void
 {
     assert(value.id == .macro_instantiation);
@@ -16480,6 +16080,44 @@ emit_macro_instantiation = fn (module: &Module, value: &Value) void
     assert(!old_macro_instantiation);
     >macro_instantiation = &value.content.macro_instantiation;
     module.current_macro_instantiation = macro_instantiation;
+
+    >declaration = macro_instantiation.declaration;
+    >instantiation_arguments = macro_instantiation.instantiation_arguments;
+    >instantiation_declaration_arguments = macro_instantiation.declaration_arguments;
+
+    if (module.has_debug_info)
+    {
+        >subroutine_type: &LLVMMetadata = zero;
+        >is_local_to_unit: u1 = 1;
+        >is_definition: u1 = 1;
+        >flags: LLVMDIFlags = zero;
+        >is_optimized = build_mode_is_optimized(module.build_mode);
+        >subprogram = LLVMDIBuilderCreateFunction(module.llvm.di_builder, module.scope.llvm, declaration.name.pointer, declaration.name.length, declaration.name.pointer, declaration.name.length, module.llvm.file, macro_instantiation.scope.line, subroutine_type, @extend(is_local_to_unit), @extend(is_definition), macro_instantiation.scope.line, flags, @extend(is_optimized));
+        macro_instantiation.scope.llvm = subprogram;
+    }
+
+    if (module.has_debug_info)
+    {
+        >type_buffer: [64]&LLVMMetadata = undefined;
+        >type_count = instantiation_arguments.length + 1;
+
+        resolve_type_in_place_debug(module, value.type);
+        type_buffer[0] = value.type.llvm.debug;
+
+        for (i: 0..instantiation_declaration_arguments.length)
+        {
+            >declaration_argument = &instantiation_declaration_arguments[i];
+            >type = declaration_argument.variable.type;
+            resolve_type_in_place_debug(module, type);
+            type_buffer[i + 1] = type.llvm.debug;
+        }
+
+        LLVMSetCurrentDebugLocation2(module.llvm.builder, zero);
+        >flags: LLVMDIFlags = zero;
+        >subroutine_type = LLVMDIBuilderCreateSubroutineType(module.llvm.di_builder, module.llvm.file, &type_buffer[0], @truncate(type_count), flags);
+        assert(macro_instantiation.scope.llvm != zero);
+        llvm_subprogram_replace_type(macro_instantiation.scope.llvm, subroutine_type);
+    }
 
     >caller_debug_location: &LLVMMetadata = zero;
     if (module.has_debug_info)
@@ -16567,7 +16205,7 @@ emit_macro_instantiation = fn (module: &Module, value: &Value) void
         }
     }
 
-    analyze_block(module, macro_instantiation.block);
+    emit_block(module, macro_instantiation.block);
 
     if (LLVMGetInsertBlock(module.llvm.builder))
     {
@@ -16590,6 +16228,8 @@ ShortcircuitingOperation = enum
 
 emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_constant: u1) void
 {
+    assert(module.phase == .emission);
+
     >must_be_constant = expect_constant or (!module.current_function and !module.current_macro_instantiation);
 
     >parent_function_global: &Global = zero;
@@ -16615,6 +16255,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
 
     assert(value.type != zero);
     assert(!value.llvm);
+    resolve_type_in_place(module, value.type);
 
     >resolved_value_type = resolve_alias(module, value.type);
     resolve_type_in_place(module, resolved_value_type);
@@ -16895,6 +16536,107 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                     >enum_type = resolved_unary_type;
                     assert(enum_type.id == .enum);
                     >enum_to_string_function = enum_type.content.enum.enum_to_string_function;
+
+                    >string_type = get_slice_type(module, uint8(module));
+
+                    if (!enum_to_string_function)
+                    {
+                        >current_block = LLVMGetInsertBlock(module.llvm.builder);
+                        >enum_name_array_global = get_enum_name_array_global(module, enum_type);
+                        >argument_types: [_]&LLVMType = [ enum_type.llvm.abi ];
+                        >llvm_function_type = LLVMFunctionType(string_type.llvm.memory, &argument_types[0], argument_types.length, 0);
+                        >function_name = arena_join_string(module.arena, [ "enum_to_string.", enum_type.name ][..]);
+                        >llvm_function = llvm_module_create_function(module.llvm.module, llvm_function_type, .internal, function_name);
+                        LLVMSetFunctionCallConv(llvm_function, .fast);
+
+                        >llvm_argument: &LLVMValue = zero;
+                        //assert(argument_types.length == 1); TODO: constant evaluation
+                        LLVMGetParams(llvm_function, &llvm_argument);
+
+                        >entry_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "entry");
+                        LLVMPositionBuilderAtEnd(module.llvm.builder, entry_block);
+
+                        >u32_type = uint32(module);
+                        resolve_type_in_place(module, u32_type);
+
+                        >current_function = get_current_function(module);
+                        >old_alloca_insertion_point = current_function.variable.storage.content.function.llvm.alloca_insertion_point;
+                        current_function.variable.storage.content.function.llvm.alloca_insertion_point = LLVMBuildAlloca(module.llvm.builder, u32_type.llvm.abi, "alloca.insertion.point");
+
+                        >alloca = create_alloca(module, {
+                            .type = string_type,
+                            .name = "return_value",
+                            zero,
+                        });
+
+                        >return_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "return_block");
+                        >else_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "else_block");
+
+                        >enum_fields = enum_type.content.enum.fields;
+
+                        >switch_instruction = LLVMBuildSwitch(module.llvm.builder, llvm_argument, else_block, @truncate(enum_fields.length));
+                        >backing_type = enum_type.llvm.abi;
+                        assert(backing_type != zero);
+                        
+                        >u64_type = uint64(module).llvm.abi;
+                        assert(u64_type != zero);
+
+                        for (i: 0..enum_fields.length)
+                        {
+                            >field = &enum_fields[i];
+                            >case_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "case_block");
+                            >case_value = LLVMConstInt(backing_type, field.value, 0);
+
+                            LLVMAddCase(switch_instruction, case_value, case_block);
+                            LLVMPositionBuilderAtEnd(module.llvm.builder, case_block);
+
+                            >case_value_result_pointer = create_gep(module, {
+                                .type = enum_name_array_global.variable.type.llvm.memory,
+                                .pointer = enum_name_array_global.variable.storage.llvm,
+                                .indices = [ LLVMConstNull(u64_type), LLVMConstInt(u64_type, i, 0) ][..],
+                                zero,
+                            });
+
+                            >case_value_result = create_load(module, {
+                                .type = string_type,
+                                .pointer = case_value_result_pointer,
+                                zero,
+                            });
+
+                            create_store(module, {
+                                .source = case_value_result,
+                                .destination = alloca,
+                                .type = string_type,
+                                zero,
+                            });
+
+                            LLVMBuildBr(module.llvm.builder, return_block);
+                        }
+
+                        LLVMPositionBuilderAtEnd(module.llvm.builder, else_block);
+                        LLVMBuildUnreachable(module.llvm.builder);
+
+                        LLVMPositionBuilderAtEnd(module.llvm.builder, return_block);
+
+                        >function_result = create_load(module, {
+                            .type = string_type,
+                            .pointer = alloca,
+                            zero,
+                        });
+
+                        LLVMBuildRet(module.llvm.builder, function_result);
+
+                        if (current_block)
+                        {
+                            LLVMPositionBuilderAtEnd(module.llvm.builder, current_block);
+                        }
+
+                        enum_to_string_function = llvm_function;
+                        enum_type.content.enum.enum_to_string_function = enum_to_string_function;
+
+                        current_function.variable.storage.content.function.llvm.alloca_insertion_point = old_alloca_insertion_point;
+                    }
+
                     assert(enum_to_string_function != zero);
                     >call = LLVMBuildCall2(module.llvm.builder, LLVMGlobalGetValueType(enum_to_string_function), enum_to_string_function, &llvm_unary_value, 1, "");
                     LLVMSetInstructionCallConv(call, .fast);
@@ -17438,7 +17180,10 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                             }
                             else
                             {
+                                // TODO: avoid this trick
+                                module.phase = .analysis;
                                 reanalyze_type_as_left_value(module, value);
+                                module.phase = .emission;
                                 
                                 >alignment = get_byte_alignment(resolved_value_type);
                                 >address: Address = {
@@ -17652,6 +17397,301 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
             >llvm_string_value = string_value.llvm;
 
             >s2e = enum_type.content.enum.string_to_enum_function;
+
+            if (!s2e)
+            {
+                resolve_type_in_place(module, enum_type);
+
+                >fields = enum_type.content.enum.fields;
+                >array_element_count = fields.length;
+
+                >insert_block = LLVMGetInsertBlock(module.llvm.builder);
+
+                >u1_type = uint1(module);
+                >u8_type = uint8(module);
+                >u64_type = uint64(module);
+                resolve_type_in_place(module, u1_type);
+                resolve_type_in_place(module, u8_type);
+                resolve_type_in_place(module, u64_type);
+
+                >u64_zero = LLVMConstNull(u64_type.llvm.abi);
+
+                >struct_type = get_optional_type(module, enum_type);
+                resolve_type_in_place(module, struct_type);
+
+                >argument_types: [_]&LLVMType = [ module.llvm.pointer_type, u64_type.llvm.abi ];
+                >llvm_function_type = LLVMFunctionType(struct_type.llvm.abi, &argument_types[0], argument_types.length, 0);
+                >slice_struct_type = get_slice_type(module, u8_type);
+
+                >function_name = arena_join_string(module.arena, [ "string_to_enum.", enum_type.name ][..]);
+                >llvm_function = llvm_module_create_function(module.llvm.module, llvm_function_type, .internal, function_name);
+                LLVMSetFunctionCallConv(llvm_function, .fast);
+
+                >name_array_global = get_enum_name_array_global(module, enum_type);
+
+                >enum_value_type = enum_type.llvm.memory;
+
+                >value_constant_buffer: [64]&LLVMValue = undefined;
+                for (i: 0..fields.length)
+                {
+                    >field = &fields[i];
+                    >global_value = LLVMConstInt(enum_value_type, field.value, 0);
+                    value_constant_buffer[i] = global_value;
+                }
+
+                >enum_alignment = get_byte_alignment(enum_type);
+                >value_array = LLVMConstArray2(enum_value_type, &value_constant_buffer[0], array_element_count);
+                >value_array_variable_type = LLVMArrayType2(enum_value_type, array_element_count);
+                >is_constant: u1 = 1;
+                >thread_local_mode: LLVMThreadLocalMode = .none;
+                >externally_initialized: u1 = 0;
+                >enum_alignment = get_byte_alignment(enum_type);
+                >value_array_variable = llvm_create_global_variable(module.llvm.module, value_array_variable_type, is_constant, .internal, value_array, "value.array.enum", thread_local_mode, externally_initialized, enum_alignment, .global);
+
+                >entry_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "entry");
+                >return_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "return_block");
+                >loop_entry_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "loop.entry");
+                >loop_body_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "loop.body");
+                >loop_exit_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "loop.exit");
+
+                LLVMPositionBuilderAtEnd(module.llvm.builder, entry_block);
+
+                >current_function = get_current_function(module);
+                >old_alloca_insertion_point = current_function.variable.storage.content.function.llvm.alloca_insertion_point;
+
+                >u32_type = uint32(module);
+                resolve_type_in_place(module, u32_type);
+
+                current_function.variable.storage.content.function.llvm.alloca_insertion_point = LLVMBuildAlloca(module.llvm.builder, u32_type.llvm.abi, "alloca.insertion.point");
+
+                >arguments: [2]&LLVMValue = undefined;
+                LLVMGetParams(llvm_function, &arguments[0]);
+
+                >return_value_alloca = create_alloca(module, {
+                    .type = enum_type,
+                    .name = "return_value",
+                    zero,
+                });
+
+                >return_boolean_alloca = create_alloca(module, {
+                    .type = u8_type,
+                    .name = "return_bool",
+                    zero,
+                });
+
+                >index_alloca = create_alloca(module, {
+                    .type = u64_type,
+                    .name = "index",
+                    zero,
+                });
+
+                create_store(module, {
+                    .source = u64_zero,
+                    .destination = index_alloca,
+                    .type = u64_type,
+                    zero,
+                });
+
+                >slice_pointer = arguments[0];
+                >slice_length = arguments[1];
+                LLVMBuildBr(module.llvm.builder, loop_entry_block);
+
+                LLVMPositionBuilderAtEnd(module.llvm.builder, loop_entry_block);
+                >index_load = create_load(module, {
+                    .type = u64_type,
+                    .pointer = index_alloca,
+                    zero,
+                });
+                >loop_compare = LLVMBuildICmp(module.llvm.builder, .ult, index_load, LLVMConstInt(u64_type.llvm.abi, array_element_count, 0), "");
+                LLVMBuildCondBr(module.llvm.builder, loop_compare, loop_body_block, loop_exit_block);
+
+                LLVMPositionBuilderAtEnd(module.llvm.builder, loop_body_block);
+                >body_index_load = create_load(module, {
+                    .type = u64_type,
+                    .pointer = index_alloca,
+                    zero,
+                });
+
+                >array_element_pointer = create_gep(module, {
+                    .type = name_array_global.variable.type.llvm.memory,
+                    .pointer = name_array_global.variable.storage.llvm,
+                    .indices = [ u64_zero, body_index_load ][..],
+                    zero,
+                });
+
+                >element_length_pointer = LLVMBuildStructGEP2(module.llvm.builder, slice_struct_type.llvm.abi, array_element_pointer, 1, "length");
+                >element_length = create_load(module, {
+                    .type = u64_type,
+                    .pointer = element_length_pointer,
+                    zero,
+                });
+
+                >length_comparison = LLVMBuildICmp(module.llvm.builder, .eq, slice_length, element_length, "");
+
+                >length_match_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "length.match");
+                >length_mismatch_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "length.mismatch");
+                LLVMBuildCondBr(module.llvm.builder, length_comparison, length_match_block, length_mismatch_block);
+
+                LLVMPositionBuilderAtEnd(module.llvm.builder, length_match_block);
+
+                >s32_type = sint32(module);
+                resolve_type_in_place(module, s32_type);
+
+                >memcmp = module.llvm.memcmp;
+                if (!memcmp)
+                {
+                    memcmp = LLVMGetNamedFunction(module.llvm.module, "memcmp");
+                    if (!memcmp)
+                    {
+                        >arguments: [_]&LLVMType = [
+                            module.llvm.pointer_type,
+                            module.llvm.pointer_type,
+                            u64_type.llvm.abi,
+                        ];
+                        >llvm_function_type = LLVMFunctionType(s32_type.llvm.abi, &arguments[0], arguments.length, 0);
+                        >llvm_function = llvm_module_create_function(module.llvm.module, llvm_function_type, .external, "memcmp");
+                        memcmp = llvm_function;
+                    }
+
+                    module.llvm.memcmp = memcmp;
+                }
+
+                assert(memcmp != zero);
+                assert(module.llvm.memcmp != zero);
+
+                >length_index_load = create_load(module, {
+                    .type = u64_type,
+                    .pointer = index_alloca,
+                    zero,
+                });
+
+                >length_array_element_pointer = create_gep(module, {
+                    .type = name_array_global.variable.type.llvm.memory,
+                    .pointer = name_array_global.variable.storage.llvm,
+                    .indices = [ u64_zero, length_index_load ][..],
+                    zero,
+                });
+
+                >element_pointer_pointer = LLVMBuildStructGEP2(module.llvm.builder, slice_struct_type.llvm.abi, length_array_element_pointer, 0, "pointer");
+                >element_pointer = create_load(module, {
+                    .type = get_pointer_type(module, u8_type),
+                    .pointer = element_pointer_pointer,
+                    zero,
+                });
+
+                >memcmp_arguments: [_]&LLVMValue = [
+                    slice_pointer,
+                    element_pointer,
+                    slice_length,
+                ];
+                >memcmp_return_result = LLVMBuildCall2(module.llvm.builder, LLVMGlobalGetValueType(memcmp), memcmp, &memcmp_arguments[0], memcmp_arguments.length, "");
+                >content_comparison = LLVMBuildICmp(module.llvm.builder, .eq, memcmp_return_result, LLVMConstNull(s32_type.llvm.abi), "");
+                >content_match_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "content.match");
+                LLVMBuildCondBr(module.llvm.builder, content_comparison, content_match_block, length_mismatch_block);
+
+                LLVMPositionBuilderAtEnd(module.llvm.builder, content_match_block);
+
+                >content_index_load = create_load(module, {
+                    .type = u64_type,
+                    .pointer = index_alloca,
+                    zero,
+                });
+
+                >value_array_element_pointer = create_gep(module, {
+                    .type = value_array_variable_type,
+                    .pointer = value_array_variable,
+                    .indices = [ u64_zero, content_index_load ][..],
+                    zero,
+                });
+
+                >enum_value_load = create_load(module, {
+                    .type = enum_type,
+                    .pointer = value_array_element_pointer,
+                    zero,
+                });
+
+                create_store(module, {
+                    .source = enum_value_load,
+                    .destination = return_value_alloca,
+                    .type = enum_type,
+                    zero,
+                });
+
+                create_store(module, {
+                    .source = LLVMConstInt(u8_type.llvm.abi, 1, 0),
+                    .destination = return_boolean_alloca,
+                    .type = u8_type,
+                    zero,
+                });
+
+                LLVMBuildBr(module.llvm.builder, return_block);
+
+                LLVMPositionBuilderAtEnd(module.llvm.builder, length_mismatch_block);
+
+                >inc_index_load = create_load(module, {
+                    .type = u64_type,
+                    .pointer = index_alloca,
+                    zero,
+                });
+
+                >inc = LLVMBuildAdd(module.llvm.builder, inc_index_load, LLVMConstInt(u64_type.llvm.abi, 1, 0), "");
+
+                create_store(module, {
+                    .source = inc,
+                    .destination = index_alloca,
+                    .type = u64_type,
+                    zero,
+                });
+
+                LLVMBuildBr(module.llvm.builder, loop_entry_block);
+
+                LLVMPositionBuilderAtEnd(module.llvm.builder, loop_exit_block);
+
+                create_store(module, {
+                    .source = LLVMConstNull(enum_type.llvm.memory),
+                    .destination = return_value_alloca,
+                    .type = enum_type,
+                    zero,
+                });
+                create_store(module, {
+                    .source = LLVMConstNull(u8_type.llvm.abi),
+                    .destination = return_boolean_alloca,
+                    .type = u8_type,
+                    zero,
+                });
+                LLVMBuildBr(module.llvm.builder, return_block);
+
+                LLVMPositionBuilderAtEnd(module.llvm.builder, return_block);
+                >value_load = create_load(module, {
+                    .type = enum_type,
+                    .pointer = return_value_alloca,
+                    .kind = .memory,
+                    zero,
+                });
+
+                >return_value = LLVMBuildInsertValue(module.llvm.builder, LLVMGetPoison(struct_type.llvm.memory), value_load, 0, "");
+                >bool_load = create_load(module, {
+                    .type = u8_type,
+                    .pointer = return_boolean_alloca,
+                    zero,
+                });
+
+                return_value = LLVMBuildInsertValue(module.llvm.builder, return_value, bool_load, 1, "");
+
+                LLVMBuildRet(module.llvm.builder, return_value);
+
+                // End of scope
+                LLVMPositionBuilderAtEnd(module.llvm.builder, insert_block);
+
+                s2e = llvm_function;
+
+                enum_type.content.enum.string_to_enum_function = llvm_function;
+
+                current_function.variable.storage.content.function.llvm.alloca_insertion_point = old_alloca_insertion_point;
+            }
+
+            assert(s2e != zero);
+
             >first_field = LLVMBuildExtractValue(module.llvm.builder, llvm_string_value, 0, "");
             >second_field = LLVMBuildExtractValue(module.llvm.builder, llvm_string_value, 1, "");
             >fields: [_]&LLVMValue = [
@@ -18531,8 +18571,10 @@ emit_assignment = fn (module: &Module, right: &Value, address: Address) void
     }
 }
 
-analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) void
+emit_statement = fn (module: &Module, scope: &Scope, statement: &Statement) void
 {
+    assert(module.phase == .emission);
+
     >parent_function_global: &Global = undefined;
     if (module.current_function)
     {
@@ -18560,6 +18602,51 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
 
     switch (statement.id)
     {
+        .if =>
+        {
+            >condition = statement.content.if.condition;
+            >taken_statement = statement.content.if.if;
+            >not_taken_statement = statement.content.if.else;
+
+            >taken_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "if.taken");
+            >not_taken_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "if.not_taken");
+            >exit_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "if.exit");
+
+            emit_value(module, condition, .abi, 0);
+            >llvm_condition = emit_condition(module, condition);
+
+            LLVMBuildCondBr(module.llvm.builder, llvm_condition, taken_block, not_taken_block);
+            LLVMPositionBuilderAtEnd(module.llvm.builder, taken_block);
+
+            emit_statement(module, scope, taken_statement);
+
+            if (LLVMGetInsertBlock(module.llvm.builder) != zero)
+            {
+                LLVMBuildBr(module.llvm.builder, exit_block);
+            }
+
+            LLVMPositionBuilderAtEnd(module.llvm.builder, not_taken_block);
+
+            if (not_taken_statement != zero)
+            {
+                emit_statement(module, scope, not_taken_statement);
+            }
+
+            if (LLVMGetInsertBlock(module.llvm.builder) != zero)
+            {
+                LLVMBuildBr(module.llvm.builder, exit_block);
+            }
+
+            LLVMPositionBuilderAtEnd(module.llvm.builder, exit_block);
+        },
+        .block =>
+        {
+            emit_block(module, statement.content.block);
+        },
+        .expression =>
+        {
+            emit_value(module, statement.content.expression, .abi, 0);
+        },
         .return =>
         {
             >return_value = statement.content.return;
@@ -18570,39 +18657,19 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                 >function_type = &parent_function_global.variable.storage.type.content.pointer.element_type.content.function;
                 >return_abi = &function_type.abi.return_abi;
 
-                switch (return_abi.semantic_type.id)
+                if (return_value)
                 {
-                    .void =>
+                    if (module.has_debug_info)
                     {
-                        if (return_value)
-                        {
-                            report_error(module, "return value with return type 'void'");
-                        }
-                    },
-                    .noreturn =>
-                    {
-                        report_error(module, "return statement with 'noreturn'");
-                    },
-                    else =>
-                    {
-                        if (!return_value)
-                        {
-                            report_error(module, "sizable return type with no return value");
-                        }
+                        LLVMSetCurrentDebugLocation2(module.llvm.builder, statement_location);
+                    }
 
-                        if (module.has_debug_info)
-                        {
-                            LLVMSetCurrentDebugLocation2(module.llvm.builder, statement_location);
-                        }
+                    >return_type = return_abi.semantic_type;
 
-                        >return_type = return_abi.semantic_type;
-                        analyze_type(module, return_value, return_type, zero);
+                    >return_address = parent_function_global.variable.storage.content.function.llvm.return_address;
+                    assert(return_address.pointer != zero);
 
-                        >return_address = parent_function_global.variable.storage.content.function.llvm.return_address;
-                        assert(return_address.pointer != zero);
-
-                        emit_assignment(module, return_value, return_address);
-                    },
+                    emit_assignment(module, return_value, return_address);
                 }
 
                 >return_block = parent_function_global.variable.storage.content.function.llvm.return_block;
@@ -18616,8 +18683,8 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                 >return_type = macro_instantiation.return_type;
                 assert(return_type != zero);
 
-                analyze_type(module, return_value, return_type, zero);
                 emit_assignment(module, return_value, macro_instantiation.return_address);
+
                 LLVMBuildBr(module.llvm.builder, macro_instantiation.return_block);
                 LLVMClearInsertionPosition(module.llvm.builder);
             }
@@ -18630,10 +18697,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
         {
             >local = statement.content.local;
             >expected_type = local.variable.type;
-            assert(!local.variable.storage);
-
-            analyze_type(module, local.initial_value, expected_type, zero);
-            local.variable.type = @select(expected_type != zero, expected_type, local.initial_value.type);
+            assert(local.variable.storage != zero);
             assert(local.variable.type != zero);
 
             emit_local(module, local);
@@ -18645,128 +18709,11 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
             };
             emit_assignment(module, local.initial_value, address);
         },
-        .if =>
-        {
-            >condition = statement.content.if.condition;
-            >taken_statement = statement.content.if.if;
-            >not_taken_statement = statement.content.if.else;
-
-            >taken_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "if.taken");
-            >not_taken_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "if.not_taken");
-            >exit_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "if.exit");
-
-            analyze_value(module, condition, zero, .abi, 0);
-            >llvm_condition = emit_condition(module, condition);
-
-            LLVMBuildCondBr(module.llvm.builder, llvm_condition, taken_block, not_taken_block);
-            LLVMPositionBuilderAtEnd(module.llvm.builder, taken_block);
-
-            analyze_statement(module, scope, taken_statement);
-
-            if (LLVMGetInsertBlock(module.llvm.builder) != zero)
-            {
-                LLVMBuildBr(module.llvm.builder, exit_block);
-            }
-
-            LLVMPositionBuilderAtEnd(module.llvm.builder, not_taken_block);
-            if (not_taken_statement != zero)
-            {
-                analyze_statement(module, scope, not_taken_statement);
-            }
-
-            if (LLVMGetInsertBlock(module.llvm.builder) != zero)
-            {
-                LLVMBuildBr(module.llvm.builder, exit_block);
-            }
-
-            LLVMPositionBuilderAtEnd(module.llvm.builder, exit_block);
-        },
-        .block =>
-        {
-            analyze_block(module, statement.content.block);
-        },
-        .expression =>
-        {
-            analyze_value(module, statement.content.expression, zero, .memory, 0);
-        },
-        .while =>
-        {
-            >entry_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "while.entry");
-            LLVMBuildBr(module.llvm.builder, entry_block);
-            LLVMPositionBuilderAtEnd(module.llvm.builder, entry_block);
-
-            >body_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "while.body");
-            >continue_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "while.continue");
-            >exit_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "while.exit");
-
-            >previous_continue_block = module.llvm.continue_block;
-            >previous_exit_block = module.llvm.exit_block;
-            module.llvm.continue_block = continue_block;
-            module.llvm.exit_block = exit_block;
-
-            >condition = statement.content.while.condition;
-            >block = statement.content.while.block;
-
-            if (value_is_constant(condition))
-            {
-                switch (condition.id)
-                {
-                    .constant_integer =>
-                    {
-                        >value = condition.content.constant_integer.value;
-                        if (value == 0)
-                        {
-                            report_error(module, "zero-condition in a while loop");
-                        }
-                    },
-                    else => { report_error(module, "TODO: condition value id"); },
-                }
-
-                LLVMBuildBr(module.llvm.builder, body_block);
-            }
-            else
-            {
-                analyze_value(module, condition, zero, .abi, 0);
-
-                >llvm_condition = emit_condition(module, condition);
-                LLVMBuildCondBr(module.llvm.builder, llvm_condition, body_block, exit_block);
-            }
-
-            LLVMPositionBuilderAtEnd(module.llvm.builder, body_block);
-
-            analyze_block(module, block);
-
-            if (LLVMGetInsertBlock(module.llvm.builder))
-            {
-                LLVMBuildBr(module.llvm.builder, continue_block);
-            }
-
-            LLVMPositionBuilderAtEnd(module.llvm.builder, continue_block);
-
-            LLVMBuildBr(module.llvm.builder, entry_block);
-
-            if (!LLVMGetFirstUse(@pointer_cast(body_block)))
-            {
-                fail();
-            }
-
-            if (!LLVMGetFirstUse(@pointer_cast(exit_block)))
-            {
-                fail();
-            }
-
-            LLVMPositionBuilderAtEnd(module.llvm.builder, exit_block);
-
-            module.llvm.continue_block = previous_continue_block;
-            module.llvm.exit_block = previous_exit_block;
-        },
         .assignment =>
         {
             >left = statement.content.assignment.left;
             >right = statement.content.assignment.right;
             >id = statement.content.assignment.id;
-
-            analyze_type(module, left, zero, zero);
 
             >left_type = left.type;
             if (left_type.id != .pointer)
@@ -18808,8 +18755,6 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
             {
                 .assign =>
                 {
-                    analyze_type(module, right, element_type, zero);
-
                     if (is_storing_to_vector_element)
                     {
                         emit_value(module, right, .abi, 0);
@@ -18854,7 +18799,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                                 });
                     }
 
-                    analyze_value(module, right, element_type, .abi, 0);
+                    emit_value(module, right, .abi, 0);
 
                     >b = right.llvm;
 
@@ -18904,172 +18849,63 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                 },
             }
         },
-        .switch =>
+        .while =>
         {
-            >discriminant = statement.content.switch.discriminant;
-            >clauses = statement.content.switch.clauses;
+            >entry_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "while.entry");
+            LLVMBuildBr(module.llvm.builder, entry_block);
+            LLVMPositionBuilderAtEnd(module.llvm.builder, entry_block);
 
-            >exit_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "switch.exit");
+            >body_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "while.body");
+            >continue_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "while.continue");
+            >exit_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "while.exit");
 
-            analyze_value(module, discriminant, zero, .abi, 0);
+            >previous_continue_block = module.llvm.continue_block;
+            >previous_exit_block = module.llvm.exit_block;
+            module.llvm.continue_block = continue_block;
+            module.llvm.exit_block = exit_block;
 
-            >discriminant_type = discriminant.type;
+            >condition = statement.content.while.condition;
+            >block = statement.content.while.block;
 
-            >invalid_clause_index: u64 = ~0;
-            >else_clause_index = invalid_clause_index;
-            >discriminant_case_count: u64 = 0;
-
-            // TODO: more analysis
-            switch (discriminant_type.id)
+            if (value_is_constant(condition))
             {
-                .enum, .integer => {},
-                else => { report_error(module, "TODO: discriminant_type"); },
-            }
-
-            for (i: 0..clauses.length)
-            {
-                >clause = &clauses[i];
-                clause.basic_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, @select(clause.values.length == 0, "switch.else_case_block", "switch.case_block"));
-                discriminant_case_count += clause.values.length;
-
-                if (clause.values.length == 0)
-                {
-                    if (else_clause_index != invalid_clause_index)
-                    {
-                        // Double else
-                        report_error(module, "Double else");
-                    }
-
-                    else_clause_index = i;
-                }
-                else
-                {
-                    for (&value: clause.values)
-                    {
-                        switch (value.id)
-                        {
-                            .single =>
-                            {
-                                >v = value.content.single;
-                                assert(v != zero);
-                                analyze_value(module, v, discriminant_type, .abi, 1);
-                            },
-                            .range =>
-                            {
-                                >start = value.content.range[0];
-                                >end = value.content.range[1];
-
-                                for (v: value.content.range)
-                                {
-                                    analyze_value(module, v, discriminant_type, .abi, 1);
-                                }
-
-                                if (start.id != end.id)
-                                {
-                                    report_error(module, "range values id must match");
-                                }
-
-                                switch (start.id)
-                                {
-                                    .constant_integer =>
-                                    {
-                                        if (start.content.constant_integer.value >= end.content.constant_integer.value)
-                                        {
-                                            report_error(module, "start value is greater or equal than end value");
-                                        }
-                                    },
-                                    else => { report_error(module, "TODO: start value id"); },
-                                }
-                            },
-                        }
-                    }
-                }
-            }
-
-            >else_block: &LLVMBasicBlock = undefined;
-            if (else_clause_index != invalid_clause_index)
-            {
-                else_block = clauses[else_clause_index].basic_block;
+                LLVMBuildBr(module.llvm.builder, body_block);
             }
             else
             {
-                else_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "switch.else_case_block");
+                emit_value(module, condition, .abi, 0);
+
+                >llvm_condition = emit_condition(module, condition);
+                LLVMBuildCondBr(module.llvm.builder, llvm_condition, body_block, exit_block);
             }
 
-            >switch_instruction = LLVMBuildSwitch(module.llvm.builder, discriminant.llvm, else_block, @truncate(discriminant_case_count));
-            >all_blocks_terminated: u1 = 1;
+            LLVMPositionBuilderAtEnd(module.llvm.builder, body_block);
 
-            for (&clause: clauses)
+            emit_block(module, block);
+
+            if (LLVMGetInsertBlock(module.llvm.builder))
             {
-                for (&value: clause.values)
-                {
-                    switch (value.id)
-                    {
-                        .single =>
-                        {
-                            LLVMAddCase(switch_instruction, value.content.single.llvm, clause.basic_block);
-                        },
-                        .range =>
-                        {
-                            >start = value.content.range[0];
-                            >end = value.content.range[1];
-                            
-                            LLVMAddCase(switch_instruction, start.llvm, clause.basic_block);
-
-                            assert(start.id == end.id);
-
-                            switch (start.id)
-                            {
-                                .constant_integer =>
-                                {
-                                    >start_value = start.content.constant_integer.value;
-                                    >end_value = end.content.constant_integer.value;
-
-                                    for (i: start_value + 1 .. end_value)
-                                    {
-                                        LLVMAddCase(switch_instruction, LLVMConstInt(start.type.llvm.abi, i, 0), clause.basic_block);
-                                    }
-                                },
-                                else => { unreachable; },
-                            }
-
-                            LLVMAddCase(switch_instruction, end.llvm, clause.basic_block);
-                        },
-                    }
-                }
-
-                LLVMPositionBuilderAtEnd(module.llvm.builder, clause.basic_block);
-
-                analyze_block(module, clause.block);
-
-                if (LLVMGetInsertBlock(module.llvm.builder))
-                {
-                    all_blocks_terminated = 0;
-                    LLVMBuildBr(module.llvm.builder, exit_block);
-                    LLVMClearInsertionPosition(module.llvm.builder);
-                }
+                LLVMBuildBr(module.llvm.builder, continue_block);
             }
 
-            if (else_clause_index == invalid_clause_index)
+            LLVMPositionBuilderAtEnd(module.llvm.builder, continue_block);
+
+            LLVMBuildBr(module.llvm.builder, entry_block);
+
+            if (!LLVMGetFirstUse(@pointer_cast(body_block)))
             {
-                LLVMPositionBuilderAtEnd(module.llvm.builder, else_block);
+                fail();
+            }
 
-                if (module.has_debug_info and !build_mode_is_optimized(module.build_mode))
-                {
-                    emit_intrinsic_call(module, ."llvm.trap", zero, zero);
-                }
-
-                LLVMBuildUnreachable(module.llvm.builder);
-                LLVMClearInsertionPosition(module.llvm.builder);
+            if (!LLVMGetFirstUse(@pointer_cast(exit_block)))
+            {
+                fail();
             }
 
             LLVMPositionBuilderAtEnd(module.llvm.builder, exit_block);
 
-            if (all_blocks_terminated)
-            {
-                LLVMBuildUnreachable(module.llvm.builder);
-                LLVMClearInsertionPosition(module.llvm.builder);
-            }
+            module.llvm.continue_block = previous_continue_block;
+            module.llvm.exit_block = previous_exit_block;
         },
         .for =>
         {
@@ -19111,82 +18947,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                         >kind = kinds[i];
                         >iteratable = iteratables[i];
 
-                        analyze_type(module, iteratable, zero, zero);
-
-                        if (iteratable.kind == .right)
-                        {
-                            if (!type_is_slice(iteratable.type))
-                            {
-                                reanalyze_type_as_left_value(module, iteratable);
-                            }
-                        }
-
-                        >aggregate_type: &Type = zero;
-
-                        if (iteratable.kind == .left and iteratable.type.id != .pointer)
-                        {
-                            if (!type_is_slice(iteratable.type))
-                            {
-                                report_error(module, "expected slice type");
-                            }
-
-                            iteratable.kind = .right;
-                        }
-
-                        switch (iteratable.kind)
-                        {
-                            .left =>
-                            {
-                                >pointer_type = iteratable.type;
-
-                                if (pointer_type.id != .pointer)
-                                {
-                                    report_error(module, "lvalue must be pointer");
-                                }
-
-                                aggregate_type = pointer_type.content.pointer.element_type;
-                            },
-                            .right =>
-                            {
-                                aggregate_type = iteratable.type;
-                                assert(type_is_slice(aggregate_type));
-                            },
-                        }
-
-                        >child_type: &Type = zero;
-
-                        switch (aggregate_type.id)
-                        {
-                            .array =>
-                            {
-                                child_type = aggregate_type.content.array.element_type;
-                            },
-                            .struct =>
-                            {
-                                if (!type_is_slice(aggregate_type))
-                                {
-                                    report_error(module, "aggregate type must be slice");
-                                }
-
-                                >pointer_type = aggregate_type.content.struct.fields[0].type;
-                                assert(pointer_type.id == .pointer);
-                                child_type = pointer_type.content.pointer.element_type;
-                            },
-                            else => { unreachable; },
-                        }
-
-                        assert(child_type != zero);
-                        assert(!local.variable.type);
-
-                        >local_type = child_type;
-
-                        if (kind == .left)
-                        {
-                            local_type = get_pointer_type(module, child_type);
-                        }
-
-                        assert(local_type != zero);
-                        local.variable.type = local_type;
+                        assert(local.variable.type != zero);
 
                         emit_local(module, local);
                         emit_value(module, iteratable, .memory, 0);
@@ -19398,7 +19159,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
 
                     assert(!local);
 
-                    analyze_statement(module, &statement.content.for.scope, statement.content.for.predicate);
+                    emit_statement(module, &statement.content.for.scope, statement.content.for.predicate);
 
                     if (LLVMGetInsertBlock(module.llvm.builder))
                     {
@@ -19425,6 +19186,929 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                     LLVMBuildBr(module.llvm.builder, entry_block);
 
                     LLVMPositionBuilderAtEnd(module.llvm.builder, exit_block);
+                },
+                .range =>
+                {
+                    >local = statement.content.for.first_local;
+                    assert(local != zero);
+                    assert(!local.next);
+                    >local_type = local.variable.type;
+                    assert(local_type != zero);
+
+                    assert(kinds.length == 1);
+
+                    if (iteratables.length == 2)
+                    {
+                        >start = iteratables[0];
+                        >end = iteratables[1];
+
+                        emit_local(module, local);
+                        emit_value(module, start, .memory, 0);
+
+                        >index_alloca = local.variable.storage.llvm;
+
+                        create_store(module, {
+                            .source = start.llvm,
+                            .destination = index_alloca,
+                            .type = local_type,
+                            zero,
+                        });
+
+                        LLVMBuildBr(module.llvm.builder, entry_block);
+                        LLVMPositionBuilderAtEnd(module.llvm.builder, entry_block);
+
+                        >header_index_load = create_load(module, {
+                            .type = local_type,
+                            .pointer = index_alloca,
+                            zero,
+                        });
+
+                        emit_value(module, end, .abi, 0);
+
+                        >length_value = end.llvm;
+                        >index_compare = LLVMBuildICmp(module.llvm.builder, .ult, header_index_load, length_value, "");
+                        LLVMBuildCondBr(module.llvm.builder, index_compare, body_block, exit_block);
+
+                        LLVMPositionBuilderAtEnd(module.llvm.builder, body_block);
+                        emit_statement(module, &statement.content.for.scope, statement.content.for.predicate);
+
+                        if (LLVMGetInsertBlock(module.llvm.builder))
+                        {
+                            LLVMBuildBr(module.llvm.builder, continue_block);
+                        }
+
+                        LLVMPositionBuilderAtEnd(module.llvm.builder, continue_block);
+
+                        >continue_index_load = create_load(module, {
+                            .type = local_type,
+                            .pointer = index_alloca,
+                            zero,
+                        });
+
+                        >inc = LLVMBuildAdd(module.llvm.builder, continue_index_load, LLVMConstInt(local_type.llvm.abi, 1, 0), "");
+                        
+                        create_store(module, {
+                            .source = inc,
+                            .destination = index_alloca,
+                            .type = local_type,
+                            zero,
+                        });
+
+                        LLVMBuildBr(module.llvm.builder, entry_block);
+
+                        LLVMPositionBuilderAtEnd(module.llvm.builder, exit_block);
+                    }
+                    else
+                    {
+                        // TODO: case for reverse range
+                        fail();
+                    }
+                },
+            }
+
+            // END OF SCOPE
+            module.llvm.continue_block = previous_continue_block;
+            module.llvm.exit_block = previous_exit_block;
+        },
+        .break =>
+        {
+            >exit_block = module.llvm.exit_block;
+            if (!exit_block)
+            {
+                report_error(module, "no exit block found for break");
+            }
+
+            LLVMBuildBr(module.llvm.builder, exit_block);
+            LLVMClearInsertionPosition(module.llvm.builder);
+        },
+        .continue =>
+        {
+            >continue_block = module.llvm.continue_block;
+            if (!continue_block)
+            {
+                report_error(module, "no continue block found for continue");
+            }
+
+            LLVMBuildBr(module.llvm.builder, continue_block);
+            LLVMClearInsertionPosition(module.llvm.builder);
+        },
+        .switch =>
+        {
+            >discriminant = statement.content.switch.discriminant;
+            >clauses = statement.content.switch.clauses;
+
+            >exit_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "switch.exit");
+
+            emit_value(module, discriminant, .abi, 0);
+
+            >discriminant_type = discriminant.type;
+
+            >invalid_clause_index: u64 = ~0;
+            >else_clause_index = invalid_clause_index;
+            >discriminant_case_count: u64 = 0;
+
+            for (i: 0..clauses.length)
+            {
+                >clause = &clauses[i];
+                clause.basic_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, @select(clause.values.length == 0, "switch.else_case_block", "switch.case_block"));
+                discriminant_case_count += clause.values.length;
+
+                if (clause.values.length == 0)
+                {
+                    if (else_clause_index != invalid_clause_index)
+                    {
+                        // Double else
+                        report_error(module, "Double else");
+                    }
+
+                    else_clause_index = i;
+                }
+                else
+                {
+                    for (&value: clause.values)
+                    {
+                        switch (value.id)
+                        {
+                            .single =>
+                            {
+                                >v = value.content.single;
+                                assert(v != zero);
+                                emit_value(module, v, .abi, 1);
+                            },
+                            .range =>
+                            {
+                                >start = value.content.range[0];
+                                >end = value.content.range[1];
+
+                                for (v: value.content.range)
+                                {
+                                    emit_value(module, v, .abi, 1);
+                                }
+                            },
+                        }
+                    }
+                }
+            }
+
+            >else_block: &LLVMBasicBlock = undefined;
+            if (else_clause_index != invalid_clause_index)
+            {
+                else_block = clauses[else_clause_index].basic_block;
+            }
+            else
+            {
+                else_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "switch.else_case_block");
+            }
+
+            >switch_instruction = LLVMBuildSwitch(module.llvm.builder, discriminant.llvm, else_block, @truncate(discriminant_case_count));
+            >all_blocks_terminated: u1 = 1;
+
+            for (&clause: clauses)
+            {
+                for (&value: clause.values)
+                {
+                    switch (value.id)
+                    {
+                        .single =>
+                        {
+                            LLVMAddCase(switch_instruction, value.content.single.llvm, clause.basic_block);
+                        },
+                        .range =>
+                        {
+                            >start = value.content.range[0];
+                            >end = value.content.range[1];
+                            
+                            LLVMAddCase(switch_instruction, start.llvm, clause.basic_block);
+
+                            assert(start.id == end.id);
+
+                            switch (start.id)
+                            {
+                                .constant_integer =>
+                                {
+                                    >start_value = start.content.constant_integer.value;
+                                    >end_value = end.content.constant_integer.value;
+
+                                    for (i: start_value + 1 .. end_value)
+                                    {
+                                        LLVMAddCase(switch_instruction, LLVMConstInt(start.type.llvm.abi, i, 0), clause.basic_block);
+                                    }
+                                },
+                                else => { unreachable; },
+                            }
+
+                            LLVMAddCase(switch_instruction, end.llvm, clause.basic_block);
+                        },
+                    }
+                }
+
+                LLVMPositionBuilderAtEnd(module.llvm.builder, clause.basic_block);
+
+                emit_block(module, clause.block);
+
+                if (LLVMGetInsertBlock(module.llvm.builder))
+                {
+                    all_blocks_terminated = 0;
+                    LLVMBuildBr(module.llvm.builder, exit_block);
+                    LLVMClearInsertionPosition(module.llvm.builder);
+                }
+            }
+
+            if (else_clause_index == invalid_clause_index)
+            {
+                LLVMPositionBuilderAtEnd(module.llvm.builder, else_block);
+
+                if (module.has_debug_info and !build_mode_is_optimized(module.build_mode))
+                {
+                    emit_intrinsic_call(module, ."llvm.trap", zero, zero);
+                }
+
+                LLVMBuildUnreachable(module.llvm.builder);
+                LLVMClearInsertionPosition(module.llvm.builder);
+            }
+
+            LLVMPositionBuilderAtEnd(module.llvm.builder, exit_block);
+
+            if (all_blocks_terminated)
+            {
+                LLVMBuildUnreachable(module.llvm.builder);
+                LLVMClearInsertionPosition(module.llvm.builder);
+            }
+        },
+        else =>
+        {
+            report_error(module, "TODO: emit statement");
+        },
+    }
+}
+
+emit_block = fn (module: &Module, block: &Block) void
+{
+    assert(module.phase == .emission);
+
+    if (module.has_debug_info)
+    {
+        >lexical_block = LLVMDIBuilderCreateLexicalBlock(module.llvm.di_builder, block.scope.parent.llvm, module.llvm.file, block.scope.line, block.scope.column);
+        block.scope.llvm = lexical_block;
+    }
+
+    >statement = block.first_statement;
+
+    while (statement)
+    {
+        emit_statement(module, &block.scope, statement);
+
+        statement = statement.next;
+    }
+}
+
+analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) void
+{
+    assert(!statement.analyzed);
+    assert(module.phase == .analysis);
+
+    >parent_function_global: &Global = undefined;
+    if (module.current_function)
+    {
+        parent_function_global = module.current_function;
+        assert(parent_function_global != zero);
+    }
+    else if (module.current_macro_instantiation)
+    {
+        parent_function_global = module.current_macro_instantiation.instantiation_function;
+    }
+    else
+    {
+        report_error(module, "Not inside a function");
+    }
+
+    switch (statement.id)
+    {
+        .return =>
+        {
+            >return_value = statement.content.return;
+
+            if (module.current_function)
+            {
+                assert(!module.current_macro_instantiation);
+                >function_type = &parent_function_global.variable.storage.type.content.pointer.element_type.content.function;
+                >return_abi = &function_type.abi.return_abi;
+
+                switch (return_abi.semantic_type.id)
+                {
+                    .void =>
+                    {
+                        if (return_value)
+                        {
+                            report_error(module, "return value with return type 'void'");
+                        }
+                    },
+                    .noreturn =>
+                    {
+                        report_error(module, "return statement with 'noreturn'");
+                    },
+                    else =>
+                    {
+                        if (!return_value)
+                        {
+                            report_error(module, "sizable return type with no return value");
+                        }
+
+                        >return_type = return_abi.semantic_type;
+                        analyze_type(module, return_value, return_type, zero);
+                    },
+                }
+            }
+            else if (module.current_macro_instantiation)
+            {
+                >macro_instantiation = module.current_macro_instantiation;
+                >return_type = macro_instantiation.return_type;
+                assert(return_type != zero);
+
+                analyze_type(module, return_value, return_type, zero);
+            }
+            else
+            {
+                report_error(module, "TODO: internal compiler error");
+            }
+        },
+        .expression =>
+        {
+            analyze_type(module, statement.content.expression, zero, zero);
+        },
+        .local =>
+        {
+            >local = statement.content.local;
+            >expected_type = local.variable.type;
+            assert(!local.variable.storage);
+
+            analyze_type(module, local.initial_value, expected_type, zero);
+            >local_type = @select(expected_type != zero, expected_type, local.initial_value.type);
+            assert(local_type != zero);
+
+            local.variable.type = local_type;
+
+            >storage = new_value(module);
+            storage.& = {
+                .type = get_pointer_type(module, local_type),
+                .id = .local,
+                zero,
+            };
+            local.variable.storage = storage;
+        },
+        .if =>
+        {
+            >condition = statement.content.if.condition;
+            >taken_statement = statement.content.if.if;
+            >not_taken_statement = statement.content.if.else;
+
+            analyze_type(module, condition, zero, zero);
+
+            analyze_statement(module, scope, taken_statement);
+
+            if (not_taken_statement != zero)
+            {
+                analyze_statement(module, scope, not_taken_statement);
+            }
+        },
+        .block =>
+        {
+            analyze_block(module, statement.content.block);
+        },
+        .while =>
+        {
+            >condition = statement.content.while.condition;
+            >block = statement.content.while.block;
+
+            if (value_is_constant(condition))
+            {
+                switch (condition.id)
+                {
+                    .constant_integer =>
+                    {
+                        >value = condition.content.constant_integer.value;
+                        if (value == 0)
+                        {
+                            report_error(module, "zero-condition in a while loop");
+                        }
+                    },
+                    else => { report_error(module, "TODO: condition value id"); },
+                }
+            }
+            else
+            {
+                analyze_type(module, condition, zero, zero);
+            }
+
+            analyze_block(module, block);
+        },
+        .assignment =>
+        {
+            >left = statement.content.assignment.left;
+            >right = statement.content.assignment.right;
+            >id = statement.content.assignment.id;
+
+            analyze_type(module, left, zero, zero);
+
+            >left_type = left.type;
+            if (left_type.id != .pointer)
+            {
+                report_error(module, "left type must be pointer");
+            }
+
+            >element_type = resolve_alias(module, left_type.content.pointer.element_type);
+            >is_storing_to_vector_element = left.id == .array_expression;
+            >array_like = left.content.array_expression.array_like;
+            >index = left.content.array_expression.index;
+            >vector_type: &Type = zero;
+            >vector_load: &LLVMValue = zero;
+
+            if (is_storing_to_vector_element)
+            {
+                vector_type = array_like.type.content.pointer.element_type;
+                is_storing_to_vector_element = vector_type.id == .vector;
+            }
+
+            analyze_type(module, right, element_type, zero);
+        },
+        .switch =>
+        {
+            >discriminant = statement.content.switch.discriminant;
+            >clauses = statement.content.switch.clauses;
+
+            analyze_type(module, discriminant, zero, zero);
+
+            >discriminant_type = discriminant.type;
+
+            >invalid_clause_index: u64 = ~0;
+            >else_clause_index = invalid_clause_index;
+            >discriminant_case_count: u64 = 0;
+
+            // TODO: more analysis
+            switch (discriminant_type.id)
+            {
+                .enum, .integer => {},
+                else => { report_error(module, "TODO: discriminant_type"); },
+            }
+
+            for (i: 0..clauses.length)
+            {
+                >clause = &clauses[i];
+                discriminant_case_count += clause.values.length;
+
+                if (clause.values.length == 0)
+                {
+                    if (else_clause_index != invalid_clause_index)
+                    {
+                        // Double else
+                        report_error(module, "Double else");
+                    }
+
+                    else_clause_index = i;
+                }
+                else
+                {
+                    for (&value: clause.values)
+                    {
+                        switch (value.id)
+                        {
+                            .single =>
+                            {
+                                >v = value.content.single;
+                                assert(v != zero);
+                                analyze_type(module, v, discriminant_type, { .must_be_constant = 1, zero });
+                            },
+                            .range =>
+                            {
+                                >start = value.content.range[0];
+                                >end = value.content.range[1];
+
+                                for (v: value.content.range)
+                                {
+                                    analyze_type(module, v, discriminant_type, { .must_be_constant = 1, zero });
+                                }
+
+                                if (start.id != end.id)
+                                {
+                                    report_error(module, "range values id must match");
+                                }
+
+                                switch (start.id)
+                                {
+                                    .constant_integer =>
+                                    {
+                                        if (start.content.constant_integer.value >= end.content.constant_integer.value)
+                                        {
+                                            report_error(module, "start value is greater or equal than end value");
+                                        }
+                                    },
+                                    else => { report_error(module, "TODO: start value id"); },
+                                }
+                            },
+                        }
+                    }
+                }
+            }
+
+            //>else_block: &LLVMBasicBlock = undefined;
+            //if (else_clause_index != invalid_clause_index)
+            //{
+            //    else_block = clauses[else_clause_index].basic_block;
+            //}
+            //else
+            //{
+            //    else_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "switch.else_case_block");
+            //}
+
+            //>switch_instruction = LLVMBuildSwitch(module.llvm.builder, discriminant.llvm, else_block, @truncate(discriminant_case_count));
+            >all_blocks_terminated: u1 = 1;
+
+            for (&clause: clauses)
+            {
+                //for (&value: clause.values)
+                //{
+                //    switch (value.id)
+                //    {
+                //        .single =>
+                //        {
+                //            LLVMAddCase(switch_instruction, value.content.single.llvm, clause.basic_block);
+                //        },
+                //        .range =>
+                //        {
+                //            >start = value.content.range[0];
+                //            >end = value.content.range[1];
+                //            
+                //            LLVMAddCase(switch_instruction, start.llvm, clause.basic_block);
+
+                //            assert(start.id == end.id);
+
+                //            switch (start.id)
+                //            {
+                //                .constant_integer =>
+                //                {
+                //                    >start_value = start.content.constant_integer.value;
+                //                    >end_value = end.content.constant_integer.value;
+
+                //                    for (i: start_value + 1 .. end_value)
+                //                    {
+                //                        LLVMAddCase(switch_instruction, LLVMConstInt(start.type.llvm.abi, i, 0), clause.basic_block);
+                //                    }
+                //                },
+                //                else => { unreachable; },
+                //            }
+
+                //            LLVMAddCase(switch_instruction, end.llvm, clause.basic_block);
+                //        },
+                //    }
+                //}
+
+                //LLVMPositionBuilderAtEnd(module.llvm.builder, clause.basic_block);
+
+                analyze_block(module, clause.block);
+
+                //if (LLVMGetInsertBlock(module.llvm.builder))
+                //{
+                //    all_blocks_terminated = 0;
+                //    LLVMBuildBr(module.llvm.builder, exit_block);
+                //    LLVMClearInsertionPosition(module.llvm.builder);
+                //}
+            }
+
+            //if (else_clause_index == invalid_clause_index)
+            //{
+            //    LLVMPositionBuilderAtEnd(module.llvm.builder, else_block);
+
+            //    if (module.has_debug_info and !build_mode_is_optimized(module.build_mode))
+            //    {
+            //        emit_intrinsic_call(module, ."llvm.trap", zero, zero);
+            //    }
+
+            //    LLVMBuildUnreachable(module.llvm.builder);
+            //    LLVMClearInsertionPosition(module.llvm.builder);
+            //}
+
+            //LLVMPositionBuilderAtEnd(module.llvm.builder, exit_block);
+
+            //if (all_blocks_terminated)
+            //{
+            //    LLVMBuildUnreachable(module.llvm.builder);
+            //    LLVMClearInsertionPosition(module.llvm.builder);
+            //}
+        },
+        .for =>
+        {
+            >index_type = uint64(module);
+            >kinds = statement.content.for.kinds;
+            >iteratables = statement.content.for.iteratables;
+
+            switch (statement.content.for.kind)
+            {
+                .slice =>
+                {
+                    // Construct loop pre-initialization
+
+                    assert(kinds.length == iteratables.length);
+                    >local = statement.content.for.first_local;
+
+                    for (i: 0..iteratables.length)
+                    {
+                        >kind = kinds[i];
+                        >iteratable = iteratables[i];
+
+                        analyze_type(module, iteratable, zero, zero);
+
+                        if (iteratable.kind == .right)
+                        {
+                            if (!type_is_slice(iteratable.type))
+                            {
+                                reanalyze_type_as_left_value(module, iteratable);
+                            }
+                        }
+
+                        >aggregate_type: &Type = zero;
+
+                        if (iteratable.kind == .left and iteratable.type.id != .pointer)
+                        {
+                            if (!type_is_slice(iteratable.type))
+                            {
+                                report_error(module, "expected slice type");
+                            }
+
+                            iteratable.kind = .right;
+                        }
+
+                        switch (iteratable.kind)
+                        {
+                            .left =>
+                            {
+                                >pointer_type = iteratable.type;
+
+                                if (pointer_type.id != .pointer)
+                                {
+                                    report_error(module, "lvalue must be pointer");
+                                }
+
+                                aggregate_type = pointer_type.content.pointer.element_type;
+                            },
+                            .right =>
+                            {
+                                aggregate_type = iteratable.type;
+                                assert(type_is_slice(aggregate_type));
+                            },
+                        }
+
+                        >child_type: &Type = zero;
+
+                        switch (aggregate_type.id)
+                        {
+                            .array =>
+                            {
+                                child_type = aggregate_type.content.array.element_type;
+                            },
+                            .struct =>
+                            {
+                                if (!type_is_slice(aggregate_type))
+                                {
+                                    report_error(module, "aggregate type must be slice");
+                                }
+
+                                >pointer_type = aggregate_type.content.struct.fields[0].type;
+                                assert(pointer_type.id == .pointer);
+                                child_type = pointer_type.content.pointer.element_type;
+                            },
+                            else => { unreachable; },
+                        }
+
+                        assert(child_type != zero);
+                        assert(!local.variable.type);
+
+                        >local_type = child_type;
+
+                        if (kind == .left)
+                        {
+                            local_type = get_pointer_type(module, child_type);
+                        }
+
+                        assert(local_type != zero);
+                        local.variable.type = local_type;
+
+                        >local_storage = new_value(module);
+                        local_storage.& = {
+                            .type = get_pointer_type(module, local_type),
+                            .id = .local,
+                            zero,
+                        };
+                        local.variable.storage = local_storage;
+
+                        //emit_local(module, local);
+                        //emit_value(module, iteratable, .memory, 0);
+
+                        local = local.next;
+                    }
+
+                    assert(!local);
+
+                    >length_value: &LLVMValue = zero;
+
+                    // TODO: we are only taking the first length in order to operate
+                    //for (value: iteratables)
+                    //{
+                    //    >value_type = value.type;
+                    //    >aggregate_type = value_type;
+
+                    //    if (value.kind == .left)
+                    //    {
+                    //        assert(value_type.id == .pointer);
+                    //        aggregate_type = value_type.content.pointer.element_type;
+                    //    }
+
+                    //    assert(aggregate_type != zero);
+
+                    //    >llvm_value = value.llvm;
+
+                    //    switch (aggregate_type.id)
+                    //    {
+                    //        .array =>
+                    //        {
+                    //            assert(value.kind == .left);
+                    //            >element_count = aggregate_type.content.array.element_count;
+                    //            length_value = LLVMConstInt(index_type.llvm.abi, element_count, 0);
+                    //        },
+                    //        .struct =>
+                    //        {
+                    //            assert(type_is_slice(aggregate_type));
+
+                    //            switch (value.kind)
+                    //            {
+                    //                .right =>
+                    //                {
+                    //                    length_value = LLVMBuildExtractValue(module.llvm.builder, llvm_value, 1, "slice.length");
+                    //                },
+                    //                .left =>
+                    //                {
+                    //                    >gep = LLVMBuildStructGEP2(module.llvm.builder, aggregate_type.llvm.abi, llvm_value, 1, "slice.length.pointer");
+                    //                    >load = create_load(module, {
+                    //                        .type = index_type,
+                    //                        .pointer = gep,
+                    //                        zero,
+                    //                    });
+                    //                    length_value = load;
+                    //                },
+                    //            }
+                    //        },
+                    //        else => { unreachable; },
+                    //    }
+
+                    //    break;
+                    //}
+
+                    //>index_alloca = create_alloca(module, {
+                    //    .type = index_type,
+                    //    .name = "for_each.index",
+                    //    zero,
+                    //});
+                    //create_store(module, {
+                    //    .source = index_zero,
+                    //    .destination = index_alloca,
+                    //    .type = index_type,
+                    //    zero,
+                    //});
+
+                    //assert(length_value != zero);
+
+                    //// Construct loop header
+
+                    //LLVMBuildBr(module.llvm.builder, entry_block);
+                    //LLVMPositionBuilderAtEnd(module.llvm.builder, entry_block);
+
+                    //>header_index_load = create_load(module, {
+                    //    .type = index_type,
+                    //    .pointer = index_alloca,
+                    //    zero,
+                    //});
+                    //>index_compare = LLVMBuildICmp(module.llvm.builder, .ult, header_index_load, length_value, "");
+                    //LLVMBuildCondBr(module.llvm.builder, index_compare, body_block, exit_block);
+
+                    //// Construct loop body
+
+                    //LLVMPositionBuilderAtEnd(module.llvm.builder, body_block);
+                    //>body_index_load = create_load(module, {
+                    //    .type = index_type,
+                    //    .pointer = index_alloca,
+                    //    zero,
+                    //});
+
+                    //local = statement.content.for.first_local;
+
+                    //for (i: 0..iteratables.length)
+                    //{
+                    //    >kind = kinds[i];
+                    //    >iteratable = iteratables[i];
+
+                    //    >iteratable_type = iteratable.type;
+                    //    >iteratable_kind = iteratable.kind;
+                    //    >iteratable_llvm = iteratable.llvm;
+
+                    //    >aggregate_type: &Type = iteratable_type;
+
+                    //    if (iteratable_kind == .left)
+                    //    {
+                    //        assert(iteratable_type.id == .pointer);
+                    //        aggregate_type = iteratable_type.content.pointer.element_type;
+                    //    }
+
+                    //    assert(aggregate_type != zero);
+                    //    >element_pointer_value: &LLVMValue = zero;
+
+                    //    switch (aggregate_type.id)
+                    //    {
+                    //        .array =>
+                    //        {
+                    //            assert(iteratable_kind == .left);
+                    //            element_pointer_value = create_gep(module, {
+                    //                .type = aggregate_type.llvm.memory,
+                    //                .pointer = iteratable_llvm,
+                    //                .indices = [ index_zero, body_index_load ][..],
+                    //                zero,
+                    //            });
+                    //        },
+                    //        .struct =>
+                    //        {
+                    //            assert(type_is_slice(aggregate_type));
+
+                    //            if (iteratable_kind == .left)
+                    //            {
+                    //                iteratable_llvm = create_load(module, {
+                    //                    .type = aggregate_type,
+                    //                    .pointer = iteratable_llvm,
+                    //                    zero,
+                    //                });
+                    //            }
+
+                    //            >extract_pointer = LLVMBuildExtractValue(module.llvm.builder, iteratable_llvm, 0, "");
+
+                    //            >fields = aggregate_type.content.struct.fields;
+                    //            >pointer_type = fields[0].type;
+                    //            assert(pointer_type.id == .pointer);
+                    //            >gep_type = pointer_type.content.pointer.element_type;
+                    //            resolve_type_in_place(module, gep_type);
+
+                    //            >gep = create_gep(module, {
+                    //                .type = gep_type.llvm.memory,
+                    //                .pointer = extract_pointer,
+                    //                .indices = [ body_index_load ][..],
+                    //                zero,
+                    //            });
+
+                    //            element_pointer_value = gep;
+                    //        },
+                    //        else => { unreachable; },
+                    //    }
+
+                    //    assert(element_pointer_value != zero);
+
+                    //    >local_type = local.variable.type;
+
+                    //    switch (kind)
+                    //    {
+                    //        .right =>
+                    //        {
+                    //            >evaluation_kind = get_evaluation_kind(local_type);
+                    //            if (evaluation_kind == .scalar or type_is_slice(aggregate_type) or type_is_slice(local_type))
+                    //            {
+                    //                >load = create_load(module, {
+                    //                    .type = local_type,
+                    //                    .pointer = element_pointer_value,
+                    //                    zero,
+                    //                });
+
+                    //                create_store(module, {
+                    //                    .source = load,
+                    //                    .destination = local.variable.storage.llvm,
+                    //                    .type = local_type,
+                    //                    zero,
+                    //                });
+                    //            }
+                    //            else
+                    //            {
+                    //                fail();
+                    //            }
+                    //        },
+                    //        .left =>
+                    //        {
+                    //            create_store(module, {
+                    //                .source = element_pointer_value,
+                    //                .destination = local.variable.storage.llvm,
+                    //                .type = local_type,
+                    //                zero,
+                    //            });
+                    //        },
+                    //    }
+
+                    //    local = local.next;
+                    //}
+
+                    assert(!local);
                 },
                 .range =>
                 {
@@ -19488,61 +20172,15 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                         }
 
                         local.variable.type = local_type;
-                        emit_local(module, local);
-                        emit_value(module, start, .memory, 0);
 
-                        >index_alloca = local.variable.storage.llvm;
-
-                        create_store(module, {
-                            .source = start.llvm,
-                            .destination = index_alloca,
-                            .type = local_type,
+                        >local_storage = new_value(module);
+                        local_storage.& = {
+                            .type = get_pointer_type(module, local_type),
+                            .id = .local,
                             zero,
-                        });
-
-                        LLVMBuildBr(module.llvm.builder, entry_block);
-                        LLVMPositionBuilderAtEnd(module.llvm.builder, entry_block);
-
-                        >header_index_load = create_load(module, {
-                            .type = local_type,
-                            .pointer = index_alloca,
-                            zero,
-                        });
-
-                        emit_value(module, end, .abi, 0);
-
-                        >length_value = end.llvm;
-                        >index_compare = LLVMBuildICmp(module.llvm.builder, .ult, header_index_load, length_value, "");
-                        LLVMBuildCondBr(module.llvm.builder, index_compare, body_block, exit_block);
-
-                        LLVMPositionBuilderAtEnd(module.llvm.builder, body_block);
-                        analyze_statement(module, &statement.content.for.scope, statement.content.for.predicate);
-
-                        if (LLVMGetInsertBlock(module.llvm.builder))
-                        {
-                            LLVMBuildBr(module.llvm.builder, continue_block);
-                        }
-
-                        LLVMPositionBuilderAtEnd(module.llvm.builder, continue_block);
-
-                        >continue_index_load = create_load(module, {
-                            .type = local_type,
-                            .pointer = index_alloca,
-                            zero,
-                        });
-
-                        >inc = LLVMBuildAdd(module.llvm.builder, continue_index_load, LLVMConstInt(local_type.llvm.abi, 1, 0), "");
-                        
-                        create_store(module, {
-                            .source = inc,
-                            .destination = index_alloca,
-                            .type = local_type,
-                            zero,
-                        });
-
-                        LLVMBuildBr(module.llvm.builder, entry_block);
-
-                        LLVMPositionBuilderAtEnd(module.llvm.builder, exit_block);
+                        };
+                        assert(!local.variable.storage);
+                        local.variable.storage = local_storage;
                     }
                     else
                     {
@@ -19552,46 +20190,29 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                 },
             }
 
-            // END OF SCOPE
-            module.llvm.continue_block = previous_continue_block;
-            module.llvm.exit_block = previous_exit_block;
+            analyze_statement(module, &statement.content.for.scope, statement.content.for.predicate);
         },
         .break =>
         {
-            >exit_block = module.llvm.exit_block;
-            if (!exit_block)
-            {
-                report_error(module, "no exit block found for break");
-            }
-
-            LLVMBuildBr(module.llvm.builder, exit_block);
-            LLVMClearInsertionPosition(module.llvm.builder);
+            // TODO: better analysis
         },
         .continue =>
         {
-            >continue_block = module.llvm.continue_block;
-            if (!continue_block)
-            {
-                report_error(module, "no continue block found for continue");
-            }
-
-            LLVMBuildBr(module.llvm.builder, continue_block);
-            LLVMClearInsertionPosition(module.llvm.builder);
+            // TODO: better analysis
         },
         else =>
         {
             fail();
         },
     }
+
+    statement.analyzed = 1;
 }
 
 analyze_block = fn (module: &Module, block: &Block) void
 {
-    if (module.has_debug_info)
-    {
-        >lexical_block = LLVMDIBuilderCreateLexicalBlock(module.llvm.di_builder, block.scope.parent.llvm, module.llvm.file, block.scope.line, block.scope.column);
-        block.scope.llvm = lexical_block;
-    }
+    assert(module.phase == .analysis);
+    assert(!block.analyzed);
 
     >statement = block.first_statement;
 
@@ -19599,8 +20220,14 @@ analyze_block = fn (module: &Module, block: &Block) void
     {
         analyze_statement(module, &block.scope, statement);
 
+        >old_statement = statement;
+
         statement = statement.next;
+
+        assert(statement != old_statement);
     }
+
+    block.analyzed = 1;
 }
 
 LLVMObjectGenerate = struct
@@ -19662,93 +20289,98 @@ generate_object = fn (module: &LLVMModule, target_machine: &LLVMTargetMachine, o
 
 link = fn (module: &Module) void
 {
-    >arena = module.arena;
-    >builder: ArgumentBuilder = zero;
-    add_argument(&builder, "ld.lld");
-    add_argument(&builder, "--error-limit=0");
-    add_argument(&builder, "-o");
-    add_argument(&builder, module.executable);
-
-    for (library_directory: module.library_directories)
+    if (module.link)
     {
-        add_argument(&builder, arena_join_string(arena, [ "-L", library_directory ][..]));
-    }
+        module.phase = .linkage;
 
-    >candidate_library_paths: [_][]u8 = [
-        "/usr/lib",
-        "/usr/lib/x86_64-linux-gnu",
-    ];
+        >arena = module.arena;
+        >builder: ArgumentBuilder = zero;
+        add_argument(&builder, "ld.lld");
+        add_argument(&builder, "--error-limit=0");
+        add_argument(&builder, "-o");
+        add_argument(&builder, module.executable);
 
-    >i: u64 = 0;
-    >scrt1_directory_path: []u8 = zero;
-    >scrt1_object_path: []u8 = zero;
-    for (directory_path: candidate_library_paths)
-    {
-        >object_path = arena_join_string(arena, [ directory_path, "/Scrt1.o" ][..]);
-        >file = os_file_open(object_path.pointer, { .read = 1, zero }, zero);
-        if (file >= 0)
+        for (library_directory: module.library_directories)
         {
-            os_file_close(file);
-            scrt1_directory_path = directory_path;
-            scrt1_object_path = object_path;
-            break;
+            add_argument(&builder, arena_join_string(arena, [ "-L", library_directory ][..]));
         }
-    }
 
-    if (scrt1_object_path.length == 0)
-    {
-        report_error(module, "scrt1 object not found");
-    }
+        >candidate_library_paths: [_][]u8 = [
+            "/usr/lib",
+            "/usr/lib/x86_64-linux-gnu",
+        ];
 
-    add_argument(&builder, arena_join_string(arena, [ "-L", scrt1_directory_path ][..]));
-    add_argument(&builder, "-L/usr/lib/gcc/x86_64-pc-linux-gnu/15.1.1");
-    add_argument(&builder, "-L/usr/lib/gcc/x86_64-linux-gnu/13");
+        >i: u64 = 0;
+        >scrt1_directory_path: []u8 = zero;
+        >scrt1_object_path: []u8 = zero;
+        for (directory_path: candidate_library_paths)
+        {
+            >object_path = arena_join_string(arena, [ directory_path, "/Scrt1.o" ][..]);
+            >file = os_file_open(object_path.pointer, { .read = 1, zero }, zero);
+            if (file >= 0)
+            {
+                os_file_close(file);
+                scrt1_directory_path = directory_path;
+                scrt1_object_path = object_path;
+                break;
+            }
+        }
 
-    for (object: module.objects)
-    {
-        add_argument(&builder, object);
-    }
+        if (scrt1_object_path.length == 0)
+        {
+            report_error(module, "scrt1 object not found");
+        }
 
-    for (library_path: module.library_paths)
-    {
-        add_argument(&builder, library_path);
-    }
+        add_argument(&builder, arena_join_string(arena, [ "-L", scrt1_directory_path ][..]));
+        add_argument(&builder, "-L/usr/lib/gcc/x86_64-pc-linux-gnu/15.1.1");
+        add_argument(&builder, "-L/usr/lib/gcc/x86_64-linux-gnu/13");
 
-    for (library_name: module.library_names)
-    {
-        add_argument(&builder, arena_join_string(arena, [ "-l", library_name ][..]));
-    }
+        for (object: module.objects)
+        {
+            add_argument(&builder, object);
+        }
 
-    if (module.link_libcpp)
-    {
-        add_argument(&builder, "-lstdc++");
-    }
-    
-    >link_libc: u1 = 1;
-    >dynamic_linker: u1 = 1;
+        for (library_path: module.library_paths)
+        {
+            add_argument(&builder, library_path);
+        }
 
-    if (dynamic_linker)
-    {
-        add_argument(&builder, "-dynamic-linker");
-        add_argument(&builder, "/usr/lib64/ld-linux-x86-64.so.2");
-    }
+        for (library_name: module.library_names)
+        {
+            add_argument(&builder, arena_join_string(arena, [ "-l", library_name ][..]));
+        }
 
-    if (link_libc)
-    {
-        add_argument(&builder, scrt1_object_path);
-        add_argument(&builder, "-lc");
-    }
+        if (module.link_libcpp)
+        {
+            add_argument(&builder, "-lstdc++");
+        }
 
-    >linker_arguments = flush_arguments(&builder);
+        >link_libc: u1 = 1;
+        >dynamic_linker: u1 = 1;
 
-    >result = lld_elf_link(linker_arguments.pointer, linker_arguments.length, 1, 0);
-    if (!result.success)
-    {
-        print(result.stdout);
-        print("\n");
-        print(result.stderr);
-        print("\n");
-        report_error(module, "");
+        if (dynamic_linker)
+        {
+            add_argument(&builder, "-dynamic-linker");
+            add_argument(&builder, "/usr/lib64/ld-linux-x86-64.so.2");
+        }
+
+        if (link_libc)
+        {
+            add_argument(&builder, scrt1_object_path);
+            add_argument(&builder, "-lc");
+        }
+
+        >linker_arguments = flush_arguments(&builder);
+
+        >result = lld_elf_link(linker_arguments.pointer, linker_arguments.length, 1, 0);
+        if (!result.success)
+        {
+            print(result.stdout);
+            print("\n");
+            print(result.stderr);
+            print("\n");
+            report_error(module, "");
+        }
     }
 }
 
@@ -19769,15 +20401,16 @@ emit_debug_argument = fn (module: &Module, argument: &Argument, basic_block: &LL
     LLVMDIBuilderInsertDeclareRecordAtEnd(module.llvm.di_builder, argument.variable.storage.llvm, parameter_variable, null_expression(module), debug_location, basic_block);
 }
 
-emit = fn (module: &Module) void
+analyze = fn (module: &Module) void
 {
+    module.phase = .analysis;
+
     assert(!module.current_function);
     assert(!module.current_macro_instantiation);
     assert(!module.current_macro_declaration);
 
-    >target_triple: &u8 = zero;
-    >cpu_model: &u8 = zero;
-    >cpu_features: &u8 = zero;
+    module.cpu_model = "generic";
+    module.cpu_features = "";
 
     >native_target = target_get_native();
     >target = module.target;
@@ -19785,9 +20418,9 @@ emit = fn (module: &Module) void
 
     if (target_match and module.host_cpu_model)
     {
-        target_triple = LLVMGetDefaultTargetTriple();
-        cpu_model = LLVMGetHostCPUName();
-        cpu_features = LLVMGetHostCPUFeatures();
+        module.target_triple = LLVMGetDefaultTargetTriple();
+        module.cpu_model = LLVMGetHostCPUName();
+        module.cpu_features = LLVMGetHostCPUFeatures();
     }
     else
     {
@@ -19796,12 +20429,12 @@ emit = fn (module: &Module) void
             .macos =>
             {
                 >target_triple_slice = arena_join_string(module.arena, [ @enum_name(target.cpu), "-apple-macosx15.0.0" ][..]);
-                target_triple = target_triple_slice.pointer;
+                module.target_triple = target_triple_slice.pointer;
             },
             .linux =>
             {
                 >target_triple_slice = arena_join_string(module.arena, [ @enum_name(target.cpu), "-unknown-linux-gnu" ][..]);
-                target_triple = target_triple_slice.pointer;
+                module.target_triple = target_triple_slice.pointer;
             },
             else =>
             {
@@ -19809,25 +20442,21 @@ emit = fn (module: &Module) void
             },
         }
 
-        cpu_model = "generic";
-        cpu_features = "";
-
         if (target.cpu == .aarch64 and target.os == .macos)
         {
-            cpu_model = "apple-m1";
+            module.cpu_model = "apple-m1";
         }
-
     }
 
     >vector_extension: X86VectorExtension = zero;
 
-    if (module.target.cpu == .x86_64 and c_string_length(cpu_features) != 0)
+    if (module.target.cpu == .x86_64 and c_string_length(module.cpu_features) != 0)
     {
         >i: u64 = 0;
 
         while (1)
         {
-            >ch = cpu_features[i];
+            >ch = module.cpu_features[i];
 
             if (ch == 0)
             {
@@ -19842,7 +20471,7 @@ emit = fn (module: &Module) void
 
                 while (1)
                 {
-                    >ch = cpu_features[i];
+                    >ch = module.cpu_features[i];
                     >escape = ch == ',' or ch == 0;
 
                     if (escape)
@@ -19855,7 +20484,7 @@ emit = fn (module: &Module) void
 
                 if (ch == '+')
                 {
-                    >feature = cpu_features[offset..i];
+                    >feature = module.cpu_features[offset..i];
                     >new_vector_extension: X86VectorExtension = zero;
                     >avx512 = "avx512";
 
@@ -19882,7 +20511,7 @@ emit = fn (module: &Module) void
                     }
                 }
 
-                if (cpu_features[i] == ',')
+                if (module.cpu_features[i] == ',')
                 {
                     i += 1;
                 }
@@ -19895,102 +20524,6 @@ emit = fn (module: &Module) void
     }
 
     module.x86_vector_extension = vector_extension;
-
-    llvm_initialize_targets();
-
-    >context = LLVMContextCreate();
-    >m = LLVMModuleCreateWithNameInContext(module.name.pointer, context);
-    >builder = LLVMCreateBuilderInContext(context);
-
-    >di_builder: &LLVMDIBuilder = zero;
-    >di_file: &LLVMMetadata = zero;
-
-    if (module.has_debug_info)
-    {
-        di_builder = LLVMCreateDIBuilder(m);
-        >last_slash = string_last_character(module.path, '/');
-        if (last_slash == string_no_match)
-        {
-            report_error(module, "module source file path must contain directories");
-        }
-
-        >directory = module.path[..last_slash];
-        >file_name = module.path[last_slash + 1..];
-
-        di_file = LLVMDIBuilderCreateFile(di_builder, file_name.pointer, file_name.length, directory.pointer, directory.length);
-        
-        >language: LLVMDwarfSourceLanguage = .C17;
-        >producer_name = "bloat buster";
-        >is_optimized = build_mode_is_optimized(module.build_mode);
-        >flags = "";
-        >emission_kind: LLVMDwarfEmissionKind = .full;
-        >runtime_version: u32 = 0;
-        >split_name = "";
-        >sysroot = "";
-        >sdk = "";
-
-        module.scope.llvm = LLVMDIBuilderCreateCompileUnit(di_builder, language, di_file, producer_name.pointer, producer_name.length, @extend(is_optimized), flags.pointer, flags.length, runtime_version, split_name.pointer, split_name.length, emission_kind, 0, 0, @extend(is_optimized), sysroot.pointer, sysroot.length, sdk.pointer, sdk.length);
-    }
-
-    >target_machine_options = LLVMCreateTargetMachineOptions();
-    LLVMTargetMachineOptionsSetCPU(target_machine_options, cpu_model);
-    LLVMTargetMachineOptionsSetFeatures(target_machine_options, cpu_features);
-
-    >code_generation_optimization_level: LLVMCodeGenerationOptimizationLevel = undefined;
-    switch (module.build_mode)
-    {
-        .development, .debug => { code_generation_optimization_level = .none; },
-        .speed, .size => { code_generation_optimization_level = .aggressive; },
-    }
-
-    LLVMTargetMachineOptionsSetCodeGenOptLevel(target_machine_options, code_generation_optimization_level);
-
-    >llvm_target: &LLVMTarget = zero;
-    >error_message: &u8 = zero;
-    >result = LLVMGetTargetFromTriple(target_triple, &llvm_target, &error_message);
-    if (result != 0)
-    {
-        report_error(module, "LLVM target not found");
-    }
-
-    assert(!error_message);
-
-    >target_machine = LLVMCreateTargetMachineWithOptions(llvm_target, target_triple, target_machine_options);
-
-    >target_data_layout = LLVMCreateTargetDataLayout(target_machine);
-    LLVMSetModuleDataLayout(m, target_data_layout);
-    LLVMSetTarget(m, target_triple);
-
-    module.llvm = {
-        .context = context,
-        .module = m,
-        .builder = builder,
-        .di_builder = di_builder,
-        .file = di_file,
-        .target_machine = target_machine,
-        .target_data_layout = target_data_layout,
-        .pointer_type = LLVMPointerTypeInContext(context, default_address_space),
-        .void_type = LLVMVoidTypeInContext(context),
-        zero,
-    };
-
-    for (i: 0..module.llvm.intrinsic_table.length)
-    {
-        >e: LLVMIntrinsicIndex = @enum_from_int(i);
-        >name = @enum_name(e);
-        >intrinsic_id = LLVMLookupIntrinsicID(name.pointer, name.length);
-        assert(intrinsic_id != 0);
-        module.llvm.intrinsic_table[i] = intrinsic_id;
-    }
-
-    for (i: 0..module.llvm.attribute_table.length)
-    {
-        >e: LLVMAttributeIndex = @enum_from_int(i);
-        >name = @enum_name(e);
-        >attribute_id = LLVMGetEnumAttributeKindForName(name.pointer, name.length);
-        assert(attribute_id != 0);
-        module.llvm.attribute_table[i] = attribute_id;
-    }
 
     >global = module.first_global;
 
@@ -20014,7 +20547,6 @@ emit = fn (module: &Module) void
                     >semantic_argument_types = function_type.base.semantic_argument_types;
                     >semantic_return_type = function_type.base.semantic_return_type;
                     function_type.abi.argument_abis = arena_allocate_slice[AbiInformation](module.arena, semantic_argument_types.length);
-                    >llvm_abi_argument_type_buffer: [64]&LLVMType = undefined;
 
                     >resolved_calling_convention: ResolvedCallingConvention = undefined;
                     >calling_convention = function_type.base.calling_convention;
@@ -20028,6 +20560,8 @@ emit = fn (module: &Module) void
                     }
 
                     >register_call = resolved_calling_convention == .system_v and 0; // TODO: regcall calling convention
+
+                    >llvm_abi_argument_type_buffer: [64]&LLVMType = undefined;
 
                     switch (resolved_calling_convention)
                     {
@@ -20071,18 +20605,17 @@ emit = fn (module: &Module) void
 
                             assert(abi_return_type != zero);
                             function_type.abi.abi_return_type = abi_return_type;
-                            resolve_type_in_place(module, abi_return_type);
 
                             if (return_abi_kind == .indirect)
                             {
                                 assert(!function_type.abi.return_abi.flags.sret_after_this);
                                 function_type.abi.available_registers.system_v.gpr -= 1;
                                 >indirect_type = get_pointer_type(module, function_type.abi.return_abi.semantic_type);
-                                resolve_type_in_place(module, indirect_type);
+                                //resolve_type_in_place(module, indirect_type);
 
                                 >abi_index = abi_argument_type_count;
                                 abi_argument_type_buffer[abi_index] = indirect_type;
-                                llvm_abi_argument_type_buffer[abi_index] = indirect_type.llvm.abi;
+                                //llvm_abi_argument_type_buffer[abi_index] = indirect_type.llvm.abi;
 
                                 abi_argument_type_count += 1;
                             }
@@ -20096,7 +20629,9 @@ emit = fn (module: &Module) void
                                     >is_named_argument = i < semantic_argument_types.length;
                                     assert(is_named_argument);
 
-                                    abi.& = abi_system_v_classify_argument(module, &function_type.abi.available_registers.system_v, llvm_abi_argument_type_buffer[..], abi_argument_type_buffer[..], {
+                                    abi.& = abi_system_v_classify_argument(module, &function_type.abi.available_registers.system_v,
+                                    //llvm_abi_argument_type_buffer[..],
+                                    abi_argument_type_buffer[..], {
                                             .type = semantic_argument_type,
                                             .abi_start = abi_argument_type_count,
                                             .is_named_argument = is_named_argument,
@@ -20118,7 +20653,196 @@ emit = fn (module: &Module) void
                         },
                     }
 
-                    >llvm_function_type = LLVMFunctionType(function_type.abi.abi_return_type.llvm.abi, &llvm_abi_argument_type_buffer[0], @truncate(function_type.abi.abi_argument_types.length), @extend(function_type.base.is_variable_argument));
+                    if (global.variable.storage.id == .function)
+                    {
+                        module.current_function = global;
+                        analyze_block(module, global.variable.storage.content.function.block);
+                        module.current_function = zero;
+                    }
+                },
+                .global =>
+                {
+                    assert(!module.current_function);
+                    >initial_value = global.initial_value;
+                    analyze_type(module, initial_value, global.variable.type, { .must_be_constant = 1, zero });
+
+                    >initial_value_type = initial_value.type;
+
+                    if (!global.variable.type)
+                    {
+                        global.variable.type = initial_value_type;
+                    }
+
+                    >global_type = global.variable.type;
+
+                    if (global_type != initial_value_type)
+                    {
+                        report_error(module, "Global type must match initial value type");
+                    }
+
+                    global.variable.storage.type = get_pointer_type(module, global_type);
+
+                    //resolve_type_in_place(module, global_type);
+
+                },
+                else =>
+                {
+                    report_error(module, "TODO: global id");
+                },
+            }
+        }
+
+        global = global.next;
+    }
+}
+
+emit = fn (module: &Module) void
+{
+    llvm_initialize_targets();
+
+    >context = LLVMContextCreate();
+    >m = LLVMModuleCreateWithNameInContext(module.name.pointer, context);
+    >builder = LLVMCreateBuilderInContext(context);
+
+    >di_builder: &LLVMDIBuilder = zero;
+    >di_file: &LLVMMetadata = zero;
+
+    if (module.has_debug_info)
+    {
+        di_builder = LLVMCreateDIBuilder(m);
+        >last_slash = string_last_character(module.path, '/');
+        if (last_slash == string_no_match)
+        {
+            report_error(module, "module source file path must contain directories");
+        }
+
+        >directory = module.path[..last_slash];
+        >file_name = module.path[last_slash + 1..];
+
+        di_file = LLVMDIBuilderCreateFile(di_builder, file_name.pointer, file_name.length, directory.pointer, directory.length);
+        
+        >language: LLVMDwarfSourceLanguage = .C17;
+        >producer_name = "bloat buster";
+        >is_optimized = build_mode_is_optimized(module.build_mode);
+        >flags = "";
+        >emission_kind: LLVMDwarfEmissionKind = .full;
+        >runtime_version: u32 = 0;
+        >split_name = "";
+        >sysroot = "";
+        >sdk = "";
+
+        module.scope.llvm = LLVMDIBuilderCreateCompileUnit(di_builder, language, di_file, producer_name.pointer, producer_name.length, @extend(is_optimized), flags.pointer, flags.length, runtime_version, split_name.pointer, split_name.length, emission_kind, 0, 0, @extend(is_optimized), sysroot.pointer, sysroot.length, sdk.pointer, sdk.length);
+    }
+
+    >target_machine_options = LLVMCreateTargetMachineOptions();
+    LLVMTargetMachineOptionsSetCPU(target_machine_options, module.cpu_model);
+    LLVMTargetMachineOptionsSetFeatures(target_machine_options, module.cpu_features);
+
+    >code_generation_optimization_level: LLVMCodeGenerationOptimizationLevel = undefined;
+    switch (module.build_mode)
+    {
+        .development, .debug => { code_generation_optimization_level = .none; },
+        .speed, .size => { code_generation_optimization_level = .aggressive; },
+    }
+
+    LLVMTargetMachineOptionsSetCodeGenOptLevel(target_machine_options, code_generation_optimization_level);
+
+    >llvm_target: &LLVMTarget = zero;
+    >error_message: &u8 = zero;
+    >result = LLVMGetTargetFromTriple(module.target_triple, &llvm_target, &error_message);
+    if (result != 0)
+    {
+        report_error(module, "LLVM target not found");
+    }
+
+    assert(!error_message);
+
+    >target_machine = LLVMCreateTargetMachineWithOptions(llvm_target, module.target_triple, target_machine_options);
+
+    >target_data_layout = LLVMCreateTargetDataLayout(target_machine);
+    LLVMSetModuleDataLayout(m, target_data_layout);
+    LLVMSetTarget(m, module.target_triple);
+
+    module.llvm = {
+        .context = context,
+        .module = m,
+        .builder = builder,
+        .di_builder = di_builder,
+        .file = di_file,
+        .target_machine = target_machine,
+        .target_data_layout = target_data_layout,
+        .pointer_type = LLVMPointerTypeInContext(context, default_address_space),
+        .void_type = LLVMVoidTypeInContext(context),
+        zero,
+    };
+
+    for (i: 0..module.llvm.intrinsic_table.length)
+    {
+        >e: LLVMIntrinsicIndex = @enum_from_int(i);
+        >name = @enum_name(e);
+        >intrinsic_id = LLVMLookupIntrinsicID(name.pointer, name.length);
+        assert(intrinsic_id != 0);
+        module.llvm.intrinsic_table[i] = intrinsic_id;
+    }
+
+    for (i: 0..module.llvm.attribute_table.length)
+    {
+        >e: LLVMAttributeIndex = @enum_from_int(i);
+        >name = @enum_name(e);
+        >attribute_id = LLVMGetEnumAttributeKindForName(name.pointer, name.length);
+        assert(attribute_id != 0);
+        module.llvm.attribute_table[i] = attribute_id;
+    }
+
+    module.phase = .emission;
+
+    >global = module.first_global;
+
+    while (global)
+    {
+        assert(!module.current_function);
+        assert(!module.current_macro_instantiation);
+        assert(!module.current_macro_declaration);
+
+        if (!global.emitted)
+        {
+            switch (global.variable.storage.id)
+            {
+                .function, .forward_declared_function =>
+                {
+                    >global_pointer_type = global.variable.storage.type;
+                    assert(global_pointer_type.id == .pointer);
+                    >global_value_type = global_pointer_type.content.pointer.element_type;
+
+                    >function_type = &global_value_type.content.function;
+                    >semantic_argument_types = function_type.base.semantic_argument_types;
+                    >semantic_return_type = function_type.base.semantic_return_type;
+                    >calling_convention = function_type.base.calling_convention;
+
+                    >llvm_abi_argument_type_buffer: [64]&LLVMType = undefined;
+
+                    >abi_argument_types = function_type.abi.abi_argument_types;
+
+                    for (semantic_argument_type: semantic_argument_types)
+                    {
+                        resolve_type_in_place(module, semantic_argument_type);
+                    }
+
+                    resolve_type_in_place(module, semantic_return_type);
+
+                    for (i: 0..abi_argument_types.length)
+                    {
+                        >abi_argument_type = abi_argument_types[i];
+                        resolve_type_in_place(module, abi_argument_type);
+
+                        llvm_abi_argument_type_buffer[i] = abi_argument_type.llvm.abi;
+                    }
+
+                    >abi_return_type = function_type.abi.abi_return_type;
+
+                    resolve_type_in_place(module, abi_return_type);
+
+                    >llvm_function_type = LLVMFunctionType(abi_return_type.llvm.abi, &llvm_abi_argument_type_buffer[0], @truncate(abi_argument_types.length), @extend(function_type.base.is_variable_argument));
 
                     >subroutine_type: &LLVMMetadata = zero;
 
@@ -20165,10 +20889,10 @@ emit = fn (module: &Module) void
                         {
                             llvm_linkage = .internal;
                         },
-                            .external =>
-                            {
-                                llvm_linkage = .external;
-                            },
+                        .external =>
+                        {
+                            llvm_linkage = .external;
+                        },
                     }
 
                     >llvm_function = llvm_module_create_function(module.llvm.module, llvm_function_type, llvm_linkage, global.variable.name);
@@ -20185,12 +20909,12 @@ emit = fn (module: &Module) void
                     LLVMSetFunctionCallConv(llvm_function, llvm_calling_convention);
 
                     emit_attributes(module, llvm_function, &LLVMAddAttributeAtIndex, {
-                            .return_abi = &function_type.abi.return_abi,
-                            .argument_abis = function_type.abi.argument_abis,
-                            .abi_argument_types = function_type.abi.abi_argument_types,
-                            .abi_return_type = function_type.abi.abi_return_type,
-                            .attributes = global.variable.storage.content.function.attributes,
-                            });
+                        .return_abi = &function_type.abi.return_abi,
+                        .argument_abis = function_type.abi.argument_abis,
+                        .abi_argument_types = function_type.abi.abi_argument_types,
+                        .abi_return_type = function_type.abi.abi_return_type,
+                        .attributes = global.variable.storage.content.function.attributes,
+                    });
 
                     >subprogram: &LLVMMetadata = zero;
 
@@ -20214,38 +20938,22 @@ emit = fn (module: &Module) void
                         {
                             global.variable.storage.content.function.scope.llvm = subprogram;
                         },
-                            .forward_declared_function =>
+                        .forward_declared_function =>
+                        {
+                            assert(global.linkage == .external);
+                            if (module.has_debug_info)
                             {
-                                assert(global.linkage == .external);
-                                if (module.has_debug_info)
-                                {
-                                    LLVMDIBuilderFinalizeSubprogram(module.llvm.di_builder, subprogram);
-                                }
-                            },
-                            else => { unreachable; },
+                                LLVMDIBuilderFinalizeSubprogram(module.llvm.di_builder, subprogram);
+                            }
+                        },
+                        else => { unreachable; },
                     }
                 },
                 .global =>
                 {
-                    assert(!module.current_function);
-                    >initial_value = global.initial_value;
-                    analyze_value(module, initial_value, global.variable.type, .memory, 1);
-
-                    >initial_value_type = initial_value.type;
-
-                    if (!global.variable.type)
-                    {
-                        global.variable.type = initial_value_type;
-                    }
-
                     >global_type = global.variable.type;
-
-                    if (global_type != initial_value_type)
-                    {
-                        report_error(module, "Global type must match initial value type");
-                    }
-
-                    resolve_type_in_place(module, global_type);
+                    >initial_value = global.initial_value;
+                    emit_value(module, initial_value, .memory, 1);
 
                     >is_constant: u1 = 0;
                     >linkage: LLVMLinkage = undefined;
@@ -20262,7 +20970,6 @@ emit = fn (module: &Module) void
 
                     >llvm_global = llvm_create_global_variable(module.llvm.module, global_type.llvm.memory, is_constant, linkage, initial_value.llvm, global.variable.name, thread_local_mode, externally_initialized, alignment, unnamed_address);
                     global.variable.storage.llvm = llvm_global;
-                    global.variable.storage.type = get_pointer_type(module, global_type);
 
                     if (module.has_debug_info)
                     {
@@ -20272,11 +20979,10 @@ emit = fn (module: &Module) void
                         >global_debug = LLVMDIBuilderCreateGlobalVariableExpression(module.llvm.di_builder, module.scope.llvm, name.pointer, name.length, linkage_name.pointer, linkage_name.length, module.llvm.file, global.variable.line, global_type.llvm.debug, @extend(local_to_unit), null_expression(module), zero, alignment * 8);
                         LLVMGlobalSetMetadata(llvm_global, 0, global_debug);
                     }
+
+                    global.emitted = 1;
                 },
-                else =>
-                {
-                    report_error(module, "TODO: global id");
-                },
+                else => { @trap(); },
             }
         }
 
@@ -20577,15 +21283,7 @@ emit = fn (module: &Module) void
                         emit_store_of_scalar(module, argument_value, argument.variable.type, declaration_pointer);
                     }
 
-                    >storage = new_value(module);
-                    >value_type = argument.variable.type;
-                    storage.& = {
-                        .type = get_pointer_type(module, value_type),
-                        .id = .argument,
-                        .llvm = declaration_pointer.pointer,
-                        zero,
-                    };
-                    argument.variable.storage = storage;
+                    argument.variable.storage.llvm = declaration_pointer.pointer;
 
                     if (module.has_debug_info)
                     {
@@ -20593,7 +21291,7 @@ emit = fn (module: &Module) void
                     }
                 }
 
-                analyze_block(module, function.content.function.block);
+                emit_block(module, function.content.function.block);
 
                 >current_basic_block = LLVMGetInsertBlock(module.llvm.builder);
 
@@ -20607,7 +21305,7 @@ emit = fn (module: &Module) void
                     }
                     else
                     {
-                        emit_block(module, return_block);
+                        llvm_emit_block(module, return_block);
                     }
                 }
                 else
@@ -20643,7 +21341,7 @@ emit = fn (module: &Module) void
                     }
                     else
                     {
-                        emit_block(module, return_block);
+                        llvm_emit_block(module, return_block);
                     }
                 }
 
@@ -20767,11 +21465,6 @@ emit = fn (module: &Module) void
     });
 
     assert(object_generation_result);
-
-    if (module.link)
-    {
-        link(module);
-    }
 }
 
 compile = fn (arena: &Arena, options: CompileOptions) void
@@ -21058,7 +21751,9 @@ compile = fn (arena: &Arena, options: CompileOptions) void
     }
 
     parse(&module);
+    analyze(&module);
     emit(&module);
+    link(&module);
 }
 
 parse_target_triple = fn (target_triple: []u8) Target
