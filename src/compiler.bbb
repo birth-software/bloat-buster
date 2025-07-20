@@ -2811,10 +2811,6 @@ macro_declaration_is_generic = fn (declaration: &MacroDeclaration) u1
 [extern] LLVMGetHostCPUName = fn [cc(c)] () &u8;
 [extern] LLVMGetHostCPUFeatures = fn [cc(c)] () &u8;
 
-host_target_triple: &u8 = zero;
-host_cpu_model: &u8 = zero;
-host_cpu_features: &u8 = zero;
-
 llvm_targets_initialized: u1 = 0;
 
 llvm_initialize_targets = fn () void
@@ -2834,10 +2830,6 @@ llvm_initialize_targets = fn () void
         LLVMInitializeX86AsmPrinter();
         LLVMInitializeX86AsmParser();
         LLVMInitializeX86Disassembler();
-
-        host_target_triple = LLVMGetDefaultTargetTriple();
-        host_cpu_model = LLVMGetHostCPUName();
-        host_cpu_features = LLVMGetHostCPUFeatures();
 
         llvm_targets_initialized = 1;
     }
@@ -19793,10 +19785,9 @@ emit = fn (module: &Module) void
 
     if (target_match and module.host_cpu_model)
     {
-        target_triple = host_target_triple;
-
-        cpu_model = host_cpu_model;
-        cpu_features = host_cpu_features;
+        target_triple = LLVMGetDefaultTargetTriple();
+        cpu_model = LLVMGetHostCPUName();
+        cpu_features = LLVMGetHostCPUFeatures();
     }
     else
     {
