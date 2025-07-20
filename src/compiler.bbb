@@ -19782,40 +19782,6 @@ emit = fn (module: &Module) void
     assert(!module.current_function);
     assert(!module.current_macro_instantiation);
     assert(!module.current_macro_declaration);
-    llvm_initialize_targets();
-    >context = LLVMContextCreate();
-    >m = LLVMModuleCreateWithNameInContext(module.name.pointer, context);
-    >builder = LLVMCreateBuilderInContext(context);
-
-    >di_builder: &LLVMDIBuilder = zero;
-    >di_file: &LLVMMetadata = zero;
-
-    if (module.has_debug_info)
-    {
-        di_builder = LLVMCreateDIBuilder(m);
-        >last_slash = string_last_character(module.path, '/');
-        if (last_slash == string_no_match)
-        {
-            report_error(module, "module source file path must contain directories");
-        }
-
-        >directory = module.path[..last_slash];
-        >file_name = module.path[last_slash + 1..];
-
-        di_file = LLVMDIBuilderCreateFile(di_builder, file_name.pointer, file_name.length, directory.pointer, directory.length);
-        
-        >language: LLVMDwarfSourceLanguage = .C17;
-        >producer_name = "bloat buster";
-        >is_optimized = build_mode_is_optimized(module.build_mode);
-        >flags = "";
-        >emission_kind: LLVMDwarfEmissionKind = .full;
-        >runtime_version: u32 = 0;
-        >split_name = "";
-        >sysroot = "";
-        >sdk = "";
-
-        module.scope.llvm = LLVMDIBuilderCreateCompileUnit(di_builder, language, di_file, producer_name.pointer, producer_name.length, @extend(is_optimized), flags.pointer, flags.length, runtime_version, split_name.pointer, split_name.length, emission_kind, 0, 0, @extend(is_optimized), sysroot.pointer, sysroot.length, sdk.pointer, sdk.length);
-    }
 
     >target_triple: &u8 = zero;
     >cpu_model: &u8 = zero;
@@ -19938,6 +19904,42 @@ emit = fn (module: &Module) void
     }
 
     module.x86_vector_extension = vector_extension;
+
+    llvm_initialize_targets();
+
+    >context = LLVMContextCreate();
+    >m = LLVMModuleCreateWithNameInContext(module.name.pointer, context);
+    >builder = LLVMCreateBuilderInContext(context);
+
+    >di_builder: &LLVMDIBuilder = zero;
+    >di_file: &LLVMMetadata = zero;
+
+    if (module.has_debug_info)
+    {
+        di_builder = LLVMCreateDIBuilder(m);
+        >last_slash = string_last_character(module.path, '/');
+        if (last_slash == string_no_match)
+        {
+            report_error(module, "module source file path must contain directories");
+        }
+
+        >directory = module.path[..last_slash];
+        >file_name = module.path[last_slash + 1..];
+
+        di_file = LLVMDIBuilderCreateFile(di_builder, file_name.pointer, file_name.length, directory.pointer, directory.length);
+        
+        >language: LLVMDwarfSourceLanguage = .C17;
+        >producer_name = "bloat buster";
+        >is_optimized = build_mode_is_optimized(module.build_mode);
+        >flags = "";
+        >emission_kind: LLVMDwarfEmissionKind = .full;
+        >runtime_version: u32 = 0;
+        >split_name = "";
+        >sysroot = "";
+        >sdk = "";
+
+        module.scope.llvm = LLVMDIBuilderCreateCompileUnit(di_builder, language, di_file, producer_name.pointer, producer_name.length, @extend(is_optimized), flags.pointer, flags.length, runtime_version, split_name.pointer, split_name.length, emission_kind, 0, 0, @extend(is_optimized), sysroot.pointer, sysroot.length, sdk.pointer, sdk.length);
+    }
 
     >target_machine_options = LLVMCreateTargetMachineOptions();
     LLVMTargetMachineOptionsSetCPU(target_machine_options, cpu_model);
