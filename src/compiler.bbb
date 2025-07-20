@@ -21510,24 +21510,12 @@ Configuration = struct
 
 default_configurations: [_]Configuration = [
     {
-        .build_mode = .development,
-        .has_debug_info = 1,
-    },
-    {
         .build_mode = .debug,
         .has_debug_info = 1,
     },
     {
-        .build_mode = .size,
-        .has_debug_info = 0,
-    },
-    {
         .build_mode = .speed,
         .has_debug_info = 1,
-    },
-    {
-        .build_mode = .speed,
-        .has_debug_info = 0,
     },
 ];
 
