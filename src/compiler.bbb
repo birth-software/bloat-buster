@@ -171,9 +171,12 @@ c_string_length = fn (c_string: &u8) u64
 {
     >it = c_string;
 
-    while (it.&)
+    if (it)
     {
-        it = it + 1;
+        while (it.&)
+        {
+            it = it + 1;
+        }
     }
 
     return @int_from_pointer(it) - @int_from_pointer(c_string);
