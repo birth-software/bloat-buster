@@ -8003,15 +8003,16 @@ optional_syntax_sugar = fn () void
 atomic_operations = fn () void
 {
     >a: s32 = 0;
-    @atomic_store(&a, 1, .sequentially_consistent);
-    require(@atomic_load(&a, .sequentially_consistent) == 1);
-    @atomic_rmw(.add, &a, 1, .sequentially_consistent);
-    require(@atomic_load(&a, .sequentially_consistent) == 2);
-    @fence(.sequentially_consistent);
-    >cas = @compare_and_swap(.strong, &a, 2, 3, .sequentially_consistent, .sequentially_consistent);
+    @atomic(.store, .sequentially_consistent, &a, 1);
+    require(@atomic(.load, .sequentially_consistent, &a) == 1);
+    >b = @atomic(.add, .sequentially_consistent, &a, 1);
+    require(b == 1);
+    require(@atomic(.load, .sequentially_consistent, &a) == 2);
+    @atomic(.fence, .sequentially_consistent);
+    >cas = @atomic(.compare_and_swap, .sequentially_consistent, &a, 2, 3, .sequentially_consistent, .strong);
     require(cas?);
     require(cas.? == 2);
-    require(@atomic_load(&a, .sequentially_consistent) == 3);
+    require(@atomic(.load, .sequentially_consistent, &a) == 3);
 }
 
 [export] main = fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32

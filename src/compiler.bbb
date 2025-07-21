@@ -2569,6 +2569,23 @@ atomic_ordering_to_llvm = fn (ordering: AtomicOrdering) LLVMAtomicOrdering
     }
 }
 
+AtomicOperation = enum
+{
+    fence,
+    load,
+    store,
+    compare_and_swap,
+    xchg,
+    add,
+    sub,
+    and,
+    nand,
+    or,
+    xor,
+    max,
+    min,
+}
+
 AtomicRmwOperation = enum
 {
     xchg,
@@ -4768,13 +4785,10 @@ ValueKeyword = enum
 ValueIntrinsic = enum
 {
     align_of,
-    atomic_load,
-    atomic_rmw,
-    atomic_store,
+    atomic,
     breakpoint,
     build_mode,
     byte_size,
-    compare_and_swap,
     enum_from_int,
     enum_name,
     enum_names,
@@ -6706,79 +6720,17 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                         zero,
                     };
                 },
-                .atomic_load =>
+                .atomic =>
                 {
                     skip_space(module);
                     expect_character(module, left_parenthesis);
-
-                    >pointer = parse_value(module, scope, zero);
-
-                    skip_space(module);
-                    expect_character(module, ',');
-                    skip_space(module);
-
-                    >ordering = parse_ordering(module);
-
-                    skip_space(module);
-                    expect_character(module, right_parenthesis);
-
-                    result.& = {
-                        .content = {
-                            .atomic_load = {
-                                .pointer = pointer,
-                                .ordering = ordering,
-                            },
-                        },
-                        .id = .atomic_load,
-                        zero,
-                    };
-                },
-                .atomic_store =>
-                {
-                    skip_space(module);
-                    expect_character(module, left_parenthesis);
-
-                    >pointer = parse_value(module, scope, zero);
-
-                    skip_space(module);
-                    expect_character(module, ',');
-                    skip_space(module);
-
-                    >value = parse_value(module, scope, zero);
-
-                    skip_space(module);
-                    expect_character(module, ',');
-                    skip_space(module);
-
-                    >ordering = parse_ordering(module);
-
-                    skip_space(module);
-                    expect_character(module, right_parenthesis);
-
-                    result.& = {
-                        .content = {
-                            .atomic_store = {
-                                .pointer = pointer,
-                                .value = value,
-                                .ordering = ordering,
-                            },
-                        },
-                        .id = .atomic_store,
-                        zero,
-                    };
-                },
-                .atomic_rmw =>
-                {
-                    skip_space(module);
-                    expect_character(module, left_parenthesis);
-                    skip_space(module);
 
                     expect_character(module, '.');
                     >operation_identifier = parse_identifier(module);
-                    >operation_s2e = @string_to_enum(AtomicRmwOperation, operation_identifier);
+                    >operation_s2e = @string_to_enum(AtomicOperation, operation_identifier);
                     if (!operation_s2e?)
                     {
-                        report_error(module, "Invalid atomic read-modify-write operation");
+                        report_error(module, "Invalid atomic intrinsic");
                     }
                     >operation = operation_s2e.?;
 
@@ -6786,128 +6738,164 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                     expect_character(module, ',');
                     skip_space(module);
 
-                    >pointer = parse_value(module, scope, zero);
-
-                    skip_space(module);
-                    expect_character(module, ',');
-                    skip_space(module);
-
-                    >value = parse_value(module, scope, zero);
-
-                    skip_space(module);
-                    expect_character(module, ',');
-                    skip_space(module);
-
                     >ordering = parse_ordering(module);
 
+                    switch (operation)
+                    {
+                        .fence =>
+                        {
+                            result.& = {
+                                .content = {
+                                    .fence = {
+                                        .ordering = ordering,
+                                    },
+                                },
+                                .id = .fence,
+                                zero,
+                            };
+                        },
+                        else =>
+                        {
+                            skip_space(module);
+                            expect_character(module, ',');
+                            skip_space(module);
+
+                            >pointer = parse_value(module, scope, zero);
+
+                            switch (operation)
+                            {
+                                .fence => { unreachable; },
+                                .load =>
+                                {
+                                    result.& = {
+                                        .content = {
+                                            .atomic_load = {
+                                                .pointer = pointer,
+                                                .ordering = ordering,
+                                            },
+                                        },
+                                        .id = .atomic_load,
+                                        zero,
+                                    };
+                                },
+                                else =>
+                                {
+                                    skip_space(module);
+                                    expect_character(module, ',');
+                                    skip_space(module);
+
+                                    >value = parse_value(module, scope, zero);
+
+                                    switch (operation)
+                                    {
+                                        .fence, .load => { unreachable; },
+                                        .compare_and_swap =>
+                                        {
+                                            >expected_value = value;
+
+                                            skip_space(module);
+                                            expect_character(module, ',');
+                                            skip_space(module);
+
+                                            >new_value = parse_value(module, scope, zero);
+
+                                            skip_space(module);
+                                            expect_character(module, ',');
+                                            skip_space(module);
+
+                                            >success_ordering = ordering;
+                                            >failure_ordering = parse_ordering(module);
+
+                                            skip_space(module);
+                                            expect_character(module, ',');
+                                            skip_space(module);
+
+                                            expect_character(module, '.');
+                                            >weakness_identifier = parse_identifier(module);
+
+                                            >is_strong: u1 = 0;
+
+                                            if (string_equal(weakness_identifier, "strong"))
+                                            {
+                                                is_strong = 1;
+                                            }
+                                            else if (string_equal(weakness_identifier, "weak"))
+                                            {
+                                                is_strong = 0;
+                                            }
+                                            else
+                                            {
+                                                report_error(module, "Invalid weakness specifier for compare_and_swap");
+                                            }
+
+                                            result.& = {
+                                                .content = {
+                                                    .compare_and_swap = {
+                                                        .pointer = pointer,
+                                                        .expected_value = expected_value,
+                                                        .new_value = new_value,
+                                                        .success_ordering = success_ordering,
+                                                        .failure_ordering = failure_ordering,
+                                                        .is_strong = is_strong,
+                                                    },
+                                                },
+                                                .id = .compare_and_swap,
+                                                zero,
+                                            };
+                                        },
+                                        .store =>
+                                        {
+                                            result.& = {
+                                                .content = {
+                                                    .atomic_store = {
+                                                        .pointer = pointer,
+                                                        .value = value,
+                                                        .ordering = ordering,
+                                                    },
+                                                },
+                                                .id = .atomic_store,
+                                                zero,
+                                            };
+                                        },
+                                        else =>
+                                        {
+                                            >rmw_operation: AtomicRmwOperation = undefined;
+
+                                            switch (operation)
+                                            {
+                                                .xchg => { rmw_operation = .xchg; },
+                                                .add => { rmw_operation = .add; },
+                                                .sub => { rmw_operation = .sub; },
+                                                .and => { rmw_operation = .and; },
+                                                .nand => { rmw_operation = .nand; },
+                                                .or => { rmw_operation = .or; },
+                                                .xor => { rmw_operation = .xor; },
+                                                .max => { rmw_operation = .max; },
+                                                .min => { rmw_operation = .min; },
+                                                else => { unreachable; },
+                                            }
+
+                                            result.& = {
+                                                .content = {
+                                                    .atomic_rmw = {
+                                                        .pointer = pointer,
+                                                        .value = value,
+                                                        .operation = rmw_operation,
+                                                        .ordering = ordering,
+                                                    },
+                                                },
+                                                .id = .atomic_rmw,
+                                                zero,
+                                            };
+                                        },
+                                    }
+                                },
+                            }
+                        },
+                    }
+
                     skip_space(module);
                     expect_character(module, right_parenthesis);
-
-                    result.& = {
-                        .content = {
-                            .atomic_rmw = {
-                                .pointer = pointer,
-                                .value = value,
-                                .operation = operation,
-                                .ordering = ordering,
-                            },
-                        },
-                        .id = .atomic_rmw,
-                        zero,
-                    };
-                },
-                .fence =>
-                {
-                    skip_space(module);
-                    expect_character(module, left_parenthesis);
-                    skip_space(module);
-
-                    >ordering = parse_ordering(module);
-
-                    skip_space(module);
-                    expect_character(module, right_parenthesis);
-
-                    result.& = {
-                        .content = {
-                            .fence = {
-                                .ordering = ordering,
-                            },
-                        },
-                        .id = .fence,
-                        zero,
-                    };
-                },
-                .compare_and_swap =>
-                {
-                    skip_space(module);
-                    expect_character(module, left_parenthesis);
-                    skip_space(module);
-
-                    expect_character(module, '.');
-                    >weakness_identifier = parse_identifier(module);
-
-                    >is_strong: u1 = 0;
-
-                    if (string_equal(weakness_identifier, "strong"))
-                    {
-                        is_strong = 1;
-                    }
-                    else if (string_equal(weakness_identifier, "weak"))
-                    {
-                        is_strong = 0;
-                    }
-                    else
-                    {
-                        report_error(module, "Invalid weakness specifier for compare_and_swap");
-                    }
-
-                    skip_space(module);
-                    expect_character(module, ',');
-                    skip_space(module);
-
-                    >pointer = parse_value(module, scope, zero);
-
-                    skip_space(module);
-                    expect_character(module, ',');
-                    skip_space(module);
-
-                    >expected_value = parse_value(module, scope, zero);
-
-                    skip_space(module);
-                    expect_character(module, ',');
-                    skip_space(module);
-
-                    >new_value = parse_value(module, scope, zero);
-
-                    skip_space(module);
-                    expect_character(module, ',');
-                    skip_space(module);
-
-                    >success_ordering = parse_ordering(module);
-
-                    skip_space(module);
-                    expect_character(module, ',');
-                    skip_space(module);
-
-                    >failure_ordering = parse_ordering(module);
-
-                    skip_space(module);
-                    expect_character(module, right_parenthesis);
-
-                    result.& = {
-                        .content = {
-                            .compare_and_swap = {
-                                .pointer = pointer,
-                                .expected_value = expected_value,
-                                .new_value = new_value,
-                                .success_ordering = success_ordering,
-                                .failure_ordering = failure_ordering,
-                                .is_strong = is_strong,
-                            },
-                        },
-                        .id = .compare_and_swap,
-                        zero,
-                    };
                 },
                 else => { unreachable; },
             }
