@@ -8015,6 +8015,31 @@ atomic_operations = fn () void
     require(@atomic(.load, .sequentially_consistent, &a) == 3);
 }
 
+basic_when = fn () void
+{
+    >result: s32 = 0;
+
+    when (@byte_size(u64) == 8)
+    {
+        result += 0;
+    }
+    else
+    {
+        result += 1;
+    }
+
+    when (@byte_size(s32) == 3)
+    {
+        result += 1;
+    }
+    else
+    {
+        result += 0;
+    }
+
+    require(result == 0);
+}
+
 [export] main = fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32
 {
     >rc = return_constant();
@@ -8293,6 +8318,8 @@ atomic_operations = fn () void
     optional_syntax_sugar();
 
     atomic_operations();
+
+    basic_when();
 
     return 0;
 }

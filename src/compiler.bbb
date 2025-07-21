@@ -3532,6 +3532,28 @@ StatementId = enum
     for,
     break,
     continue,
+    when,
+}
+
+statement_is_block_like = fn (statement: &Statement) u1
+{
+    switch (statement.id)
+    {
+        .block,
+        .if,
+        .while,
+        .switch,
+        .for,
+        .when,
+        =>
+        {
+            return 1;
+        },
+        else =>
+        {
+            return 0;
+        },
+    }
 }
 
 StatementAssignmentId = enum
@@ -7619,6 +7641,7 @@ StatementStartKeyword = enum
     switch,
     break,
     continue,
+    when,
 }
 
 parse_block = fn (module: &Module, parent_scope: &Scope) &Block;
@@ -7729,7 +7752,9 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                             statement.content.return = return_value;
                             statement.id = .return;
                         },
-                        .if =>
+                        .if,
+                        .when,
+                        =>
                         {
                             skip_space(module);
                             expect_character(module, left_parenthesis);
@@ -7741,12 +7766,16 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                             expect_character(module, right_parenthesis);
                             skip_space(module);
 
-                            >if_statement = parse_statement(module, scope);
+                            >if_block = parse_statement(module, scope);
+                            if (!statement_is_block_like(if_block))
+                            {
+                                report_error(module, "If and when statements must-contain block-like predicates");
+                            }
 
                             skip_space(module);
 
                             >is_else: u1 = 0;
-                            >else_statement: &Statement = zero;
+                            >else_block: &Statement = zero;
 
                             if (is_identifier_start(module.content[module.offset]))
                             {
@@ -7758,7 +7787,12 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                                 if (is_else)
                                 {
                                     skip_space(module);
-                                    else_statement = parse_statement(module, scope);
+                                    else_block = parse_statement(module, scope);
+
+                                    if (!statement_is_block_like(else_block))
+                                    {
+                                        report_error(module, "If and when statements must-contain block-like predicates");
+                                    }
                                 }
                                 else
                                 {
@@ -7768,14 +7802,23 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
 
                             require_semicolon = 0;
 
+                            >statement_id: StatementId = undefined;
+
+                            switch (statement_start_keyword)
+                            {
+                                .if => { statement_id = .if; },
+                                .when => { statement_id = .when; },
+                                else => { unreachable; },
+                            }
+
                             statement.content = {
                                 .if = {
                                     .condition = condition,
-                                    .if = if_statement,
-                                    .else = else_statement,
+                                    .if = if_block,
+                                    .else = else_block,
                                 },
                             };
-                            statement.id = .if;
+                            statement.id = statement_id;
                         },
                         .for =>
                         {
@@ -7905,6 +7948,10 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                             skip_space(module);
 
                             >predicate = parse_statement(module, scope);
+                            if (!statement_is_block_like(predicate))
+                            {
+                                report_error(module, "For loop predicates must be block-like statements");
+                            }
                             statement.content.for.predicate = predicate;
                             
                             skip_space(module);
@@ -7923,6 +7970,7 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                             expect_character(module, right_parenthesis);
                             skip_space(module);
 
+                            // TODO: support block-like statement
                             >block = parse_block(module, scope);
 
                             require_semicolon = 0;
@@ -8089,6 +8137,7 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                         {
                             statement.id = .continue;
                         },
+                        else => { unreachable; },
                     }
                 }
                 else
@@ -11773,6 +11822,17 @@ clone_value = fn (module: &Module, scope: &Scope, old_value: &Value) &Value
     return result;
 }
 
+clone_block = fn (module: &Module, scope: &Scope, old_block: &Block) &Block
+{
+    >block = arena_allocate[Block](module.arena, 1);
+    copy_block(module, scope, {
+        .source = old_block,
+        .destination = block,
+    });
+
+    return block;
+}
+
 clone_statement = fn (module: &Module, scope: &Scope, old_statement: &Statement) &Statement
 {
     >new_statement = arena_allocate[Statement](module.arena, 1);
@@ -11800,31 +11860,25 @@ clone_statement = fn (module: &Module, scope: &Scope, old_statement: &Statement)
         .if =>
         {
             >condition = clone_value(module, scope, old_statement.content.if.condition);
-            >if_statement = clone_statement(module, scope, old_statement.content.if.if);
-            >else_statement = old_statement.content.if.else;
-            if (else_statement)
+            >if_block = clone_statement(module, scope, old_statement.content.if.if);
+            >else_block = old_statement.content.if.else;
+            if (else_block)
             {
-                else_statement = clone_statement(module, scope, else_statement);
+                else_block = clone_statement(module, scope, else_block);
             }
 
             new_statement.content = {
                 .if = {
                     .condition = condition,
-                    .if = if_statement,
-                    .else = else_statement,
+                    .if = if_block,
+                    .else = else_block,
                 },
             };
         },
         .block =>
         {
-            >block = arena_allocate[Block](module.arena, 1);
-            copy_block(module, scope, {
-                .source = old_statement.content.block,
-                .destination = block,
-            });
-
             new_statement.content = {
-                .block = block,
+                .block = clone_block(module, scope, old_statement.content.block),
             };
         },
         .expression =>
@@ -18593,8 +18647,8 @@ emit_statement = fn (module: &Module, scope: &Scope, statement: &Statement) void
         .if =>
         {
             >condition = statement.content.if.condition;
-            >taken_statement = statement.content.if.if;
-            >not_taken_statement = statement.content.if.else;
+            >taken = statement.content.if.if;
+            >not_taken = statement.content.if.else;
 
             >taken_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "if.taken");
             >not_taken_block = LLVMAppendBasicBlockInContext(module.llvm.context, llvm_function, "if.not_taken");
@@ -18606,7 +18660,7 @@ emit_statement = fn (module: &Module, scope: &Scope, statement: &Statement) void
             LLVMBuildCondBr(module.llvm.builder, llvm_condition, taken_block, not_taken_block);
             LLVMPositionBuilderAtEnd(module.llvm.builder, taken_block);
 
-            emit_statement(module, scope, taken_statement);
+            emit_statement(module, scope, taken);
 
             if (LLVMGetInsertBlock(module.llvm.builder) != zero)
             {
@@ -18615,9 +18669,9 @@ emit_statement = fn (module: &Module, scope: &Scope, statement: &Statement) void
 
             LLVMPositionBuilderAtEnd(module.llvm.builder, not_taken_block);
 
-            if (not_taken_statement != zero)
+            if (not_taken)
             {
-                emit_statement(module, scope, not_taken_statement);
+                emit_statement(module, scope, not_taken);
             }
 
             if (LLVMGetInsertBlock(module.llvm.builder) != zero)
@@ -19423,6 +19477,21 @@ emit_statement = fn (module: &Module, scope: &Scope, statement: &Statement) void
                 LLVMClearInsertionPosition(module.llvm.builder);
             }
         },
+        .when =>
+        {
+            >taken = statement.content.if.if;
+            >not_taken = statement.content.if.else;
+
+            if (taken)
+            {
+                emit_statement(module, scope, taken);
+            }
+
+            if (not_taken)
+            {
+                emit_statement(module, scope, not_taken);
+            }
+        },
         else =>
         {
             report_error(module, "TODO: emit statement");
@@ -19447,6 +19516,61 @@ emit_block = fn (module: &Module, block: &Block) void
         emit_statement(module, &block.scope, statement);
 
         statement = statement.next;
+    }
+}
+
+evaluate_value_as_integer = fn (module: &Module, value: &Value) u64
+{
+    switch (value.id)
+    {
+        .constant_integer =>
+        {
+            return value.content.constant_integer.value;
+        },
+        .unary_type =>
+        {
+            >id = value.content.unary_type.id;
+            switch (id)
+            {
+                .byte_size =>
+                {
+                    return get_byte_size(value.content.unary_type.type);
+                },
+                else => { report_error(module, "TODO: unary_type id compare_value"); },
+            }
+        },
+        else =>
+        {
+            report_error(module, "TODO: value id compare_value");
+        }
+    }
+}
+
+compare_value = fn (module: &Module, v1: &Value, v2: &Value) u1
+{
+    >v1_int = evaluate_value_as_integer(module, v1);
+    >v2_int = evaluate_value_as_integer(module, v2);
+
+    return v1_int == v2_int;
+}
+
+evaluate_condition = fn (module: &Module, scope: &Scope, value: &Value) u1
+{
+    switch (value.id)
+    {
+        .binary =>
+        {
+            >id = value.content.binary.id;
+            switch (id)
+            {
+                .compare_equal =>
+                {
+                    return compare_value(module, value.content.binary.left, value.content.binary.right);
+                },
+                else => { report_error(module, "TODO: binary id evaluate_condition"); },
+            }
+        },
+        else => { report_error(module, "TODO: condition"); },
     }
 }
 
@@ -19544,19 +19668,50 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
             };
             local.variable.storage = storage;
         },
-        .if =>
+        .if,
+        =>
         {
             >condition = statement.content.if.condition;
-            >taken_statement = statement.content.if.if;
-            >not_taken_statement = statement.content.if.else;
+            >taken = statement.content.if.if;
+            >not_taken = statement.content.if.else;
 
             analyze_type(module, condition, zero, zero);
 
-            analyze_statement(module, scope, taken_statement);
+            analyze_statement(module, scope, taken);
 
-            if (not_taken_statement != zero)
+            if (not_taken)
             {
-                analyze_statement(module, scope, not_taken_statement);
+                analyze_statement(module, scope, not_taken);
+            }
+        },
+        .when =>
+        {
+            >condition = statement.content.if.condition;
+            >taken = statement.content.if.if;
+            >not_taken = statement.content.if.else;
+
+            >evaluated_condition = evaluate_condition(module, scope, condition);
+
+            analyze_statement(module, scope, taken);
+
+            if (not_taken)
+            {
+                analyze_statement(module, scope, not_taken);
+            }
+
+            switch (evaluated_condition)
+            {
+                1 =>
+                {
+                    if (not_taken)
+                    {
+                        statement.content.if.else = zero;
+                    }
+                },
+                0 =>
+                {
+                    statement.content.if.if = zero;
+                },
             }
         },
         .block =>
