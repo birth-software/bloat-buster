@@ -3105,7 +3105,12 @@ LLVMFCmpPredicate = enum u32
 [extern] LLVMVectorType = fn [cc(c)] (element_type: &LLVMType, element_count: u32) &LLVMType;
 [extern] LLVMStructTypeInContext = fn [cc(c)] (context: &LLVMContext, type_pointer: &&LLVMType, type_count: u32, is_packed: s32) &LLVMType;
 
+[extern] LLVMABISizeOfType = fn [cc(c)] (target_data_layout: &LLVMTargetDataLayout, type: &LLVMType) u64;
 [extern] LLVMStoreSizeOfType = fn [cc(c)] (target_data_layout: &LLVMTargetDataLayout, type: &LLVMType) u64;
+
+[extern] LLVMABIAlignmentOfType = fn [cc(c)] (target_data_layout: &LLVMTargetDataLayout, type: &LLVMType) u32;
+[extern] LLVMCallFrameAlignmentOfType = fn [cc(c)] (target_data_layout: &LLVMTargetDataLayout, type: &LLVMType) u32;
+[extern] LLVMPreferredAlignmentOfType = fn [cc(c)] (target_data_layout: &LLVMTargetDataLayout, type: &LLVMType) u32;
 
 [extern] LLVMCreateDIBuilder = fn (module: &LLVMModule) &LLVMDIBuilder;
 [extern] LLVMDIBuilderCreateFile = fn (di_builder: &LLVMDIBuilder, file_pointer: &u8, file_length: u64, directory_pointer: &u8, directory_length: u64) &LLVMMetadata;
@@ -9104,7 +9109,7 @@ parse = fn (module: &Module) void
                                 .line = field_line,
                             };
 
-                            biggest_field = @select(field_size > byte_size, field_index, biggest_field);
+                            biggest_field = @select(field_size > byte_size or (field_size == byte_size and field_alignment > alignment), field_index, biggest_field);
                             alignment = @max(alignment, field_alignment);
                             byte_size = @max(byte_size, field_size);
 
@@ -9119,7 +9124,9 @@ parse = fn (module: &Module) void
                         >fields = arena_allocate_slice[UnionField](module.arena, field_count);
                         memcpy(@pointer_cast(fields.pointer), @pointer_cast(&field_buffer), field_count * @byte_size(UnionField));
 
-                        >biggest_size = get_byte_size(fields[biggest_field].type);
+                        >biggest_field_type = fields[biggest_field].type;
+
+                        >biggest_size = get_byte_size(biggest_field_type);
                         assert(biggest_size == byte_size);
 
                         union_type.content.union = {

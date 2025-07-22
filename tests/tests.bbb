@@ -8053,6 +8053,31 @@ parse_switch = fn (ch: u8) void
     }
 }
 
+TokenContent = union
+{
+    content: []u8,
+    integer: u128,
+}
+
+TokenId = enum
+{
+    a,
+    b,
+    c,
+}
+
+Token = struct
+{
+    content: TokenContent,
+    id: TokenId,
+}
+
+struct_union_alignment = fn () void
+{
+    >token: Token = zero;
+    token.id = .c;
+}
+
 [export] main = fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32
 {
     >rc = return_constant();
@@ -8335,6 +8360,8 @@ parse_switch = fn (ch: u8) void
     basic_when();
 
     parse_switch('a');
+
+    struct_union_alignment();
 
     return 0;
 }
