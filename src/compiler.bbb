@@ -1872,7 +1872,7 @@ is_arbitrary_bit_integer = fn (type: &Type) u1
 integer_max_value = fn (bc: u64, signed: u1) u128
 {
     >bit_count: u128 = @extend(bc);
-    >value: u128 = @select(bit_count == @byte_size(u128) * 8, ~0, (1 << (bit_count - @extend(signed))) - 1);
+    >value = @select(bit_count == @byte_size(u128) * 8, ~0, (1 << (bit_count - @extend(signed))) - 1);
     return value;
 }
 
@@ -2239,12 +2239,6 @@ ValueId = enum
     atomic_rmw,
     fence,
     compare_and_swap,
-}
-
-ValueConstantInteger = struct
-{
-    value: u64,
-    signed: u1,
 }
 
 Address = struct
@@ -2642,7 +2636,7 @@ ValueCompareAndSwap = struct
 
 ValueContent = union
 {
-    constant_integer: ValueConstantInteger,
+    constant_integer: u128,
     function: ValueFunction,
     unary: ValueUnary,
     binary: ValueBinary,
@@ -4159,7 +4153,7 @@ get_vector_type = fn (module: &Module, element_type: &Type, element_count: u64) 
 
 is_space = fn (ch: u8) u1
 {
-    return ch == ' ' or ch == '\n' or ch == '\t' or ch == '\r';
+    return (ch == ' ' or ch == '\n') or (ch == '\t' or ch == '\r');
 }
 
 is_decimal = fn (ch: u8) u1
@@ -4350,16 +4344,19 @@ escape_character = fn (ch: u8) u8
     }
 }
 
-parse_string_literal = fn (module: &Module) []u8
+parse_string_literal = fn (arena: &Arena, content: []u8, offset_pointer: &u64) []u8
 {
-    expect_character(module, '"');
+    >i = offset_pointer.&;
+    assert(content[i] == '"');
+    i += 1;
 
-    >start = module.offset;
+    >start = i;
+
     >escape_character_count: u64 = 0;
 
-    while (1)
+    while (i < content.length)
     {
-        >ch = module.content[module.offset];
+        >ch = content[i];
         
         if (ch == '"')
         {
@@ -4367,38 +4364,88 @@ parse_string_literal = fn (module: &Module) []u8
         }
 
         escape_character_count += @extend(ch == '\\');
-        module.offset += 1;
-    }
-
-    >end = module.offset;
-    >length = end - start - escape_character_count;
-    >pointer = arena_allocate_bytes(module.arena, length + 1, 1);
-    >string_literal = pointer[..length];
-
-    >source_i = start;
-    >i: u64 = 0;
-
-    while (source_i < end)
-    {
-        >ch = module.content[source_i];
-        if (ch == '\\')
-        {
-            source_i += 1;
-            ch = module.content[source_i];
-            string_literal[i] = escape_character(ch);
-        }
-        else
-        {
-            string_literal[i] = ch;
-        }
-
-        source_i += 1;
         i += 1;
     }
 
-    expect_character(module, '"');
+    >is_properly_finished = content[i] == '"';
+    if (!is_properly_finished)
+    {
+        @trap();
+    }
+
+    >end = i;
+    >length = end - start - escape_character_count;
+    >pointer = arena_allocate_bytes(arena, length + 1, 1);
+    >string_literal = pointer[..length];
+
+    >source_i = start;
+    >destination_i: u64 = 0;
+
+    while (source_i < end)
+    {
+        >ch = content[source_i];
+
+        if (ch == '\\')
+        {
+            source_i += 1;
+            ch = content[source_i];
+            string_literal[destination_i] = escape_character(ch);
+        }
+        else
+        {
+            string_literal[destination_i] = ch;
+        }
+
+        source_i += 1;
+        destination_i += 1;
+    }
+
+    assert(content[source_i] == '"');
+    source_i += 1;
+
+    offset_pointer.& = source_i;
 
     return string_literal;
+}
+
+module_parse_string_literal = fn (module: &Module) []u8
+{
+    return parse_string_literal(module.arena, module.content, &module.offset);
+}
+
+parse_character_literal = fn (content: []u8, offset_pointer: &u64) u8
+{
+    >i = offset_pointer.&;
+    assert(content[i] == '\'');
+    i += 1;
+
+    >ch: u8 = undefined;
+    if (content[i] == '\\')
+    {
+        i += 1;
+        ch = escape_character(content[i]);
+    }
+    else
+    {
+        ch = content[i];
+        if (ch == '\'')
+        {
+            @trap();
+        }
+    }
+
+    i += 1;
+
+    if (content[i] != '\'')
+    {
+        @trap();
+    }
+    
+    i += 1;
+
+    offset_pointer.& = i;
+
+    return ch;
 }
 
 parse_name = fn (module: &Module) []u8
@@ -4407,7 +4454,7 @@ parse_name = fn (module: &Module) []u8
 
     if (module.content[module.offset] == '"')
     {
-        result = parse_string_literal(module);
+        result = module_parse_string_literal(module);
     }
     else
     {
@@ -4446,35 +4493,39 @@ FunctionTypeAttribute = enum
     cc,
 }
 
-accumulate_decimal = fn(accumulator: u64, ch: u8) u64
+accumulate_decimal = fn(accumulator: u128, ch: u8) u128
 {
     assert(is_decimal(ch));
     return (accumulator * 10) + @extend(ch - '0');
 }
 
-parse_decimal = fn (module: &Module) u64
+parse_decimal = fn (content: []u8, offset_pointer: &u64) u128
 {
-    >value: u64 = 0;
+    >value: u128 = 0;
+
+    >i = offset_pointer.&;
 
     while (1)
     {
-        >ch = module.content[module.offset];
+        >ch = content[i];
 
         if (!is_decimal(ch))
         {
             break;
         }
 
-        module.offset += 1;
+        i += 1;
         value = accumulate_decimal(value, ch);
     }
+
+    offset_pointer.& = i;
 
     return value;
 }
 
-parse_integer_decimal_assume_valid = fn (string: []u8) u64
+parse_integer_decimal_assume_valid = fn (string: []u8) u128
 {
-    >value: u64 = 0;
+    >value: u128 = 0;
 
     for (ch: string)
     {
@@ -4484,57 +4535,65 @@ parse_integer_decimal_assume_valid = fn (string: []u8) u64
     return value;
 }
 
-accumulate_octal = fn (accumulator: u64, ch: u8) u64
+accumulate_octal = fn (accumulator: u128, ch: u8) u128
 {
     assert(is_octal(ch));
 
     return (accumulator * 8) + @extend(ch - '0');
 }
 
-parse_octal = fn (module: &Module) u64
+parse_octal = fn (content: []u8, offset_pointer: &u64) u128
 {
-    >value: u64 = 0;
+    >value: u128 = 0;
+
+    >i = offset_pointer.&;
 
     while (1)
     {
-        >ch = module.content[module.offset];
+        >ch = content[i];
 
         if (!is_octal(ch))
         {
             break;
         }
 
-        module.offset += 1;
+        i += 1;
 
         value = accumulate_octal(value, ch);
     }
 
+    offset_pointer.& = i;
+
     return value;
 }
 
-accumulate_binary = fn (accumulator: u64, ch: u8) u64
+accumulate_binary = fn (accumulator: u128, ch: u8) u128
 {
     assert(is_binary(ch));
     return (accumulator * 2) + @extend(ch - '0');
 }
 
-parse_binary = fn (module: &Module) u64
+parse_binary = fn (content: []u8, offset_pointer: &u64) u128
 {
-    >value: u64 = 0;
+    >value: u128 = 0;
+
+    >i = offset_pointer.&;
 
     while (1)
     {
-        >ch = module.content[module.offset];
+        >ch = content[i];
 
         if (!is_binary(ch))
         {
             break;
         }
 
-        module.offset += 1;
+        i += 1;
 
         value = accumulate_binary(value, ch);
     }
+
+    offset_pointer.& = i;
 
     return value;
 }
@@ -4801,12 +4860,6 @@ TokenIntegerKind = enum
     character_literal,
 }
 
-TokenInteger = struct
-{
-    value: u64,
-    kind: TokenIntegerKind,
-};
-
 ValueKeyword = enum
 {
     undefined,
@@ -4859,7 +4912,7 @@ OperatorKeyword = enum
 
 TokenContent = union
 {
-    integer: TokenInteger,
+    integer: u128,
     value_keyword: ValueKeyword,
     value_intrinsic: ValueIntrinsic,
     operator_keyword: OperatorKeyword,
@@ -5353,7 +5406,13 @@ parse_array_like_type = fn (module: &Module, scope: &Scope) ArrayLikeType
         {
             .constant_integer =>
             {
-                element_count = length_value.content.constant_integer.value;
+                >candidate_element_count = length_value.content.constant_integer;
+                if (candidate_element_count > @integer_max(u64))
+                {
+                    report_error(module, "Array too big");
+                }
+
+                element_count = @truncate(candidate_element_count);
 
                 if (element_count == 0)
                 {
@@ -5483,7 +5542,7 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
                     },
                 }
 
-                >bit_count = parse_integer_decimal_assume_valid(identifier[1..]);
+                >bit_count: u64 = @truncate(parse_integer_decimal_assume_valid(identifier[1..]));
 
                 if (bit_count == 0)
                 {
@@ -5640,7 +5699,7 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
     }
 }
 
-accumulate_hexadecimal = fn (accumulator: u64, ch: u8) u64
+accumulate_hexadecimal = fn (accumulator: u128, ch: u8) u128
 {
     >value: u8 = undefined;
 
@@ -5664,22 +5723,26 @@ accumulate_hexadecimal = fn (accumulator: u64, ch: u8) u64
     return (accumulator * 16) + @extend(value);
 }
 
-parse_hexadecimal = fn (module: &Module) u64
+parse_hexadecimal = fn (content: []u8, offset_pointer: &u64) u128
 {
-    >value: u64 = 0;
+    >value: u128 = 0;
+
+    >i = offset_pointer.&;
 
     while (1)
     {
-        >ch = module.content[module.offset];
+        >ch = content[i];
 
         if (!is_hexadecimal(ch))
         {
             break;
         }
 
-        module.offset += 1;
+        i += 1;
         value = accumulate_hexadecimal(value, ch);
     }
+
+    offset_pointer.& = i;
 
     return value;
 }
@@ -5870,7 +5933,7 @@ tokenize = fn (module: &Module) Token
         },
         '"' =>
         {
-            >string_literal = parse_string_literal(module);
+            >string_literal = module_parse_string_literal(module);
 
             token = {
                 .content = {
@@ -5881,32 +5944,11 @@ tokenize = fn (module: &Module) Token
         },
         '\'' =>
         {
-            module.offset += 1;
-
-            >ch: u8 = undefined;
-            if (module.content[module.offset] == '\\')
-            {
-                module.offset += 1;
-                ch = escape_character(module.content[module.offset]);
-            }
-            else
-            {
-                ch = module.content[module.offset];
-                if (ch == '\'')
-                {
-                    report_error(module, "Empty character");
-                }
-            }
-
-            module.offset += 1;
-            expect_character(module, '\'');
+            >ch = parse_character_literal(module.content, &module.offset);
 
             token = {
                 .content = {
-                    .integer = {
-                        .value = @extend(ch),
-                        .kind = .character_literal,
-                    },
+                    .integer = @extend(ch),
                 },
                 .id = .integer,
             };
@@ -5933,21 +5975,21 @@ tokenize = fn (module: &Module) Token
                 module.offset += 2 * @extend(token_integer_kind != .decimal or !inferred_decimal);
             }
 
-            >value: u64 = undefined;
+            >value: u128 = undefined;
 
             switch (token_integer_kind)
             {
-                .hexadecimal => { value = parse_hexadecimal(module); },
-                .decimal => { value = parse_decimal(module); },
-                .octal => { value = parse_octal(module); },
-                .binary => { value = parse_binary(module); },
-                .character_literal => { report_error(module, "Invalid character literal format"); },
+                .hexadecimal => { value = parse_hexadecimal(module.content, &module.offset); },
+                .decimal => { value = parse_decimal(module.content, &module.offset); },
+                .octal => { value = parse_octal(module.content, &module.offset); },
+                .binary => { value = parse_binary(module.content, &module.offset); },
+                .character_literal => { unreachable; },
             }
 
             if (inferred_decimal and module.content[module.offset] == '.' and module.content[module.offset + 1] != '.')
             {
                 module.offset += 1;
-                >mantissa = parse_decimal(module);
+                >mantissa = parse_decimal(module.content, &module.offset);
 
                 >float_string_literal = module.content[start_index..module.offset];
 
@@ -5962,10 +6004,7 @@ tokenize = fn (module: &Module) Token
             {
                 token = {
                     .content = {
-                        .integer = {
-                            .value = value,
-                            .kind = token_integer_kind,
-                        },
+                        .integer = value,
                     },
                     .id = .integer,
                 };
@@ -6378,14 +6417,11 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
     {
         .integer =>
         {
-            >integer_value = token.content.integer.value;
+            >integer_value = token.content.integer;
             result = new_value(module);
             result.& = {
                 .content = {
-                    .constant_integer = {
-                        .value = integer_value,
-                        .signed = 0,
-                    },
+                    .constant_integer = integer_value,
                 },
                 .id = .constant_integer,
                 .kind = .right,
@@ -6702,7 +6738,7 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                     expect_character(module, ',');
                     skip_space(module);
 
-                    >field_name = parse_string_literal(module);
+                    >field_name = module_parse_string_literal(module);
 
                     skip_space(module);
                     expect_character(module, right_parenthesis);
@@ -8589,7 +8625,13 @@ parse = fn (module: &Module) void
                                         {
                                             .constant_integer =>
                                             {
-                                                field_integer_value = field_value.content.constant_integer.value;
+                                                >candidate_field_integer_value = field_value.content.constant_integer;
+                                                if (candidate_field_integer_value > @integer_max(u64))
+                                                {
+                                                    report_error(module, "Field value too big");
+                                                }
+
+                                                field_integer_value = @truncate(candidate_field_integer_value);
                                             },
                                             else => { report_error(module, "TODO: Invalid value"); },
                                         }
@@ -9137,9 +9179,6 @@ parse = fn (module: &Module) void
                         >most_aligned_type_alignment = get_byte_alignment(most_aligned_field_type);
 
                         assert(alignment == most_aligned_type_alignment);
-
-                        >biggest_alignment = get_byte_alignment(biggest_field_type);
-                        assert(biggest_alignment == alignment);
 
                         union_type.content.union = {
                             .fields = fields,
@@ -12148,8 +12187,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             //resolve_type_in_place(module, expected_type);
             >resolved_type = resolve_alias(module, expected_type);
 
-            >value_constant: u128 = @extend(value.content.constant_integer.value);
-            >value_is_signed = value.content.constant_integer.signed;
+            >value_constant = value.content.constant_integer;
 
             switch (resolved_type.id)
             {
@@ -12158,29 +12196,13 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     >type_bit_count = resolved_type.content.integer.bit_count;
                     >type_is_signed = resolved_type.content.integer.signed;
 
-                    if (value_is_signed)
+                    >max_value = integer_max_value(type_bit_count, type_is_signed);
+                    if (value_constant > max_value)
                     {
-                        if (type_is_signed)
-                        {
-                            report_error(module, "Must not be signed");
-                        }
-
-                        fail();
+                        report_error(module, "Value bigger than type max value");
                     }
-                    else
-                    {
-                        // TODO: check properly
-                        if (type_bit_count != 128)
-                        {
-                            >max_value = integer_max_value(type_bit_count, type_is_signed);
-                            if (value_constant > max_value)
-                            {
-                                report_error(module, "Value bigger than type max value");
-                            }
-                        }
 
-                        value_type = expected_type;
-                    }
+                    value_type = expected_type;
                 },
                 .pointer =>
                 {
@@ -15614,7 +15636,7 @@ emit_slice_expresion = fn (module: &Module, value: &Value) [2]&LLVMValue
 
     >has_start = start != zero;
 
-    if (start != zero and? start.id == .constant_integer and? start.content.constant_integer.value == 0)
+    if (start != zero and? start.id == .constant_integer and? start.content.constant_integer == 0)
     {
         has_start = 0;
     }
@@ -16344,7 +16366,12 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
         .constant_integer =>
         {
             >llvm_integer_type = get_llvm_type(resolved_value_type, type_kind);
-            llvm_value = LLVMConstInt(llvm_integer_type, value.content.constant_integer.value, @extend(value.content.constant_integer.signed));
+            >words: [2]u64 = zero;
+            >value = value.content.constant_integer;
+            words[0] = @truncate(value);
+            words[1] = @truncate(value >> 64);
+
+            llvm_value = LLVMConstIntOfArbitraryPrecision(llvm_integer_type, words.length, &words[0]);
         },
         .binary =>
         {
@@ -17331,7 +17358,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                                     {
                                         .constant_integer =>
                                         {
-                                            field_value = @extend(value.content.constant_integer.value);
+                                            field_value = value.content.constant_integer;
                                         },
                                         .enum_literal =>
                                         {
@@ -19463,12 +19490,17 @@ emit_statement = fn (module: &Module, scope: &Scope, statement: &Statement) void
                             {
                                 .constant_integer =>
                                 {
-                                    >start_value = start.content.constant_integer.value;
-                                    >end_value = end.content.constant_integer.value;
+                                    >start_value = start.content.constant_integer;
+                                    >end_value = end.content.constant_integer;
 
                                     for (i: start_value + 1 .. end_value)
                                     {
-                                        LLVMAddCase(switch_instruction, LLVMConstInt(start.type.llvm.abi, i, 0), clause.basic_block);
+                                        >words: [2]u64 = zero;
+                                        words[0] = @truncate(i);
+                                        words[1] = @truncate(i >> 64);
+
+                                        >v = LLVMConstIntOfArbitraryPrecision(start.type.llvm.abi, words.length, &words[0]);
+                                        LLVMAddCase(switch_instruction, v, clause.basic_block);
                                     }
                                 },
                                 else => { unreachable; },
@@ -19554,13 +19586,13 @@ emit_block = fn (module: &Module, block: &Block) void
     }
 }
 
-evaluate_value_as_integer = fn (module: &Module, value: &Value) u64
+evaluate_value_as_integer = fn (module: &Module, value: &Value) u128
 {
     switch (value.id)
     {
         .constant_integer =>
         {
-            return value.content.constant_integer.value;
+            return value.content.constant_integer;
         },
         .unary_type =>
         {
@@ -19569,7 +19601,8 @@ evaluate_value_as_integer = fn (module: &Module, value: &Value) u64
             {
                 .byte_size =>
                 {
-                    return get_byte_size(value.content.unary_type.type);
+                    >size = get_byte_size(value.content.unary_type.type);
+                    return @extend(size);
                 },
                 else => { report_error(module, "TODO: unary_type id compare_value"); },
             }
@@ -19764,7 +19797,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                 {
                     .constant_integer =>
                     {
-                        >value = condition.content.constant_integer.value;
+                        >value = condition.content.constant_integer;
                         if (value == 0)
                         {
                             report_error(module, "zero-condition in a while loop");
@@ -19875,7 +19908,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                                 {
                                     .constant_integer =>
                                     {
-                                        if (start.content.constant_integer.value >= end.content.constant_integer.value)
+                                        if (start.content.constant_integer >= end.content.constant_integer)
                                         {
                                             report_error(module, "start value is greater or equal than end value");
                                         }
@@ -20314,10 +20347,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                                     {
                                         .constant_integer =>
                                         {
-                                            >start_signed = start.content.constant_integer.signed;
-                                            >end_signed = end.content.constant_integer.signed;
-                                            >is_signed = !(!start_signed and !end_signed);
-                                            local_type = get_integer_type(module, { .bit_count = 64, .signed = is_signed });
+                                            local_type = get_integer_type(module, { .bit_count = 64, .signed = 0 });
                                         },
                                         else =>
                                         {
@@ -21645,6 +21675,959 @@ emit = fn (module: &Module) void
     assert(object_generation_result);
 }
 
+TypeStartKeyword = enum
+{
+    struct,
+    bits,
+    enum,
+    union,
+    fn,
+}
+
+TokenContent2 = union
+{
+    string: []u8,
+    integer: u128,
+    type_start_keyword: TypeStartKeyword,
+}
+
+TokenId2 = enum
+{
+    identifier,
+    left_brace,
+    right_brace,
+    left_bracket,
+    right_bracket,
+    left_parenthesis,
+    right_parenthesis,
+    colon,
+    semicolon,
+    comma,
+    question,
+    assign,
+    compare_equal,
+    compare_not_equal,
+    switch_case_token,
+    integer,
+    exclamation,
+    at,
+    slash,
+    slash_assign,
+    bitwise_and,
+    bitwise_and_assign,
+    bitwise_or,
+    bitwise_or_assign,
+    bitwise_xor,
+    bitwise_xor_assign,
+    dot,
+    double_dot,
+    triple_dot,
+    shift_left,
+    shift_left_equal,
+    shift_right,
+    shift_right_equal,
+    compare_equal,
+    compare_not_equal,
+    compare_greater,
+    compare_greater_equal,
+    compare_less,
+    compare_less_equal,
+    add,
+    add_assign,
+    sub,
+    sub_assign,
+    mul,
+    mul_assign,
+    rem,
+    rem_assign,
+    tilde,
+    string_literal,
+    character_literal,
+    backtick,
+    type_start_keyword,
+}
+
+Token2 = struct
+{
+    content: TokenContent2,
+    id: TokenId2,
+    line: u32,
+    column: u32,
+}
+
+IntegerPrefix = enum
+{
+    hexadecimal,
+    decimal,
+    octal,
+    binary,
+}
+
+lex = fn (arena: &Arena, content: []u8) []Token2
+{
+    >i: u64 = 0;
+    >line_offset: u64 = 0;
+    >line_character_offset: u64 = 0;
+
+    >tokens = arena_allocate[Token2](arena, content.length);
+    >token_count: u64 = 0;
+
+    while (1)
+    {
+        while (1)
+        {
+            >iteration_offset = i;
+
+            while (i < content.length)
+            {
+                >ch = content[i];
+
+                >space = is_space(ch);
+                >is_line_feed = ch == '\n';
+                i += @extend(space);
+
+                line_offset += @extend(is_line_feed);
+                line_character_offset = @select(is_line_feed, i, line_character_offset);
+
+                if (!space)
+                {
+                    break;
+                }
+            }
+
+            if (i + 1 < content.length)
+            {
+                >is_comment = content[i] == '/' and content[i + 1] == '/';
+
+                if (is_comment)
+                {
+                    while (i < content.length and? content[i] != '\n')
+                    {
+                        i += 1;
+                    }
+
+                    if (i < content.length)
+                    {
+                        line_offset += 1;
+                        line_character_offset = i;
+                        i += 1;
+                    }
+                }
+            }
+
+            if (i - iteration_offset == 0)
+            {
+                break;
+            }
+        }
+
+        if (i == content.length)
+        {
+            break;
+        }
+
+        >start_index = i;
+        >start = content[start_index];
+
+        >line = line_offset + 1;
+        >column = i - line_character_offset + 1;
+        if (line > @integer_max(u32) or column > @integer_max(u32))
+        {
+            @trap();
+        }
+
+        >token: Token2 = {
+            .line = @truncate(line),
+            .column = @truncate(column),
+            zero,
+        };
+
+        switch (start)
+        {
+            'a'...'z',
+            'A'...'Z',
+            '_'
+            =>
+            {
+                assert(is_identifier_start(start));
+
+                while (i < content.length)
+                {
+                    >ch = content[i];
+                    if (!is_identifier(ch))
+                    {
+                        break;
+                    }
+
+                    i += 1;
+                }
+
+                >candidate_identifier = content[start_index..i];
+                assert(candidate_identifier.length != 0);
+
+                >type_start_keyword_s2e = @string_to_enum(TypeStartKeyword, candidate_identifier);
+
+                if (type_start_keyword_s2e?)
+                {
+                    >keyword = type_start_keyword_s2e.?;
+                    token.content = {
+                        .type_start_keyword = keyword,
+                    };
+                    token.id = .type_start_keyword;
+                }
+                else
+                {
+                    token.content = {
+                        .string = candidate_identifier,
+                    };
+                    token.id = .identifier;
+                }
+            },
+            '0'...'9' =>
+            {
+                >is_zero_0 = start == '0';
+                i += 1;
+
+                >prefix_ch = content[i];
+                >is_valid_prefix_ch = (prefix_ch == 'x' or prefix_ch == 'd') or (prefix_ch == 'o' or prefix_ch == 'b');
+
+                >is_valid_prefix = is_zero_0 and is_valid_prefix_ch;
+
+                i += @extend(is_valid_prefix);
+                i -= @extend(!is_valid_prefix);
+
+                >prefix: IntegerPrefix = .decimal;
+
+                if (is_valid_prefix)
+                {
+                    switch (prefix_ch)
+                    {
+                        'x' => { prefix = .hexadecimal; },
+                        'd' => { prefix = .decimal; },
+                        'o' => { prefix = .octal; },
+                        'b' => { prefix = .binary; },
+                        else => { unreachable; },
+                    }
+                }
+
+                >value: u128 = 0;
+
+                switch (prefix)
+                {
+                    .hexadecimal => { value = parse_hexadecimal(content, &i); },
+                    .decimal => { value = parse_decimal(content, &i); },
+                    .octal => { value = parse_octal(content, &i); },
+                    .binary => { value = parse_binary(content, &i); },
+                }
+
+                token.content = {
+                    .integer = value,
+                };
+                token.id = .integer;
+            },
+            '"' =>
+            {
+                >string_literal = parse_string_literal(arena, content, &i);
+
+                token.content = {
+                    .string = string_literal,
+                };
+                token.id = .string_literal;
+            },
+            '\'' =>
+            {
+                >ch = parse_character_literal(content, &i);
+
+                token.content = {
+                    .integer = @extend(ch),
+                };
+                token.id = .character_literal;
+            },
+            left_brace,
+            right_brace,
+            left_bracket,
+            right_bracket,
+            left_parenthesis,
+            right_parenthesis,
+            ':',
+            ';',
+            ',',
+            '@',
+            '~',
+            '?',
+            '`'
+            =>
+            {
+                >id: TokenId2 = undefined;
+                switch (start)
+                {
+                    left_brace => { id = .left_brace; },
+                    right_brace => { id = .right_brace; },
+                    left_bracket => { id = .left_bracket; },
+                    right_bracket => { id = .right_bracket; },
+                    left_parenthesis => { id = .left_parenthesis; },
+                    right_parenthesis => { id = .right_parenthesis; },
+                    ':' => { id = .colon; },
+                    ';' => { id = .semicolon; },
+                    ',' => { id = .comma; },
+                    '@' => { id = .at; },
+                    '~' => { id = .tilde; },
+                    '?' => { id = .question; },
+                    '`' => { id = .backtick; },
+                    else => { unreachable; },
+                }
+
+                token.id = id;
+                i += 1;
+            },
+            '=' =>
+            {
+                i += 1;
+
+                >ch = content[i];
+
+                >is_compare_equal = ch == '=';
+                >is_switch_token = ch == '>';
+
+                i += @extend(is_compare_equal);
+                i += @extend(is_switch_token);
+
+                >id: TokenId2 = undefined;
+
+                if (is_compare_equal)
+                {
+                    id = .compare_equal;
+                }
+                else if (is_switch_token)
+                {
+                    id = .switch_case_token;
+                }
+                else
+                {
+                    id = .assign;
+                }
+
+                token.id = id;
+            },
+            '!' =>
+            {
+                i += 1;
+
+                >ch = content[i];
+
+                >is_compare_not_equal = ch == '=';
+
+                i += @extend(is_compare_not_equal);
+
+                token.id = @select(is_compare_not_equal, .compare_not_equal, .exclamation);
+            },
+            '&' =>
+            {
+                i += 1;
+
+                >ch = content[i];
+
+                >is_assign = ch == '=';
+
+                i += @extend(is_assign);
+
+                token.id = @select(is_assign, .bitwise_and_assign, .bitwise_and);
+            },
+            '|' =>
+            {
+                i += 1;
+
+                >ch = content[i];
+
+                >is_assign = ch == '=';
+
+                i += @extend(is_assign);
+
+                token.id = @select(is_assign, .bitwise_or_assign, .bitwise_or);
+            },
+            '^' =>
+            {
+                i += 1;
+
+                >ch = content[i];
+
+                >is_assign = ch == '=';
+
+                i += @extend(is_assign);
+
+                token.id = @select(is_assign, .bitwise_xor_assign, .bitwise_xor);
+            },
+            '+' =>
+            {
+                i += 1;
+
+                >ch = content[i];
+
+                >is_assign = ch == '=';
+
+                i += @extend(is_assign);
+
+                token.id = @select(is_assign, .add_assign, .add);
+            },
+            '-' =>
+            {
+                i += 1;
+
+                >ch = content[i];
+
+                >is_assign = ch == '=';
+
+                i += @extend(is_assign);
+
+                token.id = @select(is_assign, .sub_assign, .sub);
+            },
+            '*' =>
+            {
+                i += 1;
+
+                >ch = content[i];
+
+                >is_assign = ch == '=';
+
+                i += @extend(is_assign);
+
+                token.id = @select(is_assign, .mul_assign, .mul);
+            },
+            '/' =>
+            {
+                i += 1;
+
+                >ch = content[i];
+
+                >is_assign = ch == '=';
+
+                i += @extend(is_assign);
+
+                token.id = @select(is_assign, .slash_assign, .slash);
+            },
+            '%' =>
+            {
+                i += 1;
+
+                >ch = content[i];
+
+                >is_assign = ch == '=';
+
+                i += @extend(is_assign);
+
+                token.id = @select(is_assign, .rem_assign, .rem);
+            },
+            '.' =>
+            {
+                >ch2 = content[i + 1];
+                >ch3 = content[i + 2];
+
+                >is_ch2_dot = ch2 == '.';
+                >is_ch3_dot = ch3 == '.';
+
+                i += 1;
+                >add2: u64 = @extend(is_ch2_dot and is_ch3_dot);
+                i += 2 * add2;
+                i += @extend(is_ch2_dot and !is_ch3_dot);
+
+                token.id = @select(is_ch2_dot and is_ch3_dot, .triple_dot, @select(is_ch2_dot, .double_dot, .dot));
+            },
+            '>' =>
+            {
+                >ch2 = content[i + 1];
+
+                >id: TokenId2 = undefined;
+
+                if (ch2 == '>')
+                {
+                    >ch3 = content[i + 2];
+
+                    if (ch3 == '=')
+                    {
+                        id = .shift_right_equal;
+                        i += 3;
+                    }
+                    else
+                    {
+                        id = .shift_right;
+                        i += 2;
+                    }
+                }
+                else if (ch2 == '=')
+                {
+                    id = .compare_greater_equal;
+                    i += 2;
+                }
+                else
+                {
+                    id = .compare_greater;
+                    i += 1;
+                }
+
+                token.id = id;
+            },
+            '<' =>
+            {
+                >ch2 = content[i + 1];
+
+                >id: TokenId2 = undefined;
+
+                if (ch2 == '<')
+                {
+                    >ch3 = content[i + 2];
+
+                    if (ch3 == '=')
+                    {
+                        id = .shift_left_equal;
+                        i += 3;
+                    }
+                    else
+                    {
+                        id = .shift_left;
+                        i += 2;
+                    }
+                }
+                else if (ch2 == '=')
+                {
+                    id = .compare_less_equal;
+                    i += 2;
+                }
+                else
+                {
+                    id = .compare_less;
+                    i += 1;
+                }
+
+                token.id = id;
+            },
+            else =>
+            {
+                @trap();
+            },
+        }
+
+        tokens[token_count] = token;
+        token_count += 1;
+    }
+
+    return tokens[..token_count];
+}
+
+Parser = struct
+{
+    tokens: []Token2,
+    offset: u64,
+}
+
+parser_initialize = fn (tokens: []Token2) Parser
+{
+    return {
+        .tokens = tokens,
+        .offset = 0,
+    };
+}
+
+tokens_left = fn (parser: &Parser) u1
+{
+    return parser.offset < parser.tokens.length;
+}
+
+get_token = fn (parser: &Parser) &Token2
+{
+    assert(tokens_left(parser));
+    >token = &parser.tokens[parser.offset];
+
+    return token;
+}
+
+peek_token = fn (parser: &Parser) &Token2
+{
+    >token: &Token2 = zero;
+
+    if (tokens_left(parser))
+    {
+        token = get_token(parser);
+    }
+
+    return token;
+}
+
+get_token_if = fn (parser: &Parser, id: TokenId2) &Token2
+{
+    >token: &Token2 = zero;
+    >t = peek_token(parser);
+
+    if (t)
+    {
+        if (t.id == id)
+        {
+            token = t;
+        }
+    }
+
+    return token;
+}
+
+consume_token = fn (parser: &Parser) &Token2
+{
+    assert(tokens_left(parser));
+    >token = &parser.tokens[parser.offset];
+    parser.offset += 1;
+    return token;
+}
+
+consume_token_if = fn (parser: &Parser, id: TokenId2) &Token2
+{
+    >token = get_token_if(parser, id);
+
+    if (token)
+    {
+        parser.offset += 1;
+    }
+
+    return token;
+}
+
+expect_token = fn (parser: &Parser, id: TokenId2) &Token2
+{
+    >token = consume_token_if(parser, id);
+    if (!token)
+    {
+        @trap();
+    }
+    return token;
+}
+
+TypeKeyword2 = enum
+{
+    void,
+    noreturn,
+}
+
+parse_type2 = fn (parser: &Parser) void
+{
+    >token = consume_token(parser);
+
+    switch (token.id)
+    {
+        .identifier =>
+        {
+            >identifier = token.content.string;
+
+            >is_integer_type = identifier.length > 1 and (identifier[0] == 's' or identifier[0] == 'u');
+            >is_float_type = identifier.length > 1 and identifier[0] == 'f';
+
+            if (is_integer_type or is_float_type)
+            {
+                for (ch: identifier[1..])
+                {
+                    >is_decimal_ch = is_decimal(ch);
+                    is_integer_type = is_integer_type and is_decimal_ch;
+                    is_float_type = is_float_type and is_decimal_ch;
+                }
+            }
+
+            if (is_integer_type)
+            {
+                >is_signed: u1 = undefined;
+                switch (identifier[0])
+                {
+                    's' =>
+                    {
+                        is_signed = 1;
+                    },
+                    'u' =>
+                    {
+                        is_signed = 0;
+                    },
+                    else =>
+                    {
+                        unreachable;
+                    },
+                }
+
+                >bit_count: u64 = @truncate(parse_integer_decimal_assume_valid(identifier[1..]));
+
+                if (bit_count == 0)
+                {
+                    @trap(); // report_error(module, "Invalid integer bit count: 0");
+                }
+
+                if (bit_count > 64)
+                {
+                    if (bit_count != 128)
+                    {
+                        @trap(); // report_error(module, "Invalid integer bit count > 64");
+                    }
+                }
+
+                //>result = get_integer_type(module, { .bit_count = bit_count, .signed = is_signed }); 
+                //return result;
+            }
+            else if (is_float_type)
+            {
+                >bit_count = parse_integer_decimal_assume_valid(identifier[1..]);
+
+                >float_id: TypeFloatId = undefined;
+
+                switch (bit_count)
+                {
+                    16 =>
+                    {
+                        float_id = .f16;
+                    },
+                    32 =>
+                    {
+                        float_id = .f32;
+                    },
+                    64 =>
+                    {
+                        float_id = .f64;
+                    },
+                    128 =>
+                    {
+                        float_id = .f128;
+                    },
+                    else =>
+                    {
+                        @trap(); // report_error(module, "Unknown float type");
+                    },
+                }
+
+                //>float_type = get_float_type(module, float_id);
+                //return float_type;
+            }
+            else
+            {
+                @trap();
+            }
+        },
+        else =>
+        {
+            @trap();
+        },
+    }
+}
+
+ValueBuilder2 = struct
+{
+    token: &Token2,
+    left: &Value,
+    precedence: Precedence,
+    kind: ValueKind,
+    allow_assignment_operators: u1,
+}
+
+parse_left2 = fn (module: &Module, parser: &Parser, scope: &Scope, builder: ValueBuilder2) &Value
+{
+    >token = consume_token(parser);
+    >result: &Value = zero;
+
+    switch (token.id)
+    {
+        .integer =>
+        {
+            >integer_value = token.content.integer;
+            result = new_value(module);
+            result.& = {
+                .content = {
+                    .constant_integer = integer_value,
+                },
+                .id = .constant_integer,
+                .kind = .right,
+                zero,
+            };
+        },
+        else =>
+        {
+            @trap();
+        },
+    }
+
+    assert(result != zero);
+    return result;
+}
+
+get_token_precedence2 = fn (token: &Token2) Precedence
+{
+    switch (token.id)
+    {
+        .semicolon,
+        =>
+        {
+            return .none;
+        },
+        else =>
+        {
+            @trap();
+        },
+    }
+}
+
+parse_right2 = fn (module: &Module, parser: &Parser, scope: &Scope, builder: ValueBuilder2) &Value
+{
+    @trap();
+}
+
+parse_right_with_left2 = fn (module: &Module, parser: &Parser, scope: &Scope, builder: ValueBuilder2) &Value
+{
+    >result = builder.left;
+    assert(result != zero);
+    >precedence = builder.precedence;
+
+    while (1)
+    {
+        >token = peek_token(parser);
+        if (!token)
+        {
+            @trap();
+        }
+
+        >token_precedence = get_token_precedence2(token);
+        if (token_precedence == .assignment)
+        {
+            token_precedence = @select(builder.allow_assignment_operators, token_precedence, .none);
+        }
+
+        if (precedence > token_precedence)
+        {
+            break;
+        }
+
+        consume_token(parser);
+
+        >left = result;
+
+        >right_builder = builder;
+        right_builder.token = token;
+        right_builder.precedence = .none;
+        right_builder.left = left;
+
+        >right = parse_right2(module, parser, scope, right_builder);
+
+        result = right;
+    }
+
+    return result;
+}
+
+parse_precedence2 = fn (module: &Module, parser: &Parser, scope: &Scope, builder: ValueBuilder2) &Value
+{
+    assert(!builder.token);
+    >left = parse_left2(module, parser, scope, builder);
+    >right_builder = builder;
+    right_builder.left = left;
+    >result = parse_right_with_left2(module, parser, scope, right_builder);
+    return result;
+}
+
+parse_value2 = fn (module: &Module, parser: &Parser, scope: &Scope, builder: ValueBuilder2) &Value
+{
+    assert(builder.precedence == .none);
+    assert(!builder.left);
+    builder.precedence = .assignment;
+    >value = parse_precedence2(module, parser, scope, builder);
+    return value;
+}
+
+parse2 = fn (module: &Module, tokens: []Token2) void
+{
+    >p = parser_initialize(tokens);
+    >parser = &p;
+    >scope = &module.scope;
+
+    while (tokens_left(parser))
+    {
+        >token = consume_token(parser);
+
+        switch (token.id)
+        {
+            // This means global variable
+            .identifier =>
+            {
+                if (consume_token_if(parser, .colon))
+                {
+                    parse_type2(parser);
+                }
+
+                if (consume_token_if(parser, .left_bracket))
+                {
+                    @trap();
+                }
+
+                expect_token(parser, .assign);
+
+                parse_value2(module, parser, scope, zero);
+
+                expect_token(parser, .semicolon);
+            },
+            .type_start_keyword =>
+            {
+                >keyword = token.content.type_start_keyword;
+
+                switch (keyword)
+                {
+                    .struct =>
+                    {
+                        >identifier = expect_token(parser, .identifier);
+
+                        expect_token(parser, .left_brace);
+
+                        while (1)
+                        {
+                            >field_identifier = expect_token(parser, .identifier);
+
+                            expect_token(parser, .colon);
+
+                            parse_type2(parser);
+
+                            if (!consume_token_if(parser, .comma) or? get_token_if(parser, .right_brace) != zero)
+                            {
+                                break;
+                            }
+                        }
+
+                        expect_token(parser, .right_brace);
+
+                        consume_token_if(parser, .semicolon);
+                    },
+                    .enum =>
+                    {
+                        >identifier = expect_token(parser, .identifier);
+
+                        expect_token(parser, .left_brace);
+
+                        while (1)
+                        {
+                            >field_identifier = expect_token(parser, .identifier);
+
+                            if (consume_token_if(parser, .assign))
+                            {
+                                parse_value2(module, parser, scope, zero);
+                            }
+
+                            if (!consume_token_if(parser, .comma) or? get_token_if(parser, .right_brace) != zero)
+                            {
+                                break;
+                            }
+                        }
+
+                        expect_token(parser, .right_brace);
+
+                        consume_token_if(parser, .semicolon);
+                    },
+                    .fn =>
+                    {
+                        @trap();
+                    },
+                    else => { @trap(); },
+                }
+            },
+            else => { @trap(); },
+        }
+    }
+}
+
 compile = fn (arena: &Arena, options: CompileOptions) void
 {
     >module: Module = undefined;
@@ -21928,10 +22911,20 @@ compile = fn (arena: &Arena, options: CompileOptions) void
         };
     }
 
-    parse(&module);
-    analyze(&module);
-    emit(&module);
-    link(&module);
+    >new_path: u1 = 1;
+
+    if (new_path)
+    {
+        >tokens = lex(module.arena, module.content);
+        parse2(&module, tokens);
+    }
+    else
+    {
+        parse(&module);
+        analyze(&module);
+        emit(&module);
+        link(&module);
+    }
 }
 
 parse_target_triple = fn (target_triple: []u8) Target
