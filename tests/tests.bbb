@@ -8078,6 +8078,14 @@ struct_union_alignment = fn () void
     token.id = .c;
 }
 
+integer_max_128 = fn () u1
+{
+    >max128: u128 = @integer_max(u128);
+    >max64: u128 = @integer_max(u64);
+
+    return max128 > max64;
+}
+
 [export] main = fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32
 {
     >rc = return_constant();
@@ -8362,6 +8370,8 @@ struct_union_alignment = fn () void
     parse_switch('a');
 
     struct_union_alignment();
+
+    require(integer_max_128());
 
     return 0;
 }

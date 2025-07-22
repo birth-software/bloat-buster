@@ -1865,9 +1865,10 @@ is_arbitrary_bit_integer = fn (type: &Type) u1
     }
 }
 
-integer_max_value = fn (bit_count: u64, signed: u1) u64
+integer_max_value = fn (bc: u64, signed: u1) u128
 {
-    >value: u64 = @select(bit_count == 64, ~0, (1 << (bit_count - @extend(signed))) - 1);
+    >bit_count: u128 = @extend(bc);
+    >value: u128 = @select(bit_count == @byte_size(u128) * 8, ~0, (1 << (bit_count - @extend(signed))) - 1);
     return value;
 }
 
@@ -12125,7 +12126,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             //resolve_type_in_place(module, expected_type);
             >resolved_type = resolve_alias(module, expected_type);
 
-            >value_constant = value.content.constant_integer.value;
+            >value_constant: u128 = @extend(value.content.constant_integer.value);
             >value_is_signed = value.content.constant_integer.signed;
 
             switch (resolved_type.id)
@@ -12578,13 +12579,13 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     report_error(module, "value_type expected to be integer");
                 }
 
-                >value: u64 = undefined;
+                >value: u128 = undefined;
                 >max_value = integer_max_value(value_type.content.integer.bit_count, value_type.content.integer.signed);
 
                 switch (unary_type_id)
                 {
                     .align_of => { value = @extend(get_byte_alignment(unary_type)); },
-                    .byte_size => { value = get_byte_size(unary_type); },
+                    .byte_size => { value = @extend(get_byte_size(unary_type)); },
                     .integer_max =>
                     {
                         if (unary_type.id != .integer)
@@ -12597,10 +12598,10 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     else => { unreachable; },
                 }
 
-                //if (value > max_value)
-                //{
-                    //report_error(module, "value is higher than type max value");
-                //}
+                if (value > max_value)
+                {
+                    report_error(module, "value is higher than type max value");
+                }
             }
 
             typecheck(module, expected_type, value_type);
@@ -14544,7 +14545,7 @@ emit_bool_vec_conversion = fn (module: &Module, vector: &LLVMValue, vector_type:
 
         for (i: count..memory_element_count)
         {
-            shuffle_mask_buffer[i] = LLVMConstInt(s32_type.llvm.abi, integer_max_value(64, 0), 1);
+            shuffle_mask_buffer[i] = LLVMConstInt(s32_type.llvm.abi, @truncate(integer_max_value(64, 0)), 1);
         }
 
         >result = LLVMBuildShuffleVector(module.llvm.builder, vector, LLVMGetPoison(LLVMTypeOf(vector)), LLVMConstVector(&shuffle_mask_buffer[0], @truncate(memory_element_count)), name.pointer);
@@ -16812,7 +16813,11 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                     assert(unary_type.id == .integer);
                     >signed = unary_type.content.integer.signed;
                     >max_value = integer_max_value(unary_type.content.integer.bit_count, signed);
-                    llvm_value = LLVMConstInt(llvm_result_type, max_value, @extend(signed));
+                    >words: [2]u64 = zero;
+                    words[0] = @truncate(max_value);
+                    words[1] = @truncate(max_value >> 64);
+
+                    llvm_value = LLVMConstIntOfArbitraryPrecision(llvm_result_type, words.length, &words[0]);
                 },
                 .enum_values =>
                 {
