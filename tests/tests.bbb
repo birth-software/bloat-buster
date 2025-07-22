@@ -8040,6 +8040,19 @@ basic_when = fn () void
     require(result == 0);
 }
 
+parse_switch = fn (ch: u8) void
+{
+    switch (ch)
+    {
+        'a'...'z', =>
+        {
+        },
+        else =>
+        {
+        },
+    }
+}
+
 [export] main = fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32
 {
     >rc = return_constant();
@@ -8320,6 +8333,8 @@ basic_when = fn () void
     atomic_operations();
 
     basic_when();
+
+    parse_switch('a');
 
     return 0;
 }
