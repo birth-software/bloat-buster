@@ -1,0 +1,13 @@
+when (@byte_size(u64) == 4)
+{
+    >a: s32 = 1;
+}
+else
+{
+    >a: s32 = 0;
+}
+
+[export] main = fn [cc(c)] () s32
+{
+    return a;
+}

@@ -3443,6 +3443,36 @@ Phase = enum
     linkage,
 }
 
+TopLevelDeclaration = struct;
+
+TopLevelDeclarationWhen = struct
+{
+    condition: &Value,
+    first_taken: &TopLevelDeclaration,
+    first_not_taken: &TopLevelDeclaration,
+}
+
+TopLevelDeclarationContent = union
+{
+    type: &Type,
+    global: &Global,
+    when: TopLevelDeclarationWhen,
+}
+
+TopLevelDeclarationId = enum
+{
+    type,
+    global,
+    when,
+}
+
+TopLevelDeclaration = struct
+{
+    content: TopLevelDeclarationContent,
+    next: &TopLevelDeclaration,
+    id: TopLevelDeclarationId,
+}
+
 Module = struct
 {
     arena: &Arena,
@@ -3450,6 +3480,8 @@ Module = struct
     offset: u64,
     line_offset: u64,
     line_character_offset: u64,
+
+    first_top_level_declaration: &TopLevelDeclaration,
 
     first_pointer_type: &Type,
     first_slice_type: &Type,
@@ -8266,9 +8298,34 @@ enum_bit_count = fn (highest_value: u64) u64
     return needed_bit_count;
 }
 
-parse = fn (module: &Module) void
+parse = fn (module: &Module, is_block: u1) &TopLevelDeclaration;
+
+parse_global_when = fn (module: &Module, scope: &Scope) TopLevelDeclarationWhen
+{
+    skip_space(module);
+
+    expect_character(module, left_parenthesis);
+    >condition = parse_value(module, scope, zero);
+    expect_character(module, right_parenthesis);
+
+    skip_space(module);
+
+    >taken_statements = parse(module, 1);
+
+    @trap();
+}
+
+parse = fn (module: &Module, is_block: u1) &TopLevelDeclaration
 {
     >scope = &module.scope;
+
+    >previous_top_level_declaration: &TopLevelDeclaration = zero;
+    >first_top_level_declaration: &TopLevelDeclaration = zero;
+
+    if (is_block)
+    {
+        expect_character(module, left_brace);
+    }
 
     while (1)
     {
@@ -8279,11 +8336,24 @@ parse = fn (module: &Module) void
             break;
         }
 
+        if (is_block and module.content[module.offset] == right_brace)
+        {
+            break;
+        }
+
         >is_export: u1 = 0;
         >is_extern: u1 = 0;
 
         >global_line = get_line(module);
         >global_column = get_line(module);
+
+        >top_level_declaration = arena_allocate[TopLevelDeclaration](module.arena, 1);
+        top_level_declaration.& = zero;
+
+        if (!first_top_level_declaration)
+        {
+            first_top_level_declaration = top_level_declaration;
+        }
 
         if (consume_character_if_match(module, left_bracket))
         {
@@ -8324,627 +8394,129 @@ parse = fn (module: &Module) void
             skip_space(module);
         }
 
-        >global_name = arena_duplicate_string(module.arena, parse_identifier(module));
-
-        >global_forward_declaration: &Global = zero;
-
-        >last_global = module.first_global;
-
-        while (last_global)
+        >global_identifier = parse_identifier(module);
+        if (string_equal(global_identifier, "when"))
         {
-            if (string_equal(global_name, last_global.variable.name))
-            {
-                global_forward_declaration = last_global;
-
-                if (last_global.variable.storage.id != .forward_declared_function)
-                {
-                    report_error(module, "Previously declared global must be forward-declared function");
-                }
-
-                // TODO: only forbid extern, not exports
-                if (last_global.linkage == .external)
-                {
-                    report_error(module, "Function forward declarations with later definition must not have external linkage");
-                }
-
-                break;
-            }
-
-            if (!last_global.next)
-            {
-                break;
-            }
-
-            last_global = last_global.next;
+            parse_global_when(module, scope);
         }
-
-        >type_it = module.scope.types.first;
-        >type_forward_declaration: &Type = zero;
-
-        while (type_it)
+        else
         {
-            if (string_equal(global_name, type_it.name))
+            >global_name = arena_duplicate_string(module.arena, global_identifier);
+
+            >global_forward_declaration: &Global = zero;
+
+            >last_global = module.first_global;
+
+            while (last_global)
             {
-                if (type_it.id == .forward_declaration)
+                if (string_equal(global_name, last_global.variable.name))
                 {
-                    type_forward_declaration = type_it;
+                    global_forward_declaration = last_global;
+
+                    if (last_global.variable.storage.id != .forward_declared_function)
+                    {
+                        report_error(module, "Previously declared global must be forward-declared function");
+                    }
+
+                    // TODO: only forbid extern, not exports
+                    if (last_global.linkage == .external)
+                    {
+                        report_error(module, "Function forward declarations with later definition must not have external linkage");
+                    }
+
                     break;
                 }
-                else
+
+                if (!last_global.next)
                 {
-                    report_error(module, "Type with later definition must previously be forward declared");
-                }
-            }
-
-            if (!type_it.next)
-            {
-                break;
-            }
-
-            type_it = type_it.next;
-        }
-
-        skip_space(module);
-
-        >global_type: &Type = zero;
-
-        if (consume_character_if_match(module, ':'))
-        {
-            skip_space(module);
-
-            global_type = parse_type(module, scope);
-
-            skip_space(module);
-        }
-
-        expect_character(module, '=');
-
-        skip_space(module);
-
-        >is_global_keyword: u1 = 0;
-
-        if (is_identifier_start(module.content[module.offset]))
-        {
-            >checkpoint = get_checkpoint(module);
-            >global_keyword_string = parse_identifier(module);
-            skip_space(module);
-
-            >global_keyword_s2e = @string_to_enum(GlobalKeyword, global_keyword_string);
-
-            is_global_keyword = global_keyword_s2e?;
-
-            if (is_global_keyword)
-            {
-                >global_keyword = global_keyword_s2e.?;
-
-                if (global_forward_declaration != zero and global_keyword != .fn)
-                {
-                    report_error(module, "Global forward declaration must be a function");
+                    break;
                 }
 
-                switch (global_keyword)
+                last_global = last_global.next;
+            }
+
+            >type_it = module.scope.types.first;
+            >type_forward_declaration: &Type = zero;
+
+            while (type_it)
+            {
+                if (string_equal(global_name, type_it.name))
                 {
-                    .bits =>
+                    if (type_it.id == .forward_declaration)
                     {
-                        >is_implicit_type = module.content[module.offset] == left_brace;
-
-                        >backing_type: &Type = zero;
-
-                        if (!is_implicit_type)
-                        {
-                            backing_type = parse_type(module, scope);
-                        }
-
-                        skip_space(module);
-                        expect_character(module, left_brace);
-
-                        >field_buffer: [64]Field = undefined;
-                        >field_bit_offset: u64 = 0;
-                        >field_count: u64 = 0;
-
-                        while (1)
-                        {
-                            skip_space(module);
-
-                            if (consume_character_if_match(module, right_brace))
-                            {
-                                break;
-                            }
-
-                            >field_line = get_line(module);
-                            >field_name = arena_duplicate_string(module.arena, parse_identifier(module));
-
-                            skip_space(module);
-                            expect_character(module, ':');
-                            skip_space(module);
-
-                            >field_type = parse_type(module, scope);
-
-                            >field_bit_count = get_bit_size(field_type);
-
-                            skip_space(module);
-
-                            consume_character_if_match(module, ',');
-
-                            field_buffer[field_count] = {
-                                .name = field_name,
-                                .type = field_type,
-                                .offset = field_bit_offset,
-                                .line = field_line,
-                            };
-
-                            field_bit_offset += field_bit_count;
-                            field_count += 1;
-                        }
-
-                        consume_character_if_match(module, ';');
-
-                        >fields = arena_allocate_slice[Field](module.arena, field_count);
-                        memcpy(@pointer_cast(fields.pointer), @pointer_cast(&field_buffer), field_count * @byte_size(Field));
-
-                        >needed_bit_count = @max(next_power_of_two(field_bit_offset), 8);
-                        if (needed_bit_count > @integer_max(u32))
-                        {
-                            report_error(module, "TODO: Needed bit count must be less or equal than 32?");
-                        }
-
-                        >bit_count = needed_bit_count;
-
-                        if (!backing_type)
-                        {
-                            backing_type = get_integer_type(module, { .bit_count = bit_count, .signed = 0 });
-                        }
-
-                        if (backing_type.id != .integer)
-                        {
-                            report_error(module, "Backing type must be integer");
-                        }
-
-                        >backing_type_bit_size = get_bit_size(backing_type);
-
-                        if (backing_type_bit_size > 64)
-                        {
-                            if (backing_type_bit_size != 128)
-                            {
-                                report_error(module, "Backing type bit size must be less or equal than 64 or 128");
-                            }
-                        }
-
-                        new_type(module, {
-                            .content = {
-                                .bits = {
-                                    .fields = fields,
-                                    .backing_type = backing_type,
-                                    .line = global_line,
-                                    .is_implicit_backing_type = is_implicit_type,
-                                },
-                            },
-                            .id = .bits,
-                            .name = global_name,
-                            .scope = &module.scope,
-                            zero,
-                        });
-                    },
-                    .enum =>
+                        type_forward_declaration = type_it;
+                        break;
+                    }
+                    else
                     {
-                        >is_implicit_type = module.content[module.offset] == left_brace;
-                        >backing_type: &Type = zero;
-                        if (!is_implicit_type)
-                        {
-                            backing_type = parse_type(module, scope);
-                        }
+                        report_error(module, "Type with later definition must previously be forward declared");
+                    }
+                }
 
-                        skip_space(module);
-                        expect_character(module, left_brace);
+                if (!type_it.next)
+                {
+                    break;
+                }
 
-                        >name_buffer: [64][]u8 = undefined;
-                        >int_value_buffer: [64]u64 = undefined;
-                        >field_count: u64 = 0;
-                        >is_resolved: u1 = 1;
+                type_it = type_it.next;
+            }
 
-                        while (1)
-                        {
-                            skip_space(module);
+            skip_space(module);
 
-                            if (consume_character_if_match(module, right_brace))
-                            {
-                                break;
-                            }
+            >global_type: &Type = zero;
 
-                            >field_index = field_count;
-                            field_count += 1;
+            if (consume_character_if_match(module, ':'))
+            {
+                skip_space(module);
 
-                            >field_name = parse_name(module);
-                            name_buffer[field_index] = field_name;
-                            
-                            skip_space(module);
+                global_type = parse_type(module, scope);
 
-                            >field_integer_value = field_index;
+                skip_space(module);
+            }
 
-                            if (consume_character_if_match(module, '='))
-                            {
-                                skip_space(module);
+            expect_character(module, '=');
 
-                                >field_value = parse_value(module, scope, zero);
-                                if (is_resolved)
-                                {
-                                    if (value_is_constant(field_value))
-                                    {
-                                        switch (field_value.id)
-                                        {
-                                            .constant_integer =>
-                                            {
-                                                field_integer_value = field_value.content.constant_integer.value;
-                                            },
-                                            else => { report_error(module, "TODO: Invalid value"); },
-                                        }
-                                    }
-                                    else
-                                    {
-                                        // TODO: ??
-                                        report_error(module, "TODO: must be constant");
-                                    }
-                                }
-                                else
-                                {
-                                    // TODO: ??
-                                    report_error(module, "TODO: must be resolved");
-                                }
-                            }
-                            else
-                            {
-                                if (!is_resolved)
-                                {
-                                    report_error(module, "TODO: must be resolved 2");
-                                }
-                            }
+            skip_space(module);
 
-                            int_value_buffer[field_index] = field_integer_value;
+            >is_global_keyword: u1 = 0;
 
-                            skip_space(module);
-                            consume_character_if_match(module, ',');
-                        }
+            if (is_identifier_start(module.content[module.offset]))
+            {
+                >checkpoint = get_checkpoint(module);
+                >global_keyword_string = parse_identifier(module);
+                skip_space(module);
 
-                        if (is_resolved)
-                        {
-                            >fields = arena_allocate_slice[EnumField](module.arena, field_count);
-                            >highest_value: u64 = 0;
+                >global_keyword_s2e = @string_to_enum(GlobalKeyword, global_keyword_string);
 
-                            for (i: 0..field_count)
-                            {
-                                >value = int_value_buffer[i];
-                                highest_value = @max(highest_value, value);
-                                fields[i] = {
-                                    .name = name_buffer[i],
-                                    .value = value,
-                                };
-                            }
+                is_global_keyword = global_keyword_s2e?;
 
-                            >needed_bit_count = enum_bit_count(highest_value);
+                if (is_global_keyword)
+                {
+                    >global_keyword = global_keyword_s2e.?;
 
-                            if (!backing_type)
-                            {
-                                backing_type = get_integer_type(module, { .bit_count = needed_bit_count, .signed = 0 });
-                            }
-
-                            >enum_type = new_type(module, {
-                                .content = {
-                                    .enum = {
-                                        .fields = fields,
-                                        .backing_type = backing_type,
-                                        .line = global_line,
-                                        zero,
-                                    },
-                                },
-                                .id = .enum,
-                                .name = global_name,
-                                .scope = &module.scope,
-                                zero,
-                            });
-                        }
-                        else
-                        {
-                            report_error(module, "TODO: must be resolved 3");
-                        }
-                    },
-                    .fn =>
+                    if (global_forward_declaration != zero and global_keyword != .fn)
                     {
-                        >mandate_argument_names: u1 = 1;
-                        >function_header = parse_function_header(module, scope, mandate_argument_names);
+                        report_error(module, "Global forward declaration must be a function");
+                    }
 
-                        >function_type = function_header.type;
-                        >function_attributes = function_header.attributes;
-                        >semantic_argument_types = function_type.content.function.base.semantic_argument_types;
-                        >pointer_to_function_type = get_pointer_type(module, function_type);
-
-                        >global: &Global = zero;
-                        if (global_forward_declaration)
-                        {
-                            global = global_forward_declaration;
-
-                            if (global_forward_declaration.variable.type != function_type)
-                            {
-                                report_error(module, "Function forward declaration must match definition");
-                            }
-
-                            assert(global_forward_declaration.variable.storage.type == pointer_to_function_type);
-
-                            global.variable.name = global_name;
-                            global.variable.line = global_line;
-                            global.variable.column = global_column;
-                        }
-                        else
-                        {
-                            >storage = new_value(module);
-                            storage.& = {
-                                .type = pointer_to_function_type,
-                                .id = .forward_declared_function,
-                                // TODO: .kind = .left // ????
-                                zero,
-                            };
-
-                            global = new_global(module);
-                            global.& = {
-                                .variable = {
-                                    .storage = storage,
-                                    .type = function_type,
-                                    .scope = scope,
-                                    .name = global_name,
-                                    .line = global_line,
-                                    .column = global_column,
-                                },
-                                .initial_value = zero,
-                                .linkage = @select(is_export or is_extern, .external, .internal),
-                                zero,
-                            };
-                        }
-
-                        if (!consume_character_if_match(module, ';'))
-                        {
-                            module.current_function = global;
-                            >arguments = arena_allocate_slice[Argument](module.arena, semantic_argument_types.length);
-
-                            for (i: 0..semantic_argument_types.length)
-                            {
-                                >argument = &arguments[i];
-                                >header_argument = &function_header.arguments[i];
-                                >name = header_argument.name;
-                                >line = header_argument.line;
-                                >type = semantic_argument_types[i];
-
-                                >argument_storage = new_value(module);
-                                argument_storage.& = {
-                                    .type = get_pointer_type(module, type),
-                                    .id = .argument,
-                                    zero,
-                                };
-
-                                argument.& = {
-                                    .variable = {
-                                        .storage = argument_storage,
-                                        .type = type,
-                                        .scope = &global.variable.storage.content.function.scope,
-                                        .name = name,
-                                        .line = line,
-                                        .column = 0,
-                                    },
-                                    .index = @truncate(i + 1),
-                                };
-                            }
-
-                            global.variable.storage.content.function = {
-                                .arguments = arguments,
-                                .scope = {
-                                    .parent = scope,
-                                    .line = global_line,
-                                    .column = global_column,
-                                    .kind = .function,
-                                    zero,
-                                },
-                                .attributes = function_attributes,
-                                zero,
-                            };
-                            global.variable.storage.id = .function;
-
-                            global.variable.storage.content.function.block = parse_block(module, &global.variable.storage.content.function.scope);
-
-                            module.current_function = zero;
-                        }
-                    },
-                    .macro =>
+                    switch (global_keyword)
                     {
-                        >constant_argument_buffer: [64]ConstantArgument = undefined;
-                        >constant_argument_count: u64 = 0;
-
-                        >is_generic = consume_character_if_match(module, left_bracket);
-                        >macro_declaration = arena_allocate[MacroDeclaration](module.arena, 1);
-                        macro_declaration.& = {
-                            .name = global_name,
-                            .scope = {
-                                .parent = scope,
-                                .line = global_line,
-                                .column = global_column,
-                                .kind = .macro_declaration,
-                                zero,
-                            },
-                            zero,
-                        };
-
-                        if (is_generic)
+                        .bits =>
                         {
-                            while (1)
+                            >is_implicit_type = module.content[module.offset] == left_brace;
+
+                            >backing_type: &Type = zero;
+
+                            if (!is_implicit_type)
                             {
-                                skip_space(module);
-
-                                if (consume_character_if_match(module, right_bracket))
-                                {
-                                    break;
-                                }
-
-                                >argument_name = arena_duplicate_string(module.arena, parse_identifier(module));
-
-                                skip_space(module);
-                                
-                                >has_value = consume_character_if_match(module, ':');
-
-                                >constant_argument_index = constant_argument_count;
-
-                                if (has_value)
-                                {
-                                    fail();
-                                }
-                                else
-                                {
-                                    >ty = new_type(module, {
-                                        .id = .unresolved,
-                                        .name = argument_name,
-                                        .scope = &macro_declaration.scope,
-                                        zero,
-                                    });
-
-                                    constant_argument_buffer[constant_argument_index] = {
-                                        .name = argument_name,
-                                        .content = {
-                                            .type = ty,
-                                        },
-                                        .id = .type,
-                                    };
-                                }
-
-                                constant_argument_count += 1;
+                                backing_type = parse_type(module, scope);
                             }
 
                             skip_space(module);
+                            expect_character(module, left_brace);
 
-                            // END OF SCOPE
-                            if (constant_argument_count == 0)
-                            {
-                                report_error(module, "Constant argument must not be zero");
-                            }
-                        }
-                        else
-                        {
-                            assert(constant_argument_count == 0);
-                        }
-
-                        expect_character(module, left_parenthesis);
-
-                        macro_declaration.constant_arguments = arena_allocate_slice[ConstantArgument](module.arena, constant_argument_count);
-                        memcpy(@pointer_cast(macro_declaration.constant_arguments.pointer), @pointer_cast(&constant_argument_buffer), constant_argument_count * @byte_size(ConstantArgument));
-
-                        if (module.first_macro_declaration)
-                        {
-                            assert(module.first_macro_declaration != zero);
-                            module.last_macro_declaration.next = macro_declaration;
-                        }
-                        else
-                        {
-                            assert(!module.first_macro_declaration);
-                            module.first_macro_declaration = macro_declaration;
-                        }
-
-                        module.last_macro_declaration = macro_declaration;
-                        module.current_macro_declaration = macro_declaration;
-
-                        >scope = &macro_declaration.scope;
-
-                        >argument_buffer: [64]Argument = undefined;
-                        >argument_count: u64 = 0;
-
-                        while (1)
-                        {
-                            skip_space(module);
-
-                            if (consume_character_if_match(module, right_parenthesis))
-                            {
-                                break;
-                            }
-
-                            >argument_index = argument_count;
-
-                            >argument_line = get_line(module);
-                            >argument_column = get_column(module);
-
-                            >argument_name = arena_duplicate_string(module.arena, parse_identifier(module));
-
-                            skip_space(module);
-                            expect_character(module, ':');
-                            skip_space(module);
-
-                            >argument_type = parse_type(module, scope);
-
-                            >argument = &argument_buffer[argument_index];
-                            argument.& = {
-                                .variable = {
-                                    .type = argument_type,
-                                    .scope = scope,
-                                    .name = argument_name,
-                                    .line = argument_line,
-                                    .column = argument_column,
-                                    zero,
-                                },
-                                .index = @truncate(argument_index + 1),
-                            };
-
-                            argument_count += 1;
-
-                            skip_space(module);
-                            consume_character_if_match(module, ',');
-                        }
-
-                        skip_space(module);
-
-                        >return_type = parse_type(module, scope);
-                        macro_declaration.return_type = return_type;
-
-                        >arguments = arena_allocate_slice[Argument](module.arena, argument_count);
-                        memcpy(@pointer_cast(arguments.pointer), @pointer_cast(&argument_buffer), argument_count * @byte_size(Argument));
-                        macro_declaration.arguments = arguments;
-
-                        skip_space(module);
-
-                        >block = parse_block(module, scope);
-                        macro_declaration.block = block;
-
-                        // END OF SCOPE
-                        module.current_macro_declaration = zero;
-                    },
-                    .opaque =>
-                    {
-                        skip_space(module);
-                        expect_character(module, ';');
-                        new_type(module, {
-                            .id = .opaque,
-                            .name = global_name,
-                            .scope = &module.scope,
-                            zero,
-                        });
-                    },
-                    .struct =>
-                    {
-                        skip_space(module);
-
-                        >struct_type: &Type = undefined;
-                        if (type_forward_declaration)
-                        {
-                            struct_type = type_forward_declaration;
-                        }
-                        else
-                        {
-                            struct_type = new_type(module, {
-                                .id = .forward_declaration,
-                                .name = global_name,
-                                .scope = &module.scope,
-                                zero,
-                            });
-                        }
-
-                        if (consume_character_if_match(module, left_brace))
-                        {
-                            >field_buffer: [256]Field = undefined;
-
-                            >byte_size: u64 = 0;
-                            >byte_alignment: u32 = 1;
+                            >field_buffer: [64]Field = undefined;
+                            >field_bit_offset: u64 = 0;
                             >field_count: u64 = 0;
 
                             while (1)
@@ -8956,7 +8528,6 @@ parse = fn (module: &Module) void
                                     break;
                                 }
 
-                                >field_index = field_count;
                                 >field_line = get_line(module);
                                 >field_name = arena_duplicate_string(module.arena, parse_identifier(module));
 
@@ -8966,202 +8537,759 @@ parse = fn (module: &Module) void
 
                                 >field_type = parse_type(module, scope);
 
-                                >field_byte_size = get_byte_size(field_type);
-                                >field_byte_alignment = get_byte_alignment(field_type);
-                                // Align struct size by field alignment
-                                >field_byte_offset = align_forward(byte_size, @extend(field_byte_alignment));
-
-                                field_buffer[field_index] = {
-                                    .name = field_name,
-                                    .type = field_type,
-                                    .offset = field_byte_offset,
-                                    .line = field_line,
-                                };
-
-                                byte_size = field_byte_offset + field_byte_size;
-                                byte_alignment = @max(byte_alignment, field_byte_alignment);
+                                >field_bit_count = get_bit_size(field_type);
 
                                 skip_space(module);
 
                                 consume_character_if_match(module, ',');
 
+                                field_buffer[field_count] = {
+                                    .name = field_name,
+                                    .type = field_type,
+                                    .offset = field_bit_offset,
+                                    .line = field_line,
+                                };
+
+                                field_bit_offset += field_bit_count;
                                 field_count += 1;
                             }
 
-                            byte_size = align_forward(byte_size, @extend(byte_alignment));
-                            assert(byte_size % @extend(byte_alignment) == 0);
-
-                            skip_space(module);
                             consume_character_if_match(module, ';');
 
                             >fields = arena_allocate_slice[Field](module.arena, field_count);
                             memcpy(@pointer_cast(fields.pointer), @pointer_cast(&field_buffer), field_count * @byte_size(Field));
 
-                            struct_type.content = {
-                                .struct = {
+                            >needed_bit_count = @max(next_power_of_two(field_bit_offset), 8);
+                            if (needed_bit_count > @integer_max(u32))
+                            {
+                                report_error(module, "TODO: Needed bit count must be less or equal than 32?");
+                            }
+
+                            >bit_count = needed_bit_count;
+
+                            if (!backing_type)
+                            {
+                                backing_type = get_integer_type(module, { .bit_count = bit_count, .signed = 0 });
+                            }
+
+                            if (backing_type.id != .integer)
+                            {
+                                report_error(module, "Backing type must be integer");
+                            }
+
+                            >backing_type_bit_size = get_bit_size(backing_type);
+
+                            if (backing_type_bit_size > 64)
+                            {
+                                if (backing_type_bit_size != 128)
+                                {
+                                    report_error(module, "Backing type bit size must be less or equal than 64 or 128");
+                                }
+                            }
+
+                            >type = new_type(module, {
+                                    .content = {
+                                    .bits = {
+                                    .fields = fields,
+                                    .backing_type = backing_type,
+                                    .line = global_line,
+                                    .is_implicit_backing_type = is_implicit_type,
+                                    },
+                                    },
+                                    .id = .bits,
+                                    .name = global_name,
+                                    .scope = &module.scope,
+                                    zero,
+                                    });
+
+                            top_level_declaration.content = {
+                                .type = type,
+                            };
+                            top_level_declaration.id = .type;
+                        },
+                            .enum =>
+                            {
+                                >is_implicit_type = module.content[module.offset] == left_brace;
+                                >backing_type: &Type = zero;
+                                if (!is_implicit_type)
+                                {
+                                    backing_type = parse_type(module, scope);
+                                }
+
+                                skip_space(module);
+                                expect_character(module, left_brace);
+
+                                >name_buffer: [64][]u8 = undefined;
+                                >int_value_buffer: [64]u64 = undefined;
+                                >field_count: u64 = 0;
+                                >is_resolved: u1 = 1;
+
+                                while (1)
+                                {
+                                    skip_space(module);
+
+                                    if (consume_character_if_match(module, right_brace))
+                                    {
+                                        break;
+                                    }
+
+                                    >field_index = field_count;
+                                    field_count += 1;
+
+                                    >field_name = parse_name(module);
+                                    name_buffer[field_index] = field_name;
+
+                                    skip_space(module);
+
+                                    >field_integer_value = field_index;
+
+                                    if (consume_character_if_match(module, '='))
+                                    {
+                                        skip_space(module);
+
+                                        >field_value = parse_value(module, scope, zero);
+                                        if (is_resolved)
+                                        {
+                                            if (value_is_constant(field_value))
+                                            {
+                                                switch (field_value.id)
+                                                {
+                                                    .constant_integer =>
+                                                    {
+                                                        field_integer_value = field_value.content.constant_integer.value;
+                                                    },
+                                                        else => { report_error(module, "TODO: Invalid value"); },
+                                                }
+                                            }
+                                            else
+                                            {
+                                                // TODO: ??
+                                                report_error(module, "TODO: must be constant");
+                                            }
+                                        }
+                                        else
+                                        {
+                                            // TODO: ??
+                                            report_error(module, "TODO: must be resolved");
+                                        }
+                                    }
+                                    else
+                                    {
+                                        if (!is_resolved)
+                                        {
+                                            report_error(module, "TODO: must be resolved 2");
+                                        }
+                                    }
+
+                                    int_value_buffer[field_index] = field_integer_value;
+
+                                    skip_space(module);
+                                    consume_character_if_match(module, ',');
+                                }
+
+                                if (is_resolved)
+                                {
+                                    >fields = arena_allocate_slice[EnumField](module.arena, field_count);
+                                    >highest_value: u64 = 0;
+
+                                    for (i: 0..field_count)
+                                    {
+                                        >value = int_value_buffer[i];
+                                        highest_value = @max(highest_value, value);
+                                        fields[i] = {
+                                            .name = name_buffer[i],
+                                            .value = value,
+                                        };
+                                    }
+
+                                    >needed_bit_count = enum_bit_count(highest_value);
+
+                                    if (!backing_type)
+                                    {
+                                        backing_type = get_integer_type(module, { .bit_count = needed_bit_count, .signed = 0 });
+                                    }
+
+                                    >enum_type = new_type(module, {
+                                            .content = {
+                                            .enum = {
+                                            .fields = fields,
+                                            .backing_type = backing_type,
+                                            .line = global_line,
+                                            zero,
+                                            },
+                                            },
+                                            .id = .enum,
+                                            .name = global_name,
+                                            .scope = &module.scope,
+                                            zero,
+                                            });
+                                    top_level_declaration.content = {
+                                        .type = enum_type,
+                                    };
+                                    top_level_declaration.id = .type;
+                                }
+                                else
+                                {
+                                    report_error(module, "TODO: must be resolved 3");
+                                }
+                            },
+                            .fn =>
+                            {
+                                >mandate_argument_names: u1 = 1;
+                                >function_header = parse_function_header(module, scope, mandate_argument_names);
+
+                                >function_type = function_header.type;
+                                >function_attributes = function_header.attributes;
+                                >semantic_argument_types = function_type.content.function.base.semantic_argument_types;
+                                >pointer_to_function_type = get_pointer_type(module, function_type);
+
+                                >global: &Global = zero;
+                                if (global_forward_declaration)
+                                {
+                                    global = global_forward_declaration;
+
+                                    if (global_forward_declaration.variable.type != function_type)
+                                    {
+                                        report_error(module, "Function forward declaration must match definition");
+                                    }
+
+                                    assert(global_forward_declaration.variable.storage.type == pointer_to_function_type);
+
+                                    global.variable.name = global_name;
+                                    global.variable.line = global_line;
+                                    global.variable.column = global_column;
+                                }
+                                else
+                                {
+                                    >storage = new_value(module);
+                                    storage.& = {
+                                        .type = pointer_to_function_type,
+                                        .id = .forward_declared_function,
+                                        // TODO: .kind = .left // ????
+                                        zero,
+                                    };
+
+                                    global = new_global(module);
+                                    global.& = {
+                                        .variable = {
+                                            .storage = storage,
+                                            .type = function_type,
+                                            .scope = scope,
+                                            .name = global_name,
+                                            .line = global_line,
+                                            .column = global_column,
+                                        },
+                                        .initial_value = zero,
+                                        .linkage = @select(is_export or is_extern, .external, .internal),
+                                        zero,
+                                    };
+                                }
+
+                                if (!consume_character_if_match(module, ';'))
+                                {
+                                    module.current_function = global;
+                                    >arguments = arena_allocate_slice[Argument](module.arena, semantic_argument_types.length);
+
+                                    for (i: 0..semantic_argument_types.length)
+                                    {
+                                        >argument = &arguments[i];
+                                        >header_argument = &function_header.arguments[i];
+                                        >name = header_argument.name;
+                                        >line = header_argument.line;
+                                        >type = semantic_argument_types[i];
+
+                                        >argument_storage = new_value(module);
+                                        argument_storage.& = {
+                                            .type = get_pointer_type(module, type),
+                                            .id = .argument,
+                                            zero,
+                                        };
+
+                                        argument.& = {
+                                            .variable = {
+                                                .storage = argument_storage,
+                                                .type = type,
+                                                .scope = &global.variable.storage.content.function.scope,
+                                                .name = name,
+                                                .line = line,
+                                                .column = 0,
+                                            },
+                                            .index = @truncate(i + 1),
+                                        };
+                                    }
+
+                                    global.variable.storage.content.function = {
+                                        .arguments = arguments,
+                                        .scope = {
+                                            .parent = scope,
+                                            .line = global_line,
+                                            .column = global_column,
+                                            .kind = .function,
+                                            zero,
+                                        },
+                                        .attributes = function_attributes,
+                                        zero,
+                                    };
+                                    global.variable.storage.id = .function;
+
+                                    global.variable.storage.content.function.block = parse_block(module, &global.variable.storage.content.function.scope);
+
+                                    module.current_function = zero;
+                                }
+
+                                top_level_declaration.content = {
+                                    .global = global,
+                                };
+                                top_level_declaration.id = .global;
+                            },
+                            .macro =>
+                            {
+                                >constant_argument_buffer: [64]ConstantArgument = undefined;
+                                >constant_argument_count: u64 = 0;
+
+                                >is_generic = consume_character_if_match(module, left_bracket);
+                                >macro_declaration = arena_allocate[MacroDeclaration](module.arena, 1);
+                                macro_declaration.& = {
+                                    .name = global_name,
+                                    .scope = {
+                                        .parent = scope,
+                                        .line = global_line,
+                                        .column = global_column,
+                                        .kind = .macro_declaration,
+                                        zero,
+                                    },
+                                    zero,
+                                };
+
+                                if (is_generic)
+                                {
+                                    while (1)
+                                    {
+                                        skip_space(module);
+
+                                        if (consume_character_if_match(module, right_bracket))
+                                        {
+                                            break;
+                                        }
+
+                                        >argument_name = arena_duplicate_string(module.arena, parse_identifier(module));
+
+                                        skip_space(module);
+
+                                        >has_value = consume_character_if_match(module, ':');
+
+                                        >constant_argument_index = constant_argument_count;
+
+                                        if (has_value)
+                                        {
+                                            fail();
+                                        }
+                                        else
+                                        {
+                                            >ty = new_type(module, {
+                                                    .id = .unresolved,
+                                                    .name = argument_name,
+                                                    .scope = &macro_declaration.scope,
+                                                    zero,
+                                                    });
+
+                                            constant_argument_buffer[constant_argument_index] = {
+                                                .name = argument_name,
+                                                .content = {
+                                                    .type = ty,
+                                                },
+                                                .id = .type,
+                                            };
+                                        }
+
+                                        constant_argument_count += 1;
+                                    }
+
+                                    skip_space(module);
+
+                                    // END OF SCOPE
+                                    if (constant_argument_count == 0)
+                                    {
+                                        report_error(module, "Constant argument must not be zero");
+                                    }
+                                }
+                                else
+                                {
+                                    assert(constant_argument_count == 0);
+                                }
+
+                                expect_character(module, left_parenthesis);
+
+                                macro_declaration.constant_arguments = arena_allocate_slice[ConstantArgument](module.arena, constant_argument_count);
+                                memcpy(@pointer_cast(macro_declaration.constant_arguments.pointer), @pointer_cast(&constant_argument_buffer), constant_argument_count * @byte_size(ConstantArgument));
+
+                                if (module.first_macro_declaration)
+                                {
+                                    assert(module.first_macro_declaration != zero);
+                                    module.last_macro_declaration.next = macro_declaration;
+                                }
+                                else
+                                {
+                                    assert(!module.first_macro_declaration);
+                                    module.first_macro_declaration = macro_declaration;
+                                }
+
+                                module.last_macro_declaration = macro_declaration;
+                                module.current_macro_declaration = macro_declaration;
+
+                                >scope = &macro_declaration.scope;
+
+                                >argument_buffer: [64]Argument = undefined;
+                                >argument_count: u64 = 0;
+
+                                while (1)
+                                {
+                                    skip_space(module);
+
+                                    if (consume_character_if_match(module, right_parenthesis))
+                                    {
+                                        break;
+                                    }
+
+                                    >argument_index = argument_count;
+
+                                    >argument_line = get_line(module);
+                                    >argument_column = get_column(module);
+
+                                    >argument_name = arena_duplicate_string(module.arena, parse_identifier(module));
+
+                                    skip_space(module);
+                                    expect_character(module, ':');
+                                    skip_space(module);
+
+                                    >argument_type = parse_type(module, scope);
+
+                                    >argument = &argument_buffer[argument_index];
+                                    argument.& = {
+                                        .variable = {
+                                            .type = argument_type,
+                                            .scope = scope,
+                                            .name = argument_name,
+                                            .line = argument_line,
+                                            .column = argument_column,
+                                            zero,
+                                        },
+                                        .index = @truncate(argument_index + 1),
+                                    };
+
+                                    argument_count += 1;
+
+                                    skip_space(module);
+                                    consume_character_if_match(module, ',');
+                                }
+
+                                skip_space(module);
+
+                                >return_type = parse_type(module, scope);
+                                macro_declaration.return_type = return_type;
+
+                                >arguments = arena_allocate_slice[Argument](module.arena, argument_count);
+                                memcpy(@pointer_cast(arguments.pointer), @pointer_cast(&argument_buffer), argument_count * @byte_size(Argument));
+                                macro_declaration.arguments = arguments;
+
+                                skip_space(module);
+
+                                >block = parse_block(module, scope);
+                                macro_declaration.block = block;
+
+                                // END OF SCOPE
+                                module.current_macro_declaration = zero;
+                            },
+                            .opaque =>
+                            {
+                                skip_space(module);
+                                expect_character(module, ';');
+                                >type = new_type(module, {
+                                        .id = .opaque,
+                                        .name = global_name,
+                                        .scope = &module.scope,
+                                        zero,
+                                        });
+                                top_level_declaration.content = {
+                                    .type = type,
+                                };
+                                top_level_declaration.id = .type;
+                            },
+                            .struct =>
+                            {
+                                skip_space(module);
+
+                                >struct_type: &Type = undefined;
+                                if (type_forward_declaration)
+                                {
+                                    struct_type = type_forward_declaration;
+                                }
+                                else
+                                {
+                                    struct_type = new_type(module, {
+                                            .id = .forward_declaration,
+                                            .name = global_name,
+                                            .scope = &module.scope,
+                                            zero,
+                                            });
+                                }
+
+                                if (consume_character_if_match(module, left_brace))
+                                {
+                                    >field_buffer: [256]Field = undefined;
+
+                                    >byte_size: u64 = 0;
+                                    >byte_alignment: u32 = 1;
+                                    >field_count: u64 = 0;
+
+                                    while (1)
+                                    {
+                                        skip_space(module);
+
+                                        if (consume_character_if_match(module, right_brace))
+                                        {
+                                            break;
+                                        }
+
+                                        >field_index = field_count;
+                                        >field_line = get_line(module);
+                                        >field_name = arena_duplicate_string(module.arena, parse_identifier(module));
+
+                                        skip_space(module);
+                                        expect_character(module, ':');
+                                        skip_space(module);
+
+                                        >field_type = parse_type(module, scope);
+
+                                        >field_byte_size = get_byte_size(field_type);
+                                        >field_byte_alignment = get_byte_alignment(field_type);
+                                        // Align struct size by field alignment
+                                        >field_byte_offset = align_forward(byte_size, @extend(field_byte_alignment));
+
+                                        field_buffer[field_index] = {
+                                            .name = field_name,
+                                            .type = field_type,
+                                            .offset = field_byte_offset,
+                                            .line = field_line,
+                                        };
+
+                                        byte_size = field_byte_offset + field_byte_size;
+                                        byte_alignment = @max(byte_alignment, field_byte_alignment);
+
+                                        skip_space(module);
+
+                                        consume_character_if_match(module, ',');
+
+                                        field_count += 1;
+                                    }
+
+                                    byte_size = align_forward(byte_size, @extend(byte_alignment));
+                                    assert(byte_size % @extend(byte_alignment) == 0);
+
+                                    skip_space(module);
+                                    consume_character_if_match(module, ';');
+
+                                    >fields = arena_allocate_slice[Field](module.arena, field_count);
+                                    memcpy(@pointer_cast(fields.pointer), @pointer_cast(&field_buffer), field_count * @byte_size(Field));
+
+                                    struct_type.content = {
+                                        .struct = {
+                                            .fields = fields,
+                                            .byte_size = byte_size,
+                                            .byte_alignment = byte_alignment,
+                                            .line = global_line,
+                                            zero,
+                                        },
+                                    };
+                                    struct_type.id = .struct;
+                                }
+                                else
+                                {
+                                    if (type_forward_declaration)
+                                    {
+                                        report_error(module, "TODO: type_forward_declaration exists");
+                                    }
+
+                                    expect_character(module, ';');
+                                }
+
+                                top_level_declaration.content = {
+                                    .type = struct_type,
+                                };
+                                top_level_declaration.id = .type;
+                            },
+                            .typealias =>
+                            {
+                                >aliased_type = parse_type(module, scope);
+
+                                if (!consume_character_if_match(module, ';'))
+                                {
+                                    report_error(module, "Expected semicolon after alias");
+                                }
+
+                                >alias_type = new_type(module, {
+                                        .content = {
+                                        .alias = {
+                                        .type = aliased_type,
+                                        .scope = scope,
+                                        .line = global_line,
+                                        },
+                                        },
+                                        .id = .alias,
+                                        .name = global_name,
+                                        .scope = scope,
+                                        zero,
+                                        });
+                                top_level_declaration.content = {
+                                    .type = alias_type,
+                                };
+                                top_level_declaration.id = .type;
+                            },
+                            .union =>
+                            {
+                                skip_space(module);
+                                expect_character(module, left_brace);
+
+                                >union_type: &Type = undefined;
+
+                                if (type_forward_declaration)
+                                {
+                                    union_type = type_forward_declaration;
+                                }
+                                else
+                                {
+                                    union_type = new_type(module, {
+                                            .id = .forward_declaration,
+                                            .name = global_name,
+                                            .scope = &module.scope,
+                                            zero,
+                                            });
+                                }
+
+                                >field_count: u64 = 0;
+                                >biggest_field: u64 = 0;
+                                >alignment: u32 = 1;
+                                >byte_size: u64 = 0;
+
+                                >field_buffer: [64]UnionField = undefined;
+
+                                while (1)
+                                {
+                                    skip_space(module);
+
+                                    if (consume_character_if_match(module, right_brace))
+                                    {
+                                        break;
+                                    }
+
+                                    >field_index = field_count;
+                                    field_count += 1;
+
+                                    >field_line = get_line(module);
+                                    >field_name = arena_duplicate_string(module.arena, parse_identifier(module));
+
+                                    skip_space(module);
+                                    expect_character(module, ':');
+                                    skip_space(module);
+
+                                    >field_type = parse_type(module, scope);
+
+                                    >field_alignment = get_byte_alignment(field_type);
+                                    >field_size = get_byte_size(field_type);
+
+                                    field_buffer[field_index] = {
+                                        .type = field_type,
+                                        .name = field_name,
+                                        .line = field_line,
+                                    };
+
+                                    biggest_field = @select(field_size > byte_size, field_index, biggest_field);
+                                    alignment = @max(alignment, field_alignment);
+                                    byte_size = @max(byte_size, field_size);
+
+                                    skip_space(module);
+
+                                    consume_character_if_match(module, ',');
+                                }
+
+                                skip_space(module);
+                                consume_character_if_match(module, ';');
+
+                                >fields = arena_allocate_slice[UnionField](module.arena, field_count);
+                                memcpy(@pointer_cast(fields.pointer), @pointer_cast(&field_buffer), field_count * @byte_size(UnionField));
+
+                                >biggest_size = get_byte_size(fields[biggest_field].type);
+                                assert(biggest_size == byte_size);
+
+                                union_type.content.union = {
                                     .fields = fields,
                                     .byte_size = byte_size,
-                                    .byte_alignment = byte_alignment,
+                                    .byte_alignment = alignment,
                                     .line = global_line,
-                                    zero,
-                                },
-                            };
-                            struct_type.id = .struct;
-                        }
-                        else
-                        {
-                            if (type_forward_declaration)
-                            {
-                                report_error(module, "TODO: type_forward_declaration exists");
-                            }
+                                    .biggest_field = biggest_field,
+                                };
+                                union_type.id = .union;
 
-                            expect_character(module, ';');
-                        }
-                    },
-                    .typealias =>
-                    {
-                        >aliased_type = parse_type(module, scope);
-
-                        if (!consume_character_if_match(module, ';'))
-                        {
-                            report_error(module, "Expected semicolon after alias");
-                        }
-
-                        >alias_type = new_type(module, {
-                            .content = {
-                                .alias = {
-                                    .type = aliased_type,
-                                    .scope = scope,
-                                    .line = global_line,
-                                },
+                                top_level_declaration.content = {
+                                    .type = union_type,
+                                };
+                                top_level_declaration.id = .type;
                             },
-                            .id = .alias,
-                            .name = global_name,
-                            .scope = scope,
-                            zero,
-                        });
-                    },
-                    .union =>
-                    {
-                        skip_space(module);
-                        expect_character(module, left_brace);
-
-                        >union_type: &Type = undefined;
-
-                        if (type_forward_declaration)
-                        {
-                            union_type = type_forward_declaration;
-                        }
-                        else
-                        {
-                            union_type = new_type(module, {
-                                .id = .forward_declaration,
-                                .name = global_name,
-                                .scope = &module.scope,
-                                zero,
-                            });
-                        }
-
-                        >field_count: u64 = 0;
-                        >biggest_field: u64 = 0;
-                        >alignment: u32 = 1;
-                        >byte_size: u64 = 0;
-
-                        >field_buffer: [64]UnionField = undefined;
-
-                        while (1)
-                        {
-                            skip_space(module);
-
-                            if (consume_character_if_match(module, right_brace))
-                            {
-                                break;
-                            }
-
-                            >field_index = field_count;
-                            field_count += 1;
-
-                            >field_line = get_line(module);
-                            >field_name = arena_duplicate_string(module.arena, parse_identifier(module));
-
-                            skip_space(module);
-                            expect_character(module, ':');
-                            skip_space(module);
-
-                            >field_type = parse_type(module, scope);
-
-                            >field_alignment = get_byte_alignment(field_type);
-                            >field_size = get_byte_size(field_type);
-
-                            field_buffer[field_index] = {
-                                .type = field_type,
-                                .name = field_name,
-                                .line = field_line,
-                            };
-
-                            biggest_field = @select(field_size > byte_size, field_index, biggest_field);
-                            alignment = @max(alignment, field_alignment);
-                            byte_size = @max(byte_size, field_size);
-
-                            skip_space(module);
-
-                            consume_character_if_match(module, ',');
-                        }
-
-                        skip_space(module);
-                        consume_character_if_match(module, ';');
-
-                        >fields = arena_allocate_slice[UnionField](module.arena, field_count);
-                        memcpy(@pointer_cast(fields.pointer), @pointer_cast(&field_buffer), field_count * @byte_size(UnionField));
-
-                        >biggest_size = get_byte_size(fields[biggest_field].type);
-                        assert(biggest_size == byte_size);
-
-                        union_type.content.union = {
-                            .fields = fields,
-                            .byte_size = byte_size,
-                            .byte_alignment = alignment,
-                            .line = global_line,
-                            .biggest_field = biggest_field,
-                        };
-                        union_type.id = .union;
-                    },
+                    }
+                }
+                else
+                {
+                    set_checkpoint(module, checkpoint);
                 }
             }
-            else
+
+            if (!is_global_keyword)
             {
-                set_checkpoint(module, checkpoint);
+                >initial_value = parse_value(module, scope, zero);
+                skip_space(module);
+                expect_character(module, ';');
+
+                >global_storage = new_value(module);
+                global_storage.& = {
+                    .id = .global,
+                    zero,
+                };
+
+                >global = new_global(module);
+                global.& = {
+                    .variable = {
+                        .storage = global_storage,
+                        .type = global_type,
+                        .scope = scope,
+                        .name = global_name,
+                        .line = global_line,
+                        .column = global_column,
+                    },
+                    .initial_value = initial_value,
+                    .linkage = .internal, // TODO: linkage
+                    zero,
+                };
+
+                top_level_declaration.content = {
+                    .global = global,
+                };
+                top_level_declaration.id = .global;
             }
         }
 
-        if (!is_global_keyword)
+        previous_top_level_declaration.next = top_level_declaration;
+        previous_top_level_declaration = top_level_declaration;
+    }
+
+    if (is_block)
+    {
+        if (module.offset == module.content.length)
         {
-            >initial_value = parse_value(module, scope, zero);
-            skip_space(module);
-            expect_character(module, ';');
-
-            >global_storage = new_value(module);
-            global_storage.& = {
-                .id = .global,
-                zero,
-            };
-
-            >global = new_global(module);
-            global.& = {
-                .variable = {
-                    .storage = global_storage,
-                    .type = global_type,
-                    .scope = scope,
-                    .name = global_name,
-                    .line = global_line,
-                    .column = global_column,
-                },
-                .initial_value = initial_value,
-                .linkage = .internal, // TODO: linkage
-                zero,
-            };
+            report_error(module, "When block was not properly terminated");
         }
     }
+
+    return first_top_level_declaration;
 }
 
 resolve_type_in_place_abi = fn (module: &Module, type: &Type) void
@@ -21893,7 +22021,8 @@ compile = fn (arena: &Arena, options: CompileOptions) void
         };
     }
 
-    parse(&module);
+    >first_top_level_declaration = parse(&module, 0);
+    module.first_top_level_declaration = first_top_level_declaration;
     analyze(&module);
     emit(&module);
     link(&module);
