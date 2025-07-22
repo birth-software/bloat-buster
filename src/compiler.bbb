@@ -9138,6 +9138,9 @@ parse = fn (module: &Module) void
 
                         assert(alignment == most_aligned_type_alignment);
 
+                        >biggest_alignment = get_byte_alignment(biggest_field_type);
+                        assert(biggest_alignment == alignment);
+
                         union_type.content.union = {
                             .fields = fields,
                             .byte_size = byte_size,
