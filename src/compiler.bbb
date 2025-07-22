@@ -8046,12 +8046,17 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                                             .triple_dot =>
                                             {
                                                 >last_case_value = parse_value(module, scope, zero);
+
                                                 clause_discriminant = {
                                                     .content = {
                                                         .range = [ first_case_value, last_case_value ],
                                                     },
                                                     .id = .range,
                                                 };
+
+                                                skip_space(module);
+
+                                                consume_character_if_match(module, ',');
                                             },
                                             else =>
                                             {
