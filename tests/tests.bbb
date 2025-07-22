@@ -1,4 +1,4 @@
-require = fn (ok: u1) void
+require: fn (ok: u1) void = 
 {
     if (!ok)
     {
@@ -6,7 +6,7 @@ require = fn (ok: u1) void
     }
 }
 
-return_constant = fn () s32 // This is a comment
+return_constant: fn () s32 = // This is a comment
 // This is a comment
 { // This is a comment
     // This is a comment
@@ -14,140 +14,140 @@ return_constant = fn () s32 // This is a comment
 }// This is a comment
 // This is a comment
 
-constant_add = fn () s32
+constant_add: fn () s32 =
 {
     return -1 + 1;
 }
 
-constant_and = fn () s32
+constant_and: fn () s32 = 
 {
     return 1 & 2;
 }
 
-constant_div = fn () s32
+constant_div: fn () s32 =
 {
     return 0 / 5;
 }
 
-constant_mul = fn () s32
+constant_mul: fn () s32 =
 {
     return 1 * 0;
 }
 
-constant_rem = fn () s32
+constant_rem: fn () s32 = 
 {
     return 5 % 5;
 }
 
-constant_or = fn () s32
+constant_or: fn () s32 = 
 {
     return 0 | 0;
 }
 
-constant_sub = fn () s32
+constant_sub: fn () s32 = 
 {
     return 1 - 1;
 }
 
-constant_xor = fn () s32
+constant_xor: fn () s32 = 
 {
     return 0 ^ 0;
 }
 
-constant_shift_left = fn () s32
+constant_shift_left: fn () s32 = 
 {
     return 0 << 1;
 }
 
-constant_shift_right = fn () s32
+constant_shift_right: fn () s32 = 
 {
     return 0 >> 1;
 }
 
-minimal_stack = fn () s32
+minimal_stack: fn () s32 = 
 {
-    >a: s32 = 0;
+    a: s32 = 0;
     return a;
 }
 
-minimal_stack_arithmetic0 = fn () s32
+minimal_stack_arithmetic0: fn () s32 = 
 {
-    >a: s32 = 1;
+    a: s32 = 1;
     return a - 1;
 }
 
-minimal_stack_arithmetic1 = fn () s32
+minimal_stack_arithmetic1: fn () s32 = 
 {
-    >a: s32 = 1;
-    >b = a - 1;
+    a: s32 = 1;
+    b := a - 1;
     return b;
 }
 
-minimal_stack_arithmetic2 = fn () s32
+minimal_stack_arithmetic2: fn () s32 = 
 {
-    >a: s32 = 1;
-    >b = 1 - a;
+    a: s32 = 1;
+    b := 1 - a;
     return b;
 }
 
-stack_negation = fn () s32
+stack_negation: fn () s32 = 
 {
-    >v: s32 = 0;
+    v: s32 = 0;
     return -v;
 }
 
-stack_add = fn () s32
+stack_add: fn () s32 = 
 {
-    >a: s32 = -1;
-    >b: s32 = 1;
+    a: s32 = -1;
+    b: s32 = 1;
     return a + b;
 }
 
-stack_sub = fn () s32
+stack_sub: fn () s32 = 
 {
-    >a: s32 = 1;
-    >b: s32 = 1;
+    a: s32 = 1;
+    b: s32 = 1;
     return a - b;
 }
 
-extend = fn () s32
+extend: fn () s32 = 
 {
-    >a: s8 = 0;
+    a: s8 = 0;
     return @extend(a);
 }
 
-integer_max = fn () s32
+integer_max: fn () s32 = 
 {
-    >a = @integer_max(u64);
+    a := @integer_max(u64);
     return @truncate(a + 1);
 }
 
-integer_hex = fn () s32
+integer_hex: fn () s32 = 
 {
-    >result: s32 = 0x0;
+    result: s32 = 0x0;
     return result;
 }
 
-basic_pointer = fn () s32
+basic_pointer: fn () s32 = 
 {
-    >a: s32 = 0;
-    >pointer = &a;
+    a: s32 = 0;
+    pointer := &a;
     return pointer.&;
 }
 
-basic_call_foo = fn () s32
+basic_call_foo: fn () s32 = 
 {
     return 0;
 }
 
-basic_call = fn () s32
+basic_call: fn () s32 = 
 {
     return basic_call_foo();
 }
 
-basic_branch = fn () s32
+basic_branch: fn () s32 = 
 {
-    >result: s32 = 1;
+    result: s32 = 1;
     if (result != 1)
     {
         return 1;
@@ -158,33 +158,32 @@ basic_branch = fn () s32
     }
 }
 
-basic_array = fn () s32
+basic_array: fn () s32 = 
 {
-    >array: [_]s32 = [3, 2, 1, 0];
+    array: [_]s32 = [3, 2, 1, 0];
     return array[3];
 }
 
-BasicEnum = enum
+enum BasicEnum
 {
-    zero = 0,
     one = 1,
     two = 2,
     three = 3,
 }
 
-basic_enum = fn () s32
+basic_enum: fn () s32 = 
 {
-    >a: BasicEnum = .three;
-    >b: BasicEnum = .two;
-    >c: BasicEnum = .one;
-    >a_int: s32 = @extend(@int_from_enum(a));
-    >b_int: s32 = @extend(@int_from_enum(b));
-    >c_int: s32 = @extend(@int_from_enum(c));
+    a: BasicEnum = .three;
+    b: BasicEnum = .two;
+    c: BasicEnum = .one;
+    a_int: s32 = @extend(@int_from_enum(a));
+    b_int: s32 = @extend(@int_from_enum(b));
+    c_int: s32 = @extend(@int_from_enum(c));
 
     return a_int - (b_int + c_int);
 }
 
-basic_slice_receiver = fn (slice: []u8) void
+basic_slice_receiver: fn (slice: []u8) void =
 {
     require(slice.length == 3);
     require(slice[0] == 0);
@@ -192,44 +191,44 @@ basic_slice_receiver = fn (slice: []u8) void
     require(slice[2] == 2);
 }
 
-basic_slice = fn () void
+basic_slice: fn () void =
 {
-    >a: [_]u8 = [0, 1, 2];
+    a: [_]u8 = [0, 1, 2];
     basic_slice_receiver(a[..]);
 }
 
-basic_string = fn () void
+basic_string: fn () void =
 {
-    >string = "abc";
+    string := "abc";
     require(string[0] == 'a');
     require(string[1] == 'b');
     require(string[2] == 'c');
 }
 
-basic_varargs_function = fn [cc(c)] (first_arg: u32, ...) void
+basic_varargs_function: fn [cc(c)] (first_arg: u32, ...) void = 
 {
     require(first_arg == 123456789);
 
-    >va = @va_start();
+    va := @va_start();
 
-    >a = @va_arg(&va, u32);
+    a := @va_arg(&va, u32);
 
     require(a == 987654321);
 
-    >first_arg_b = @va_arg(&va, u32);
+    first_arg_b := @va_arg(&va, u32);
     require(first_arg == first_arg_b);
 }
 
-basic_varargs = fn () void
+basic_varargs: fn () void = 
 {
-    >first_arg: u32 = 123456789;
-    >a: u32 = 987654321;
+    first_arg: u32 = 123456789;
+    a: u32 = 987654321;
     basic_varargs_function(first_arg, a, first_arg);
 }
 
-c_string_length = fn (c_string: &u8) u64
+c_string_length: fn (c_string: &u8) u64 =
 {
-    >it = c_string;
+    it := c_string;
 
     while (it.&)
     {
@@ -239,104 +238,104 @@ c_string_length = fn (c_string: &u8) u64
     return @int_from_pointer(it) - @int_from_pointer(c_string);
 }
 
-basic_while = fn (argc: s32, argv: &&u8) void
+basic_while: fn (argc: s32, argv: &&u8) void = 
 {
     require(argc != 0);
 
-    >first_arg = argv[0];
+    first_arg := argv[0];
     require(first_arg != zero);
 
-    >arg_length = c_string_length(first_arg);
+    arg_length := c_string_length(first_arg);
     require(arg_length != 0);
 
     require(first_arg[arg_length] == 0);
 }
 
-pointer_function = fn (v: &s32) void
+pointer_function: fn (v: &s32) void = 
 {
     v.& = 1;
 }
 
-pointer = fn () s32
+pointer: fn () s32 = 
 {
-    >value: s32 = 0;
+    value: s32 = 0;
     pointer_function(&value);
     return @extend(value == 0);
 }
 
-pointer_cast = fn () s32
+pointer_cast: fn () s32 = 
 {
-    >result: u32 = 0;
-    >p = &result;
-    >signed_pointer: &s32 = @pointer_cast(p);
+    result: u32 = 0;
+    p := &result;
+    signed_pointer: &s32 = @pointer_cast(p);
     return signed_pointer.&;
 }
 
-u1_return_foo = fn () u1
+u1_return_foo: fn () u1 =
 {
-    >result: u1 = 0;
+    result: u1 = 0;
     return result;
 }
 
-u1_return = fn () s32
+u1_return: fn () s32 = 
 {
-    >result = u1_return_foo();
+    result := u1_return_foo();
     return @extend(result);
 }
 
-local_type_inference_foo = fn () s32
+local_type_inference_foo: fn () s32 = 
 {
     return 0;
 }
 
-local_type_inference = fn () s32
+local_type_inference: fn () s32 = 
 {
-    >a: s32 = 0;
-    >result = local_type_inference_foo() + a;
+    a: s32 = 0;
+    result := local_type_inference_foo() + a;
     return result;
 }
 
 basic_global_foo: s32 = 0;
 
-basic_global = fn () s32
+basic_global: fn () s32 = 
 {
     return basic_global_foo;
 }
 
-basic_function_pointer_callback = fn () s32
+basic_function_pointer_callback: fn () s32 = 
 {
     return 123;
 }
 
-basic_function_pointer = fn () s32
+basic_function_pointer: fn () s32 = 
 {
-    >function_pointer = &basic_function_pointer_callback;
+    function_pointer := &basic_function_pointer_callback;
     return function_pointer() - 123;
 }
 
-[extern] strlen = fn [cc(c)] (string: &u8) s64;
+strlen [extern] : fn [cc(c)] (string: &u8) s64;
 
-basic_extern = fn () void
+basic_extern: fn () void = 
 {
-    >length = strlen("abc");
+    length := strlen("abc");
     require(length == 3);
 }
 
-basic_byte_size = fn () void
+basic_byte_size: fn () void = 
 {
-    >sizeofu8: u8 = @byte_size(u8);
+    sizeofu8: u8 = @byte_size(u8);
     require(sizeofu8 == 1);
-    >sizeofu16: u8 = @byte_size(u16);
+    sizeofu16: u8 = @byte_size(u16);
     require(sizeofu16 == 2);
-    >sizeofs32: s32 = @byte_size(s32);
+    sizeofs32: s32 = @byte_size(s32);
     require(sizeofs32 == 4);
-    >sizeofs64: s32 = @byte_size(s64);
+    sizeofs64: s32 = @byte_size(s64);
     require(sizeofs64 == 8);
 }
 
-unsigned_assignment_operators = fn(n: s32) s32
+unsigned_assignment_operators: fn(n: s32) s32 = 
 {
-    >result: u32 = @extend(n);
+    result: u32 = @extend(n);
     result >>= 1;
     result <<= 1;
     result ^= 1;
@@ -351,10 +350,10 @@ unsigned_assignment_operators = fn(n: s32) s32
     return @extend(result);
 }
 
-assignment_operators = fn () s32
+assignment_operators: fn () s32 = 
 {
-    >result: s32 = 0;
-    >pointer = &result;
+    result: s32 = 0;
+    pointer := &result;
     pointer -= 1;
     pointer += 1;
     result >>= 1;
@@ -370,15 +369,15 @@ assignment_operators = fn () s32
     return unsigned_assignment_operators(result);
 }
 
-not_pointer = fn () s32
+not_pointer: fn () s32 = 
 {
-    >a: s32 = 0;
-    >ptr = &a;
-    >b = !ptr;
+    a: s32 = 0;
+    ptr := &a;
+    b := !ptr;
     return @extend(b);
 }
 
-BasicBitField = bits u8
+bits BasicBitField u8
 {
     a: u2,
     b: u2,
@@ -386,9 +385,9 @@ BasicBitField = bits u8
     d: u2,
 }
 
-basic_bits = fn () void
+basic_bits: fn () void = 
 {
-    >bf: BasicBitField = {
+    bf: BasicBitField = {
         .a = 3,
         .b = 2,
         .c = 2,
@@ -401,15 +400,15 @@ basic_bits = fn () void
     require(bf.d == 3);
 }
 
-BitsNoBackingType = bits
+bits BitsNoBackingType
 {
     a: u1,
     b: u1,
 }
 
-bits_no_backing_type = fn () void
+bits_no_backing_type: fn () void = 
 {
-    >bf: BitsNoBackingType = {
+    bf: BitsNoBackingType = {
         .a = 1,
         .b = 1,
     };
@@ -418,16 +417,16 @@ bits_no_backing_type = fn () void
     require(bf.b == 1);
 }
 
-BitsU1 = bits u32
+bits BitsU1 u32
 {
     a: u1,
     b: u1,
     c: u1,
 }
 
-bits_return_u1_function = fn () u1
+bits_return_u1_function: fn () u1 =
 {
-    >b1: BitsU1 = {
+    b1: BitsU1 = {
         .a = 1,
         .b = 1,
         .c = 0,
@@ -436,28 +435,28 @@ bits_return_u1_function = fn () u1
     return b1.c;
 }
 
-bits_return_u1 = fn () void
+bits_return_u1: fn () void = 
 {
-    >b1 = bits_return_u1_function();
+    b1 := bits_return_u1_function();
     require(b1 == 0);
 }
 
-BitsZero = bits
+bits BitsZero
 {
     a: u1,
     b: u1,
     c: u1,
 }
 
-bits_zero = fn () void
+bits_zero: fn () void = 
 {
-    >a_bz: BitsZero = zero;
+    a_bz: BitsZero = zero;
 
     require(a_bz.a == 0);
     require(a_bz.b == 0);
     require(a_bz.c == 0);
 
-    >b_bz: BitsZero = {
+    b_bz: BitsZero = {
         .a = 1,
         .b = 1,
         zero,
@@ -468,17 +467,17 @@ bits_zero = fn () void
     require(b_bz.c == 0);
 }
 
-basic_comparison_trivial = fn (a: s32, b: s32) u1
+basic_comparison_trivial: fn (a: s32, b: s32) u1 =
 {
     return a + 1 == b + 1;
 }
 
-basic_comparison = fn (argument_count: s32) void
+basic_comparison: fn (argument_count: s32) void = 
 {
     require(basic_comparison_trivial(argument_count, argument_count));
 }
 
-BasicGlobalStruct = struct
+struct BasicGlobalStruct
 {
     a: u32,
     b: u32,
@@ -491,16 +490,16 @@ basic_global_struct_variable: BasicGlobalStruct = {
     .c = 3,
 };
 
-basic_global_struct = fn () void
+basic_global_struct: fn () void = 
 {
     require(basic_global_struct_variable.a == 1);
     require(basic_global_struct_variable.b == 2);
     require(basic_global_struct_variable.c == 3);
 }
 
-if_no_else = fn () s32
+if_no_else: fn () s32 = 
 {
-    >a: s32 = 5;
+    a: s32 = 5;
     if (a == 2)
     {
         return 1;
@@ -509,16 +508,16 @@ if_no_else = fn () s32
     return 0;
 }
 
-if_no_else_void = fn () void
+if_no_else_void: fn () void = 
 {
-    >result: s32 = 0;
+    result: s32 = 0;
     if (result != 0)
     {
         @trap();
     }
 }
 
-Indirect = struct
+struct Indirect
 {
     a: u32,
     b: u32,
@@ -528,12 +527,12 @@ Indirect = struct
     f: u32,
 }
 
-indirect_ret = fn [cc(c)] () Indirect
+indirect_ret: fn [cc(c)] () Indirect =
 {
     return { .a = 56, .b = 57, .c = 58, .d = 59, .e = 60, .f = 61 };
 }
 
-indirect_arg = fn [cc(c)] (s: Indirect) void
+indirect_arg: fn [cc(c)] (s: Indirect) void = 
 {
     require(s.a == 56);
     require(s.b == 57);
@@ -543,9 +542,9 @@ indirect_arg = fn [cc(c)] (s: Indirect) void
     require(s.f == 61);
 }
 
-basic_indirect = fn () void
+basic_indirect: fn () void = 
 {
-    >s = indirect_ret();
+    s := indirect_ret();
     require(s.a == 56);
     require(s.b == 57);
     require(s.c == 58);
@@ -555,13 +554,13 @@ basic_indirect = fn () void
     indirect_arg(s);
 }
 
-IndirectVarArgs = struct
+struct IndirectVarArgs
 {
     a: u64,
     b: u64,
     c: u64,
     d: u64,
-    e: u64
+    e: u64,
     f: u64,
     g: u64,
     h: u64,
@@ -569,16 +568,16 @@ IndirectVarArgs = struct
     j: u64
 }
 
-indirect_varargs_function = fn [cc(c)] (first_arg: u32, ...) void
+indirect_varargs_function: fn [cc(c)] (first_arg: u32, ...) void = 
 {
     if (first_arg != 123456789)
     {
         @trap();
     }
 
-    >va = @va_start();
+    va := @va_start();
 
-    >s = @va_arg(&va, IndirectVarArgs);
+    s := @va_arg(&va, IndirectVarArgs);
     require(s.a == 9);
     require(s.b == 8);
     require(s.c == 7);
@@ -591,10 +590,10 @@ indirect_varargs_function = fn [cc(c)] (first_arg: u32, ...) void
     require(s.j == 0);
 }
 
-indirect_varargs = fn () void
+indirect_varargs: fn () void = 
 {
-    >first_arg: u32 = 123456789;
-    >s: IndirectVarArgs = {
+    first_arg: u32 = 123456789;
+    s: IndirectVarArgs = {
         .a = 9,
         .b = 8,
         .c = 7,
@@ -609,70 +608,70 @@ indirect_varargs = fn () void
     indirect_varargs_function(first_arg, s);
 }
 
-return_type_builtin = fn () s32
+return_type_builtin: fn () s32 = 
 {
-    >result: @ReturnType = 0;
+    result: @ReturnType = 0;
     return result;
 }
 
-Struct_u64_u64 = struct
+struct Struct_u64_u64
 {
     a: u64,
     b: u64,
 }
 
-return_struct_u64_u64_function = fn [cc(c)] () Struct_u64_u64
+return_struct_u64_u64_function: fn [cc(c)] () Struct_u64_u64 =
 {
     return { .a = 1, .b = 2 };
 }
 
-return_struct_u64_u64 = fn [cc(c)] () s32
+return_struct_u64_u64: fn [cc(c)] () s32 = 
 {
-    >r = return_struct_u64_u64_function();
+    r := return_struct_u64_u64_function();
     return @truncate(r.a + r.b - 3);
 }
 
-select = fn () s32
+select: fn () s32 = 
 {
-    >boolean: u1 = 1;
-    >left: s32 = 0;
-    >right: s32 = 1;
+    boolean: u1 = 1;
+    left: s32 = 0;
+    right: s32 = 1;
     return @select(boolean, left, right);
 }
 
-slice2 = fn (argc: s32, argv: &&u8) void
+slice2: fn (argc: s32, argv: &&u8) void = 
 {
     require(argc != 0);
-    >arg_ptr = argv[0];
-    >a1 = arg_ptr[0..c_string_length(arg_ptr)];
-    >a2 = a1[1..];
+    arg_ptr := argv[0];
+    a1 := arg_ptr[0..c_string_length(arg_ptr)];
+    a2 := a1[1..];
 
     require(a1.pointer == a2.pointer - 1);
     require(a1.length == a2.length + 1);
 }
 
-SA1 = struct
+struct SA1
 {
     a: u8,
     b: u8,
     c: u8,
 }
 
-SA2 = struct
+struct SA2
 {
     a: u8,
     b: u8,
     c: u8,
 }
 
-struct_assignment = fn () void
+struct_assignment: fn () void = 
 {
-    >s1: SA1 = {
+    s1: SA1 = {
         .a = 255,
         .b = 254,
         .c = 253,
     };
-    >s2: SA2 = {
+    s2: SA2 = {
         .a = s1.a,
         .b = s1.b,
         .c = s1.c,
@@ -687,21 +686,21 @@ struct_assignment = fn () void
     require(s2.c == 253);
 }
 
-BasicStruct = struct
+struct BasicStruct
 {
     x: s32,
     y: s32,
     z: s32,
 }
 
-basic_struct_fn = fn (s: BasicStruct) s32
+basic_struct_fn: fn (s: BasicStruct) s32 = 
 {
     return s.z;
 }
 
-basic_struct = fn () s32
+basic_struct: fn () s32 = 
 {
-    >a: BasicStruct = {
+    a: BasicStruct = {
         .x = 2,
         .y = 1,
         .z = 0,
@@ -710,15 +709,15 @@ basic_struct = fn () s32
     return basic_struct_fn(a);
 }
 
-struct_zero = fn () void
+struct_zero: fn () void = 
 {
-    >a: SA1 = zero;
+    a: SA1 = zero;
 
     require(a.a == 0);
     require(a.b == 0);
     require(a.c == 0);
 
-    >b: SA1 = {
+    b: SA1 = {
         .a = 1,
         .b = 1,
         zero,
@@ -729,9 +728,9 @@ struct_zero = fn () void
     require(b.c == 0);
 }
 
-basic_unreachable = fn () s32
+basic_unreachable: fn () s32 = 
 {
-    >result: s32 = 0;
+    result: s32 = 0;
 
     if (result != 0)
     {
@@ -741,7 +740,7 @@ basic_unreachable = fn () s32
     return result;
 }
 
-S = struct
+struct S
 {
     a: u32,
     b: u32,
@@ -750,14 +749,14 @@ S = struct
     e: u64
 }
 
-va_arg_function = fn [cc(c)] (first_arg: u32, ...) void
+va_arg_function: fn [cc(c)] (first_arg: u32, ...) void = 
 {
-    >va = @va_start();
+    va := @va_start();
 
-    >a = @va_arg(&va, u32);
-    >b = @va_arg(&va, S);
-    >c = @va_arg(&va, s64); 
-    >d = @va_arg(&va, s32); 
+    a := @va_arg(&va, u32);
+    b := @va_arg(&va, S);
+    c := @va_arg(&va, s64); 
+    d := @va_arg(&va, s32); 
 
     require(first_arg == 123456789);
     require(a == 123);
@@ -772,34 +771,35 @@ va_arg_function = fn [cc(c)] (first_arg: u32, ...) void
     @va_end(&va);
 }
 
-S2 = struct
+struct S2
 {
     a: u64,
     b: u64,
 }
 
-va_arg_function2 = fn [cc(c)] (...) void
+va_arg_function2: fn [cc(c)] (...) void = 
 {
-    >va = @va_start();
-    >s2 = @va_arg(&va, S2);
+    va := @va_start();
+    s2 := @va_arg(&va, S2);
     require(s2.a == 8);
     require(s2.b == 9);
     @va_end(&va);
 }
 
-va_args = fn [cc(c)] () void
+va_args: fn [cc(c)] () void = 
 {
-    >first_arg: u32 = 123456789;
-    >a: u32 = 123;
-    >b: S = { .a = 1, .b = 2, .c = 3, .d = 4, .e = 5 };
-    >c: s64 = -1;
-    >d: s32 = -2;
+    first_arg: u32 = 123456789;
+    a: u32 = 123;
+    b: S = { .a = 1, .b = 2, .c = 3, .d = 4, .e = 5 };
+    c: s64 = -1;
+    d: s32 = -2;
     va_arg_function(first_arg, a, b, c, d);
-    >s2: S2 = { .a = 8, .b = 9 };
+    s2: S2 = { .a = 8, .b = 9 };
     va_arg_function2(s2);
 }
 
-EnumBoolEnum = enum {
+enum EnumBoolEnum
+{
     a,
     b,
     c,
@@ -809,24 +809,24 @@ EnumBoolEnum = enum {
     g,
 }
 
-EnumBoolStruct = struct
+struct EnumBoolStruct
 {
-    enum: EnumBoolEnum,
+    enumerator: EnumBoolEnum,
     bool: u1,
 }
 
-enum_bool_struct = fn () void
+enum_bool_struct: fn () void = 
 {
-    >s: EnumBoolStruct = {
-        .enum = .f,
+    s: EnumBoolStruct = {
+        .enumerator = .f,
         .bool = 1,
     };
 
-    require(s.enum == .f);
+    require(s.enumerator == .f);
     require(s.bool);
 }
 
-BigStruct = struct
+struct BigStruct
 {
     a: u64,
     b: u64,
@@ -835,12 +835,12 @@ BigStruct = struct
     e: u8,
 }
 
-BigUnion = struct
+struct BigUnion
 {
     a: BigStruct,
 }
 
-SmallPackedStruct = bits u8
+bits SmallPackedStruct u8
 {
     a: u2,
     b: u2,
@@ -848,7 +848,7 @@ SmallPackedStruct = bits u8
     d: u2,
 }
 
-SmallStructInts = struct
+struct SmallStructInts
 {
     a: u8,
     b: u8,
@@ -856,21 +856,21 @@ SmallStructInts = struct
     d: u8,
 }
 
-SplitStructInt = struct
+struct SplitStructInt
 {
     a: u64,
     b: u8,
     c: u32,
 }
 
-MedStructInts = struct
+struct MedStructInts
 {
     x: s32,
     y: s32,
     z: s32,
 }
 
-Rect = struct
+struct Rect
 {
     left: u32,
     right: u32,
@@ -878,106 +878,106 @@ Rect = struct
     bottom: u32,
 }
 
-StructWithArray = struct
+struct StructWithArray
 {
     a: s32,
     padding: [4]u8,
     b: s64,
 }
 
-ByRef = struct
+struct ByRef
 {
     val: s32,
     arr: [15]s32,
 }
 
-ByValOrigin = struct
+struct ByValOrigin
 {
     x: u64,
     y: u64,
     z: u64,
 }
 
-ByValSize = struct
+struct ByValSize
 {
     width: u64,
     height: u64,
     depth: u64,
 }
 
-ByVal = struct
+struct ByVal
 {
     origin: ByValOrigin,
     size: ByValSize,
 }
 
-S128 = struct
+struct S128
 {
     value: s128,
 }
 
-U128 = struct
+struct U128
 {
     value: s128,
 }
 
-[extern] c_u8 = fn [cc(c)] (x: u8) void;
-[extern] c_u16 = fn [cc(c)] (x: u16) void;
-[extern] c_u32 = fn [cc(c)] (x: u32) void;
-[extern] c_u64 = fn [cc(c)] (x: u64) void;
+c_u8 [extern] : fn [cc(c)] (x: u8) void;
+c_u16 [extern] : fn [cc(c)] (x: u16) void;
+c_u32 [extern] : fn [cc(c)] (x: u32) void;
+c_u64 [extern] : fn [cc(c)] (x: u64) void;
 
-[extern] c_s8 = fn [cc(c)] (x: s8) void;
-[extern] c_s16 = fn [cc(c)] (x: s16) void;
-[extern] c_s32 = fn [cc(c)] (x: s32) void;
-[extern] c_s64 = fn [cc(c)] (x: s64) void;
+c_s8 [extern] : fn [cc(c)] (x: s8) void;
+c_s16 [extern] : fn [cc(c)] (x: s16) void;
+c_s32 [extern] : fn [cc(c)] (x: s32) void;
+c_s64 [extern] : fn [cc(c)] (x: s64) void;
 
-[extern] c_struct_u128 = fn [cc(c)] (x: U128) void;
-[extern] c_struct_i128 = fn [cc(c)] (x: S128) void;
+c_struct_u128 [extern] : fn [cc(c)] (x: U128) void;
+c_struct_i128 [extern] : fn [cc(c)] (x: S128) void;
 
-[extern] c_five_integers = fn [cc(c)] (a: s32, b: s32, c: s32, d: s32, e: s32) void;
+c_five_integers [extern] : fn [cc(c)] (a: s32, b: s32, c: s32, d: s32, e: s32) void;
 
-[extern] c_f32 = fn [cc(c)] (x: f32) void;
-[extern] c_f64 = fn [cc(c)] (x: f64) void;
+c_f32 [extern] : fn [cc(c)] (x: f32) void;
+c_f64 [extern] : fn [cc(c)] (x: f64) void;
 
-[extern] c_five_floats = fn [cc(c)] (a: f32, b: f32, c: f32, d: f32, e: f32) void;
+c_five_floats [extern] : fn [cc(c)] (a: f32, b: f32, c: f32, d: f32, e: f32) void;
 
-[extern] c_ptr = fn [cc(c)] (x: &u8) void;
+c_ptr [extern] : fn [cc(c)] (x: &u8) void;
 
-[extern] c_bool = fn [cc(c)] (x: u8) void;
+c_bool [extern] : fn [cc(c)] (x: u8) void;
 
-ComplexFloat = struct
+struct ComplexFloat
 {
     real: f32,
     imaginary: f32,
 }
 
-ComplexDouble = struct
+struct ComplexDouble
 {
     real: f64,
     imaginary: f64,
 }
 
-[extern] c_cmultf = fn [cc(c)] (a: ComplexFloat, b: ComplexFloat) ComplexFloat;
-[extern] c_cmultd = fn [cc(c)] (a: ComplexDouble, b: ComplexDouble) ComplexDouble;
+c_cmultf [extern]: fn [cc(c)] (a: ComplexFloat, b: ComplexFloat) ComplexFloat;
+c_cmultd [extern]: fn [cc(c)] (a: ComplexDouble, b: ComplexDouble) ComplexDouble;
 
-[extern] c_cmultf_comp = fn [cc(c)] (a_r: f32, a_i: f32, b_r: f32, b_i: f32) ComplexFloat;
-[extern] c_cmultd_comp = fn [cc(c)] (a_r: f64, a_i: f64, b_r: f64, b_i: f64) ComplexDouble;
+c_cmultf_comp [extern]: fn [cc(c)] (a_r: f32, a_i: f32, b_r: f32, b_i: f32) ComplexFloat;
+c_cmultd_comp [extern]: fn [cc(c)] (a_r: f64, a_i: f64, b_r: f64, b_i: f64) ComplexDouble;
 
-[extern] c_ret_struct_u64_u64 = fn [cc(c)] () Struct_u64_u64;
+c_ret_struct_u64_u64 [extern]: fn [cc(c)] () Struct_u64_u64;
 
-Struct_i32_i32 = struct
+struct Struct_i32_i32
 {
     a: s32,
     b: s32,
 }
 
-BigPackedStruct = bits
+bits BigPackedStruct
 {
     a: u64,
     b: u64,
 }
 
-MedStructMixed = struct
+struct MedStructMixed
 {
     a: u32,
     b: f32,
@@ -985,14 +985,14 @@ MedStructMixed = struct
     d: u32,
 }
 
-SplitStructMixed = struct
+struct SplitStructMixed
 {
     a: u64,
     b: u8,
     c: f32,
 }
 
-FloatRect = struct
+struct FloatRect
 {
     left: f32,
     right: f32,
@@ -1000,65 +1000,65 @@ FloatRect = struct
     bottom: f32,
 }
 
-Struct_f32 = struct
+struct Struct_f32
 {
     a: f32,
 }
 
-Struct_f64 = struct
+struct Struct_f64
 {
     a: f64,
 }
 
-Struct_f32f32_f32_Struct = struct
+struct Struct_f32f32_f32_Struct
 {
     b: f32,
     c: f32,
 }
 
-Struct_f32f32_f32 = struct
+struct Struct_f32f32_f32
 {
     a: Struct_f32f32_f32_Struct,
     d: f32,
 }
 
-Struct_f32_f32f32_Struct = struct
+struct Struct_f32_f32f32_Struct
 {
     c: f32,
     d: f32,
 }
 
-Struct_f32_f32f32 = struct
+struct Struct_f32_f32f32
 {
     a: f32,
     b: Struct_f32_f32f32_Struct,
 }
 
-Struct_u32_Union_u32_u32u32_Union_Struct = struct
+struct Struct_u32_Union_u32_u32u32_Union_Struct
 {
     d: u32,
     e: u32,
 }
 
-Struct_u32_Union_u32_u32u32_Union = union
+union Struct_u32_Union_u32_u32u32_Union
 {
     c: Struct_u32_Union_u32_u32u32_Union_Struct,
 }
 
-Struct_u32_Union_u32_u32u32 = struct
+struct Struct_u32_Union_u32_u32u32
 {
     a: u32,
     b: Struct_u32_Union_u32_u32u32_Union,
-};
+}
 
-Vector3 = struct
+struct Vector3
 {
     x: f32,
     y: f32,
     z: f32,
 }
 
-Vector5 = struct
+struct Vector5
 {
     x: f32,
     y: f32,
@@ -1067,282 +1067,282 @@ Vector5 = struct
     q: f32,
 }
 
-FloatArrayStructOrigin = struct
+struct FloatArrayStructOrigin
 {
     x: f64,
     y: f64,
 }
 
-FloatArrayStructSize = struct
+struct FloatArrayStructSize
 {
     width: f64,
     height: f64,
 }
 
-FloatArrayStruct = struct
+struct FloatArrayStruct
 {
     origin: FloatArrayStructOrigin,
     size: FloatArrayStructSize,
 }
 
-SmallVec = typealias vector[2]u32;
-MediumVec = typealias vector[4]u64;
-BigVec = typealias vector[8]u64;
+typealias SmallVec = vector[2]u32;
+typealias MediumVec = vector[4]u64;
+typealias BigVec = vector[8]u64;
 
-Vector2 = struct
+struct Vector2
 {
     x: f32,
     y: f32,
 }
 
-DC = struct
+struct DC
 {
     v1: f64,
     v2: u8,
 }
 
-CFF = struct
+struct CFF
 {
     v1: u8,
     v2: f32,
     v3: f32,
 }
 
-PD = struct
+struct PD
 {
     v1: &u8,
     v2: f64,
 }
 
-f128_struct = struct
+struct f128_struct
 {
     a: f128,
 }
 
-f128_f128_struct = struct
+struct f128_f128_struct
 {
     a: f128,
     b: f128,
 }
 
-[extern] c_struct_u64_u64_0 = fn [cc(c)] (a: Struct_u64_u64) void;
-[extern] c_struct_u64_u64_1 = fn [cc(c)] (a: u64, b: Struct_u64_u64) void;
-[extern] c_struct_u64_u64_2 = fn [cc(c)] (a: u64, b: u64, c: Struct_u64_u64) void;
-[extern] c_struct_u64_u64_3 = fn [cc(c)] (a: u64, b: u64, c: u64, d: Struct_u64_u64) void;
-[extern] c_struct_u64_u64_4 = fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: Struct_u64_u64) void;
-[extern] c_struct_u64_u64_5 = fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: u64, f: Struct_u64_u64) void;
-[extern] c_struct_u64_u64_6 = fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: Struct_u64_u64) void;
-[extern] c_struct_u64_u64_7 = fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: Struct_u64_u64) void;
-[extern] c_struct_u64_u64_8 = fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u64, i: Struct_u64_u64) void;
+typealias Vector2Bool = vector[2]u1;
+typealias Vector4Bool = vector[4]u1;
+typealias Vector8Bool = vector[8]u1;
+typealias Vector16Bool = vector[16]u1;
+typealias Vector32Bool = vector[32]u1;
+typealias Vector64Bool = vector[64]u1;
+typealias Vector128Bool = vector[128]u1;
+typealias Vector256Bool = vector[256]u1;
+typealias Vector512Bool = vector[512]u1;
 
-[extern] c_ret_struct_f32 = fn [cc(c)] () Struct_f32;
-[extern] c_struct_f32 = fn [cc(c)] (x: Struct_f32) void;
+c_struct_u64_u64_0 [extern]: fn [cc(c)] (a: Struct_u64_u64) void;
+c_struct_u64_u64_1 [extern]: fn [cc(c)] (a: u64, b: Struct_u64_u64) void;
+c_struct_u64_u64_2 [extern]: fn [cc(c)] (a: u64, b: u64, c: Struct_u64_u64) void;
+c_struct_u64_u64_3 [extern]: fn [cc(c)] (a: u64, b: u64, c: u64, d: Struct_u64_u64) void;
+c_struct_u64_u64_4 [extern]: fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: Struct_u64_u64) void;
+c_struct_u64_u64_5 [extern]: fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: u64, f: Struct_u64_u64) void;
+c_struct_u64_u64_6 [extern]: fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: Struct_u64_u64) void;
+c_struct_u64_u64_7 [extern]: fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: Struct_u64_u64) void;
+c_struct_u64_u64_8 [extern]: fn [cc(c)] (a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u64, i: Struct_u64_u64) void;
 
-[extern] c_ret_struct_f64 = fn [cc(c)] () Struct_f64;
-[extern] c_struct_f64 = fn [cc(c)] (x: Struct_f64) void;
+c_ret_struct_f32 [extern]: fn [cc(c)] () Struct_f32;
+c_struct_f32 [extern]: fn [cc(c)] (x: Struct_f32) void;
 
-[extern] c_ret_struct_f32f32_f32 = fn [cc(c)] () Struct_f32f32_f32;
-[extern] c_struct_f32f32_f32 = fn [cc(c)] (x: Struct_f32f32_f32) void;
+c_ret_struct_f64 [extern]: fn [cc(c)] () Struct_f64;
+c_struct_f64 [extern]: fn [cc(c)] (x: Struct_f64) void;
 
-[extern] c_ret_struct_f32_f32f32 = fn [cc(c)] () Struct_f32_f32f32;
-[extern] c_struct_f32_f32f32 = fn [cc(c)] (x: Struct_f32_f32f32) void;
+c_ret_struct_f32f32_f32 [extern]: fn [cc(c)] () Struct_f32f32_f32;
+c_struct_f32f32_f32 [extern]: fn [cc(c)] (x: Struct_f32f32_f32) void;
 
-[extern] c_ret_struct_u32_union_u32_u32u32 = fn [cc(c)] () Struct_u32_Union_u32_u32u32;
-[extern] c_struct_u32_union_u32_u32u32 = fn [cc(c)] (x: Struct_u32_Union_u32_u32u32) void;
+c_ret_struct_f32_f32f32 [extern]: fn [cc(c)] () Struct_f32_f32f32;
+c_struct_f32_f32f32 [extern]: fn [cc(c)] (x: Struct_f32_f32f32) void;
 
-[extern] c_mut_struct_i32_i32 = fn [cc(c)] (x: Struct_i32_i32) Struct_i32_i32;
-[extern] c_struct_i32_i32 = fn [cc(c)] (x: Struct_i32_i32) void;
+c_ret_struct_u32_union_u32_u32u32 [extern]: fn [cc(c)] () Struct_u32_Union_u32_u32u32;
+c_struct_u32_union_u32_u32u32 [extern]: fn [cc(c)] (x: Struct_u32_Union_u32_u32u32) void;
 
-[extern] c_big_struct = fn [cc(c)] (x: BigStruct) void;
-[extern] c_big_union = fn [cc(c)] (x: BigUnion) void;
+c_mut_struct_i32_i32 [extern]: fn [cc(c)] (x: Struct_i32_i32) Struct_i32_i32;
+c_struct_i32_i32 [extern]: fn [cc(c)] (x: Struct_i32_i32) void;
 
-[extern] c_med_struct_mixed = fn [cc(c)] (x: MedStructMixed) void;
-[extern] c_ret_med_struct_mixed = fn [cc(c)] () MedStructMixed;
+c_big_struct [extern]: fn [cc(c)] (x: BigStruct) void;
+c_big_union [extern]: fn [cc(c)] (x: BigUnion) void;
 
-[extern] c_small_struct_ints = fn [cc(c)] (x: SmallStructInts) void;
-[extern] c_ret_small_struct_ints = fn [cc(c)] () SmallStructInts;
+c_med_struct_mixed [extern]: fn [cc(c)] (x: MedStructMixed) void;
+c_ret_med_struct_mixed [extern]: fn [cc(c)] () MedStructMixed;
 
-[extern] c_med_struct_ints = fn [cc(c)] (x: MedStructInts) void;
-[extern] c_ret_med_struct_ints = fn [cc(c)] () MedStructInts;
+c_small_struct_ints [extern]: fn [cc(c)] (x: SmallStructInts) void;
+c_ret_small_struct_ints [extern]: fn [cc(c)] () SmallStructInts;
 
-[extern] c_small_packed_struct = fn [cc(c)] (x: SmallPackedStruct) void;
-[extern] c_ret_small_packed_struct = fn [cc(c)] () SmallPackedStruct;
+c_med_struct_ints [extern]: fn [cc(c)] (x: MedStructInts) void;
+c_ret_med_struct_ints [extern]: fn [cc(c)] () MedStructInts;
 
-[extern] c_big_packed_struct = fn [cc(c)] (x: BigPackedStruct) void;
-[extern] c_ret_big_packed_struct = fn [cc(c)] () BigPackedStruct;
+c_small_packed_struct [extern]: fn [cc(c)] (x: SmallPackedStruct) void;
+c_ret_small_packed_struct [extern]: fn [cc(c)] () SmallPackedStruct;
 
-[extern] c_split_struct_ints = fn [cc(c)] (x: SplitStructInt) void;
+c_big_packed_struct [extern]: fn [cc(c)] (x: BigPackedStruct) void;
+c_ret_big_packed_struct [extern]: fn [cc(c)] () BigPackedStruct;
 
-[extern] c_split_struct_mixed = fn [cc(c)] (x: SplitStructMixed) void;
-[extern] c_ret_split_struct_mixed = fn [cc(c)] () SplitStructMixed;
+c_split_struct_ints [extern]: fn [cc(c)] (x: SplitStructInt) void;
 
-[extern] c_big_struct_both = fn [cc(c)] (x: BigStruct) BigStruct;
+c_split_struct_mixed [extern]: fn [cc(c)] (x: SplitStructMixed) void;
+c_ret_split_struct_mixed [extern]: fn [cc(c)] () SplitStructMixed;
 
-[extern] c_small_struct_floats = fn [cc(c)] (v: Vector3) void;
-[extern] c_small_struct_floats_extra = fn [cc(c)] (v: Vector3, e: &u8) void;
+c_big_struct_both [extern]: fn [cc(c)] (x: BigStruct) BigStruct;
 
-[extern] c_big_struct_floats = fn [cc(c)] (v: Vector5) void;
+c_small_struct_floats [extern]: fn [cc(c)] (v: Vector3) void;
+c_small_struct_floats_extra [extern]: fn [cc(c)] (v: Vector3, e: &u8) void;
 
-[extern] c_multiple_struct_ints = fn [cc(c)] (a: Rect, b: Rect) void;
+c_big_struct_floats [extern]: fn [cc(c)] (v: Vector5) void;
 
-[extern] c_multiple_struct_floats = fn [cc(c)] (r1: FloatRect, r2: FloatRect) void;
+c_multiple_struct_ints [extern]: fn [cc(c)] (a: Rect, b: Rect) void;
 
-[extern] c_ret_bool = fn [cc(c)] () u8;
+c_multiple_struct_floats [extern]: fn [cc(c)] (r1: FloatRect, r2: FloatRect) void;
 
-[extern] c_ret_u8 = fn [cc(c)] () u8;
-[extern] c_ret_u16 = fn [cc(c)] () u16;
-[extern] c_ret_u32 = fn [cc(c)] () u32;
-[extern] c_ret_u64 = fn [cc(c)] () u64;
+c_ret_bool [extern]: fn [cc(c)] () u8;
 
-[extern] c_ret_s8 = fn [cc(c)] () s8;
-[extern] c_ret_s16 = fn [cc(c)] () s16;
-[extern] c_ret_s32 = fn [cc(c)] () s32;
-[extern] c_ret_s64 = fn [cc(c)] () s64;
+c_ret_u8 [extern]: fn [cc(c)] () u8;
+c_ret_u16 [extern]: fn [cc(c)] () u16;
+c_ret_u32 [extern]: fn [cc(c)] () u32;
+c_ret_u64 [extern]: fn [cc(c)] () u64;
 
-[extern] c_struct_with_array = fn [cc(c)] (x: StructWithArray) void;
-[extern] c_ret_struct_with_array = fn [cc(c)] () StructWithArray;
+c_ret_s8 [extern]: fn [cc(c)] () s8;
+c_ret_s16 [extern]: fn [cc(c)] () s16;
+c_ret_s32 [extern]: fn [cc(c)] () s32;
+c_ret_s64 [extern]: fn [cc(c)] () s64;
 
-[extern] c_float_array_struct = fn [cc(c)] (s: FloatArrayStruct) void;
-[extern] c_ret_float_array_struct = fn [cc(c)] () FloatArrayStruct;
+c_struct_with_array [extern]: fn [cc(c)] (x: StructWithArray) void;
+c_ret_struct_with_array [extern]: fn [cc(c)] () StructWithArray;
 
-[extern] c_small_vec = fn [cc(c)] (v: SmallVec) void;
-[extern] c_ret_small_vec = fn [cc(c)] () SmallVec;
+c_float_array_struct [extern]: fn [cc(c)] (s: FloatArrayStruct) void;
+c_ret_float_array_struct [extern]: fn [cc(c)] () FloatArrayStruct;
 
-[extern] c_medium_vec = fn [cc(c)] (v: MediumVec) void;
-[extern] c_ret_medium_vec = fn [cc(c)] () MediumVec;
+c_small_vec [extern]: fn [cc(c)] (v: SmallVec) void;
+c_ret_small_vec [extern]: fn [cc(c)] () SmallVec;
 
-[extern] c_big_vec = fn [cc(c)] (v: BigVec) void;
-[extern] c_ret_big_vec = fn [cc(c)] () BigVec;
+c_medium_vec [extern]: fn [cc(c)] (v: MediumVec) void;
+c_ret_medium_vec [extern]: fn [cc(c)] () MediumVec;
 
-[extern] c_vector_2_float = fn [cc(c)] (v: vector[2]f32) void;
-[extern] c_vector_4_float = fn [cc(c)] (v: vector[4]f32) void;
-[extern] c_vector_8_float = fn [cc(c)] (v: vector[8]f32) void;
-[extern] c_vector_16_float = fn [cc(c)] (v: vector[16]f32) void;
+c_big_vec [extern]: fn [cc(c)] (v: BigVec) void;
+c_ret_big_vec [extern]: fn [cc(c)] () BigVec;
 
-[extern] c_vector_2_double = fn [cc(c)] (v: vector[2]f64) void;
-[extern] c_vector_4_double = fn [cc(c)] (v: vector[4]f64) void;
-[extern] c_vector_8_double = fn [cc(c)] (v: vector[8]f64) void;
+c_vector_2_float [extern]: fn [cc(c)] (v: vector[2]f32) void;
+c_vector_4_float [extern]: fn [cc(c)] (v: vector[4]f32) void;
+c_vector_8_floa [extern]: fn [cc(c)] (v: vector[8]f32) void;
+c_vector_16_float [extern]: fn [cc(c)] (v: vector[16]f32) void;
 
-[extern] c_ret_vector_2_float = fn [cc(c)] () vector[2]f32;
-[extern] c_ret_vector_4_float = fn [cc(c)] () vector[4]f32;
-[extern] c_ret_vector_8_float = fn [cc(c)] () vector[8]f32;
-[extern] c_ret_vector_16_float = fn [cc(c)] () vector[16]f32;
+c_vector_2_double [extern]: fn [cc(c)] (v: vector[2]f64) void;
+c_vector_4_double [extern]: fn [cc(c)] (v: vector[4]f64) void;
+c_vector_8_double [extern]: fn [cc(c)] (v: vector[8]f64) void;
 
-[extern] c_ret_vector_2_double = fn [cc(c)] () vector[2]f64;
-[extern] c_ret_vector_4_double = fn [cc(c)] () vector[4]f64;
-[extern] c_ret_vector_8_double = fn [cc(c)] () vector[8]f64;
+c_ret_vector_2_float [extern]: fn [cc(c)] () vector[2]f32;
+c_ret_vector_4_float [extern]: fn [cc(c)] () vector[4]f32;
+c_ret_vector_8_float [extern]: fn [cc(c)] () vector[8]f32;
+c_ret_vector_16_float [extern]: fn [cc(c)] () vector[16]f32;
 
-Vector2Bool = typealias vector[2]u1;
-Vector4Bool = typealias vector[4]u1;
-Vector8Bool = typealias vector[8]u1;
-Vector16Bool = typealias vector[16]u1;
-Vector32Bool = typealias vector[32]u1;
-Vector64Bool = typealias vector[64]u1;
-Vector128Bool = typealias vector[128]u1;
-Vector256Bool = typealias vector[256]u1;
-Vector512Bool = typealias vector[512]u1;
+c_ret_vector_2_double [extern]: fn [cc(c)] () vector[2]f64;
+c_ret_vector_4_double [extern]: fn [cc(c)] () vector[4]f64;
+c_ret_vector_8_double [extern]: fn [cc(c)] () vector[8]f64;
 
-[extern] c_vector_2_bool = fn [cc(c)] (v: Vector2Bool) void;
-[extern] c_vector_4_bool = fn [cc(c)] (v: Vector4Bool) void;
-[extern] c_vector_8_bool = fn [cc(c)] (v: Vector8Bool) void;
-[extern] c_vector_16_bool = fn [cc(c)] (v: Vector16Bool) void;
-[extern] c_vector_32_bool = fn [cc(c)] (v: Vector32Bool) void;
-[extern] c_vector_64_bool = fn [cc(c)] (v: Vector64Bool) void;
-[extern] c_vector_128_bool = fn [cc(c)] (v: Vector128Bool) void;
-[extern] c_vector_256_bool = fn [cc(c)] (v: Vector256Bool) void;
-[extern] c_vector_512_bool = fn [cc(c)] (v: Vector512Bool) void;
+c_vector_2_bool [extern]: fn [cc(c)] (v: Vector2Bool) void;
+c_vector_4_bool [extern]: fn [cc(c)] (v: Vector4Bool) void;
+c_vector_8_bool [extern]: fn [cc(c)] (v: Vector8Bool) void;
+c_vector_16_bool [extern]: fn [cc(c)] (v: Vector16Bool) void;
+c_vector_32_bool [extern]: fn [cc(c)] (v: Vector32Bool) void;
+c_vector_64_bool [extern]: fn [cc(c)] (v: Vector64Bool) void;
+c_vector_128_bool [extern]: fn [cc(c)] (v: Vector128Bool) void;
+c_vector_256_bool [extern]: fn [cc(c)] (v: Vector256Bool) void;
+c_vector_512_bool [extern]: fn [cc(c)] (v: Vector512Bool) void;
 
-[extern] c_ret_vector_2_bool = fn [cc(c)] () Vector2Bool;
-[extern] c_ret_vector_4_bool = fn [cc(c)] () Vector4Bool;
-[extern] c_ret_vector_8_bool = fn [cc(c)] () Vector8Bool;
-[extern] c_ret_vector_16_bool = fn [cc(c)] () Vector16Bool;
-[extern] c_ret_vector_32_bool = fn [cc(c)] () Vector32Bool;
-[extern] c_ret_vector_64_bool = fn [cc(c)] () Vector64Bool;
-[extern] c_ret_vector_128_bool = fn [cc(c)] () Vector128Bool;
-[extern] c_ret_vector_256_bool = fn [cc(c)] () Vector256Bool;
-[extern] c_ret_vector_512_bool = fn [cc(c)] () Vector512Bool;
+c_ret_vector_2_bool [extern]: fn [cc(c)] () Vector2Bool;
+c_ret_vector_4_bool [extern]: fn [cc(c)] () Vector4Bool;
+c_ret_vector_8_bool [extern]: fn [cc(c)] () Vector8Bool;
+c_ret_vector_16_bool [extern]: fn [cc(c)] () Vector16Bool;
+c_ret_vector_32_bool [extern]: fn [cc(c)] () Vector32Bool;
+c_ret_vector_64_bool [extern]: fn [cc(c)] () Vector64Bool;
+c_ret_vector_128_bool [extern]: fn [cc(c)] () Vector128Bool;
+c_ret_vector_256_bool [extern]: fn [cc(c)] () Vector256Bool;
+c_ret_vector_512_bool [extern]: fn [cc(c)] () Vector512Bool;
 
-[extern] c_ptr_size_float_struct = fn [cc(c)] (v: Vector2) void;
-[extern] c_ret_ptr_size_float_struct = fn [cc(c)] () Vector2;
+c_ptr_size_float_struct [extern]: fn [cc(c)] (v: Vector2) void;
+c_ret_ptr_size_float_struct [extern]: fn [cc(c)] () Vector2;
 
-[extern] c_assert_DC = fn [cc(c)] (lv: DC) s32;
-[extern] c_assert_ret_DC = fn [cc(c)] () s32;
-[extern] c_send_DC = fn [cc(c)] () s32;
-[extern] c_ret_DC = fn [cc(c)] () DC;
+c_assert_DC [extern]: fn [cc(c)] (lv: DC) s32;
+c_assert_ret_DC [extern]: fn [cc(c)] () s32;
+c_send_DC [extern]: fn [cc(c)] () s32;
+c_ret_DC [extern]: fn [cc(c)] () DC;
 
-[extern] c_assert_CFF = fn [cc(c)] (lv: CFF) s32;
-[extern] c_assert_ret_CFF = fn [cc(c)] () s32;
-[extern] c_send_CFF = fn [cc(c)] () s32;
-[extern] c_ret_CFF = fn [cc(c)] () CFF;
+c_assert_CFF [extern]: fn [cc(c)] (lv: CFF) s32;
+c_assert_ret_CFF [extern]: fn [cc(c)] () s32;
+c_send_CFF [extern]: fn [cc(c)] () s32;
+c_ret_CFF [extern]: fn [cc(c)] () CFF;
 
-[extern] c_assert_PD = fn [cc(c)] (lv: PD) s32;
-[extern] c_assert_ret_PD = fn [cc(c)] () s32;
-[extern] c_send_PD = fn [cc(c)] () s32;
-[extern] c_ret_PD = fn [cc(c)] () PD;
+c_assert_PD [extern]: fn [cc(c)] (lv: PD) s32;
+c_assert_ret_PD [extern]: fn [cc(c)] () s32;
+c_send_PD [extern]: fn [cc(c)] () s32;
+c_ret_PD [extern]: fn [cc(c)] () PD;
 
-[extern] c_modify_by_ref_param = fn [cc(c)] (x: ByRef) ByRef;
-[extern] c_func_ptr_byval = fn [cc(c)] (a: &u8, b: &u8, c: ByVal, d: u64, e: &u8, f: u64) void;
+c_modify_by_ref_param [extern]: fn [cc(c)] (x: ByRef) ByRef;
+c_func_ptr_byval [extern]: fn [cc(c)] (a: &u8, b: &u8, c: ByVal, d: u64, e: &u8, f: u64) void;
 
-[extern] c_f128 = fn [cc(c)] (x: f128) f128;
-[extern] c_f128_struct = fn [cc(c)] (x: f128_struct) f128_struct;
-[extern] c_f128_f128_struct = fn [cc(c)] (x: f128_f128_struct) f128_f128_struct;
+c_f128 [extern]: fn [cc(c)] (x: f128) f128;
+c_f128_struct [extern]: fn [cc(c)] (x: f128_struct) f128_struct;
+c_f128_f128_struct [extern]: fn [cc(c)] (x: f128_f128_struct) f128_f128_struct;
 
-[export] bb_panic = fn [cc(c)] () noreturn
+bb_panic [export]: fn [cc(c)] () noreturn =
 {
     @trap();
 }
 
-[export] bb_u8 = fn [cc(c)] (x: u8) void
+bb_u8 [export]: fn [cc(c)] (x: u8) void =
 {
     require(x == 0xff);
 }
 
-[export] bb_u16 = fn [cc(c)] (x: u16) void
+bb_u16 [export]: fn [cc(c)] (x: u16) void =
 {
     require(x == 0xfffe);
 }
 
-[export] bb_u32 = fn [cc(c)] (x: u32) void
+bb_u32 [export]: fn [cc(c)] (x: u32) void =
 {
     require(x == 0xfffffffd);
 }
 
-[export] bb_u64 = fn [cc(c)] (x: u64) void
+bb_u64 [export]: fn [cc(c)] (x: u64) void =
 {
     require(x == 0xfffffffffffffffc);
 }
 
-[export] bb_s8 = fn [cc(c)] (x: s8) void
+bb_s8 [export]: fn [cc(c)] (x: s8) void =
 {
     require(x == -1);
 }
 
-[export] bb_s16 = fn [cc(c)] (x: s16) void
+bb_s16 [export]: fn [cc(c)] (x: s16) void =
 {
     require(x == -2);
 }
 
-[export] bb_s32 = fn [cc(c)] (x: s32) void
+bb_s32 [export]: fn [cc(c)] (x: s32) void =
 {
     require(x == -3);
 }
 
-[export] bb_s64 = fn [cc(c)] (x: s64) void
+bb_s64 [export]: fn [cc(c)] (x: s64) void =
 {
     require(x == -4);
 }
 
-[export] bb_struct_s128 = fn [cc(c)] (a: S128) void
+bb_struct_s128 [export]: fn [cc(c)] (a: S128) void =
 {
     require(a.value == -6);
 }
 
-[export] bb_struct_u128 = fn [cc(c)] (a: U128) void
+bb_struct_u128 [export]: fn [cc(c)] (a: U128) void =
 {
     require(a.value == 0xfffffffffffffffc);
 }
 
-[export] bb_five_integers = fn [cc(c)] (a: s32, b: s32, c: s32, d: s32, e: s32) void
+bb_five_integers [export]: fn [cc(c)] (a: s32, b: s32, c: s32, d: s32, e: s32) void =
 {
     require(a == 12);
     require(b == 34);
@@ -1351,17 +1351,17 @@ Vector512Bool = typealias vector[512]u1;
     require(e == 90);
 }
 
-[export] bb_f32 = fn [cc(c)] (x: f32) void
+bb_f32 [export]: fn [cc(c)] (x: f32) void =
 {
     require(x == 12.34);
 }
 
-[export] bb_f64 = fn [cc(c)] (x: f64) void
+bb_f64 [export]: fn [cc(c)] (x: f64) void =
 {
     require(x == 56.78);
 }
 
-[export] bb_five_floats = fn [cc(c)] (a: f32, b: f32, c: f32, d: f32, e: f32) void
+bb_five_floats [export]: fn [cc(c)] (a: f32, b: f32, c: f32, d: f32, e: f32) void =
 {
     require(a == 1.0);
     require(b == 2.0);
@@ -1370,17 +1370,17 @@ Vector512Bool = typealias vector[512]u1;
     require(e == 5.0);
 }
 
-[export] bb_ptr = fn [cc(c)] (x: &u8) void
+bb_ptr [export]: fn [cc(c)] (x: &u8) void =
 {
     require(@int_from_pointer(x) == 0xdeadbeef);
 }
 
-[export] bb_bool = fn [cc(c)] (x: u1) void
+bb_bool [export]: fn [cc(c)] (x: u1) void =
 {
     require(x);
 }
 
-[export] bb_cmultf = fn [cc(c)] (a: ComplexFloat, b: ComplexFloat) ComplexFloat
+bb_cmultf [export]: fn [cc(c)] (a: ComplexFloat, b: ComplexFloat) ComplexFloat =
 {
     require(a.real == 1.25);
     require(a.imaginary == 2.6);
@@ -1390,7 +1390,7 @@ Vector512Bool = typealias vector[512]u1;
     return { .real = 1.5, .imaginary = 13.5 };
 }
 
-[export] bb_cmultd = fn [cc(c)] (a: ComplexDouble, b: ComplexDouble) ComplexDouble
+bb_cmultd [export]: fn [cc(c)] (a: ComplexDouble, b: ComplexDouble) ComplexDouble =
 {
     require(a.real == 1.25);
     require(a.imaginary == 2.6);
@@ -1400,7 +1400,7 @@ Vector512Bool = typealias vector[512]u1;
     return { .real = 1.5, .imaginary = 13.5 };
 }
 
-[export] bb_cmultf_comp = fn [cc(c)] (a_r: f32, a_i: f32, b_r: f32, b_i: f32) ComplexFloat
+bb_cmultf_comp [export]: fn [cc(c)] (a_r: f32, a_i: f32, b_r: f32, b_i: f32) ComplexFloat =
 {
     require(a_r == 1.25);
     require(a_i == 2.6);
@@ -1410,7 +1410,7 @@ Vector512Bool = typealias vector[512]u1;
     return { .real = 1.5, .imaginary = 13.5 };
 }
 
-[export] bb_cmultd_comp = fn [cc(c)] (a_r: f64, a_i: f64, b_r: f64, b_i: f64) ComplexDouble
+bb_cmultd_comp [export]: fn [cc(c)] (a_r: f64, a_i: f64, b_r: f64, b_i: f64) ComplexDouble =
 {
     require(a_r == 1.25);
     require(a_i == 2.6);
@@ -1420,128 +1420,128 @@ Vector512Bool = typealias vector[512]u1;
     return { .real = 1.5, .imaginary = 13.5 };
 }
 
-[export] bb_ret_struct_u64_u64 = fn [cc(c)] () Struct_u64_u64
+bb_ret_struct_u64_u64 [export]: fn [cc(c)] () Struct_u64_u64 =
 {
     return { .a = 1, .b = 2 };
 }
 
-[export] bb_struct_u64_u64_0 = fn [cc(c)] (s: Struct_u64_u64) void
+bb_struct_u64_u64_0 [export]: fn [cc(c)] (s: Struct_u64_u64) void =
 {
     require(s.a == 3);
     require(s.b == 4);
 }
 
-[export] bb_struct_u64_u64_1 = fn [cc(c)] (_: u64, s: Struct_u64_u64) void
+bb_struct_u64_u64_1 [export]: fn [cc(c)] (_: u64, s: Struct_u64_u64) void =
 {
     require(s.a == 5);
     require(s.b == 6);
 }
 
-[export] bb_struct_u64_u64_2 = fn [cc(c)] (_: u64, _: u64, s: Struct_u64_u64) void
+bb_struct_u64_u64_2 [export]: fn [cc(c)] (_: u64, _: u64, s: Struct_u64_u64) void =
 {
     require(s.a == 7);
     require(s.b == 8);
 }
 
-[export] bb_struct_u64_u64_3 = fn [cc(c)] (_: u64, _: u64, _: u64, s: Struct_u64_u64) void
+bb_struct_u64_u64_3 [export]: fn [cc(c)] (_: u64, _: u64, _: u64, s: Struct_u64_u64) void =
 {
     require(s.a == 9);
     require(s.b == 10);
 }
 
-[export] bb_struct_u64_u64_4 = fn [cc(c)] (_: u64, _: u64, _: u64, _: u64, s: Struct_u64_u64) void
+bb_struct_u64_u64_4 [export]: fn [cc(c)] (_: u64, _: u64, _: u64, _: u64, s: Struct_u64_u64) void =
 {
     require(s.a == 11);
     require(s.b == 12);
 }
 
-[export] bb_struct_u64_u64_5 = fn [cc(c)] (_: u64, _: u64, _: u64, _: u64, _: u64, s: Struct_u64_u64) void
+bb_struct_u64_u64_5 [export]: fn [cc(c)] (_: u64, _: u64, _: u64, _: u64, _: u64, s: Struct_u64_u64) void =
 {
     require(s.a == 13);
     require(s.b == 14);
 }
 
-[export] bb_struct_u64_u64_6 = fn [cc(c)] (_: u64, _: u64, _: u64, _: u64, _: u64, _: u64, s: Struct_u64_u64) void
+bb_struct_u64_u64_6 [export]: fn [cc(c)] (_: u64, _: u64, _: u64, _: u64, _: u64, _: u64, s: Struct_u64_u64) void =
 {
     require(s.a == 15);
     require(s.b == 16);
 }
 
-[export] bb_struct_u64_u64_7 = fn [cc(c)] (_: u64, _: u64, _: u64, _: u64, _: u64, _: u64, _: u64, s: Struct_u64_u64) void
+bb_struct_u64_u64_7 [export]: fn [cc(c)] (_: u64, _: u64, _: u64, _: u64, _: u64, _: u64, _: u64, s: Struct_u64_u64) void =
 {
     require(s.a == 17);
     require(s.b == 18);
 }
 
-[export] bb_struct_u64_u64_8 = fn [cc(c)] (_: u64, _: u64, _: u64, _: u64, _: u64, _: u64, _: u64, _: u64, s: Struct_u64_u64) void
+bb_struct_u64_u64_8 [export]: fn [cc(c)] (_: u64, _: u64, _: u64, _: u64, _: u64, _: u64, _: u64, _: u64, s: Struct_u64_u64) void =
 {
     require(s.a == 19);
     require(s.b == 20);
 }
 
-[export] bb_ret_struct_f32 = fn [cc(c)] () Struct_f32
+bb_ret_struct_f32 [export]: fn [cc(c)] () Struct_f32 =
 {
     return { .a = 2.5 };
 }
 
-[export] bb_struct_f32 = fn [cc(c)] (s: Struct_f32) void
+bb_struct_f32 [export]: fn [cc(c)] (s: Struct_f32) void =
 {
     require(s.a == 2.5);
 }
 
-[export] bb_ret_struct_f64 = fn [cc(c)] () Struct_f64
+bb_ret_struct_f64 [export]: fn [cc(c)] () Struct_f64 =
 {
     return { .a = 2.5 };
 }
 
-[export] bb_struct_f64 = fn [cc(c)] (s: Struct_f64) void
+bb_struct_f64 [export]: fn [cc(c)] (s: Struct_f64) void =
 {
     require(s.a == 2.5);
 }
 
-[export] bb_ret_struct_f32f32_f32 = fn [cc(c)] () Struct_f32f32_f32
+bb_ret_struct_f32f32_f32 [export]: fn [cc(c)] () Struct_f32f32_f32 =
 {
     return { .a = { .b = 1.0, .c = 2.0 }, .d = 3.0 };
 }
 
-[export] bb_struct_f32f32_f32 = fn [cc(c)] (s: Struct_f32f32_f32) void
+bb_struct_f32f32_f32 [export]: fn [cc(c)] (s: Struct_f32f32_f32) void =
 {
     require(s.a.b == 1.0);
     require(s.a.c == 2.0);
     require(s.d == 3.0);
 }
 
-[export] bb_ret_struct_f32_f32f32 = fn [cc(c)] () Struct_f32_f32f32
+bb_ret_struct_f32_f32f32 [export]: fn [cc(c)] () Struct_f32_f32f32 =
 {
     return { .a = 1.0, .b = { .c = 2.0, .d = 3.0 } };
 }
 
-[export] bb_struct_f32_f32f32 = fn [cc(c)] (s: Struct_f32_f32f32) void
+bb_struct_f32_f32f32 [export]: fn [cc(c)] (s: Struct_f32_f32f32) void =
 {
     require(s.a == 1.0);
     require(s.b.c == 2.0);
     require(s.b.d == 3.0);
 }
 
-[export] bb_ret_struct_u32_union_u32_u32u32 = fn [cc(c)] () Struct_u32_Union_u32_u32u32
+bb_ret_struct_u32_union_u32_u32u32 [export]: fn [cc(c)] () Struct_u32_Union_u32_u32u32 =
 {
     return { .a = 1, .b = { .c = { .d = 2, .e = 3 } } };
 }
 
-[export] bb_struct_u32_union_u32_u32u32 = fn [cc(c)] (s: Struct_u32_Union_u32_u32u32) void
+bb_struct_u32_union_u32_u32u32 [export]: fn [cc(c)] (s: Struct_u32_Union_u32_u32u32) void =
 {
     require(s.a == 1);
     require(s.b.c.d == 2);
     require(s.b.c.e == 3);
 }
 
-[export] bb_struct_i32_i32 = fn [cc(c)] (s: Struct_i32_i32) void
+bb_struct_i32_i32 [export]: fn [cc(c)] (s: Struct_i32_i32) void =
 {
     require(s.a == 1);
     require(s.b == 2);
 }
 
-[export] bb_big_struct = fn [cc(c)] (x: BigStruct) void
+bb_big_struct [export]: fn [cc(c)] (x: BigStruct) void =
 {
     require(x.a == 1);
     require(x.b == 2);
@@ -1550,7 +1550,7 @@ Vector512Bool = typealias vector[512]u1;
     require(x.e == 5);
 }
 
-[export] bb_small_struct_ints = fn [cc(c)] (x: SmallStructInts) void
+bb_small_struct_ints [export]: fn [cc(c)] (x: SmallStructInts) void =
 {
     require(x.a == 1);
     require(x.b == 2);
@@ -1558,20 +1558,20 @@ Vector512Bool = typealias vector[512]u1;
     require(x.d == 4);
 }
 
-[export] bb_med_struct_ints = fn [cc(c)] (s: MedStructInts) void
+bb_med_struct_ints [export]: fn [cc(c)] (s: MedStructInts) void =
 {
     require(s.x == 1);
     require(s.y == 2);
     require(s.z == 3);
 }
 
-[export] bb_big_packed_struct = fn [cc(c)] (x: BigPackedStruct) void
+bb_big_packed_struct [export]: fn [cc(c)] (x: BigPackedStruct) void =
 {
     require(x.a == 1);
     require(x.b == 2);
 }
 
-[export] bb_small_packed_struct = fn [cc(c)] (x: SmallPackedStruct) void
+bb_small_packed_struct [export]: fn [cc(c)] (x: SmallPackedStruct) void =
 {
     require(x.a == 0);
     require(x.b == 1);
@@ -1579,35 +1579,35 @@ Vector512Bool = typealias vector[512]u1;
     require(x.d == 3);
 }
 
-[export] bb_split_struct_ints = fn [cc(c)] (x: SplitStructInt) void
+bb_split_struct_ints [export]: fn [cc(c)] (x: SplitStructInt) void =
 {
     require(x.a == 1234);
     require(x.b == 100);
     require(x.c == 1337);
 }
 
-[export] bb_med_struct_mixed = fn [cc(c)] (x: MedStructMixed) void
+bb_med_struct_mixed [export]: fn [cc(c)] (x: MedStructMixed) void =
 {
     require(x.a == 1234);
     require(x.b == 100.0);
     require(x.c == 1337.0);
 }
 
-[export] bb_split_struct_mixed = fn [cc(c)] (x: SplitStructMixed) void
+bb_split_struct_mixed [export]: fn [cc(c)] (x: SplitStructMixed) void =
 {
     require(x.a == 1234);
     require(x.b == 100);
     require(x.c == 1337.0);
 }
 
-[export] bb_big_struct_both = fn [cc(c)] (x: BigStruct) BigStruct
+bb_big_struct_both [export]: fn [cc(c)] (x: BigStruct) BigStruct =
 {
     require(x.a == 30);
     require(x.b == 31);
     require(x.c == 32);
     require(x.d == 33);
     require(x.e == 34);
-    >s: BigStruct = {
+    s: BigStruct = {
         .a = 20,
         .b = 21,
         .c = 22,
@@ -1617,7 +1617,7 @@ Vector512Bool = typealias vector[512]u1;
     return s;
 }
 
-[export] bb_multiple_struct_ints = fn [cc(c)] (x: Rect, y: Rect) void
+bb_multiple_struct_ints [export]: fn [cc(c)] (x: Rect, y: Rect) void =
 {
     require(x.left == 1);
     require(x.right == 21);
@@ -1629,7 +1629,7 @@ Vector512Bool = typealias vector[512]u1;
     require(y.bottom == 15);
 }
 
-[export] bb_multiple_struct_floats = fn [cc(c)] (x: FloatRect, y: FloatRect) void
+bb_multiple_struct_floats [export]: fn [cc(c)] (x: FloatRect, y: FloatRect) void =
 {
     require(x.left == 1.0);
     require(x.right == 21.0);
@@ -1641,58 +1641,58 @@ Vector512Bool = typealias vector[512]u1;
     require(y.bottom == 15.0);
 }
 
-[export] bb_ret_bool = fn [cc(c)] () u1
+bb_ret_bool [export]: fn [cc(c)] () u1 =
 {
     return 1;
 }
 
-[export] bb_ret_u8 = fn [cc(c)] () u8
+bb_ret_u8 [export]: fn [cc(c)] () u8 =
 {
     return 0xff;
 }
 
-[export] bb_ret_u16 = fn [cc(c)] () u16
+bb_ret_u16 [export]: fn [cc(c)] () u16 =
 {
     return 0xffff;
 }
 
-[export] bb_ret_u32 = fn [cc(c)] () u32
+bb_ret_u32 [export]: fn [cc(c)] () u32 =
 {
     return 0xffffffff;
 }
 
-[export] bb_ret_u64 = fn [cc(c)] () u64
+bb_ret_u64 [export]: fn [cc(c)] () u64 =
 {
     return 0xffffffffffffffff;
 }
 
-[export] bb_ret_s8 = fn [cc(c)] () s8
+bb_ret_s8 [export]: fn [cc(c)] () s8 =
 {
     return -1;
 }
 
-[export] bb_ret_s16 = fn [cc(c)] () s16
+bb_ret_s16 [export]: fn [cc(c)] () s16 =
 {
     return -1;
 }
 
-[export] bb_ret_s32 = fn [cc(c)] () s32
+bb_ret_s32 [export]: fn [cc(c)] () s32 = 
 {
     return -1;
 }
 
-[export] bb_ret_s64 = fn [cc(c)] () s64
+bb_ret_s64 [export]: fn [cc(c)] () s64 =
 {
     return -1;
 }
 
-[export] bb_vector_2_bool = fn [cc(c)] (vec: Vector2Bool) void
+bb_vector_2_bool [export]: fn [cc(c)] (vec: Vector2Bool) void =
 {
     require(vec[0] == 0);
     require(vec[1] == 1);
 }
 
-[export] bb_vector_4_bool = fn [cc(c)] (vec: Vector4Bool) void
+bb_vector_4_bool [export]: fn [cc(c)] (vec: Vector4Bool) void =
 {
     require(vec[0] == 0);
     require(vec[1] == 0);
@@ -1700,7 +1700,7 @@ Vector512Bool = typealias vector[512]u1;
     require(vec[3] == 0);
 }
 
-[export] bb_vector_8_bool = fn [cc(c)] (vec: Vector8Bool) void
+bb_vector_8_bool [export]: fn [cc(c)] (vec: Vector8Bool) void =
 {
     require(vec[0] == 1);
     require(vec[1] == 1);
@@ -1712,7 +1712,7 @@ Vector512Bool = typealias vector[512]u1;
     require(vec[7] == 0);
 }
 
-[export] bb_vector_16_bool = fn [cc(c)] (vec: Vector16Bool) void
+bb_vector_16_bool [export]: fn [cc(c)] (vec: Vector16Bool) void =
 {
     require(vec[0] == 1);
     require(vec[1] == 0);
@@ -1732,7 +1732,7 @@ Vector512Bool = typealias vector[512]u1;
     require(vec[15] == 1);
 }
 
-[export] bb_vector_32_bool = fn [cc(c)] (vec: Vector32Bool) void
+bb_vector_32_bool [export]: fn [cc(c)] (vec: Vector32Bool) void =
 {
     require(vec[0] == 0);
     require(vec[1] == 0);
@@ -1768,7 +1768,7 @@ Vector512Bool = typealias vector[512]u1;
     require(vec[31] == 1);
 }
 
-[export] bb_vector_64_bool = fn [cc(c)] (vec: Vector64Bool) void
+bb_vector_64_bool [export]: fn [cc(c)] (vec: Vector64Bool) void =
 {
     require(vec[0] == 1);
     require(vec[1] == 1);
@@ -1836,7 +1836,7 @@ Vector512Bool = typealias vector[512]u1;
     require(vec[63] == 1);
 }
 
-[export] bb_vector_128_bool = fn [cc(c)] (vec: Vector128Bool) void
+bb_vector_128_bool [export]: fn [cc(c)] (vec: Vector128Bool) void =
 {
     require(vec[0] == 1);
     require(vec[1] == 1);
@@ -1968,7 +1968,7 @@ Vector512Bool = typealias vector[512]u1;
     require(vec[127] == 0);
 }
 
-[export] bb_vector_256_bool = fn [cc(c)] (vec: Vector256Bool) void
+bb_vector_256_bool [export]: fn [cc(c)] (vec: Vector256Bool) void =
 {
     require(vec[0] == 0);
     require(vec[1] == 0);
@@ -2228,7 +2228,7 @@ Vector512Bool = typealias vector[512]u1;
     require(vec[255] == 1);
 }
 
-[export] bb_vector_512_bool = fn [cc(c)] (vec: Vector512Bool) void
+bb_vector_512_bool [export]: fn [cc(c)] (vec: Vector512Bool) void =
 {
     require(vec[0] == 0);
     require(vec[1] == 1);
@@ -2744,7 +2744,7 @@ Vector512Bool = typealias vector[512]u1;
     require(vec[511] == 1);
 }
 
-[export] bb_ret_vector_2_bool = fn [cc(c)] () Vector2Bool
+bb_ret_vector_2_bool [export]: fn [cc(c)] () Vector2Bool =
 {
     return [
         0,
@@ -2752,7 +2752,7 @@ Vector512Bool = typealias vector[512]u1;
     ];
 }
 
-[export] bb_ret_vector_4_bool = fn [cc(c)] () Vector4Bool
+bb_ret_vector_4_bool [export]: fn [cc(c)] () Vector4Bool =
 {
     return [
         0,
@@ -2762,7 +2762,7 @@ Vector512Bool = typealias vector[512]u1;
     ];
 }
 
-[export] bb_ret_vector_8_bool = fn [cc(c)] () Vector8Bool
+bb_ret_vector_8_bool [export]: fn [cc(c)] () Vector8Bool =
 {
     return [
         0,
@@ -2776,7 +2776,7 @@ Vector512Bool = typealias vector[512]u1;
     ];
 }
 
-[export] bb_ret_vector_16_bool = fn [cc(c)] () Vector16Bool
+bb_ret_vector_16_bool [export]: fn [cc(c)] () Vector16Bool =
 {
     return [
         0,
@@ -2798,7 +2798,7 @@ Vector512Bool = typealias vector[512]u1;
     ];
 }
 
-[export] bb_ret_vector_32_bool = fn [cc(c)] () Vector32Bool
+bb_ret_vector_32_bool [export]: fn [cc(c)] () Vector32Bool =
 {
     return [
         0,
@@ -2836,7 +2836,7 @@ Vector512Bool = typealias vector[512]u1;
     ];
 }
 
-[export] bb_ret_vector_64_bool = fn [cc(c)] () Vector64Bool
+bb_ret_vector_64_bool [export]: fn [cc(c)] () Vector64Bool =
 {
     return [
         1,
@@ -2906,7 +2906,7 @@ Vector512Bool = typealias vector[512]u1;
     ];
 }
 
-[export] bb_ret_vector_128_bool = fn [cc(c)] () Vector128Bool
+bb_ret_vector_128_bool [export]: fn [cc(c)] () Vector128Bool =
 {
     return [
         1,
@@ -3040,7 +3040,7 @@ Vector512Bool = typealias vector[512]u1;
     ];
 }
 
-[export] bb_ret_vector_256_bool = fn [cc(c)] () Vector256Bool
+bb_ret_vector_256_bool [export]: fn [cc(c)] () Vector256Bool =
 {
     return [
         1,
@@ -3302,7 +3302,7 @@ Vector512Bool = typealias vector[512]u1;
     ];
 }
 
-[export] bb_ret_vector_512_bool = fn [cc(c)] () Vector512Bool
+bb_ret_vector_512_bool [export]: fn [cc(c)] () Vector512Bool =
 {
     return [
         1,
@@ -3820,7 +3820,7 @@ Vector512Bool = typealias vector[512]u1;
     ];
 }
 
-[export] bb_ret_small_struct_ints = fn [cc(c)] () SmallStructInts
+bb_ret_small_struct_ints [export]: fn [cc(c)] () SmallStructInts =
 {
     return {
         .a = 1,
@@ -3830,7 +3830,7 @@ Vector512Bool = typealias vector[512]u1;
     };
 }
 
-[export] bb_ret_med_struct_ints = fn [cc(c)] () MedStructInts
+bb_ret_med_struct_ints [export]: fn [cc(c)] () MedStructInts =
 {
     return {
         .x = 1,
@@ -3839,7 +3839,7 @@ Vector512Bool = typealias vector[512]u1;
     };
 }
 
-[export] bb_ret_med_struct_mixed = fn [cc(c)] () MedStructMixed
+bb_ret_med_struct_mixed [export]: fn [cc(c)] () MedStructMixed =
 {
     return {
         .a = 1234,
@@ -3849,7 +3849,7 @@ Vector512Bool = typealias vector[512]u1;
     };
 }
 
-[export] bb_ret_split_struct_mixed = fn [cc(c)] () SplitStructMixed
+bb_ret_split_struct_mixed [export]: fn [cc(c)] () SplitStructMixed =
 {
     return {
         .a = 1234,
@@ -3858,9 +3858,9 @@ Vector512Bool = typealias vector[512]u1;
     };
 }
 
-[export] bb_assert_DC = fn [cc(c)] (lv: DC) s32
+bb_assert_DC [export]: fn [cc(c)] (lv: DC) s32 = 
 {
-    >err: s32 = 0;
+    err: s32 = 0;
 
     if (lv.v1 != -0.25)
     {
@@ -3875,14 +3875,14 @@ Vector512Bool = typealias vector[512]u1;
     return err;
 }
 
-[export] bb_ret_DC = fn [cc(c)] () DC
+bb_ret_DC [export]: fn [cc(c)] () DC =
 {
     return { .v1 = -0.25, .v2 = 15 };
 }
 
-[export] bb_assert_CFF = fn [cc(c)] (lv: CFF) s32
+bb_assert_CFF [export]: fn [cc(c)] (lv: CFF) s32 = 
 {
-    >err: s32 = 0;
+    err: s32 = 0;
     if (lv.v1 != 39)
     {
         err = 1;
@@ -3901,14 +3901,14 @@ Vector512Bool = typealias vector[512]u1;
     return err;
 }
 
-[export] bb_ret_CFF = fn [cc(c)] () CFF
+bb_ret_CFF [export]: fn [cc(c)] () CFF =
 {
     return { .v1 = 39, .v2 = 0.875, .v3 = 1.0 };
 }
 
-[export] bb_c_assert_PD = fn [cc(c)] (lv: PD) s32
+bb_c_assert_PD [export]: fn [cc(c)] (lv: PD) s32 = 
 {
-    >err: s32 = 0;
+    err: s32 = 0;
 
     if (lv.v1 != zero)
     {
@@ -3923,14 +3923,14 @@ Vector512Bool = typealias vector[512]u1;
     return err;
 }
 
-[export] bb_ret_PD = fn [cc(c)] () PD
+bb_ret_PD [export]: fn [cc(c)] () PD =
 {
     return { .v1 = zero, .v2 = 0.5 };
 }
 
-[export] bb_assert_PD = fn [cc(c)] (lv: PD) s32
+bb_assert_PD [export]: fn [cc(c)] (lv: PD) s32 = 
 {
-    >err: s32 = 0;
+    err: s32 = 0;
 
     if (lv.v1 != zero)
     {
@@ -3944,28 +3944,28 @@ Vector512Bool = typealias vector[512]u1;
     return err;
 }
 
-[export] bb_f128 = fn [cc(c)] (x: f128) f128
+bb_f128 [export]: fn [cc(c)] (x: f128) f128 =
 {
     require(x == 12.0);
     return 34.0;
 }
 
-[export] bb_f128_struct = fn [cc(c)] (a: f128_struct) f128_struct
+bb_f128_struct [export]: fn [cc(c)] (a: f128_struct) f128_struct =
 {
     require(a.a == 12345.0);
     return { .a = 98765.0 };
 }
 
-[export] bb_f128_f128_struct = fn [cc(c)] (a: f128_f128_struct) f128_f128_struct
+bb_f128_f128_struct [export]: fn [cc(c)] (a: f128_f128_struct) f128_f128_struct =
 {
     require(a.a == 13.0);
     require(a.b == 57.0);
     return { .a = 24.0, .b = 68.0 };
 }
 
-[extern] run_c_tests = fn [cc(c)] () void;
+run_c_tests [extern]: fn [cc(c)] () void;
 
-c_abi_tests = fn () void
+c_abi_tests: fn () void =
 {
     run_c_tests();
     
@@ -3996,7 +3996,7 @@ c_abi_tests = fn () void
     // TODO: long double?
 
     {
-        >ptr_int: u64 = 0xdeadbeef;
+        ptr_int: u64 = 0xdeadbeef;
         c_ptr(@pointer_from_int(ptr_int));
     }
 
@@ -4004,10 +4004,10 @@ c_abi_tests = fn () void
 
     // C ABI complex float
     {
-        >a: ComplexFloat = { .real = 1.25, .imaginary = 2.6 };
-        >b: ComplexFloat = { .real = 11.3, .imaginary = -1.5 };
+        a: ComplexFloat = { .real = 1.25, .imaginary = 2.6 };
+        b: ComplexFloat = { .real = 11.3, .imaginary = -1.5 };
 
-        >z = c_cmultf(a, b);
+        z := c_cmultf(a, b);
 
         require(z.real == 1.5);
         require(z.imaginary == 13.5);
@@ -4015,10 +4015,10 @@ c_abi_tests = fn () void
 
     // C ABI complex float by component
     {
-        >a: ComplexFloat = { .real = 1.25, .imaginary = 2.6 };
-        >b: ComplexFloat = { .real = 11.3, .imaginary = -1.5 };
+        a: ComplexFloat = { .real = 1.25, .imaginary = 2.6 };
+        b: ComplexFloat = { .real = 11.3, .imaginary = -1.5 };
 
-        >z = c_cmultf_comp(a.real, a.imaginary, b.real, b.imaginary);
+        z = c_cmultf_comp(a.real, a.imaginary, b.real, b.imaginary);
 
         require(z.real == 1.5);
         require(z.imaginary == 13.5);
@@ -4026,10 +4026,10 @@ c_abi_tests = fn () void
 
     // C ABI complex double
     {
-        >a: ComplexDouble = { .real = 1.25, .imaginary = 2.6 };
-        >b: ComplexDouble = { .real = 11.3, .imaginary = -1.5 };
+        a: ComplexDouble = { .real = 1.25, .imaginary = 2.6 };
+        b: ComplexDouble = { .real = 11.3, .imaginary = -1.5 };
 
-        >z = c_cmultd(a, b);
+        z := c_cmultd(a, b);
 
         require(z.real == 1.5);
         require(z.imaginary == 13.5);
@@ -4037,10 +4037,10 @@ c_abi_tests = fn () void
 
     // C ABI complex double by component
     {
-        >a: ComplexDouble = { .real = 1.25, .imaginary = 2.6 };
-        >b: ComplexDouble = { .real = 11.3, .imaginary = -1.5 };
+        a: ComplexDouble = { .real = 1.25, .imaginary = 2.6 };
+        b: ComplexDouble = { .real = 11.3, .imaginary = -1.5 };
 
-        >z2 = c_cmultd_comp(a.real, a.imaginary, b.real, b.imaginary);
+        z2 := c_cmultd_comp(a.real, a.imaginary, b.real, b.imaginary);
 
         require(z2.real == 1.5);
         require(z2.imaginary == 13.5);
@@ -4048,7 +4048,7 @@ c_abi_tests = fn () void
 
     // C ABI struct u64 u64
     {
-        >s = c_ret_struct_u64_u64();
+        s := c_ret_struct_u64_u64();
 
         require(s.a == 21);
         require(s.b == 22);
@@ -4066,7 +4066,7 @@ c_abi_tests = fn () void
 
     // C ABI struct f32
     {
-        >s = c_ret_struct_f32();
+        s := c_ret_struct_f32();
         require(s.a == 2.5);
 
         c_struct_f32({ .a = 2.5 });
@@ -4074,7 +4074,7 @@ c_abi_tests = fn () void
 
     // C ABI struct f64
     {
-        >s = c_ret_struct_f64();
+        s := c_ret_struct_f64();
         require(s.a == 2.5);
 
         c_struct_f64({ .a = 2.5 });
@@ -4082,7 +4082,7 @@ c_abi_tests = fn () void
 
     // C ABI struct {f32, f32} f32
     {
-        >s = c_ret_struct_f32f32_f32();
+        s := c_ret_struct_f32f32_f32();
         require(s.a.b == 1.0);
         require(s.a.c == 2.0);
         require(s.d == 3.0);
@@ -4092,7 +4092,7 @@ c_abi_tests = fn () void
 
     // C ABI struct f32, {f32, f32}
     {
-        >s = c_ret_struct_f32_f32f32();
+        s := c_ret_struct_f32_f32f32();
         require(s.a == 1.0);
         require(s.b.c == 2.0);
         require(s.b.d == 3.0);
@@ -4101,7 +4101,7 @@ c_abi_tests = fn () void
 
     // C ABI struct {u32, union{u32, struct{u32, u32}}}
     {
-        > s = c_ret_struct_u32_union_u32_u32u32();
+        s := c_ret_struct_u32_union_u32_u32u32();
         require(s.a == 1);
         require(s.b.c.d == 2);
         require(s.b.c.e == 3);
@@ -4110,11 +4110,11 @@ c_abi_tests = fn () void
 
     // C ABI struct i32 i32
     {
-        >s: Struct_i32_i32 = {
+        s: Struct_i32_i32 = {
             .a = 1,
             .b = 2,
         };
-        >mut_res = c_mut_struct_i32_i32(s);
+        mut_res := c_mut_struct_i32_i32(s);
         require(s.a == 1);
         require(s.b == 2);
         require(mut_res.a == 101);
@@ -4124,7 +4124,7 @@ c_abi_tests = fn () void
 
     // C ABI big struct
     {
-        >s: BigStruct = {
+        s: BigStruct = {
             .a = 1,
             .b = 2,
             .c = 3,
@@ -4137,7 +4137,7 @@ c_abi_tests = fn () void
 
     // C ABI big union
     {
-        >x: BigUnion = {
+        x: BigUnion = {
             .a = {
                 .a = 1,
                 .b = 2,
@@ -4152,7 +4152,7 @@ c_abi_tests = fn () void
 
     // C ABI medium struct of ints and floats
     {
-        >s: MedStructMixed = {
+        s: MedStructMixed = {
             .a = 1234,
             .b = 100.0,
             .c = 1337.0,
@@ -4160,7 +4160,7 @@ c_abi_tests = fn () void
         };
         c_med_struct_mixed(s);
 
-        >s2 = c_ret_med_struct_mixed();
+        s2 := c_ret_med_struct_mixed();
 
         require(s2.a == 1234);
         require(s2.b == 100.0);
@@ -4169,7 +4169,7 @@ c_abi_tests = fn () void
 
     // C ABI small struct of ints
     {
-        >s: SmallStructInts = {
+        s: SmallStructInts = {
             .a = 1,
             .b = 2,
             .c = 3,
@@ -4177,7 +4177,7 @@ c_abi_tests = fn () void
         };
         c_small_struct_ints(s);
 
-        >s2 = c_ret_small_struct_ints();
+        s2 := c_ret_small_struct_ints();
         require(s2.a == 1);
         require(s2.b == 2);
         require(s2.c == 3);
@@ -4186,14 +4186,14 @@ c_abi_tests = fn () void
 
     // C ABI medium struct of ints
     {
-        >s: MedStructInts = {
+        s: MedStructInts = {
             .x = 1,
             .y = 2,
             .z = 3,
         };
         c_med_struct_ints(s);
 
-        >s2 = c_ret_med_struct_ints();
+        s2 := c_ret_med_struct_ints();
         require(s2.x == 1);
         require(s2.y == 2);
         require(s2.z == 3);
@@ -4201,10 +4201,10 @@ c_abi_tests = fn () void
 
     // C ABI small packed struct
     {
-        >s: SmallPackedStruct = { .a = 0, .b = 1, .c = 2, .d = 3 };
+        s: SmallPackedStruct = { .a = 0, .b = 1, .c = 2, .d = 3 };
         c_small_packed_struct(s);
 
-        >s2 = c_ret_small_packed_struct();
+        s2 := c_ret_small_packed_struct();
         require(s2.a == 0);
         require(s2.b == 1);
         require(s2.c == 2);
@@ -4214,17 +4214,17 @@ c_abi_tests = fn () void
 
     // C ABI big packed struct
     {
-        >s: BigPackedStruct = { .a = 1, .b = 2 };
+        s: BigPackedStruct = { .a = 1, .b = 2 };
         c_big_packed_struct(s);
 
-        >s2 = c_ret_big_packed_struct();
+        s2 := c_ret_big_packed_struct();
         require(s2.a == 1);
         require(s2.b == 2);
     }
 
     // C ABI split struct of ints
     {
-        >s: SplitStructInt = {
+        s: SplitStructInt = {
             .a = 1234,
             .b = 100,
             .c = 1337,
@@ -4234,14 +4234,14 @@ c_abi_tests = fn () void
 
     // C ABI split struct of ints and floats
     {
-        >s: SplitStructMixed = {
+        s: SplitStructMixed = {
             .a = 1234,
             .b = 100,
             .c = 1337.0,
         };
         c_split_struct_mixed(s);
 
-        >s2 = c_ret_split_struct_mixed();
+        s2 := c_ret_split_struct_mixed();
         require(s2.a == 1234);
         require(s2.b == 100);
         require(s2.c == 1337.0);
@@ -4249,7 +4249,7 @@ c_abi_tests = fn () void
 
     // C ABI sret and byval together
     {
-        >s: BigStruct = {
+        s: BigStruct = {
             .a = 1,
             .b = 2,
             .c = 3,
@@ -4257,7 +4257,7 @@ c_abi_tests = fn () void
             .e = 5,
         };
 
-        >y = c_big_struct_both(s);
+        y := c_big_struct_both(s);
 
         require(y.a == 10);
         require(y.b == 11);
@@ -4268,7 +4268,7 @@ c_abi_tests = fn () void
 
     // C ABI structs of floats as parameter
     {
-        >v3: Vector3 = {
+        v3: Vector3 = {
             .x = 3.0,
             .y = 6.0,
             .z = 12.0,
@@ -4277,7 +4277,7 @@ c_abi_tests = fn () void
         c_small_struct_floats(v3);
         c_small_struct_floats_extra(v3, "hello");
 
-        >v5: Vector5 = {
+        v5: Vector5 = {
             .x = 76.0,
             .y = -1.0,
             .z = -12.0,
@@ -4290,14 +4290,14 @@ c_abi_tests = fn () void
 
     // C ABI structs of ints as multiple parameters
     {
-        >r1: Rect = {
+        r1: Rect = {
             .left = 1,
             .right = 21,
             .top = 16,
             .bottom = 4,
         };
 
-        >r2: Rect = {
+        r2: Rect = {
             .left = 178,
             .right = 189,
             .top = 21,
@@ -4309,14 +4309,14 @@ c_abi_tests = fn () void
 
     // C ABI structs of floats as multiple parameters
     {
-        >r1: FloatRect = {
+        r1: FloatRect = {
             .left = 1.0,
             .right = 21.0,
             .top = 16.0,
             .bottom = 4.0,
         };
 
-        >r2: FloatRect = {
+        r2: FloatRect = {
             .left = 178.0,
             .right = 189.0,
             .top = 21.0,
@@ -4343,7 +4343,7 @@ c_abi_tests = fn () void
     {
         c_struct_with_array({ .a = 1, .padding = undefined, .b = 2 });
 
-        >x = c_ret_struct_with_array();
+        x := c_ret_struct_with_array();
         require(x.a == 4);
         require(x.b == 155);
     }
@@ -4360,7 +4360,7 @@ c_abi_tests = fn () void
             },
         });
 
-        >x = c_ret_float_array_struct();
+        x := c_ret_float_array_struct();
 
         require(x.origin.x == 1.0);
         require(x.origin.y == 2.0);
@@ -4372,7 +4372,7 @@ c_abi_tests = fn () void
     {
         c_small_vec([ 1, 2 ]);
 
-        >x = c_ret_small_vec();
+        x := c_ret_small_vec();
         require(x[0] == 3);
         require(x[1] == 4);
     }
@@ -4381,7 +4381,7 @@ c_abi_tests = fn () void
     {
         c_medium_vec([ 1, 2, 3, 4]);
 
-        >x = c_ret_medium_vec();
+        x := c_ret_medium_vec();
         require(x[0] == 5);
         require(x[1] == 6);
         require(x[2] == 7);
@@ -4392,7 +4392,7 @@ c_abi_tests = fn () void
     {
         c_big_vec([ 1, 2, 3, 4, 5, 6, 7, 8 ]);
 
-        >x = c_ret_big_vec();
+        x := c_ret_big_vec();
 
         require(x[0] == 9);
         require(x[1] == 10);
@@ -4415,17 +4415,17 @@ c_abi_tests = fn () void
         c_vector_4_double([ 1.0, 2.0, 3.0, 4.0 ]);
         c_vector_8_double([ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 ]);
 
-        >vf2 = c_ret_vector_2_float();
+        vf2 := c_ret_vector_2_float();
         require(vf2[0] == 1.0);
         require(vf2[1] == 2.0);
 
-        >vf4 = c_ret_vector_4_float();
+        vf4 := c_ret_vector_4_float();
         require(vf4[0] == 1.0);
         require(vf4[1] == 2.0);
         require(vf4[2] == 3.0);
         require(vf4[3] == 4.0);
 
-        >vf8 = c_ret_vector_8_float();
+        vf8 := c_ret_vector_8_float();
         require(vf8[0] == 1.0);
         require(vf8[1] == 2.0);
         require(vf8[2] == 3.0);
@@ -4435,7 +4435,7 @@ c_abi_tests = fn () void
         require(vf8[6] == 7.0);
         require(vf8[7] == 8.0);
 
-        >vf16 = c_ret_vector_16_float();
+        vf16 := c_ret_vector_16_float();
         require(vf16[0] == 1.0);
         require(vf16[1] == 2.0);
         require(vf16[2] == 3.0);
@@ -4453,17 +4453,17 @@ c_abi_tests = fn () void
         require(vf16[14] == 15.0);
         require(vf16[15] == 16.0);
 
-        >vd2 = c_ret_vector_2_double();
+        vd2 := c_ret_vector_2_double();
         require(vd2[0] == 1.0);
         require(vd2[1] == 2.0);
 
-        >vd4 = c_ret_vector_4_double();
+        vd4 := c_ret_vector_4_double();
         require(vd4[0] == 1.0);
         require(vd4[1] == 2.0);
         require(vd4[2] == 3.0);
         require(vd4[3] == 4.0);
 
-        >vd8 = c_ret_vector_8_double();
+        vd8 := c_ret_vector_8_double();
         require(vd8[0] == 1.0);
         require(vd8[1] == 2.0);
         require(vd8[2] == 3.0);
@@ -4478,14 +4478,14 @@ c_abi_tests = fn () void
     {
         c_vector_2_bool([1, 1]);
 
-        >vec2 = c_ret_vector_2_bool();
+        vec2 := c_ret_vector_2_bool();
 
         require(vec2[0] == 1);
         require(vec2[1] == 0);
 
         c_vector_4_bool([1, 1, 0, 1]);
 
-        >vec4 = c_ret_vector_4_bool();
+        vec4 := c_ret_vector_4_bool();
 
         require(vec4[0] == 1);
         require(vec4[1] == 0);
@@ -4503,7 +4503,7 @@ c_abi_tests = fn () void
             1,
         ]);
 
-        >vec8 = c_ret_vector_8_bool();
+        vec8 := c_ret_vector_8_bool();
         require(vec8[0] == 0);
         require(vec8[1] == 1);
         require(vec8[2] == 0);
@@ -4532,7 +4532,7 @@ c_abi_tests = fn () void
             0,
         ]);
 
-        >vec16 = c_ret_vector_16_bool();
+        vec16 := c_ret_vector_16_bool();
         require(vec16[0] == 1);
         require(vec16[1] == 1);
         require(vec16[2] == 0);
@@ -4585,7 +4585,7 @@ c_abi_tests = fn () void
             0,
         ]);
 
-        >vec32 = c_ret_vector_32_bool();
+        vec32 := c_ret_vector_32_bool();
         require(vec32[0] == 1);
         require(vec32[1] == 0);
         require(vec32[2] == 1);
@@ -4686,7 +4686,7 @@ c_abi_tests = fn () void
             0,
         ]);
 
-        >vec64 = c_ret_vector_64_bool();
+        vec64 := c_ret_vector_64_bool();
         require(vec64[0] == 0);
         require(vec64[1] == 1);
         require(vec64[2] == 0);
@@ -4883,7 +4883,7 @@ c_abi_tests = fn () void
             1,
         ]);
 
-        >vec128 = c_ret_vector_128_bool();
+        vec128 := c_ret_vector_128_bool();
         require(vec128[0] == 0);
         require(vec128[1] == 1);
         require(vec128[2] == 1);
@@ -5272,7 +5272,7 @@ c_abi_tests = fn () void
             0,
         ]);
 
-        >vec256 = c_ret_vector_256_bool();
+        vec256 := c_ret_vector_256_bool();
         require(vec256[0] == 1);
         require(vec256[1] == 0);
         require(vec256[2] == 1);
@@ -6045,7 +6045,7 @@ c_abi_tests = fn () void
             1,
         ]);
 
-        >vec512 = c_ret_vector_512_bool();
+        vec512 := c_ret_vector_512_bool();
         require(vec512[0] == 0);
         require(vec512[1] == 1);
         require(vec512[2] == 0);
@@ -6564,7 +6564,7 @@ c_abi_tests = fn () void
     {
         c_ptr_size_float_struct({ .x = 1.0, .y = 2.0 });
 
-        >x = c_ret_ptr_size_float_struct();
+        x := c_ret_ptr_size_float_struct();
         require(x.x == 3.0);
         require(x.y == 4.0);
     }
@@ -6574,7 +6574,7 @@ c_abi_tests = fn () void
         require(c_assert_DC({ .v1 = -0.25, .v2 = 15 }) == 0);
         require(c_assert_ret_DC() == 0);
         require(c_send_DC() == 0);
-        >dc = c_ret_DC();
+        dc := c_ret_DC();
         require(dc.v1 == -0.25);
         require(dc.v2 == 15);
     }
@@ -6584,7 +6584,7 @@ c_abi_tests = fn () void
         require(c_assert_CFF({ .v1 = 39, .v2 = 0.875, .v3 = 1.0 }) == 0);
         require(c_assert_ret_CFF() == 0);
         require(c_send_CFF() == 0);
-        >cff = c_ret_CFF();
+        cff := c_ret_CFF();
         require(cff.v1 == 39);
         require(cff.v2 == 0.875);
         require(cff.v3 == 1.0);
@@ -6595,23 +6595,23 @@ c_abi_tests = fn () void
         require(c_assert_PD({ .v1 = zero, .v2 = 0.5 }) == 0);
         require(c_assert_ret_PD() == 0);
         require(c_send_PD() == 0);
-        >pd = c_ret_PD();
+        pd := c_ret_PD();
         require(pd.v1 == zero);
         require(pd.v2 == 0.5);
     }
 
     // C ABI modify by reference parameter
     {
-        >res = c_modify_by_ref_param({ .val = 1, .arr = undefined });
+        res := c_modify_by_ref_param({ .val = 1, .arr = undefined });
         require(res.val == 42);
     }
 
     // C ABI function that takes byval struct called via function pointer
     {
-        >fn_ptr = &c_func_ptr_byval;
-        >p1: u64 = 1;
-        >p2: u64 = 2;
-        >p4: u64 = 4;
+        fn_ptr := &c_func_ptr_byval;
+        p1: u64 = 1;
+        p2: u64 = 2;
+        p4: u64 = 4;
         fn_ptr(
             @pointer_from_int(p1),
             @pointer_from_int(p2),
@@ -6627,33 +6627,33 @@ c_abi_tests = fn () void
 
     // C ABI f128
     {
-        >a = c_f128(12.34);
+        a := c_f128(12.34);
         require(a == 56.78);
     }
 
     // C ABI f128 struct
     {
-        >a = c_f128_struct({ .a = 12.34 });
+        a := c_f128_struct({ .a = 12.34 });
         require(a.a == 56.78);
 
-        >b = c_f128_f128_struct({ .a = 12.34, .b = 87.65 });
+        b := c_f128_f128_struct({ .a = 12.34, .b = 87.65 });
         require(b.a == 56.78);
         require(b.b == 43.21);
     }
 }
 
-S2Enum = enum
+enum S2Enum
 {
     asd,
     dsa,
     gsa,
 }
 
-string_to_enum = fn () s32
+string_to_enum: fn () s32 = 
 {
-    >e = "dsa";
-    >s2e = @string_to_enum(S2Enum, e);
-    >result: s32 = 1;
+    e := "dsa";
+    s2e := @string_to_enum(S2Enum, e);
+    result: s32 = 1;
 
     if (s2e?)
     {
@@ -6663,9 +6663,9 @@ string_to_enum = fn () s32
     return result;
 }
 
-empty_if = fn (argument_count: s32) s32
+empty_if: fn (argument_count: s32) s32 = 
 {
-    >result: s32 = 0;
+    result: s32 = 0;
 
     if (argument_count != 1)
     {
@@ -6678,9 +6678,9 @@ empty_if = fn (argument_count: s32) s32
     return result;
 } 
 
-else_if = fn () s32
+else_if: fn () s32 = 
 {
-    >result: s32 = 0;
+    result: s32 = 0;
     if (result == 1)
     {
         return 1;
@@ -6695,24 +6695,24 @@ else_if = fn () s32
     }
 }
 
-ElseIfEnum = enum
+enum ElseIfEnum
 {
     a,
     b,
     c,
 }
 
-else_if_complicated = fn (argument_count: s32) s32
+else_if_complicated: fn (argument_count: s32) s32 = 
 {
-    >result: s32 = 0;
-    >foo: ElseIfEnum = .b;
+    result: s32 = 0;
+    foo: ElseIfEnum = .b;
     switch (foo)
     {
         .b =>
         {
             if (argument_count != 0)
             {
-                >a: s32 = 1;
+                a: s32 = 1;
                 if (result == 1)
                 {
                 }
@@ -6735,9 +6735,9 @@ else_if_complicated = fn (argument_count: s32) s32
     return 0;
 }
 
-basic_shortcircuiting_if = fn (argument_count: s32) s32
+basic_shortcircuiting_if: fn (argument_count: s32) s32 = 
 {
-    >a: s32 = 0;
+    a: s32 = 0;
     if (argument_count != 3 and? argument_count != 2)
     {
         return 0;
@@ -6748,9 +6748,9 @@ basic_shortcircuiting_if = fn (argument_count: s32) s32
     }
 }
 
-shortcircuiting_if = fn (argument_count: s32) s32
+shortcircuiting_if: fn (argument_count: s32) s32 = 
 {
-    >a: s32 = 0;
+    a: s32 = 0;
     if (argument_count != 0 and? argument_count != 2 and? argument_count != 3 or? argument_count != 1)
     {
         return 0;
@@ -6765,15 +6765,15 @@ shortcircuiting_if = fn (argument_count: s32) s32
     }
 }
 
-FieldAccessLeftAssign = struct
+struct FieldAccessLeftAssign
 {
     a: u32,
     b: u32,
 }
 
-field_access_left_assign = fn () void
+field_access_left_assign: fn () void =
 {
-    >s: FieldAccessLeftAssign = {
+    s: FieldAccessLeftAssign = {
         .a = 2,
         .b = 3,
     };
@@ -6785,10 +6785,10 @@ field_access_left_assign = fn () void
     require(s.b == 6);
 }
 
-for_each = fn () void
+for_each: fn () void =
 {
-    >array: [_]u32 = [5, 3, 2];
-    >counter: u32 = 0;
+    array: [_]u32 = [5, 3, 2];
+    counter: u32 = 0;
     for (e : array)
     {
         counter += e;
@@ -6801,7 +6801,7 @@ for_each = fn () void
         e.& += 1;
     }
 
-    >new_counter: u32 = 0;
+    new_counter: u32 = 0;
 
     for (e : array)
     {
@@ -6811,27 +6811,27 @@ for_each = fn () void
     require(new_counter == counter + array.length);
 }
 
-pointer_decay = fn () s32
+pointer_decay: fn () s32 = 
 {
-    >array: [_]s32 = [1, 3, 5];
-    >pointer: &s32 = &array[0];
-    >index: u64 = 0;
+    array: [_]s32 = [1, 3, 5];
+    pointer: &s32 = &array[0];
+    index: u64 = 0;
     pointer[index] = 0;
     return pointer[index];
 }
 
-NameEnum = enum
+enum NameEnum
 {
     my_expected_result,
     a,
     b,
 }
 
-[extern] memcmp = fn [cc(c)] (a: &u8, b: &u8, byte_count: u64) s32;
+memcmp [extern]: fn [cc(c)] (a: &u8, b: &u8, byte_count: u64) s32;
 
-string_equal = fn (slice_a: []u8, slice_b: []u8) u1
+string_equal: fn (slice_a: []u8, slice_b: []u8) u1 =
 {
-    >result = slice_a.length == slice_b.length;
+    result := slice_a.length == slice_b.length;
     if (result)
     {
         result = memcmp(slice_a.pointer, slice_b.pointer, slice_a.length) == 0;
@@ -6840,19 +6840,19 @@ string_equal = fn (slice_a: []u8, slice_b: []u8) u1
     return result;
 }
 
-enum_name = fn () s32
+enum_name: fn () s32 = 
 {
-    >some_enum: NameEnum = .my_expected_result;
+    some_enum: NameEnum = .my_expected_result;
     return @extend(!string_equal(@enum_name(some_enum), "my_expected_result"));
 }
 
-join = fn (slice: []u8, parts: [][]u8) void
+join: fn (slice: []u8, parts: [][]u8) void =
 {
-    >destination_i: u64 = 0;
+    destination_i: u64 = 0;
 
     for (part: parts)
     {
-        >source_i: u64 = 0;
+        source_i: u64 = 0;
 
         while (source_i < part.length)
         {
@@ -6863,38 +6863,38 @@ join = fn (slice: []u8, parts: [][]u8) void
     }
 }
 
-slice_of_slices = fn () s32
+slice_of_slices: fn () s32 = 
 {
-    >a = "a";
-    >b = "b";
-    >ab = "ab";
-    >buffer: [2]u8 = undefined;
-    >buffer_slice = buffer[..];
+    a := "a";
+    b := "b";
+    ab := "ab";
+    buffer: [2]u8 = undefined;
+    buffer_slice := buffer[..];
     join(buffer_slice, [ a, b ][..]);
 
-    >result = memcmp(buffer_slice.pointer, ab.pointer, ab.length);
+    result := memcmp(buffer_slice.pointer, ab.pointer, ab.length);
     return result;
 }
 
-int = typealias s32;
+typealias int = s32;
 
-type_alias = fn [cc(c)] () int
+type_alias: fn [cc(c)] () int =
 {
     return 0;
 }
 
-integer_formats = fn () s32
+integer_formats: fn () s32 = 
 {
-    >a: s32 = 0o10;
-    >b: s32 = 0b1000;
-    >c: s32 = 0d0;
+    a: s32 = 0o10;
+    b: s32 = 0b1000;
+    c: s32 = 0d0;
     return a - b + c;
 }
 
-for_each_int = fn () s32
+for_each_int: fn () s32 = 
 {
-    >top: s32 = 64;
-    >accumulator: s32 = 0;
+    top: s32 = 64;
+    accumulator: s32 = 0;
     for (i: 0..top)
     {
         accumulator += 1;
@@ -6902,10 +6902,10 @@ for_each_int = fn () s32
     return accumulator - top;
 }
 
-bool_array = fn () s32
+bool_array: fn () s32 = 
 {
-    >signs: [2]u1 = [0, 0];
-    >accumulator: s32 = 0;
+    signs: [2]u1 = [0, 0];
+    accumulator: s32 = 0;
 
     for (s: signs)
     {
@@ -6915,24 +6915,24 @@ bool_array = fn () s32
     return accumulator;
 }
 
-BasicUnion = union
+union BasicUnion
 {
     s: s32,
     u: u32,
 }
 
-basic_union = fn [cc(c)] () void
+basic_union: fn [cc(c)] () void =
 {
-    >my_union: BasicUnion = {
+    my_union: BasicUnion = {
         .s = -1,
     };
     require(my_union.s == -1);
     require(my_union.u == 0xffffffff);
 }
 
-break_continue = fn () s32
+break_continue: fn () s32 = 
 {
-    >a: s32 = 0;
+    a: s32 = 0;
 
     while (a < 10)
     {
@@ -6945,7 +6945,7 @@ break_continue = fn () s32
         continue;
     }
 
-    >b: s32 = 2;
+    b: s32 = 2;
     for (i: 0..10)
     {
         if (b == 2)
@@ -6965,28 +6965,28 @@ break_continue = fn () s32
 i2315_abc: s32 = 5;
 asjdkj = i2315_abc - i2315_abc;
 
-constant_global_reference = fn () s32
+constant_global_reference: fn () s32 = 
 {
     return asjdkj;
 }
 
-is_space = fn (ch: u8) u1
+is_space: fn (ch: u8) u1 =
 {
     return ch == ' ' or ch == '\n' or ch == '\t' or ch == '\r';
 }
 
-concat_logical_or = fn () s32
+concat_logical_or: fn () s32 = 
 {
     return @extend(is_space('f'));
 }
 
-strict_array_type = fn () s32
+strict_array_type: fn () s32 = 
 {
-    >arr: [3]s32 = [3, 1, 0];
+    arr: [3]s32 = [3, 1, 0];
     return arr[2];
 }
 
-PointerStructInitialization = struct
+struct PointerStructInitialization
 {
     a: u16,
     b: u8,
@@ -6994,11 +6994,11 @@ PointerStructInitialization = struct
     d: u32,
 }
 
-pointer_struct_initialization = fn () void
+pointer_struct_initialization: fn () void =
 {
-    >s: PointerStructInitialization = zero;
+    s: PointerStructInitialization = zero;
 
-    >p_s = &s;
+    p_s := &s;
     p_s.& = {
         .a = 1,
         .b = 2,
@@ -7012,75 +7012,75 @@ pointer_struct_initialization = fn () void
     require(s.d == 4);
 }
 
-slice_array_literal_receiver = fn (slices: [][]u8) void
+slice_array_literal_receiver: fn (slices: [][]u8) void =
 {
     require(slices.length == 3);
 }
 
-slice_array_literal = fn () void
+slice_array_literal: fn () void =
 {
-    >some_bool: u1 = 0;
+    some_bool: u1 = 0;
     slice_array_literal_receiver([ "abc", @select(some_bool, "bcd", "cbd"), "sas", ][..]);
 }
 
-slice_only_start = fn () void
+slice_only_start: fn () void =
 {
-    >s = "abcde";
-    >index: u64 = 3;
-    >s_sub = s[index..];
+    s := "abcde";
+    index: u64 = 3;
+    s_sub := s[index..];
     require(s_sub[0] == 'd');
 }
 
-sub = macro (a: s32, b: s32) s32
+macro sub: (a: s32, b: s32) s32 =
 {
     return a - b;
 }
 
-basic_macro = fn () s32
+basic_macro: fn () s32 = 
 {
-    >a = sub(1, 1);
-    >b = sub(2, 2);
+    a := sub(1, 1);
+    b := sub(2, 2);
     return a + b;
 }
 
-sub_generic = macro [T] (a: T, b: T) T
+macro sub_generic: [T] (a: T, b: T) T =
 {
     return a - b;
 }
 
-generic_macro = fn () s32
+generic_macro: fn () s32 = 
 {
-    >a = sub_generic[s32](1, 1);
-    >b = sub_generic[u8](2, 2);
+    a := sub_generic[s32](1, 1);
+    b := sub_generic[u8](2, 2);
     return a + @extend(b);
 }
 
-pointer_macro = macro [T] (ptr: &u32) &T
+macro pointer_macro: [T] (ptr: &u32) &T =
 {
     return @pointer_cast(ptr);
 }
 
-A = struct
+struct A
 {
     a: u32,
 }
 
-B = struct
+struct B
 {
     b: u32,
 }
 
-generic_pointer_macro = fn () void
+generic_pointer_macro: fn () void =
 {
-    >var: u32 = 0;
-    >a = pointer_macro[A](&var);
-    >b = pointer_macro[B](&var);
+    var: u32 = 0;
+    a := pointer_macro[A](&var);
+    b := pointer_macro[B](&var);
     a.a = 1;
     require(b.b == 1);
     require(var == 1);
 }
 
-assert = macro (ok: u1) void
+macro assert: (ok: u1) void =
 {
     if (!ok)
     {
@@ -7088,17 +7088,17 @@ assert = macro (ok: u1) void
     }
 }
 
-align_forward = fn (value: u64, alignment: u64) u64
+align_forward: fn (value: u64, alignment: u64) u64 =
 {
     assert(alignment != 0);
-    >mask = alignment - 1;
-    >result = (value + mask) & ~mask;
+    mask := alignment - 1;
+    result := (value + mask) & ~mask;
     return result;
 }
 
-noreturn_macro = fn () void
+noreturn_macro: fn () void =
 {
-    >result = align_forward(1, 64);
+    result := align_forward(1, 64);
 
     if (result != 64)
     {
@@ -7106,51 +7106,51 @@ noreturn_macro = fn () void
     }
 }
 
-generic_pointer_array_macro = macro[T](addr: &u64, count: u64) []T
+macro generic_pointer_array_macro: [T] (addr: &u64, count: u64) []T =
 {
-    >pointer: &T = @pointer_cast(addr);
+    pointer: &T = @pointer_cast(addr);
     return pointer[..count];
 }
 
-generic_pointer_array = fn () void
+generic_pointer_array: fn () void =
 {
-    >address_raw: u64 = 0xaaaaaaaaaaaaaaaa;
-    >some_var: &u64 = @pointer_from_int(address_raw);
-    >result: []&u8 = generic_pointer_array_macro[&u8](some_var, 1);
+    address_raw: u64 = 0xaaaaaaaaaaaaaaaa;
+    some_var: &u64 = @pointer_from_int(address_raw);
+    result: []&u8 = generic_pointer_array_macro[&u8](some_var, 1);
     require(@int_from_pointer(result.pointer) == address_raw);
     require(result.length == 1);
 }
 
-SelfReferentialStruct = struct
+struct SelfReferentialStruct
 {
     self: &SelfReferentialStruct,
 }
 
-self_referential_struct = fn () void
+self_referential_struct: fn () void =
 {
-    >s: SelfReferentialStruct = zero;
+    s: SelfReferentialStruct = zero;
     s.self = &s;
     require(s.self == &s);
 }
 
-ForwardDeclaredType = struct;
-ForwardDeclaredTypeWrapper = struct
+struct ForwardDeclaredType;
+struct ForwardDeclaredTypeWrapper
 {
     forward: &ForwardDeclaredType,
 }
 
-ForwardDeclaredType = struct
+struct ForwardDeclaredType
 {
     f: ForwardDeclaredTypeWrapper,
 }
 
-forward_declared_type = fn () void
+forward_declared_type: fn () void =
 {
-    >f: ForwardDeclaredType = zero;
+    f: ForwardDeclaredType = zero;
     f.f.forward = &f;
 }
 
-EnumArrayEnum = enum
+enum EnumArrayEnum
 {
     a,
     b,
@@ -7158,25 +7158,25 @@ EnumArrayEnum = enum
     d,
 }
 
-enum_array = fn () void
+basic_enum_array: fn () void =
 {
-    >some_enum_array: enum_array[EnumArrayEnum](u32) = [ .a = 4, .b = 3, .c = 2, .d = 1 ];
+    some_enum_array: enum_array[EnumArrayEnum](u32) = [ .a = 4, .b = 3, .c = 2, .d = 1 ];
     require(some_enum_array[.a] == 4);
     require(some_enum_array[.b] == 3);
     require(some_enum_array[.c] == 2);
     require(some_enum_array[.d] == 1);
 }
 
-OpaqueType = opaque;
+opaque OpaqueType;
 
-[extern] memcpy = fn [cc(c)] (destination: &s32, source: &s32, size: u64) &OpaqueType;
+memcpy [extern]: fn [cc(c)] (destination: &s32, source: &s32, size: u64) &OpaqueType;
 
-basic_opaque = fn () s32
+basic_opaque: fn () s32 = 
 {
-    >destination: s32 = 1;
-    >source: s32 = 0;
-    >opaque_pointer = memcpy(&destination, &source, @byte_size(s32));
-    >pointer: &s32 = @pointer_cast(opaque_pointer);
+    destination: s32 = 1;
+    source: s32 = 0;
+    opaque_pointer = memcpy(&destination, &source, @byte_size(s32));
+    pointer: &s32 = @pointer_cast(opaque_pointer);
     if (pointer != &destination)
     {
         @trap();
@@ -7184,7 +7184,7 @@ basic_opaque = fn () s32
     return destination;
 }
 
-EnumArbitraryAbi = enum
+enum EnumArbitraryAbi
 {
     a,
     b,
@@ -7192,42 +7192,42 @@ EnumArbitraryAbi = enum
     d,
 }
 
-enum_arbitrary_abi_function = fn (arg: EnumArbitraryAbi) EnumArbitraryAbi
+enum_arbitrary_abi_function: fn (arg: EnumArbitraryAbi) EnumArbitraryAbi =
 {
     return arg;
 }
 
-enum_arbitrary_abi = fn () void
+enum_arbitrary_abi: fn () void =
 {
-    >some_e: EnumArbitraryAbi = .c;
-    >a = enum_arbitrary_abi_function(some_e);
-    >b = enum_arbitrary_abi_function(.d);
+    some_e: EnumArbitraryAbi = .c;
+    a := enum_arbitrary_abi_function(some_e);
+    b := enum_arbitrary_abi_function(.d);
     require(a == .c);
     require(b == .d);
 }
 
-TypeId = enum
+enum TypeId
 {
-    void,
-    noreturn,
-    forward_declaration,
+    void1,
+    noreturn1,
+    forward_declaration1,
     integer,
-    function,
-    pointer,
-    array,
-    enum,
-    struct,
-    bits,
-    alias,
-    union,
-    unresolved,
-    vector,
-    floating_point,
-    enum_array,
-    opaque,
+    function1,
+    pointer1,
+    array1,
+    enum1,
+    struct1,
+    bits1,
+    alias1,
+    union1,
+    unresolved1,
+    vector1,
+    floating_point1,
+    enum_array1,
+    opaque1,
 }
 
-Type = struct
+struct Type
 {
     arr: [5]u32,
     id: TypeId,
@@ -7235,9 +7235,9 @@ Type = struct
     b: u64,
 }
 
-enum_debug_info = fn () void
+enum_debug_info: fn () void =
 {
-    >t: Type = {
+    t: Type = {
         .id = .integer,
         zero,
     };
@@ -7246,7 +7246,7 @@ enum_debug_info = fn () void
     t.arr[0] = 3;
 }
 
-ReturnArrayEnum = enum
+enum ReturnArrayEnum
 {
     a,
     b,
@@ -7256,129 +7256,129 @@ ReturnArrayEnum = enum
     f,
 }
 
-return_array_function = fn () [2]ReturnArrayEnum
+return_array_function: fn () [2]ReturnArrayEnum =
 {
     return [ .f, .e ];
 }
 
-return_array = fn () void
+return_array: fn () void =
 {
-    >result = return_array_function();
+    result := return_array_function();
     require(result[0] == .f);
     require(result[1] == .e);
 }
 
-BoolPair = struct
+struct BoolPair
 {
     a: u1,
     b: u1,
 }
 
-bool_pair_function = fn () BoolPair
+bool_pair_function: fn () BoolPair =
 {
     return { .a = 0, .b = 1 };
 }
 
-bool_pair = fn () void
+bool_pair: fn () void =
 {
-    >result = bool_pair_function();
+    result := bool_pair_function();
     require(!result.a);
     require(result.b);
 }
 
-min_max = fn () void
+min_max: fn () void =
 {
-    >a: u32 = 1;
-    >b: u32 = 2;
-    >min = @min(a, b);
-    >max = @max(a, b);
+    a: u32 = 1;
+    b: u32 = 2;
+    min := @min(a, b);
+    max := @max(a, b);
     require(min == a);
     require(max == b);
 }
 
-FieldParentPointerStruct = struct
+struct FieldParentPointerStruct
 {
     a: u8,
     b: u32,
     c: u8,
 }
 
-field_parent_pointer = fn () void
+field_parent_pointer: fn () void =
 {
-    >s: FieldParentPointerStruct = {
+    s: FieldParentPointerStruct = {
         .a = 241,
         .b = 12356,
         .c = 128,
     };
 
-    >p_a = &s.a;
-    >p_a_struct: &FieldParentPointerStruct = @field_parent_pointer(p_a, "a");
+    p_a := &s.a;
+    p_a_struct: &FieldParentPointerStruct = @field_parent_pointer(p_a, "a");
     require(p_a_struct == &s);
     require(p_a_struct.a == s.a);
     require(p_a_struct.b == s.b);
     require(p_a_struct.c == s.c);
     
-    >p_b = &s.b;
-    >p_b_struct: &FieldParentPointerStruct = @field_parent_pointer(p_b, "b");
+    p_b := &s.b;
+    p_b_struct: &FieldParentPointerStruct = @field_parent_pointer(p_b, "b");
     require(p_b_struct == &s);
     require(p_b_struct.a == s.a);
     require(p_b_struct.b == s.b);
     require(p_b_struct.c == s.c);
 
-    >p_c = &s.c;
-    >p_c_struct: &FieldParentPointerStruct = @field_parent_pointer(p_c, "c");
+    p_c := &s.c;
+    p_c_struct: &FieldParentPointerStruct = @field_parent_pointer(p_c, "c");
     require(p_c_struct == &s);
     require(p_c_struct.a == s.a);
     require(p_c_struct.b == s.b);
     require(p_c_struct.c == s.c);
 }
 
-leading_trailing_zeroes = fn () void
+leading_trailing_zeroes: fn () void =
 {
-    >a: u32 = 0b111;
+    a: u32 = 0b111;
     require(@leading_zeroes(a) == 29);
     require(@trailing_zeroes(a) == 0);
-    >b: u8 = 0b11010;
+    b: u8 = 0b11010;
     require(@leading_zeroes(b) == 3);
     require(@trailing_zeroes(b) == 1);
 }
 
-pointer_sub = fn () void
+pointer_sub: fn () void =
 {
-    >a: [_]s32 = [ 3, 1 ];
-    >p0 = &a[0];
-    >p1 = p0 + 1;
-    >sub: u32 = @truncate(p1 - p0);
+    a: [_]s32 = [ 3, 1 ];
+    p0 := &a[0];
+    p1 := p0 + 1;
+    sub: u32 = @truncate(p1 - p0);
     require(sub == 1);
 }
 
-breakpoint = fn () void
+breakpoint: fn () void =
 {
-    >ok: u1 = 1;
+    ok: u1 = 1;
     if (!ok)
     {
         @breakpoint();
     }
 }
 
-CPUArchitecture = enum
+enum CPUArchitecture
 {
     x86_64,
 }
 
-OperatingSystem = enum
+enum OperatingSystem
 {
     linux,
 }
 
-Target = struct
+struct Target
 {
     cpu: CPUArchitecture,
     os: OperatingSystem,
     host_cpu_model: u1,
 }
 
-struct_arbitrary_int_abi_function = fn [cc(c)] (host_cpu_model: u1) Target
+struct_arbitrary_int_abi_function: fn [cc(c)] (host_cpu_model: u1) Target =
 {
     return {
         .cpu = .x86_64,
@@ -7387,20 +7387,20 @@ struct_arbitrary_int_abi_function = fn [cc(c)] (host_cpu_model: u1) Target
     };
 }
 
-StructArbitraryIntAbiContainer = struct
+struct StructArbitraryIntAbiContainer
 {
     a: u8,
     b: u8,
     c: Target,
     d: u8,
-    e: u8
+    e: u8,
     f: u8,
     g: u8,
 }
 
-struct_arbitrary_int_abi = fn () void
+struct_arbitrary_int_abi: fn () void =
 {
-    >some_struct: StructArbitraryIntAbiContainer = {
+    some_struct: StructArbitraryIntAbiContainer = {
         .f = 45,
         .g = 46,
         .e = 123,
@@ -7421,134 +7421,134 @@ struct_arbitrary_int_abi = fn () void
     require(some_struct.g == 46);
 }
 
-basic_float = fn () u1
+basic_float: fn () u1 =
 {
-    >a: f32 = 0.0;
+    a: f32 = 0.0;
     return a == 0.0;
 }
 
-basic_vector = fn () u1
+basic_vector: fn () u1 =
 {
-    >a: vector[4]u32 = [0, 0, 0, 0];
-    >b: vector[4]u32 = zero;
-    return @reduce(and, a == b);
+    a: vector[4]u32 = [0, 0, 0, 0];
+    b: vector[4]u32 = zero;
+    return @reduce(."and", a == b);
 }
 
-float_operations = fn () void
+float_operations: fn () void =
 {
     {
-        >a: f32 = 1.0;
-        >b: f32 = 2.0;
+        a: f32 = 1.0;
+        b: f32 = 2.0;
         require(a + b == 3.0);
     }
 
     {
-        >a: f64 = 1.0;
-        >b: f64 = 2.0;
+        a: f64 = 1.0;
+        b: f64 = 2.0;
         require(a + b == 3.0);
     }
 
     {
-        >a: f128 = 1.0;
-        >b: f128 = 2.0;
+        a: f128 = 1.0;
+        b: f128 = 2.0;
         require(a + b == 3.0);
     }
 
     {
-        >a: f32 = 2.0;
-        >b: f32 = 1.0;
+        a: f32 = 2.0;
+        b: f32 = 1.0;
         require(a - b == 1.0);
     }
 
     {
-        >a: f64 = 2.0;
-        >b: f64 = 1.0;
+        a: f64 = 2.0;
+        b: f64 = 1.0;
         require(a - b == 1.0);
     }
 
     {
-        >a: f128 = 2.0;
-        >b: f128 = 1.0;
+        a: f128 = 2.0;
+        b: f128 = 1.0;
         require(a - b == 1.0);
     }
 
     {
-        >a: f32 = 2.0;
-        >b: f32 = 3.0;
+        a: f32 = 2.0;
+        b: f32 = 3.0;
         require(a * b == 6.0);
     }
 
     {
-        >a: f64 = 2.0;
-        >b: f64 = 3.0;
+        a: f64 = 2.0;
+        b: f64 = 3.0;
         require(a * b == 6.0);
     }
 
     {
-        >a: f128 = 2.0;
-        >b: f128 = 3.0;
+        a: f128 = 2.0;
+        b: f128 = 3.0;
         require(a * b == 6.0);
     }
 
     {
-        >a: f32 = 4.0;
-        >b: f32 = 2.0;
+        a: f32 = 4.0;
+        b: f32 = 2.0;
         require(a / b == 2.0);
     }
 
     {
-        >a: f64 = 4.0;
-        >b: f64 = 2.0;
+        a: f64 = 4.0;
+        b: f64 = 2.0;
         require(a / b == 2.0);
     }
 
     {
-        >a: f128 = 4.0;
-        >b: f128 = 2.0;
+        a: f128 = 4.0;
+        b: f128 = 2.0;
         require(a / b == 2.0);
     }
 
     {
-        >a: f32 = 4.0;
-        >b: f32 = 2.0;
+        a: f32 = 4.0;
+        b: f32 = 2.0;
         require(a % b == 0.0);
     }
 
     {
-        >a: f64 = 4.0;
-        >b: f64 = 2.0;
+        a: f64 = 4.0;
+        b: f64 = 2.0;
         require(a % b == 0.0);
     }
 
     {
-        >a: f128 = 4.0;
-        >b: f128 = 2.0;
+        a: f128 = 4.0;
+        b: f128 = 2.0;
         require(a % b == 0.0);
     }
 
     {
-        >a: f32 = 1.0;
+        a: f32 = 1.0;
         require(-a == -1.0);
     }
 
     {
-        >a: f64 = 1.0;
+        a: f64 = 1.0;
         require(-a == -1.0);
     }
 
     {
-        >a: f128 = 1.0;
+        a: f128 = 1.0;
         require(-a == -1.0);
     }
 }
 
-vector_operations = fn () void
+vector_operations: fn () void =
 {
     {
-        >v: vector[4]u32 = [ 12314, 512, 512312, 442 ];
+        v: vector[4]u32 = [ 12314, 512, 512312, 442 ];
 
-        >e: u32 = 12;
-        >i: u32 = 1;
+        e: u32 = 12;
+        i: u32 = 1;
 
         v[2] = e;
         v[i] = e;
@@ -7558,7 +7558,7 @@ vector_operations = fn () void
         require(v[i] == v[1]);
         require(v[3] == 442);
 
-        >v2 = v;
+        v2 := v;
 
         require(v[0] == v2[0]);
         require(v[1] == v2[1]);
@@ -7567,10 +7567,10 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]u32 = [ 0, 1, 2, 3 ];
-        >v2: vector[4]u32 = [ 0, 1, 2, 3 ];
+        v1: vector[4]u32 = [ 0, 1, 2, 3 ];
+        v2: vector[4]u32 = [ 0, 1, 2, 3 ];
 
-        >vb = v1 == v2;
+        vb := v1 == v2;
 
         require(vb[0]);
         require(vb[1]);
@@ -7584,7 +7584,7 @@ vector_operations = fn () void
         require(!vb[2]);
         require(!vb[3]);
 
-        vb = v1 > v2;
+        vb := v1 > v2;
 
         require(!vb[0]);
         require(!vb[1]);
@@ -7612,7 +7612,7 @@ vector_operations = fn () void
         require(vb[2]);
         require(vb[3]);
 
-        >v = v1 + v2;
+        v := v1 + v2;
 
         require(v[0] == 0);
         require(v[1] == 2);
@@ -7621,10 +7621,10 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]u32 = [ 7, 6, 5, 4 ];
-        >v2: vector[4]u32 = [ 0, 1, 2, 3 ];
+        v1: vector[4]u32 = [ 7, 6, 5, 4 ];
+        v2: vector[4]u32 = [ 0, 1, 2, 3 ];
 
-        >v = v1 - v2;
+        v := v1 - v2;
 
         require(v[0] == 7);
         require(v[1] == 5);
@@ -7633,10 +7633,10 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]u32 = [ 0, 1, 2, 3 ];
-        >v2: vector[4]u32 = [ 0, 1, 2, 3 ];
+        v1: vector[4]u32 = [ 0, 1, 2, 3 ];
+        v2: vector[4]u32 = [ 0, 1, 2, 3 ];
 
-        >v = v1 * v2;
+        v := v1 * v2;
 
         require(v[0] == 0);
         require(v[1] == 1);
@@ -7645,10 +7645,10 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]u32 = [ 7, 6, 5, 4 ];
-        >v2: vector[4]u32 = [ 5, 4, 3, 2 ];
+        v1: vector[4]u32 = [ 7, 6, 5, 4 ];
+        v2: vector[4]u32 = [ 5, 4, 3, 2 ];
 
-        >v = v1 / v2;
+        v := v1 / v2;
 
         require(v[0] == 1);
         require(v[1] == 1);
@@ -7657,10 +7657,10 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]u32 = [ 7, 6, 5, 4 ];
-        >v2: vector[4]u32 = [ 5, 4, 3, 2 ];
+        v1: vector[4]u32 = [ 7, 6, 5, 4 ];
+        v2: vector[4]u32 = [ 5, 4, 3, 2 ];
 
-        >v = v1 % v2;
+        v := v1 % v2;
 
         require(v[0] == 2);
         require(v[1] == 2);
@@ -7669,10 +7669,10 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]u32 = [ 0b1111, 0b1111, 0b1111, 0b1111 ];
-        >v2: vector[4]u32 = [ 0b1011, 0, 0b1010, 0b101 ];
+        v1: vector[4]u32 = [ 0b1111, 0b1111, 0b1111, 0b1111 ];
+        v2: vector[4]u32 = [ 0b1011, 0, 0b1010, 0b101 ];
 
-        >v = v1 & v2;
+        v := v1 & v2;
 
         require(v[0] == 0b1011);
         require(v[1] == 0);
@@ -7681,22 +7681,10 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]u32 = [ 0b1010, 1, 0b101, 0b10 ];
-        >v2: vector[4]u32 = [ 0b101, 0, 0b1010, 0b1000 ];
+        v1: vector[4]u32 = [ 0b1010, 1, 0b101, 0b10 ];
+        v2: vector[4]u32 = [ 0b101, 0, 0b1010, 0b1000 ];
 
-        >v = v1 | v2;
-
-        require(v[0] == 0b1111);
-        require(v[1] == 1);
-        require(v[2] == 0b1111);
-        require(v[3] == 0b1010);
-    }
-
-    {
-        >v1: vector[4]u32 = [ 0b1010, 1, 0b101, 0b10 ];
-        >v2: vector[4]u32 = [ 0b101, 0, 0b1010, 0b1000 ];
-
-        >v = v1 ^ v2;
+        v := v1 | v2;
 
         require(v[0] == 0b1111);
         require(v[1] == 1);
@@ -7705,10 +7693,22 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]u32 = [ 1, 2, 4, 8 ];
-        >v2: vector[4]u32 = [ 1, 2, 3, 4 ];
+        v1: vector[4]u32 = [ 0b1010, 1, 0b101, 0b10 ];
+        v2: vector[4]u32 = [ 0b101, 0, 0b1010, 0b1000 ];
 
-        >v = v1 << v2;
+        v := v1 ^ v2;
+
+        require(v[0] == 0b1111);
+        require(v[1] == 1);
+        require(v[2] == 0b1111);
+        require(v[3] == 0b1010);
+    }
+
+    {
+        v1: vector[4]u32 = [ 1, 2, 4, 8 ];
+        v2: vector[4]u32 = [ 1, 2, 3, 4 ];
+
+        v := v1 << v2;
 
         require(v[0] == 2);
         require(v[1] == 8);
@@ -7717,10 +7717,10 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]u32 = [ 16, 8, 4, 2 ];
-        >v2: vector[4]u32 = [ 3, 2, 1, 0 ];
+        v1: vector[4]u32 = [ 16, 8, 4, 2 ];
+        v2: vector[4]u32 = [ 3, 2, 1, 0 ];
 
-        >v = v1 >> v2;
+        v := v1 >> v2;
 
         require(v[0] == 2);
         require(v[1] == 2);
@@ -7729,12 +7729,12 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]s32 = [ 0, 1, 2, 3 ];
-        >v2: vector[4]s32 = [ 0, 1, 2, 3 ];
+        v1: vector[4]s32 = [ 0, 1, 2, 3 ];
+        v2: vector[4]s32 = [ 0, 1, 2, 3 ];
 
-        >v = v1 + v2;
+        v := v1 + v2;
 
-        >vb = v1 == v2;
+        vb := v1 == v2;
 
         require(vb[0]);
         require(vb[1]);
@@ -7783,10 +7783,10 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]s32 = [ 7, 6, 5, 4 ];
-        >v2: vector[4]s32 = [ 0, 1, 2, 3 ];
+        v1: vector[4]s32 = [ 7, 6, 5, 4 ];
+        v2: vector[4]s32 = [ 0, 1, 2, 3 ];
 
-        >v = v1 - v2;
+        v := v1 - v2;
 
         require(v[0] == 7);
         require(v[1] == 5);
@@ -7795,10 +7795,10 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]s32 = [ 0, 1, 2, 3 ];
-        >v2: vector[4]s32 = [ 0, 1, 2, 3 ];
+        v1: vector[4]s32 = [ 0, 1, 2, 3 ];
+        v2: vector[4]s32 = [ 0, 1, 2, 3 ];
 
-        >v = v1 * v2;
+        v := v1 * v2;
 
         require(v[0] == 0);
         require(v[1] == 1);
@@ -7807,10 +7807,10 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]s32 = [ 7, 6, 5, 4 ];
-        >v2: vector[4]s32 = [ 5, 4, 3, 2 ];
+        v1: vector[4]s32 = [ 7, 6, 5, 4 ];
+        v2: vector[4]s32 = [ 5, 4, 3, 2 ];
 
-        >v = v1 / v2;
+        v := v1 / v2;
 
         require(v[0] == 1);
         require(v[1] == 1);
@@ -7819,10 +7819,10 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]s32 = [ 7, 6, 5, 4 ];
-        >v2: vector[4]s32 = [ 5, 4, 3, 2 ];
+        v1: vector[4]s32 = [ 7, 6, 5, 4 ];
+        v2: vector[4]s32 = [ 5, 4, 3, 2 ];
 
-        >v = v1 % v2;
+        v := v1 % v2;
 
         require(v[0] == 2);
         require(v[1] == 2);
@@ -7831,10 +7831,10 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]s32 = [ 0b1111, 0b1111, 0b1111, 0b1111 ];
-        >v2: vector[4]s32 = [ 0b1011, 0, 0b1010, 0b101 ];
+        v1: vector[4]s32 = [ 0b1111, 0b1111, 0b1111, 0b1111 ];
+        v2: vector[4]s32 = [ 0b1011, 0, 0b1010, 0b101 ];
 
-        >v = v1 & v2;
+        v := v1 & v2;
 
         require(v[0] == 0b1011);
         require(v[1] == 0);
@@ -7843,22 +7843,10 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]s32 = [ 0b1010, 1, 0b101, 0b10 ];
-        >v2: vector[4]s32 = [ 0b101, 0, 0b1010, 0b1000 ];
+        v1: vector[4]s32 = [ 0b1010, 1, 0b101, 0b10 ];
+        v2: vector[4]s32 = [ 0b101, 0, 0b1010, 0b1000 ];
 
-        >v = v1 | v2;
-
-        require(v[0] == 0b1111);
-        require(v[1] == 1);
-        require(v[2] == 0b1111);
-        require(v[3] == 0b1010);
-    }
-
-    {
-        >v1: vector[4]s32 = [ 0b1010, 1, 0b101, 0b10 ];
-        >v2: vector[4]s32 = [ 0b101, 0, 0b1010, 0b1000 ];
-
-        >v = v1 ^ v2;
+        v := v1 | v2;
 
         require(v[0] == 0b1111);
         require(v[1] == 1);
@@ -7867,10 +7855,22 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]s32 = [ 1, 2, 4, 8 ];
-        >v2: vector[4]s32 = [ 1, 2, 3, 4 ];
+        v1: vector[4]s32 = [ 0b1010, 1, 0b101, 0b10 ];
+        v2: vector[4]s32 = [ 0b101, 0, 0b1010, 0b1000 ];
 
-        >v = v1 << v2;
+        v := v1 ^ v2;
+
+        require(v[0] == 0b1111);
+        require(v[1] == 1);
+        require(v[2] == 0b1111);
+        require(v[3] == 0b1010);
+    }
+
+    {
+        v1: vector[4]s32 = [ 1, 2, 4, 8 ];
+        v2: vector[4]s32 = [ 1, 2, 3, 4 ];
+
+        v := v1 << v2;
 
         require(v[0] == 2);
         require(v[1] == 8);
@@ -7879,10 +7879,10 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]s32 = [ 16, 8, 4, 2 ];
-        >v2: vector[4]s32 = [ 3, 2, 1, 0 ];
+        v1: vector[4]s32 = [ 16, 8, 4, 2 ];
+        v2: vector[4]s32 = [ 3, 2, 1, 0 ];
 
-        >v = v1 >> v2;
+        v := v1 >> v2;
 
         require(v[0] == 2);
         require(v[1] == 2);
@@ -7891,10 +7891,10 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]f32 = [ 0.0, 1.0, 2.0, 3.0 ];
-        >v2: vector[4]f32 = [ 0.0, 1.0, 2.0, 3.0 ];
+        v1: vector[4]f32 = [ 0.0, 1.0, 2.0, 3.0 ];
+        v2: vector[4]f32 = [ 0.0, 1.0, 2.0, 3.0 ];
 
-        >vb = v1 == v2;
+        vb := v1 == v2;
 
         require(vb[0]);
         require(vb[1]);
@@ -7936,7 +7936,7 @@ vector_operations = fn () void
         require(vb[2]);
         require(vb[3]);
 
-        >v = v1 + v2;
+        v := v1 + v2;
 
         require(v[0] == 0.0);
         require(v[1] == 2.0);
@@ -7945,10 +7945,10 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]f32 = [ 7.0, 6.0, 5.0, 4.0 ];
-        >v2: vector[4]f32 = [ 0.0, 1.0, 2.0, 3.0 ];
+        v1: vector[4]f32 = [ 7.0, 6.0, 5.0, 4.0 ];
+        v2: vector[4]f32 = [ 0.0, 1.0, 2.0, 3.0 ];
 
-        >v = v1 - v2;
+        v := v1 - v2;
 
         require(v[0] == 7.0);
         require(v[1] == 5.0);
@@ -7957,10 +7957,10 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]f32 = [ 0.0, 1.0, 2.0, 3.0 ];
-        >v2: vector[4]f32 = [ 0.0, 1.0, 2.0, 3.0 ];
+        v1: vector[4]f32 = [ 0.0, 1.0, 2.0, 3.0 ];
+        v2: vector[4]f32 = [ 0.0, 1.0, 2.0, 3.0 ];
 
-        >v = v1 * v2;
+        v := v1 * v2;
 
         require(v[0] == 0.0);
         require(v[1] == 1.0);
@@ -7969,10 +7969,10 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]f32 = [ 7.0, 6.0, 5.0, 4.0 ];
-        >v2: vector[4]f32 = [ 5.0, 2.0, 5.0, 2.0 ];
+        v1: vector[4]f32 = [ 7.0, 6.0, 5.0, 4.0 ];
+        v2: vector[4]f32 = [ 5.0, 2.0, 5.0, 2.0 ];
 
-        >v = v1 / v2;
+        v := v1 / v2;
 
         require(v[0] == 1.4);
         require(v[1] == 3.0);
@@ -7981,10 +7981,10 @@ vector_operations = fn () void
     }
 
     {
-        >v1: vector[4]f32 = [ 7.0, 6.0, 5.0, 4.0 ];
-        >v2: vector[4]f32 = [ 5.0, 4.0, 3.0, 2.0 ];
+        v1: vector[4]f32 = [ 7.0, 6.0, 5.0, 4.0 ];
+        v2: vector[4]f32 = [ 5.0, 4.0, 3.0, 2.0 ];
 
-        >v = v1 % v2;
+        v := v1 % v2;
 
         require(v[0] == 2.0);
         require(v[1] == 2.0);
@@ -7993,31 +7993,31 @@ vector_operations = fn () void
     }
 }
 
-optional_syntax_sugar = fn () void
+optional_syntax_sugar: fn () void =
 {
-    >r = @string_to_enum(BasicEnum, "three");
+    r := @string_to_enum(BasicEnum, "three");
     require(r?);
     require(r.? == .three);
 }
 
-atomic_operations = fn () void
+atomic_operations: fn () void =
 {
-    >a: s32 = 0;
+    a: s32 = 0;
     @atomic(.store, .sequentially_consistent, &a, 1);
     require(@atomic(.load, .sequentially_consistent, &a) == 1);
-    >b = @atomic(.add, .sequentially_consistent, &a, 1);
+    b := @atomic(.add, .sequentially_consistent, &a, 1);
     require(b == 1);
     require(@atomic(.load, .sequentially_consistent, &a) == 2);
     @atomic(.fence, .sequentially_consistent);
-    >cas = @atomic(.compare_and_swap, .sequentially_consistent, &a, 2, 3, .sequentially_consistent, .strong);
+    cas := @atomic(.compare_and_swap, .sequentially_consistent, &a, 2, 3, .sequentially_consistent, .strong);
     require(cas?);
     require(cas.? == 2);
     require(@atomic(.load, .sequentially_consistent, &a) == 3);
 }
 
-basic_when = fn () void
+basic_when: fn () void =
 {
-    >result: s32 = 0;
+    result: s32 = 0;
 
     when (@byte_size(u64) == 8)
     {
@@ -8040,7 +8040,7 @@ basic_when = fn () void
     require(result == 0);
 }
 
-parse_switch = fn (ch: u8) void
+parse_switch: fn (ch: u8) void =
 {
     switch (ch)
     {
@@ -8053,55 +8053,55 @@ parse_switch = fn (ch: u8) void
     }
 }
 
-TokenContent = union
+union TokenContent
 {
     content: []u8,
     integer: u128,
 }
 
-TokenId = enum
+enum TokenId
 {
     a,
     b,
     c,
 }
 
-Token = struct
+struct Token
 {
     content: TokenContent,
     id: TokenId,
 }
 
-struct_union_alignment = fn () void
+struct_union_alignment: fn () void =
 {
-    >token: Token = zero;
+    token: Token = zero;
     token.id = .c;
 }
 
-integer_max_128 = fn () u1
+integer_max_128: fn () u1 =
 {
-    >max128: u128 = @integer_max(u128);
-    >max64: u128 = @integer_max(u64);
+    max128: u128 = @integer_max(u128);
+    max64: u128 = @integer_max(u64);
 
     return max128 > max64;
 }
 
-AlignedUnionStruct = struct
+struct AlignedUnionStruct
 {
     a: u64,
     b: u64,
     c: u64,
 }
 
-AlignedUnion = union
+union AlignedUnion
 {
     a: u128,
     s: AlignedUnionStruct,
 }
 
-union_alignment = fn () void
+union_alignment: fn () void =
 {
-    >u: AlignedUnion = { .a = 123 };
+    u: AlignedUnion = { .a = 123 };
     require(u.a == 123);
     u.s = {
         .a = 1,
@@ -8114,84 +8114,84 @@ union_alignment = fn () void
     require(u.s.c == 3);
 }
 
-[export] main = fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32
+main [export]: fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32 = 
 {
-    >rc = return_constant();
+    rc := return_constant();
     require(rc == 0);
 
-    >const_add = constant_add();
+    const_add := constant_add();
     require(const_add == 0);
 
-    >const_and = constant_and();
+    const_and := constant_and();
     require(const_and == 0);
 
-    >const_div = constant_div();
+    const_div := constant_div();
     require(const_div == 0);
 
-    >const_mul = constant_mul();
+    const_mul := constant_mul();
     require(const_mul == 0);
 
-    >const_rem = constant_rem();
+    const_rem := constant_rem();
     require(const_rem == 0);
 
-    >const_or = constant_or();
+    const_or := constant_or();
     require(const_or == 0);
 
-    >const_sub = constant_sub();
+    const_sub := constant_sub();
     require(const_sub == 0);
 
-    >const_xor = constant_xor();
+    const_xor := constant_xor();
     require(const_xor == 0);
 
-    >const_shift_left = constant_shift_left();
+    const_shift_left := constant_shift_left();
     require(const_shift_left == 0);
 
-    >const_shift_right = constant_shift_right();
+    const_shift_right := constant_shift_right();
     require(const_shift_right == 0);
 
-    >min_stack = minimal_stack();
+    min_stack := minimal_stack();
     require(min_stack == 0);
 
-    >min_stack_arithmetic0 = minimal_stack_arithmetic0(); 
+    min_stack_arithmetic0 := minimal_stack_arithmetic0(); 
     require(min_stack_arithmetic0 == 0);
 
-    >min_stack_arithmetic1 = minimal_stack_arithmetic1(); 
+    min_stack_arithmetic1 = minimal_stack_arithmetic1(); 
     require(min_stack_arithmetic1 == 0);
 
-    >min_stack_arithmetic2 = minimal_stack_arithmetic2(); 
+    min_stack_arithmetic2 = minimal_stack_arithmetic2(); 
     require(min_stack_arithmetic2 == 0);
 
-    >st_neg = stack_negation();
+    st_neg := stack_negation();
     require(st_neg == 0);
 
-    >st_add = stack_add();
+    st_add := stack_add();
     require(st_add == 0);
 
-    >st_sub = stack_sub();
+    st_sub := stack_sub();
     require(st_sub == 0);
 
-    >ext = extend();
+    ext := extend();
     require(ext == 0);
 
-    >int_max = integer_max();
+    int_max := integer_max();
     require(int_max == 0);
 
-    >int_hex = integer_hex();
+    int_hex := integer_hex();
     require(int_hex == 0);
 
-    >b_pointer = basic_pointer();
+    b_pointer := basic_pointer();
     require(b_pointer == 0);
 
-    >b_call = basic_call();
+    b_call := basic_call();
     require(b_call == 0);
 
-    >b_branch = basic_branch();
+    b_branch := basic_branch();
     require(b_branch == 0);
 
-    >b_array = basic_array();
+    b_array := basic_array();
     require(b_array == 0);
 
-    >b_enum = basic_enum();
+    b_enum := basic_enum();
     require(b_enum == 0);
 
     basic_slice();
@@ -8202,32 +8202,32 @@ union_alignment = fn () void
 
     basic_while(argc, argv);
 
-    >p = pointer();
+    p := pointer();
     require(p == 0);
 
-    >pc = pointer_cast();
+    pc := pointer_cast();
     require(pc == 0);
 
-    >u1_ret = u1_return();
+    u1_ret := u1_return();
     require(u1_ret == 0);
 
-    >lti = local_type_inference();
+    lti := local_type_inference();
     require(lti == 0);
 
-    >bg = basic_global();
+    bg := basic_global();
     require(bg == 0);
 
-    >bfp = basic_function_pointer();
+    bfp := basic_function_pointer();
     require(bfp == 0);
 
     basic_extern();
 
     basic_byte_size();
 
-    >assignment_ops = assignment_operators();
+    assignment_ops := assignment_operators();
     require(assignment_ops == 0);
 
-    >np = not_pointer();
+    np := not_pointer();
     require(np == 0);
 
     basic_bits();
@@ -8242,7 +8242,7 @@ union_alignment = fn () void
 
     basic_global_struct();
 
-    >if_ne = if_no_else();
+    if_ne := if_no_else();
     require(if_ne == 0);
 
     if_no_else_void();
@@ -8251,25 +8251,25 @@ union_alignment = fn () void
 
     indirect_varargs();
 
-    >rtb = return_type_builtin();
+    rtb := return_type_builtin();
     require(rtb == 0);
 
-    >rs6464 = return_struct_u64_u64();
+    rs6464 := return_struct_u64_u64();
     require(rs6464 == 0);
 
-    >sel = select();
+    sel := select();
     require(sel == 0);
 
     slice2(argc, argv);
 
     struct_assignment();
 
-    >bs = basic_struct();
+    bs := basic_struct();
     require(bs == 0);
 
     struct_zero();
 
-    >bu = basic_unreachable();
+    bu := basic_unreachable();
     require(bu == 0);
 
     va_args();
@@ -8278,60 +8278,60 @@ union_alignment = fn () void
 
     c_abi_tests();
 
-    >s2e = string_to_enum();
+    s2e := string_to_enum();
     require(s2e == 0);
 
-    >ei = empty_if(argc);
+    ei := empty_if(argc);
     require(ei == 0);
 
-    >eif = else_if();
+    eif := else_if();
     require(eif == 0);
 
-    >ei_complicated = else_if_complicated(argc);
+    ei_complicated := else_if_complicated(argc);
     require(ei_complicated == 0);
 
-    >basic_sif = basic_shortcircuiting_if(argc);
+    basic_sif := basic_shortcircuiting_if(argc);
     require(basic_sif == 0);
 
-    >sif = shortcircuiting_if(argc);
+    sif := shortcircuiting_if(argc);
     require(sif == 0);
 
     field_access_left_assign();
 
     for_each();
 
-    >pdecay = pointer_decay();
+    pdecay := pointer_decay();
     require(pdecay == 0);
 
-    >en = enum_name();
+    en := enum_name();
     require(en == 0);
 
-    >sos = slice_of_slices();
+    sos := slice_of_slices();
     require(sos == 0);
 
     require(type_alias() == 0);
 
-    >if = integer_formats();
-    require(if == 0);
+    int_formats := integer_formats();
+    require(int_formats == 0);
 
-    >fei = for_each_int();
+    fei := for_each_int();
     require(fei == 0);
 
-    >ba = bool_array();
+    ba := bool_array();
     require(ba == 0);
 
     basic_union();
 
-    >bc = break_continue();
+    bc := break_continue();
     require(bc == 0);
 
-    >cgr = constant_global_reference();
+    cgr := constant_global_reference();
     require(cgr == 0);
 
-    >cc_logical_or = concat_logical_or();
+    cc_logical_or := concat_logical_or();
     require(cc_logical_or == 0);
 
-    >sat = strict_array_type();
+    sat := strict_array_type();
     require(sat == 0);
 
     pointer_struct_initialization();
@@ -8340,10 +8340,10 @@ union_alignment = fn () void
 
     slice_only_start();
 
-    >bm = basic_macro();
+    bm := basic_macro();
     require(bm == 0);
 
-    >gm = generic_macro();
+    gm := generic_macro();
     require(gm == 0);
 
     generic_pointer_macro();
@@ -8356,9 +8356,9 @@ union_alignment = fn () void
 
     forward_declared_type();
 
-    enum_array();
+    basic_enum_array();
 
-    >opq = basic_opaque();
+    opq := basic_opaque();
     require(opq == 0);
 
     enum_arbitrary_abi();

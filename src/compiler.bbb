@@ -1279,6 +1279,7 @@ TypeId = enum
     float,
     enum_array,
     opaque,
+    return_type,
 }
 
 TypeInteger = struct
@@ -1872,7 +1873,7 @@ is_arbitrary_bit_integer = fn (type: &Type) u1
 integer_max_value = fn (bc: u64, signed: u1) u128
 {
     >bit_count: u128 = @extend(bc);
-    >value: u128 = @select(bit_count == @byte_size(u128) * 8, ~0, (1 << (bit_count - @extend(signed))) - 1);
+    >value = @select(bit_count == @byte_size(u128) * 8, ~0, (1 << (bit_count - @extend(signed))) - 1);
     return value;
 }
 
@@ -2239,12 +2240,8 @@ ValueId = enum
     atomic_rmw,
     fence,
     compare_and_swap,
-}
-
-ValueConstantInteger = struct
-{
-    value: u64,
-    signed: u1,
+    value_identifier,
+    unresolved_intrinsic,
 }
 
 Address = struct
@@ -2640,9 +2637,15 @@ ValueCompareAndSwap = struct
     is_strong: u1,
 }
 
+ValueUnresolvedIntrinsic = struct
+{
+    intrinsic: []u8,
+    arguments: []&Value,
+}
+
 ValueContent = union
 {
-    constant_integer: ValueConstantInteger,
+    constant_integer: u128,
     function: ValueFunction,
     unary: ValueUnary,
     binary: ValueBinary,
@@ -2671,6 +2674,8 @@ ValueContent = union
     atomic_rmw: ValueAtomicRmw,
     fence: ValueFence,
     compare_and_swap: ValueCompareAndSwap,
+    value_identifier: []u8,
+    unresolved_intrinsic: ValueUnresolvedIntrinsic,
 }
 
 ValueKind = enum
@@ -4159,7 +4164,7 @@ get_vector_type = fn (module: &Module, element_type: &Type, element_count: u64) 
 
 is_space = fn (ch: u8) u1
 {
-    return ch == ' ' or ch == '\n' or ch == '\t' or ch == '\r';
+    return (ch == ' ' or ch == '\n') or (ch == '\t' or ch == '\r');
 }
 
 is_decimal = fn (ch: u8) u1
@@ -4350,16 +4355,19 @@ escape_character = fn (ch: u8) u8
     }
 }
 
-parse_string_literal = fn (module: &Module) []u8
+parse_string_literal = fn (arena: &Arena, content: []u8, offset_pointer: &u64) []u8
 {
-    expect_character(module, '"');
+    >i = offset_pointer.&;
+    assert(content[i] == '"');
+    i += 1;
 
-    >start = module.offset;
+    >start = i;
+
     >escape_character_count: u64 = 0;
 
-    while (1)
+    while (i < content.length)
     {
-        >ch = module.content[module.offset];
+        >ch = content[i];
         
         if (ch == '"')
         {
@@ -4367,38 +4375,88 @@ parse_string_literal = fn (module: &Module) []u8
         }
 
         escape_character_count += @extend(ch == '\\');
-        module.offset += 1;
-    }
-
-    >end = module.offset;
-    >length = end - start - escape_character_count;
-    >pointer = arena_allocate_bytes(module.arena, length + 1, 1);
-    >string_literal = pointer[..length];
-
-    >source_i = start;
-    >i: u64 = 0;
-
-    while (source_i < end)
-    {
-        >ch = module.content[source_i];
-        if (ch == '\\')
-        {
-            source_i += 1;
-            ch = module.content[source_i];
-            string_literal[i] = escape_character(ch);
-        }
-        else
-        {
-            string_literal[i] = ch;
-        }
-
-        source_i += 1;
         i += 1;
     }
 
-    expect_character(module, '"');
+    >is_properly_finished = content[i] == '"';
+    if (!is_properly_finished)
+    {
+        @trap();
+    }
+
+    >end = i;
+    >length = end - start - escape_character_count;
+    >pointer = arena_allocate_bytes(arena, length + 1, 1);
+    >string_literal = pointer[..length];
+
+    >source_i = start;
+    >destination_i: u64 = 0;
+
+    while (source_i < end)
+    {
+        >ch = content[source_i];
+
+        if (ch == '\\')
+        {
+            source_i += 1;
+            ch = content[source_i];
+            string_literal[destination_i] = escape_character(ch);
+        }
+        else
+        {
+            string_literal[destination_i] = ch;
+        }
+
+        source_i += 1;
+        destination_i += 1;
+    }
+
+    assert(content[source_i] == '"');
+    source_i += 1;
+
+    offset_pointer.& = source_i;
 
     return string_literal;
+}
+
+module_parse_string_literal = fn (module: &Module) []u8
+{
+    return parse_string_literal(module.arena, module.content, &module.offset);
+}
+
+parse_character_literal = fn (content: []u8, offset_pointer: &u64) u8
+{
+    >i = offset_pointer.&;
+    assert(content[i] == '\'');
+    i += 1;
+
+    >ch: u8 = undefined;
+    if (content[i] == '\\')
+    {
+        i += 1;
+        ch = escape_character(content[i]);
+    }
+    else
+    {
+        ch = content[i];
+        if (ch == '\'')
+        {
+            @trap();
+        }
+    }
+
+    i += 1;
+
+    if (content[i] != '\'')
+    {
+        @trap();
+    }
+    
+    i += 1;
+
+    offset_pointer.& = i;
+
+    return ch;
 }
 
 parse_name = fn (module: &Module) []u8
@@ -4407,7 +4465,7 @@ parse_name = fn (module: &Module) []u8
 
     if (module.content[module.offset] == '"')
     {
-        result = parse_string_literal(module);
+        result = module_parse_string_literal(module);
     }
     else
     {
@@ -4446,35 +4504,39 @@ FunctionTypeAttribute = enum
     cc,
 }
 
-accumulate_decimal = fn(accumulator: u64, ch: u8) u64
+accumulate_decimal = fn(accumulator: u128, ch: u8) u128
 {
     assert(is_decimal(ch));
     return (accumulator * 10) + @extend(ch - '0');
 }
 
-parse_decimal = fn (module: &Module) u64
+parse_decimal = fn (content: []u8, offset_pointer: &u64) u128
 {
-    >value: u64 = 0;
+    >value: u128 = 0;
+
+    >i = offset_pointer.&;
 
     while (1)
     {
-        >ch = module.content[module.offset];
+        >ch = content[i];
 
         if (!is_decimal(ch))
         {
             break;
         }
 
-        module.offset += 1;
+        i += 1;
         value = accumulate_decimal(value, ch);
     }
+
+    offset_pointer.& = i;
 
     return value;
 }
 
-parse_integer_decimal_assume_valid = fn (string: []u8) u64
+parse_integer_decimal_assume_valid = fn (string: []u8) u128
 {
-    >value: u64 = 0;
+    >value: u128 = 0;
 
     for (ch: string)
     {
@@ -4484,57 +4546,65 @@ parse_integer_decimal_assume_valid = fn (string: []u8) u64
     return value;
 }
 
-accumulate_octal = fn (accumulator: u64, ch: u8) u64
+accumulate_octal = fn (accumulator: u128, ch: u8) u128
 {
     assert(is_octal(ch));
 
     return (accumulator * 8) + @extend(ch - '0');
 }
 
-parse_octal = fn (module: &Module) u64
+parse_octal = fn (content: []u8, offset_pointer: &u64) u128
 {
-    >value: u64 = 0;
+    >value: u128 = 0;
+
+    >i = offset_pointer.&;
 
     while (1)
     {
-        >ch = module.content[module.offset];
+        >ch = content[i];
 
         if (!is_octal(ch))
         {
             break;
         }
 
-        module.offset += 1;
+        i += 1;
 
         value = accumulate_octal(value, ch);
     }
 
+    offset_pointer.& = i;
+
     return value;
 }
 
-accumulate_binary = fn (accumulator: u64, ch: u8) u64
+accumulate_binary = fn (accumulator: u128, ch: u8) u128
 {
     assert(is_binary(ch));
     return (accumulator * 2) + @extend(ch - '0');
 }
 
-parse_binary = fn (module: &Module) u64
+parse_binary = fn (content: []u8, offset_pointer: &u64) u128
 {
-    >value: u64 = 0;
+    >value: u128 = 0;
+
+    >i = offset_pointer.&;
 
     while (1)
     {
-        >ch = module.content[module.offset];
+        >ch = content[i];
 
         if (!is_binary(ch))
         {
             break;
         }
 
-        module.offset += 1;
+        i += 1;
 
         value = accumulate_binary(value, ch);
     }
+
+    offset_pointer.& = i;
 
     return value;
 }
@@ -4801,12 +4871,6 @@ TokenIntegerKind = enum
     character_literal,
 }
 
-TokenInteger = struct
-{
-    value: u64,
-    kind: TokenIntegerKind,
-};
-
 ValueKeyword = enum
 {
     undefined,
@@ -4859,7 +4923,7 @@ OperatorKeyword = enum
 
 TokenContent = union
 {
-    integer: TokenInteger,
+    integer: u128,
     value_keyword: ValueKeyword,
     value_intrinsic: ValueIntrinsic,
     operator_keyword: OperatorKeyword,
@@ -4896,7 +4960,7 @@ ValueBuilder = struct
     left: &Value,
     precedence: Precedence,
     kind: ValueKind,
-    allow_assignment_operators: u1,
+    is_statement: u1,
 }
 
 parse_value = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value;
@@ -5069,6 +5133,10 @@ resolve_alias = fn (module: &Module, type: &Type) &Type
             {
                 result = get_enum_array_type(module, enum_type, element_type);
             }
+        },
+        .unresolved =>
+        {
+            result = type;
         },
         else =>
         {
@@ -5353,7 +5421,13 @@ parse_array_like_type = fn (module: &Module, scope: &Scope) ArrayLikeType
         {
             .constant_integer =>
             {
-                element_count = length_value.content.constant_integer.value;
+                >candidate_element_count = length_value.content.constant_integer;
+                if (candidate_element_count > @integer_max(u64))
+                {
+                    report_error(module, "Array too big");
+                }
+
+                element_count = @truncate(candidate_element_count);
 
                 if (element_count == 0)
                 {
@@ -5483,7 +5557,7 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
                     },
                 }
 
-                >bit_count = parse_integer_decimal_assume_valid(identifier[1..]);
+                >bit_count: u64 = @truncate(parse_integer_decimal_assume_valid(identifier[1..]));
 
                 if (bit_count == 0)
                 {
@@ -5640,7 +5714,7 @@ parse_type = fn (module: &Module, scope: &Scope) &Type
     }
 }
 
-accumulate_hexadecimal = fn (accumulator: u64, ch: u8) u64
+accumulate_hexadecimal = fn (accumulator: u128, ch: u8) u128
 {
     >value: u8 = undefined;
 
@@ -5664,22 +5738,26 @@ accumulate_hexadecimal = fn (accumulator: u64, ch: u8) u64
     return (accumulator * 16) + @extend(value);
 }
 
-parse_hexadecimal = fn (module: &Module) u64
+parse_hexadecimal = fn (content: []u8, offset_pointer: &u64) u128
 {
-    >value: u64 = 0;
+    >value: u128 = 0;
+
+    >i = offset_pointer.&;
 
     while (1)
     {
-        >ch = module.content[module.offset];
+        >ch = content[i];
 
         if (!is_hexadecimal(ch))
         {
             break;
         }
 
-        module.offset += 1;
+        i += 1;
         value = accumulate_hexadecimal(value, ch);
     }
+
+    offset_pointer.& = i;
 
     return value;
 }
@@ -5870,7 +5948,7 @@ tokenize = fn (module: &Module) Token
         },
         '"' =>
         {
-            >string_literal = parse_string_literal(module);
+            >string_literal = module_parse_string_literal(module);
 
             token = {
                 .content = {
@@ -5881,32 +5959,11 @@ tokenize = fn (module: &Module) Token
         },
         '\'' =>
         {
-            module.offset += 1;
-
-            >ch: u8 = undefined;
-            if (module.content[module.offset] == '\\')
-            {
-                module.offset += 1;
-                ch = escape_character(module.content[module.offset]);
-            }
-            else
-            {
-                ch = module.content[module.offset];
-                if (ch == '\'')
-                {
-                    report_error(module, "Empty character");
-                }
-            }
-
-            module.offset += 1;
-            expect_character(module, '\'');
+            >ch = parse_character_literal(module.content, &module.offset);
 
             token = {
                 .content = {
-                    .integer = {
-                        .value = @extend(ch),
-                        .kind = .character_literal,
-                    },
+                    .integer = @extend(ch),
                 },
                 .id = .integer,
             };
@@ -5933,21 +5990,21 @@ tokenize = fn (module: &Module) Token
                 module.offset += 2 * @extend(token_integer_kind != .decimal or !inferred_decimal);
             }
 
-            >value: u64 = undefined;
+            >value: u128 = undefined;
 
             switch (token_integer_kind)
             {
-                .hexadecimal => { value = parse_hexadecimal(module); },
-                .decimal => { value = parse_decimal(module); },
-                .octal => { value = parse_octal(module); },
-                .binary => { value = parse_binary(module); },
-                .character_literal => { report_error(module, "Invalid character literal format"); },
+                .hexadecimal => { value = parse_hexadecimal(module.content, &module.offset); },
+                .decimal => { value = parse_decimal(module.content, &module.offset); },
+                .octal => { value = parse_octal(module.content, &module.offset); },
+                .binary => { value = parse_binary(module.content, &module.offset); },
+                .character_literal => { unreachable; },
             }
 
             if (inferred_decimal and module.content[module.offset] == '.' and module.content[module.offset + 1] != '.')
             {
                 module.offset += 1;
-                >mantissa = parse_decimal(module);
+                >mantissa = parse_decimal(module.content, &module.offset);
 
                 >float_string_literal = module.content[start_index..module.offset];
 
@@ -5962,10 +6019,7 @@ tokenize = fn (module: &Module) Token
             {
                 token = {
                     .content = {
-                        .integer = {
-                            .value = value,
-                            .kind = token_integer_kind,
-                        },
+                        .integer = value,
                     },
                     .id = .integer,
                 };
@@ -6378,14 +6432,11 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
     {
         .integer =>
         {
-            >integer_value = token.content.integer.value;
+            >integer_value = token.content.integer;
             result = new_value(module);
             result.& = {
                 .content = {
-                    .constant_integer = {
-                        .value = integer_value,
-                        .signed = 0,
-                    },
+                    .constant_integer = integer_value,
                 },
                 .id = .constant_integer,
                 .kind = .right,
@@ -6428,7 +6479,8 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
         },
         .identifier =>
         {
-            result = reference_identifier(module, scope, token.content.identifier, builder.kind);
+            >identifier = token.content.identifier;
+            result = reference_identifier(module, scope, identifier, builder.kind);
         },
         .value_intrinsic =>
         {
@@ -6702,7 +6754,7 @@ parse_left = fn (module: &Module, scope: &Scope, builder: ValueBuilder) &Value
                     expect_character(module, ',');
                     skip_space(module);
 
-                    >field_name = parse_string_literal(module);
+                    >field_name = module_parse_string_literal(module);
 
                     skip_space(module);
                     expect_character(module, right_parenthesis);
@@ -7598,7 +7650,7 @@ parse_right_with_left = fn (module: &Module, scope: &Scope, builder: ValueBuilde
         >token_precedence = get_token_precedence(token);
         if (token_precedence == .assignment)
         {
-            token_precedence = @select(builder.allow_assignment_operators, token_precedence, .none);
+            token_precedence = @select(builder.is_statement, token_precedence, .none);
         }
 
         if (precedence > token_precedence)
@@ -8589,7 +8641,13 @@ parse = fn (module: &Module) void
                                         {
                                             .constant_integer =>
                                             {
-                                                field_integer_value = field_value.content.constant_integer.value;
+                                                >candidate_field_integer_value = field_value.content.constant_integer;
+                                                if (candidate_field_integer_value > @integer_max(u64))
+                                                {
+                                                    report_error(module, "Field value too big");
+                                                }
+
+                                                field_integer_value = @truncate(candidate_field_integer_value);
                                             },
                                             else => { report_error(module, "TODO: Invalid value"); },
                                         }
@@ -9137,9 +9195,6 @@ parse = fn (module: &Module) void
                         >most_aligned_type_alignment = get_byte_alignment(most_aligned_field_type);
 
                         assert(alignment == most_aligned_type_alignment);
-
-                        >biggest_alignment = get_byte_alignment(biggest_field_type);
-                        assert(biggest_alignment == alignment);
 
                         union_type.content.union = {
                             .fields = fields,
@@ -12148,8 +12203,7 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
             //resolve_type_in_place(module, expected_type);
             >resolved_type = resolve_alias(module, expected_type);
 
-            >value_constant: u128 = @extend(value.content.constant_integer.value);
-            >value_is_signed = value.content.constant_integer.signed;
+            >value_constant = value.content.constant_integer;
 
             switch (resolved_type.id)
             {
@@ -12158,29 +12212,13 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     >type_bit_count = resolved_type.content.integer.bit_count;
                     >type_is_signed = resolved_type.content.integer.signed;
 
-                    if (value_is_signed)
+                    >max_value = integer_max_value(type_bit_count, type_is_signed);
+                    if (value_constant > max_value)
                     {
-                        if (type_is_signed)
-                        {
-                            report_error(module, "Must not be signed");
-                        }
-
-                        fail();
+                        report_error(module, "Value bigger than type max value");
                     }
-                    else
-                    {
-                        // TODO: check properly
-                        if (type_bit_count != 128)
-                        {
-                            >max_value = integer_max_value(type_bit_count, type_is_signed);
-                            if (value_constant > max_value)
-                            {
-                                report_error(module, "Value bigger than type max value");
-                            }
-                        }
 
-                        value_type = expected_type;
-                    }
+                    value_type = expected_type;
                 },
                 .pointer =>
                 {
@@ -15614,7 +15652,7 @@ emit_slice_expresion = fn (module: &Module, value: &Value) [2]&LLVMValue
 
     >has_start = start != zero;
 
-    if (start != zero and? start.id == .constant_integer and? start.content.constant_integer.value == 0)
+    if (start != zero and? start.id == .constant_integer and? start.content.constant_integer == 0)
     {
         has_start = 0;
     }
@@ -16344,7 +16382,12 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
         .constant_integer =>
         {
             >llvm_integer_type = get_llvm_type(resolved_value_type, type_kind);
-            llvm_value = LLVMConstInt(llvm_integer_type, value.content.constant_integer.value, @extend(value.content.constant_integer.signed));
+            >words: [2]u64 = zero;
+            >value = value.content.constant_integer;
+            words[0] = @truncate(value);
+            words[1] = @truncate(value >> 64);
+
+            llvm_value = LLVMConstIntOfArbitraryPrecision(llvm_integer_type, words.length, &words[0]);
         },
         .binary =>
         {
@@ -17331,7 +17374,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                                     {
                                         .constant_integer =>
                                         {
-                                            field_value = @extend(value.content.constant_integer.value);
+                                            field_value = value.content.constant_integer;
                                         },
                                         .enum_literal =>
                                         {
@@ -19463,12 +19506,17 @@ emit_statement = fn (module: &Module, scope: &Scope, statement: &Statement) void
                             {
                                 .constant_integer =>
                                 {
-                                    >start_value = start.content.constant_integer.value;
-                                    >end_value = end.content.constant_integer.value;
+                                    >start_value = start.content.constant_integer;
+                                    >end_value = end.content.constant_integer;
 
                                     for (i: start_value + 1 .. end_value)
                                     {
-                                        LLVMAddCase(switch_instruction, LLVMConstInt(start.type.llvm.abi, i, 0), clause.basic_block);
+                                        >words: [2]u64 = zero;
+                                        words[0] = @truncate(i);
+                                        words[1] = @truncate(i >> 64);
+
+                                        >v = LLVMConstIntOfArbitraryPrecision(start.type.llvm.abi, words.length, &words[0]);
+                                        LLVMAddCase(switch_instruction, v, clause.basic_block);
                                     }
                                 },
                                 else => { unreachable; },
@@ -19554,13 +19602,13 @@ emit_block = fn (module: &Module, block: &Block) void
     }
 }
 
-evaluate_value_as_integer = fn (module: &Module, value: &Value) u64
+evaluate_value_as_integer = fn (module: &Module, value: &Value) u128
 {
     switch (value.id)
     {
         .constant_integer =>
         {
-            return value.content.constant_integer.value;
+            return value.content.constant_integer;
         },
         .unary_type =>
         {
@@ -19569,7 +19617,8 @@ evaluate_value_as_integer = fn (module: &Module, value: &Value) u64
             {
                 .byte_size =>
                 {
-                    return get_byte_size(value.content.unary_type.type);
+                    >size = get_byte_size(value.content.unary_type.type);
+                    return @extend(size);
                 },
                 else => { report_error(module, "TODO: unary_type id compare_value"); },
             }
@@ -19764,7 +19813,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                 {
                     .constant_integer =>
                     {
-                        >value = condition.content.constant_integer.value;
+                        >value = condition.content.constant_integer;
                         if (value == 0)
                         {
                             report_error(module, "zero-condition in a while loop");
@@ -19875,7 +19924,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                                 {
                                     .constant_integer =>
                                     {
-                                        if (start.content.constant_integer.value >= end.content.constant_integer.value)
+                                        if (start.content.constant_integer >= end.content.constant_integer)
                                         {
                                             report_error(module, "start value is greater or equal than end value");
                                         }
@@ -20314,10 +20363,7 @@ analyze_statement = fn (module: &Module, scope: &Scope, statement: &Statement) v
                                     {
                                         .constant_integer =>
                                         {
-                                            >start_signed = start.content.constant_integer.signed;
-                                            >end_signed = end.content.constant_integer.signed;
-                                            >is_signed = !(!start_signed and !end_signed);
-                                            local_type = get_integer_type(module, { .bit_count = 64, .signed = is_signed });
+                                            local_type = get_integer_type(module, { .bit_count = 64, .signed = 0 });
                                         },
                                         else =>
                                         {
@@ -21645,6 +21691,2889 @@ emit = fn (module: &Module) void
     assert(object_generation_result);
 }
 
+TypeStartKeyword = enum
+{
+    struct,
+    bits,
+    enum,
+    union,
+    fn,
+    typealias,
+    vector,
+    macro,
+    enum_array,
+    opaque,
+}
+
+TokenContent2 = union
+{
+    string: []u8,
+    integer: u128,
+    type_start_keyword: TypeStartKeyword,
+    statement_start_keyword: StatementStartKeyword,
+    value_keyword: ValueKeyword,
+    operator_keyword: OperatorKeyword,
+}
+
+TokenId2 = enum
+{
+    identifier,
+    left_brace,
+    right_brace,
+    left_bracket,
+    right_bracket,
+    left_parenthesis,
+    right_parenthesis,
+    colon,
+    semicolon,
+    comma,
+    question,
+    assign,
+    compare_equal,
+    compare_not_equal,
+    switch_case_token,
+    integer,
+    exclamation,
+    at,
+    slash,
+    slash_assign,
+    bitwise_and,
+    bitwise_and_assign,
+    bitwise_or,
+    bitwise_or_assign,
+    bitwise_xor,
+    bitwise_xor_assign,
+    dot,
+    double_dot,
+    triple_dot,
+    shift_left,
+    shift_left_equal,
+    shift_right,
+    shift_right_equal,
+    compare_equal,
+    compare_not_equal,
+    compare_greater,
+    compare_greater_equal,
+    compare_less,
+    compare_less_equal,
+    add,
+    add_assign,
+    sub,
+    sub_assign,
+    mul,
+    mul_assign,
+    rem,
+    rem_assign,
+    tilde,
+    string_literal,
+    character_literal,
+    backtick,
+    type_start_keyword,
+    statement_start_keyword,
+    ampersand,
+    else,
+    pointer_dereference,
+    underscore,
+    value_keyword,
+    float_string_literal,
+    optional_value,
+    operator_keyword,
+}
+
+Token2 = struct
+{
+    content: TokenContent2,
+    id: TokenId2,
+    line: u32,
+    column: u32,
+}
+
+IntegerPrefix = enum
+{
+    hexadecimal,
+    decimal,
+    octal,
+    binary,
+}
+
+lex = fn (arena: &Arena, content: []u8) []Token2
+{
+    >i: u64 = 0;
+    >line_offset: u64 = 0;
+    >line_character_offset: u64 = 0;
+
+    >tokens = arena_allocate[Token2](arena, content.length);
+    >token_count: u64 = 0;
+
+    while (1)
+    {
+        while (1)
+        {
+            >iteration_offset = i;
+
+            while (i < content.length)
+            {
+                >ch = content[i];
+
+                >space = is_space(ch);
+                >is_line_feed = ch == '\n';
+                i += @extend(space);
+
+                line_offset += @extend(is_line_feed);
+                line_character_offset = @select(is_line_feed, i, line_character_offset);
+
+                if (!space)
+                {
+                    break;
+                }
+            }
+
+            if (i + 1 < content.length)
+            {
+                >is_comment = content[i] == '/' and content[i + 1] == '/';
+
+                if (is_comment)
+                {
+                    while (i < content.length and? content[i] != '\n')
+                    {
+                        i += 1;
+                    }
+
+                    if (i < content.length)
+                    {
+                        line_offset += 1;
+                        line_character_offset = i;
+                        i += 1;
+                    }
+                }
+            }
+
+            if (i - iteration_offset == 0)
+            {
+                break;
+            }
+        }
+
+        if (i == content.length)
+        {
+            break;
+        }
+
+        >start_index = i;
+        >start = content[start_index];
+
+        >line = line_offset + 1;
+        >column = i - line_character_offset + 1;
+        if (line > @integer_max(u32) or column > @integer_max(u32))
+        {
+            @trap();
+        }
+
+        >token: Token2 = {
+            .line = @truncate(line),
+            .column = @truncate(column),
+            zero,
+        };
+
+        switch (start)
+        {
+            'a'...'z',
+            'A'...'Z',
+            '_'
+            =>
+            {
+                assert(is_identifier_start(start));
+
+                while (i < content.length)
+                {
+                    >ch = content[i];
+                    if (!is_identifier(ch))
+                    {
+                        break;
+                    }
+
+                    i += 1;
+                }
+
+                >candidate_identifier = content[start_index..i];
+                assert(candidate_identifier.length != 0);
+
+                >is_underscore = string_equal(candidate_identifier, "_");
+                >is_else = string_equal(candidate_identifier, "else");
+
+                >value_keyword_s2e = @string_to_enum(ValueKeyword, candidate_identifier);
+                >type_start_keyword_s2e = @string_to_enum(TypeStartKeyword, candidate_identifier);
+                >statement_start_keyword_s2e = @string_to_enum(StatementStartKeyword, candidate_identifier);
+                >operator_keyword_s2e = @string_to_enum(OperatorKeyword, candidate_identifier);
+
+                if (is_underscore)
+                {
+                    token.id = .underscore;
+                }
+                else if (is_else)
+                {
+                    token.id = .else;
+                }
+                else if (type_start_keyword_s2e?)
+                {
+                    >keyword = type_start_keyword_s2e.?;
+                    token.content = {
+                        .type_start_keyword = keyword,
+                    };
+                    token.id = .type_start_keyword;
+                }
+                else if (value_keyword_s2e?)
+                {
+                    >keyword = value_keyword_s2e.?;
+                    token.content = {
+                        .value_keyword = keyword,
+                    };
+                    token.id = .value_keyword;
+                }
+                else if (statement_start_keyword_s2e?)
+                {
+                    >keyword = statement_start_keyword_s2e.?;
+                    token.content = {
+                        .statement_start_keyword = keyword,
+                    };
+                    token.id = .statement_start_keyword;
+                }
+                else if (operator_keyword_s2e?)
+                {
+                    >keyword = operator_keyword_s2e.?;
+                    >ch = content[i];
+                    >is_question = ch == '?';
+                    i += @extend(is_question);
+                    >candidate_keyword: OperatorKeyword = @enum_from_int(@int_from_enum(keyword) + 2);
+                    keyword = @select(is_question, candidate_keyword, keyword);
+                    token.content = {
+                        .operator_keyword = keyword,
+                    };
+                    token.id = .operator_keyword;
+                }
+                else
+                {
+                    token.content = {
+                        .string = candidate_identifier,
+                    };
+                    token.id = .identifier;
+                }
+            },
+            '0'...'9' =>
+            {
+                >is_zero_0 = start == '0';
+                i += 1;
+
+                >prefix_ch = content[i];
+                >is_valid_prefix_ch = (prefix_ch == 'x' or prefix_ch == 'd') or (prefix_ch == 'o' or prefix_ch == 'b');
+
+                >is_valid_prefix = is_zero_0 and is_valid_prefix_ch;
+
+                i += @extend(is_valid_prefix);
+                i -= @extend(!is_valid_prefix);
+
+                >prefix: IntegerPrefix = .decimal;
+
+                if (is_valid_prefix)
+                {
+                    switch (prefix_ch)
+                    {
+                        'x' => { prefix = .hexadecimal; },
+                        'd' => { prefix = .decimal; },
+                        'o' => { prefix = .octal; },
+                        'b' => { prefix = .binary; },
+                        else => { unreachable; },
+                    }
+                }
+
+                >inferred_decimal: u1 = !is_valid_prefix;
+
+                >value: u128 = 0;
+
+                switch (prefix)
+                {
+                    .hexadecimal => { value = parse_hexadecimal(content, &i); },
+                    .decimal => { value = parse_decimal(content, &i); },
+                    .octal => { value = parse_octal(content, &i); },
+                    .binary => { value = parse_binary(content, &i); },
+                }
+
+                if (inferred_decimal and? content[i] == '.' and content[i + 1] != '.')
+                {
+                    i += 1;
+                    >mantissa = parse_decimal(content, &i);
+
+                    >float_string_literal = content[start_index..i];
+
+                    token.content = {
+                        .string = float_string_literal,
+                    };
+                    token.id = .float_string_literal;
+                }
+                else
+                {
+                    token.content = {
+                        .integer = value,
+                    };
+                    token.id = .integer;
+                }
+            },
+            '"' =>
+            {
+                >string_literal = parse_string_literal(arena, content, &i);
+
+                token.content = {
+                    .string = string_literal,
+                };
+                token.id = .string_literal;
+            },
+            '\'' =>
+            {
+                >ch = parse_character_literal(content, &i);
+
+                token.content = {
+                    .integer = @extend(ch),
+                };
+                token.id = .character_literal;
+            },
+            left_brace,
+            right_brace,
+            left_bracket,
+            right_bracket,
+            left_parenthesis,
+            right_parenthesis,
+            ':',
+            ';',
+            ',',
+            '@',
+            '~',
+            '?',
+            '`'
+            =>
+            {
+                >id: TokenId2 = undefined;
+                switch (start)
+                {
+                    left_brace => { id = .left_brace; },
+                    right_brace => { id = .right_brace; },
+                    left_bracket => { id = .left_bracket; },
+                    right_bracket => { id = .right_bracket; },
+                    left_parenthesis => { id = .left_parenthesis; },
+                    right_parenthesis => { id = .right_parenthesis; },
+                    ':' => { id = .colon; },
+                    ';' => { id = .semicolon; },
+                    ',' => { id = .comma; },
+                    '@' => { id = .at; },
+                    '~' => { id = .tilde; },
+                    '?' => { id = .question; },
+                    '`' => { id = .backtick; },
+                    else => { unreachable; },
+                }
+
+                token.id = id;
+                i += 1;
+            },
+            '=' =>
+            {
+                i += 1;
+
+                >ch = content[i];
+
+                >is_compare_equal = ch == '=';
+                >is_switch_token = ch == '>';
+
+                i += @extend(is_compare_equal);
+                i += @extend(is_switch_token);
+
+                >id: TokenId2 = undefined;
+
+                if (is_compare_equal)
+                {
+                    id = .compare_equal;
+                }
+                else if (is_switch_token)
+                {
+                    id = .switch_case_token;
+                }
+                else
+                {
+                    id = .assign;
+                }
+
+                token.id = id;
+            },
+            '!' =>
+            {
+                i += 1;
+
+                >ch = content[i];
+
+                >is_compare_not_equal = ch == '=';
+
+                i += @extend(is_compare_not_equal);
+
+                token.id = @select(is_compare_not_equal, .compare_not_equal, .exclamation);
+            },
+            '&' =>
+            {
+                i += 1;
+
+                >ch = content[i];
+
+                >is_assign = ch == '=';
+
+                i += @extend(is_assign);
+
+                token.id = @select(is_assign, .bitwise_and_assign, .bitwise_and);
+            },
+            '|' =>
+            {
+                i += 1;
+
+                >ch = content[i];
+
+                >is_assign = ch == '=';
+
+                i += @extend(is_assign);
+
+                token.id = @select(is_assign, .bitwise_or_assign, .bitwise_or);
+            },
+            '^' =>
+            {
+                i += 1;
+
+                >ch = content[i];
+
+                >is_assign = ch == '=';
+
+                i += @extend(is_assign);
+
+                token.id = @select(is_assign, .bitwise_xor_assign, .bitwise_xor);
+            },
+            '+' =>
+            {
+                i += 1;
+
+                >ch = content[i];
+
+                >is_assign = ch == '=';
+
+                i += @extend(is_assign);
+
+                token.id = @select(is_assign, .add_assign, .add);
+            },
+            '-' =>
+            {
+                i += 1;
+
+                >ch = content[i];
+
+                >is_assign = ch == '=';
+
+                i += @extend(is_assign);
+
+                token.id = @select(is_assign, .sub_assign, .sub);
+            },
+            '*' =>
+            {
+                i += 1;
+
+                >ch = content[i];
+
+                >is_assign = ch == '=';
+
+                i += @extend(is_assign);
+
+                token.id = @select(is_assign, .mul_assign, .mul);
+            },
+            '/' =>
+            {
+                i += 1;
+
+                >ch = content[i];
+
+                >is_assign = ch == '=';
+
+                i += @extend(is_assign);
+
+                token.id = @select(is_assign, .slash_assign, .slash);
+            },
+            '%' =>
+            {
+                i += 1;
+
+                >ch = content[i];
+
+                >is_assign = ch == '=';
+
+                i += @extend(is_assign);
+
+                token.id = @select(is_assign, .rem_assign, .rem);
+            },
+            '.' =>
+            {
+                >ch2 = content[i + 1];
+                >ch3 = content[i + 2];
+
+                >is_ch2_dot = ch2 == '.';
+                >is_ch2_address = ch2 == '&';
+                >is_ch2_question = ch2 == '?';
+                >is_ch3_dot = ch3 == '.';
+
+                >id: TokenId2 = undefined;
+
+                if (is_ch3_dot and is_ch2_dot)
+                {
+                    id = .triple_dot;
+                    i += 3;
+                }
+                else if (is_ch2_dot)
+                {
+                    id = .double_dot;
+                    i += 2;
+                }
+                else if (is_ch2_address)
+                {
+                    id = .pointer_dereference;
+                    i += 2;
+                }
+                else if (is_ch2_question)
+                {
+                    id = .optional_value;
+                    i += 2;
+                }
+                else
+                {
+                    id = .dot;
+                    i += 1;
+                }
+
+                token.id = id;
+            },
+            '>' =>
+            {
+                >ch2 = content[i + 1];
+
+                >id: TokenId2 = undefined;
+
+                if (ch2 == '>')
+                {
+                    >ch3 = content[i + 2];
+
+                    if (ch3 == '=')
+                    {
+                        id = .shift_right_equal;
+                        i += 3;
+                    }
+                    else
+                    {
+                        id = .shift_right;
+                        i += 2;
+                    }
+                }
+                else if (ch2 == '=')
+                {
+                    id = .compare_greater_equal;
+                    i += 2;
+                }
+                else
+                {
+                    id = .compare_greater;
+                    i += 1;
+                }
+
+                token.id = id;
+            },
+            '<' =>
+            {
+                >ch2 = content[i + 1];
+
+                >id: TokenId2 = undefined;
+
+                if (ch2 == '<')
+                {
+                    >ch3 = content[i + 2];
+
+                    if (ch3 == '=')
+                    {
+                        id = .shift_left_equal;
+                        i += 3;
+                    }
+                    else
+                    {
+                        id = .shift_left;
+                        i += 2;
+                    }
+                }
+                else if (ch2 == '=')
+                {
+                    id = .compare_less_equal;
+                    i += 2;
+                }
+                else
+                {
+                    id = .compare_less;
+                    i += 1;
+                }
+
+                token.id = id;
+            },
+            else =>
+            {
+                @trap();
+            },
+        }
+
+        tokens[token_count] = token;
+        token_count += 1;
+    }
+
+    return tokens[..token_count];
+}
+
+Parser = struct
+{
+    tokens: []Token2,
+    offset: u64,
+}
+
+parser_initialize = fn (tokens: []Token2) Parser
+{
+    return {
+        .tokens = tokens,
+        .offset = 0,
+    };
+}
+
+tokens_left = fn (parser: &Parser) u1
+{
+    return parser.offset < parser.tokens.length;
+}
+
+get_token = fn (parser: &Parser) &Token2
+{
+    assert(tokens_left(parser));
+    >token = &parser.tokens[parser.offset];
+
+    return token;
+}
+
+peek_token = fn (parser: &Parser) &Token2
+{
+    >token: &Token2 = zero;
+
+    if (tokens_left(parser))
+    {
+        token = get_token(parser);
+    }
+
+    return token;
+}
+
+get_token_if = fn (parser: &Parser, id: TokenId2) &Token2
+{
+    >token: &Token2 = zero;
+    >t = peek_token(parser);
+
+    if (t)
+    {
+        if (t.id == id)
+        {
+            token = t;
+        }
+    }
+
+    return token;
+}
+
+consume_token = fn (parser: &Parser) &Token2
+{
+    assert(tokens_left(parser));
+    >token = &parser.tokens[parser.offset];
+    parser.offset += 1;
+    return token;
+}
+
+consume_token_if = fn (parser: &Parser, id: TokenId2) &Token2
+{
+    >token = get_token_if(parser, id);
+
+    if (token)
+    {
+        parser.offset += 1;
+    }
+
+    return token;
+}
+
+expect_token = fn (parser: &Parser, id: TokenId2) &Token2
+{
+    >token = consume_token_if(parser, id);
+    if (!token)
+    {
+        @trap();
+    }
+    return token;
+}
+
+rewind_token = fn (parser: &Parser) void
+{
+    assert(parser.offset > 0);
+    parser.offset -= 1;
+}
+
+TypeKeyword2 = enum
+{
+    void,
+    noreturn,
+}
+
+ValueBuilder2 = struct
+{
+    token: &Token2,
+    left: &Value,
+    precedence: Precedence,
+    kind: ValueKind,
+    is_statement: u1,
+}
+
+parse_left2 = fn (module: &Module, parser: &Parser, scope: &Scope, builder: ValueBuilder2) &Value;
+parse_right_with_left2 = fn (module: &Module, parser: &Parser, scope: &Scope, builder: ValueBuilder2) &Value;
+parse_value2 = fn (module: &Module, parser: &Parser, scope: &Scope, builder: ValueBuilder2) &Value;
+parse_type2 = fn (module: &Module, scope: &Scope, parser: &Parser) &Type;
+
+parse_array_like_type2 = fn (module: &Module, scope: &Scope, parser: &Parser) ArrayLikeType
+{
+    >element_count: u64 = 0;
+
+    if (!consume_token_if(parser, .underscore))
+    {
+        >resolved: u1 = 0;
+
+        >length_value = parse_value2(module, parser, scope, zero);
+        assert(length_value != zero);
+
+        if (!value_is_constant(length_value))
+        {
+            report_error(module, "Length not constant");
+        }
+
+        switch (length_value.id)
+        {
+            .constant_integer =>
+            {
+                >candidate_element_count = length_value.content.constant_integer;
+                if (candidate_element_count > @integer_max(u64))
+                {
+                    report_error(module, "Array too big");
+                }
+
+                element_count = @truncate(candidate_element_count);
+
+                if (element_count == 0)
+                {
+                    report_error(module, "Array element count cannot be zero");
+                }
+
+                resolved = 1;
+            },
+            else =>
+            {
+                report_error(module, "Invalid value type");
+            },
+        }
+
+        if (!resolved)
+        {
+            report_error(module, "TODO: Array must be resolved?");
+        }
+    }
+
+    expect_token(parser, .right_bracket);
+
+    >element_type = parse_type2(module, scope, parser);
+
+    return { .type = element_type, .count = element_count };
+}
+
+parse_type2 = fn (module: &Module, scope: &Scope, parser: &Parser) &Type
+{
+    >token = consume_token(parser);
+
+    switch (token.id)
+    {
+        .identifier =>
+        {
+            >identifier = token.content.string;
+
+            >identifier_long_enough = identifier.length > 1;
+            >is_integer_type = identifier_long_enough and (identifier[0] == 's' or identifier[0] == 'u');
+            >is_float_type = identifier_long_enough and identifier[0] == 'f';
+            >is_void_type = string_equal(identifier, "void");
+            >is_noreturn_type = string_equal(identifier, "noreturn");
+
+            if (is_integer_type or is_float_type)
+            {
+                for (ch: identifier[1..])
+                {
+                    >is_decimal_ch = is_decimal(ch);
+                    is_integer_type = is_integer_type and is_decimal_ch;
+                    is_float_type = is_float_type and is_decimal_ch;
+                }
+            }
+
+            if (is_void_type)
+            {
+                return void_type(module);
+            }
+            else if (is_noreturn_type)
+            {
+                return noreturn_type(module);
+            }
+            else if (is_integer_type)
+            {
+                >is_signed: u1 = undefined;
+                switch (identifier[0])
+                {
+                    's' =>
+                    {
+                        is_signed = 1;
+                    },
+                    'u' =>
+                    {
+                        is_signed = 0;
+                    },
+                    else =>
+                    {
+                        unreachable;
+                    },
+                }
+
+                >bit_count: u64 = @truncate(parse_integer_decimal_assume_valid(identifier[1..]));
+
+                if (bit_count == 0)
+                {
+                    @trap(); // report_error(module, "Invalid integer bit count: 0");
+                }
+
+                if (bit_count > 64)
+                {
+                    if (bit_count != 128)
+                    {
+                        @trap(); // report_error(module, "Invalid integer bit count > 64");
+                    }
+                }
+
+                >result = get_integer_type(module, { .bit_count = bit_count, .signed = is_signed }); 
+                return result;
+            }
+            else if (is_float_type)
+            {
+                >bit_count = parse_integer_decimal_assume_valid(identifier[1..]);
+
+                >float_id: TypeFloatId = undefined;
+
+                switch (bit_count)
+                {
+                    16 =>
+                    {
+                        float_id = .f16;
+                    },
+                    32 =>
+                    {
+                        float_id = .f32;
+                    },
+                    64 =>
+                    {
+                        float_id = .f64;
+                    },
+                    128 =>
+                    {
+                        float_id = .f128;
+                    },
+                    else =>
+                    {
+                        @trap(); // report_error(module, "Unknown float type");
+                    },
+                }
+
+                >float_type = get_float_type(module, float_id);
+                return float_type;
+            }
+            else
+            {
+                >result = arena_allocate[Type](module.arena, 1);
+                result.& = {
+                    .id = .unresolved,
+                    .name = identifier,
+                    .scope = scope,
+                    zero,
+                };
+                return result;
+            }
+        },
+        .type_start_keyword =>
+        {
+            >type_start_keyword = token.content.type_start_keyword;
+
+            switch (type_start_keyword)
+            {
+                .fn =>
+                {
+                    // TODO: parse calling convention
+                    >calling_convention: CallingConvention = .c;
+                    >is_variable_argument: u1 = 0;
+
+                    if (consume_token_if(parser, .left_bracket))
+                    {
+                        expect_token(parser, .identifier);
+                        expect_token(parser, .left_parenthesis);
+                        expect_token(parser, .identifier);
+                        expect_token(parser, .right_parenthesis);
+                        expect_token(parser, .right_bracket);
+                    }
+
+                    expect_token(parser, .left_parenthesis);
+
+                    >argument_type_buffer: [64]&Type = undefined;
+                    >argument_type_count: u64 = 0;
+
+                    while (!consume_token_if(parser, .right_parenthesis))
+                    {
+                        if (consume_token_if(parser, .triple_dot))
+                        {
+                            is_variable_argument = 1;
+                            expect_token(parser, .right_parenthesis);
+                            break;
+                        }
+
+                        if (!consume_token_if(parser, .underscore))
+                        {
+                            >argument_name_token = expect_token(parser, .identifier);
+                        }
+                        expect_token(parser, .colon);
+                        >argument_type = parse_type2(module, scope, parser);
+
+                        if (!consume_token_if(parser, .comma))
+                        {
+                            expect_token(parser, .right_parenthesis);
+                            break;
+                        }
+                    }
+
+                    >return_type = parse_type2(module, scope, parser);
+
+                    >argument_types = arena_allocate_slice[&Type](module.arena, argument_type_count);
+                    memcpy(@pointer_cast(argument_types.pointer), @pointer_cast(&argument_type_buffer[0]), argument_type_count * @byte_size(&Type));
+
+                    return get_function_type(module, {
+                        .semantic_return_type = return_type,
+                        .semantic_argument_types = argument_types,
+                        .calling_convention = calling_convention,
+                        .is_variable_argument = is_variable_argument,
+                    });
+                },
+                .vector =>
+                {
+                    expect_token(parser, .left_bracket);
+                    >element_count_expression = parse_value2(module, parser, scope, zero);
+                    expect_token(parser, .right_bracket);
+                    >element_type = parse_type2(module, scope, parser);
+
+                    if (!value_is_constant(element_count_expression))
+                    {
+                        report_error(module, "Element count expression must be constant");
+                    }
+
+                    >element_count_128 = evaluate_value_as_integer(module, element_count_expression);
+                    if (element_count_128 > @integer_max(u64))
+                    {
+                        report_error(module, "Vector size too big");
+                    }
+
+                    >element_count: u64 = @truncate(element_count_128);
+
+                    >vector_type = get_vector_type(module, element_type, element_count);
+                    return vector_type;
+                },
+                .enum_array =>
+                {
+                    expect_token(parser, .left_bracket);
+                    >enum_type = parse_type2(module, scope, parser);
+                    expect_token(parser, .right_bracket);
+
+                    expect_token(parser, .left_parenthesis);
+                    >element_type = parse_type2(module, scope, parser);
+                    expect_token(parser, .right_parenthesis);
+
+                    >enum_array_type = get_enum_array_type(module, enum_type, element_type);
+                    return enum_array_type;
+                },
+                else =>
+                {
+                    @trap();
+                },
+            }
+        },
+        .left_bracket =>
+        {
+            >is_slice = consume_token_if(parser, .right_bracket);
+            if (is_slice)
+            {
+                >element_type = parse_type2(module, scope, parser);
+                >slice_type = get_slice_type(module, element_type);
+                return slice_type;
+            }
+            else
+            {
+                >array_like_type = parse_array_like_type2(module, scope, parser);
+                >element_type = array_like_type.type;
+                >element_count = array_like_type.count;
+                >length_inferred = element_count == 0;
+
+                if (length_inferred)
+                {
+                    assert(element_count == 0);
+                    >result = new_type(module, {
+                            .content = {
+                            .array = {
+                            .element_type = element_type,
+                            .element_count = 0,
+                            zero,
+                            },
+                            },
+                            .id = .array,
+                            .name = "",
+                            .scope = element_type.scope,
+                            zero,
+                            });
+                    return result;
+                }
+                else
+                {
+                    assert(element_count != 0);
+
+                    >array_type = get_array_type(module, element_type, element_count);
+                    return array_type;
+                }
+            }
+        },
+        // TODO: rename token
+        .bitwise_and =>
+        {
+            >element_type = parse_type2(module, scope, parser);
+
+            >pointer_type = get_pointer_type(module, element_type);
+            return pointer_type;
+        },
+        .at =>
+        {
+            >identifier_token = expect_token(parser, .identifier);
+            >identifier = identifier_token.content.string;
+            >type = arena_allocate[Type](module.arena, 1);
+
+            if (string_equal(identifier, "ReturnType"))
+            {
+                type.& = {
+                    .id = .return_type,
+                    zero,
+                };
+                return type;
+            }
+            else
+            {
+                @trap();
+            }
+        },
+        else =>
+        {
+            @trap();
+        },
+    }
+}
+
+parse_precedence2 = fn (module: &Module, parser: &Parser, scope: &Scope, builder: ValueBuilder2) &Value
+{
+    assert(!builder.token);
+    >left = parse_left2(module, parser, scope, builder);
+    >right_builder = builder;
+    right_builder.left = left;
+    >result = parse_right_with_left2(module, parser, scope, right_builder);
+    return result;
+}
+
+parse_value2 = fn (module: &Module, parser: &Parser, scope: &Scope, builder: ValueBuilder2) &Value
+{
+    assert(builder.precedence == .none);
+    assert(!builder.left);
+    builder.precedence = .assignment;
+    >value = parse_precedence2(module, parser, scope, builder);
+    return value;
+}
+
+parse_call_arguments2 = fn (module: &Module, scope: &Scope, parser: &Parser) []&Value
+{
+    >arguments: []&Value = zero;
+
+    >argument_count: u64 = 0;
+    >argument_buffer: [64]&Value = undefined;
+
+    while (!consume_token_if(parser, .right_parenthesis))
+    {
+        >argument = parse_value2(module, parser, scope, zero);
+        >argument_index = argument_count;
+        argument_buffer[argument_index] = argument;
+
+        argument_count += 1;
+
+        if (!consume_token_if(parser, .comma))
+        {
+            expect_token(parser, .right_parenthesis);
+            break;
+        }
+    }
+
+    if (argument_count != 0)
+    {
+        arguments = arena_allocate_slice[&Value](module.arena, argument_count);
+        memcpy(@pointer_cast(arguments.pointer), @pointer_cast(&argument_buffer), argument_count * @byte_size(&Value));
+    }
+
+    return arguments;
+}
+
+parse_aggregate_initialization2 = fn (module: &Module, scope: &Scope, parser: &Parser, builder: ValueBuilder2, end_token: TokenId2) &Value
+{
+    >element_buffer: [64]AggregateInitializationElement = undefined;
+    >field_count: u64 = 0;
+    >is_zero: u1 = 0;
+
+    while (!consume_token_if(parser, end_token))
+    {
+        >field_index = field_count;
+        field_count += 1;
+
+        if (consume_token_if(parser, .dot))
+        {
+            >field_name_token = expect_token(parser, .identifier);
+            >field_name = arena_duplicate_string(module.arena, field_name_token.content.string);
+            expect_token(parser, .assign);
+
+            >t = get_token(parser);
+            >value = parse_value2(module, parser, scope, zero);
+
+            element_buffer[field_index] = {
+                .name = field_name,
+                .value = value,
+                .line = t.line,
+                .column = t.column,
+            };
+
+            if (!consume_token_if(parser, .comma))
+            {
+                expect_token(parser, end_token);
+                break;
+            }
+        }
+        else
+        {
+            >token = get_token_if(parser, .value_keyword);
+            if (token != zero and? token.content.value_keyword == .zero)
+            {
+                consume_token(parser);
+                consume_token_if(parser, .comma);
+                expect_token(parser, .right_brace);
+                break;
+            }
+            else
+            {
+                report_error(module, "Only zero keyword allowed in aggregate initialization");
+            }
+        }
+    }
+
+    >elements = arena_allocate_slice[AggregateInitializationElement](module.arena, field_count);
+    memcpy(@pointer_cast(elements.pointer), @pointer_cast(&element_buffer), field_count * @byte_size(AggregateInitializationElement));
+
+    >result = new_value(module);
+    result.& = {
+        .content = {
+            .aggregate_initialization = {
+                .elements = elements,
+                .scope = scope,
+                .is_constant = 0,
+                .is_zero = is_zero,
+            },
+        },
+        .id = .aggregate_initialization,
+        .kind = builder.kind,
+        zero,
+    };
+
+    return result;
+}
+
+parse_left2 = fn (module: &Module, parser: &Parser, scope: &Scope, builder: ValueBuilder2) &Value
+{
+    >token = consume_token(parser);
+    >result: &Value = zero;
+
+    switch (token.id)
+    {
+        .integer =>
+        {
+            >integer_value = token.content.integer;
+            result = new_value(module);
+            result.& = {
+                .content = {
+                    .constant_integer = integer_value,
+                },
+                .id = .constant_integer,
+                .kind = .right,
+                zero,
+            };
+        },
+        .identifier =>
+        {
+            >identifier = token.content.string;
+            result = new_value(module);
+            result.& = {
+                .content = {
+                    .value_identifier = identifier,
+                },
+                .id = .value_identifier,
+                .kind = .right,
+                zero,
+            };
+        },
+        .exclamation,
+        .sub,
+        .ampersand, .bitwise_and,
+        .tilde,
+        =>
+        {
+            assert(!builder.left);
+
+            >id: UnaryId = undefined;
+
+            switch (token.id)
+            {
+                .sub => { id = .minus; },
+                .ampersand, .bitwise_and => { id = .ampersand; },
+                .exclamation => { id = .exclamation; },
+                .tilde => { id = .bitwise_not; },
+                else => { unreachable; },
+            }
+
+            result = new_value(module);
+
+            >unary_builder = builder;
+            unary_builder.precedence = .prefix;
+            unary_builder.token = zero;
+            unary_builder.kind = @select(token.id == .ampersand, .left, builder.kind);
+            
+            >unary_value = parse_precedence2(module, parser, scope, unary_builder);
+
+            result = new_value(module);
+            result.& = {
+                .content = {
+                    .unary = {
+                        .value = unary_value,
+                        .id = id,
+                    },
+                },
+                .id = .unary,
+                .kind = .right,
+                zero,
+            };
+        },
+        .at =>
+        {
+            >identifier_token = expect_token(parser, .identifier);
+            >identifier = identifier_token.content.string;
+
+            >arguments: []&Value = zero;
+
+            if (consume_token_if(parser, .left_parenthesis))
+            {
+                arguments = parse_call_arguments2(module, scope, parser);
+            }
+
+            result = new_value(module);
+            result.& = {
+                .content = {
+                    .unresolved_intrinsic = {
+                        .intrinsic = identifier,
+                        .arguments = arguments,
+                    },
+                },
+                .id = .unresolved_intrinsic,
+                .kind = .right,
+                zero,
+            };
+        },
+        .left_bracket =>
+        {
+            >element_count: u64 = 0;
+            >value_buffer: [1024]&Value = undefined;
+
+            >checkpoint = parser.offset;
+            >is_aggregate_initialization = consume_token_if(parser, .dot) != zero and? consume_token_if(parser, .identifier) != zero and? consume_token_if(parser, .assign) != zero;
+            >rewind_times = parser.offset - checkpoint;
+            parser.offset -= rewind_times;
+
+            if (is_aggregate_initialization)
+            {
+                result = parse_aggregate_initialization2(module, scope, parser, builder, .right_bracket);
+            }
+            else
+            {
+                while (!consume_token_if(parser, .right_bracket))
+                {
+                    >value = parse_value2(module, parser, scope, zero);
+
+                    assert(element_count < value_buffer.length);
+
+                    value_buffer[element_count] = value;
+                    element_count += 1;
+
+                    if (!consume_token_if(parser, .comma))
+                    {
+                        expect_token(parser, .right_bracket);
+                        break;
+                    }
+                }
+
+                >values = arena_allocate_slice[&Value](module.arena, element_count);
+                memcpy(@pointer_cast(values.pointer), @pointer_cast(&value_buffer), element_count * @byte_size(&Value));
+
+                result = new_value(module);
+
+                result.& = {
+                    .content = {
+                        .array_initialization = {
+                            .values = values,
+                            .is_constant = 0, // This is analyzed later
+                        },
+                    },
+                    .id = .array_initialization,
+                    zero,
+                };
+            }
+        },
+        .dot =>
+        {
+            >token = consume_token_if(parser, .identifier);
+            if (!token)
+            {
+                token = expect_token(parser, .string_literal);
+            }
+
+            >identifier = token.content.string;
+
+            result = new_value(module);
+            result.& = {
+                .content = {
+                    .enum_literal = identifier,
+                },
+                .id = .enum_literal,
+                zero,
+            };
+        },
+        .left_parenthesis =>
+        {
+            result = parse_value2(module, parser, scope, { .kind = builder.kind, zero });
+            expect_token(parser, .right_parenthesis);
+        },
+        .string_literal =>
+        {
+            >string_literal = token.content.string;
+            result = new_value(module);
+            result.& = {
+                .content = {
+                    .string_literal = string_literal,
+                },
+                .id = .string_literal,
+                zero,
+            };
+        },
+        .character_literal =>
+        {
+            >character_literal = token.content.integer;
+            result = new_value(module);
+            result.& = {
+                .content = {
+                    .constant_integer = character_literal,
+                },
+                .id = .constant_integer,
+                .kind = .right,
+                zero,
+            };
+        },
+        .left_brace =>
+        {
+            result = parse_aggregate_initialization2(module, scope, parser, builder, .right_brace);
+        },
+        .value_keyword =>
+        {
+            result = new_value(module);
+
+            >value_keyword = token.content.value_keyword;
+            >id: ValueId = undefined;
+
+            switch (value_keyword)
+            {
+                .undefined => { id = .undefined; },
+                .unreachable => { id = .unreachable; },
+                .zero => { id = .zero; },
+            }
+
+            result.& = {
+                .id = id,
+                zero,
+            };
+        },
+        .float_string_literal =>
+        {
+            result = new_value(module);
+            result.& = {
+                .content = {
+                    .float_string_literal = token.content.string,
+                },
+                .id = .float_string_literal,
+                zero,
+            };
+        },
+        else =>
+        {
+            @trap();
+        },
+    }
+
+    assert(result != zero);
+    return result;
+}
+
+get_token_precedence2 = fn (token: &Token2) Precedence
+{
+    switch (token.id)
+    {
+        //.none => { unreachable; },
+        .comma,
+        .double_dot,
+        .triple_dot,
+        .semicolon,
+        .right_brace,
+        .right_bracket,
+        .right_parenthesis,
+        .switch_case_token,
+        =>
+        {
+            return .none;
+        },
+        .assign,
+        .shift_left_equal,
+        .shift_right_equal,
+        .add_assign,
+        .sub_assign,
+        .mul_assign,
+        .slash_assign,
+        .rem_assign,
+        .bitwise_xor_assign,
+        .bitwise_and_assign,
+        .bitwise_or_assign,
+        =>
+        {
+            return .assignment;
+        },
+        .operator_keyword =>
+        {
+            >operator_keyword = token.content.operator_keyword;
+            switch (operator_keyword)
+            {
+                .and,
+                ."and?",
+                =>
+                {
+                    return .boolean_and;
+                },
+                .or,
+                ."or?",
+                =>
+                {
+                    return .boolean_or;
+                },
+            }
+        },
+        .compare_equal,
+        .compare_not_equal,
+        .compare_less,
+        .compare_less_equal,
+        .compare_greater,
+        .compare_greater_equal,
+        =>
+        {
+            return .comparison;
+        },
+        .ampersand,
+        .bitwise_and,
+        .bitwise_or,
+        .bitwise_xor,
+        =>
+        {
+            return .bitwise;
+        },
+        .shift_left,
+        .shift_right,
+        =>
+        {
+            return .shifting;
+        },
+        .add,
+        .sub,
+        =>
+        {
+            return .add_like;
+        },
+        .mul,
+        .slash,
+        .rem,
+        =>
+        {
+            return .div_like;
+        },
+        .pointer_dereference,
+        .left_parenthesis,
+        .left_bracket,
+        .dot,
+        .question,
+        .optional_value,
+        =>
+        {
+            return .postfix;
+        },
+        else => { unreachable; },
+    }
+}
+
+parse_right2 = fn (module: &Module, parser: &Parser, scope: &Scope, builder: ValueBuilder2) &Value
+{
+    >left = builder.left;
+    assert(left != zero);
+
+    >token = builder.token;
+
+    >result: &Value = zero;
+
+    switch (token.id)
+    {
+        .left_parenthesis =>
+        {
+            result = new_value(module);
+
+            switch (left.id)
+            {
+                .macro =>
+                {
+                    @trap();
+                },
+                else =>
+                {
+                    >arguments = parse_call_arguments2(module, scope, parser);
+                    result.& = {
+                        .content = {
+                            .call = {
+                                .callable = left,
+                                .arguments = arguments,
+                                zero,
+                            },
+                        },
+                        .id = .call,
+                        .kind = .right,
+                        zero,
+                    };
+                },
+            }
+        },
+        .add,
+        .sub,
+        .mul,
+        .slash,
+        .rem,
+        .ampersand,
+        .bitwise_and,
+        .bitwise_or,
+        .bitwise_xor,
+        .shift_left,
+        .shift_right,
+        .compare_equal,
+        .compare_not_equal,
+        .compare_less,
+        .compare_less_equal,
+        .compare_greater,
+        .compare_greater_equal,
+        .operator_keyword,
+        =>
+        {
+            >precedence = get_token_precedence2(token);
+            assert(precedence != .assignment);
+
+            >id: BinaryId = undefined;
+
+            switch (token.id)
+            {
+                .operator_keyword =>
+                {
+                    >operator_keyword = token.content.operator_keyword;
+                    switch (operator_keyword)
+                    {
+                        .and => { id = .logical_and; },
+                        .or => { id = .logical_or; },
+                        ."and?" => { id = .logical_and_shortcircuit; },
+                        ."or?" => { id = .logical_or_shortcircuit; },
+                    }
+                },
+                .add => { id = .add; },
+                .sub => { id = .sub; },
+                .mul => { id = .mul; },
+                .slash => { id = .div; },
+                .rem => { id = .rem; },
+                .ampersand => { id = .bitwise_and; },
+                .bitwise_and => { id = .bitwise_and; },
+                .bitwise_or => { id = .bitwise_or; },
+                .bitwise_xor => { id = .bitwise_xor; },
+                .shift_left => { id = .shift_left; },
+                .shift_right => { id = .shift_right; },
+                .compare_equal => { id = .compare_equal; },
+                .compare_not_equal => { id = .compare_not_equal; },
+                .compare_less => { id = .compare_less; },
+                .compare_less_equal => { id = .compare_less_equal; },
+                .compare_greater => { id = .compare_greater; },
+                .compare_greater_equal => { id = .compare_greater_equal; },
+                else => { unreachable; },
+            }
+
+            >right_precedence: Precedence = @enum_from_int(@int_from_enum(precedence) + 1);
+            >right_builder = builder;
+            right_builder.precedence = right_precedence;
+            right_builder.token = zero;
+            right_builder.left = zero;
+            >right = parse_precedence2(module, parser, scope, right_builder);
+
+            result = new_value(module);
+            result.& = {
+                .content = {
+                    .binary = {
+                        .left = left,
+                        .right = right,
+                        .id = id,
+                    },
+                },
+                .id = .binary,
+                .kind = .right,
+                zero,
+            };
+        },
+        .dot =>
+        {
+            left.kind = .left;
+            >identifier_token = expect_token(parser, .identifier);
+            >identifier = arena_duplicate_string(module.arena, identifier_token.content.string);
+            result = new_value(module);
+
+            result.& = {
+                .content = {
+                    .field_access = {
+                        .aggregate = left,
+                        .field_name = identifier,
+                    },
+                },
+                .id = .field_access,
+                .kind = builder.kind,
+                zero,
+            };
+        },
+        .pointer_dereference =>
+        {
+            result = new_value(module);
+            result.& = {
+                .content = {
+                    .unary = {
+                        .value = left,
+                        .id = .dereference,
+                    },
+                },
+                .id = .unary,
+                .kind = .right,
+                zero,
+            };
+        },
+        .left_bracket =>
+        {
+            result = new_value(module);
+
+            if (left.id == .macro)
+            {
+                @trap();
+                //>declaration = left.content.macro;
+
+                //if (!macro_declaration_is_generic(declaration))
+                //{
+                //    report_error(module, "Declaration must be generic");
+                //}
+
+                //>instantiation_line = get_line(module);
+                //>instantiation_column = get_column(module);
+                //>original_constant_argument_count = declaration.constant_arguments.length;
+                //>constant_arguments = arena_allocate_slice[ConstantArgument](module.arena, original_constant_argument_count);
+                //>constant_argument_count: u64 = 0;
+
+                //while (1)
+                //{
+                //    skip_space(module);
+
+                //    if (consume_character_if_match(module, right_bracket))
+                //    {
+                //        break;
+                //    }
+
+                //    >constant_argument_index = constant_argument_count;
+                //    if (constant_argument_index == original_constant_argument_count)
+                //    {
+                //        report_error(module, "Constant argument count not matching");
+                //    }
+
+                //    >constant_argument = declaration.constant_arguments[constant_argument_index];
+
+                //    switch (constant_argument.id)
+                //    {
+                //        .value =>
+                //        {
+                //            fail();
+                //        },
+                //        .type =>
+                //        {
+                //            >argument_type = parse_type(module, scope);
+                //            constant_arguments[constant_argument_index] = {
+                //                .name = constant_argument.name,
+                //                .content = {
+                //                    .type = argument_type,
+                //                },
+                //                .id = .type,
+                //            };
+                //        },
+                //    }
+
+                //    constant_argument_count += 1;
+
+                //    skip_space(module);
+                //    consume_character_if_match(module, ',');
+                //}
+
+                //skip_space(module);
+
+                //expect_character(module, left_parenthesis);
+
+                //if (original_constant_argument_count != constant_argument_count)
+                //{
+                //    report_error(module, "Constant argument count must match");
+                //}
+
+                //>instantiation_arguments = parse_call_arguments(module, scope);
+
+                //result.& = {
+                //    .content = {
+                //        .macro_instantiation = {
+                //            .declaration = declaration,
+                //            .instantiation_function = module.current_function,
+                //            .declaration_arguments = zero,
+                //            .instantiation_arguments = instantiation_arguments,
+                //            .constant_arguments = constant_arguments,
+                //            .return_type = declaration.return_type,
+                //            .scope = {
+                //                .parent = scope,
+                //                .line = declaration.scope.line,
+                //                .column = declaration.scope.column,
+                //                .kind = .macro_instantiation,
+                //                zero,
+                //            },
+                //            .line = instantiation_line,
+                //            .column = instantiation_column,
+                //            zero,
+                //        },
+                //    },
+                //    .id = .macro_instantiation,
+                //    zero,
+                //};
+            }
+            else
+            {
+                left.kind = .left;
+
+                >start_double_dot = consume_token_if(parser, .double_dot);
+                >start = start_double_dot == zero;
+
+                >start_value: &Value = zero;
+                if (start)
+                {
+                    start_value = parse_value2(module, parser, scope, zero);
+                }
+
+                >is_array = start and get_token_if(parser, .right_bracket) != zero;
+
+                if (is_array)
+                {
+                    >index = start_value;
+
+                    if (!index)
+                    {
+                        report_error(module, "Array expression must have an index value");
+                    }
+
+                    result.& = {
+                        .content = {
+                            .array_expression = {
+                                .array_like = left,
+                                .index = index,
+                            },
+                        },
+                        .id = .array_expression,
+                        .kind = builder.kind,
+                        zero,
+                    };
+                }
+                else
+                {
+                    if (start)
+                    {
+                        expect_token(parser, .double_dot);
+                    }
+
+                    >end_value: &Value = zero;
+
+                    if (!get_token_if(parser, .right_bracket))
+                    {
+                        end_value = parse_value2(module, parser, scope, zero);
+                    }
+
+                    result.& = {
+                        .content = {
+                            .slice_expression = {
+                                .array_like = left,
+                                .start = start_value,
+                                .end = end_value,
+                            },
+                        },
+                        .id = .slice_expression,
+                        zero,
+                    };
+                }
+
+                expect_token(parser, .right_bracket);
+            }
+        },
+        .question =>
+        {
+            result = new_value(module);
+            result.& = {
+                .content = {
+                    .optional_result = left,
+                },
+                .id = .optional_result,
+                zero,
+            };
+        },
+        .optional_value =>
+        {
+            result = new_value(module);
+            result.& = {
+                .content = {
+                    .optional_value = left,
+                },
+                .id = .optional_value,
+                zero,
+            };
+        },
+        else =>
+        {
+            @trap();
+        },
+    }
+
+    assert(result != zero);
+    return result;
+}
+
+parse_right_with_left2 = fn (module: &Module, parser: &Parser, scope: &Scope, builder: ValueBuilder2) &Value
+{
+    >result = builder.left;
+    assert(result != zero);
+    >precedence = builder.precedence;
+
+    while (1)
+    {
+        >token = peek_token(parser);
+        if (!token)
+        {
+            @trap();
+        }
+
+        >token_precedence = get_token_precedence2(token);
+        if (token_precedence == .assignment)
+        {
+            token_precedence = @select(builder.is_statement, token_precedence, .none);
+        }
+
+        if (precedence > token_precedence)
+        {
+            break;
+        }
+
+        consume_token(parser);
+
+        >left = result;
+
+        >right_builder = builder;
+        right_builder.token = token;
+        right_builder.precedence = .none;
+        right_builder.left = left;
+
+        >right = parse_right2(module, parser, scope, right_builder);
+
+        result = right;
+    }
+
+    return result;
+}
+
+parse_block2 = fn (module: &Module, parent_scope: &Scope, parser: &Parser, left_brace: &Token2) &Block;
+
+parse_statement2 = fn (module: &Module, scope: &Scope, parser: &Parser) &Statement
+{
+    >require_semicolon: u1 = 1;
+
+    >statement_first_token = consume_token(parser);
+
+    >statement = arena_allocate[Statement](module.arena, 1);
+    statement.& = {
+        .line = statement_first_token.line,
+        .column = statement_first_token.column,
+        zero,
+    };
+
+    switch (statement_first_token.id)
+    {
+        .statement_start_keyword =>
+        {
+            >keyword = statement_first_token.content.statement_start_keyword;
+
+            switch (keyword)
+            {
+                .return =>
+                {
+                    >return_value: &Value = zero;
+
+                    if (!get_token_if(parser, .semicolon))
+                    {
+                        return_value = parse_value2(module, parser, scope, zero);
+                    }
+
+                    expect_token(parser, .semicolon);
+
+                    statement.content = {
+                        .return = return_value,
+                    };
+                    statement.id = .return;
+
+                    require_semicolon = 0;
+                },
+                .if,
+                .when,
+                =>
+                {
+                    expect_token(parser, .left_parenthesis);
+                    >condition = parse_value2(module, parser, scope, zero);
+                    expect_token(parser, .right_parenthesis);
+
+                    >if_block = parse_statement2(module, scope, parser);
+                    if (!statement_is_block_like(if_block))
+                    {
+                        report_error(module, "If and when statements must-contain block-like predicates");
+                    }
+
+                    >else_block: &Statement = zero;
+                    if (consume_token_if(parser, .else))
+                    {
+                        else_block = parse_statement2(module, scope, parser);
+                        if (!statement_is_block_like(else_block))
+                        {
+                            report_error(module, "If and when statements must-contain block-like predicates");
+                        }
+                    }
+
+                    require_semicolon = 0;
+
+                    >id: StatementId = undefined;
+
+                    switch (keyword)
+                    {
+                        .if => { id = .if; },
+                        .when => { id = .when; },
+                        else => { unreachable; },
+                    }
+
+                    statement.content = {
+                        .if = {
+                            .condition = condition,
+                            .if = if_block,
+                            .else = else_block,
+                        },
+                    };
+                    statement.id = id;
+                },
+                .while =>
+                {
+                    expect_token(parser, .left_parenthesis);
+                    >condition = parse_value2(module, parser, scope, zero);
+                    expect_token(parser, .right_parenthesis);
+
+                    // TODO: support block-like statement
+                    >block = parse_block2(module, scope, parser, expect_token(parser, .left_brace));
+
+                    require_semicolon = 0;
+
+                    statement.content = {
+                        .while = {
+                            .condition = condition,
+                            .block = block,
+                        },
+                    };
+                    statement.id = .while;
+                },
+                .switch =>
+                {
+                    expect_token(parser, .left_parenthesis);
+                    >discriminant = parse_value2(module, parser, scope, zero);
+                    expect_token(parser, .right_parenthesis);
+
+                    expect_token(parser, .left_brace);
+
+                    >clause_buffer: [64]StatementSwitchClause = undefined;
+                    >clause_count: u64 = 0;
+
+                    while (1)
+                    {
+                        >clause_values: []StatementSwitchDiscriminant = zero;
+
+                        if (consume_token_if(parser, .else))
+                        {
+                            expect_token(parser, .switch_case_token);
+                        }
+                        else
+                        {
+                            >case_buffer: [64]StatementSwitchDiscriminant = undefined;
+                            >case_count: u64 = 0;
+
+                            while (1)
+                            {
+                                >first_case_value = parse_value2(module, parser, scope, zero);
+
+                                >checkpoint = parser.offset;
+
+                                >clause_discriminant: StatementSwitchDiscriminant = undefined;
+
+                                if (consume_token_if(parser, .triple_dot))
+                                {
+                                    >last_case_value = parse_value2(module, parser, scope, zero);
+
+                                    clause_discriminant = {
+                                        .content = {
+                                            .range = [ first_case_value, last_case_value ],
+                                        },
+                                        .id = .range,
+                                    };
+
+                                    if (!consume_token_if(parser, .comma))
+                                    {
+                                        @trap();
+                                    }
+                                }
+                                else
+                                {
+                                    clause_discriminant = {
+                                        .content = {
+                                            .single = first_case_value,
+                                        },
+                                        .id = .single,
+                                    };
+                                }
+
+                                switch (clause_discriminant.id)
+                                {
+                                    .single => { assert(clause_discriminant.content.single != zero); },
+                                    .range =>
+                                    {
+                                        assert(clause_discriminant.content.range[0] != zero);
+                                        assert(clause_discriminant.content.range[1] != zero);
+                                    },
+                                }
+
+                                case_buffer[case_count] = clause_discriminant;
+                                case_count += 1;
+
+                                if (consume_token_if(parser, .switch_case_token))
+                                {
+                                    break;
+                                }
+                            }
+
+                            clause_values = arena_allocate_slice[StatementSwitchDiscriminant](module.arena, case_count);
+                            memcpy(@pointer_cast(clause_values.pointer), @pointer_cast(&case_buffer), case_count * @byte_size(StatementSwitchDiscriminant));
+                        }
+
+                        >clause_block = parse_block2(module, scope, parser, expect_token(parser, .left_brace));
+
+                        clause_buffer[clause_count] = {
+                            .values = clause_values,
+                            .block = clause_block,
+                            zero,
+                        };
+                        clause_count += 1;
+
+                        if (!consume_token_if(parser, .comma))
+                        {
+                            expect_token(parser, .right_brace);
+                            break;
+                        }
+
+                        if (consume_token_if(parser, .right_brace))
+                        {
+                            break;
+                        }
+                    }
+
+                    >clauses = arena_allocate_slice[StatementSwitchClause](module.arena, clause_count);
+                    memcpy(@pointer_cast(clauses.pointer), @pointer_cast(&clause_buffer), clause_count * @byte_size(StatementSwitchClause));
+
+                    require_semicolon = 0;
+
+                    statement.content = {
+                        .switch = {
+                            .discriminant = discriminant,
+                            .clauses = clauses,
+                        },
+                    };
+                    statement.id = .switch;
+                },
+                .for =>
+                {
+                    >parent_scope = scope;
+
+                    statement.content = {
+                        .for = {
+                            .scope = {
+                                .parent = parent_scope,
+                                .line = statement_first_token.line,
+                                .column = statement_first_token.column,
+                                .kind = .for_each,
+                                zero,
+                            },
+                            zero,
+                        },
+                    };
+                    statement.id = .for;
+
+                    expect_token(parser, .left_parenthesis);
+
+                    >scope = &statement.content.for.scope;
+                    >left_value_buffer: [64]ValueKind = undefined;
+                    >left_value_count: u64 = 0;
+
+                    while (1)
+                    {
+                        >left_token = consume_token_if(parser, .bitwise_and);
+
+                        >identifier_token = expect_token(parser, .identifier);
+
+                        >for_local_line = identifier_token.line;
+                        >for_local_column = identifier_token.column;
+
+                        >local_name = arena_duplicate_string(module.arena, identifier_token.content.string);
+
+                        >local = new_local(module, scope);
+                        local.& = {
+                            .variable = {
+                                .scope = scope,
+                                .name = local_name,
+                                .line = for_local_line,
+                                .column = for_local_column,
+                                zero,
+                            },
+                            zero,
+                        };
+
+                        >kind: ValueKind = @select(left_token != zero, .left, .right);
+
+                        left_value_buffer[left_value_count] = kind;
+                        left_value_count += 1;
+
+                        if (!consume_token_if(parser, .comma))
+                        {
+                            expect_token(parser, .colon);
+                            break;
+                        }
+                    }
+
+                    >right_value_buffer: [64]&Value = undefined;
+                    >right_value_count: u64 = 0;
+
+                    right_value_buffer[right_value_count] = parse_value2(module, parser, scope, zero);
+                    right_value_count += 1;
+
+                    >for_kind: StatementForKind = undefined;
+
+                    if (consume_token_if(parser, .double_dot))
+                    {
+                        if (left_value_count != 1)
+                        {
+                            report_error(module, "Expected left_value_count");
+                        }
+
+                        right_value_buffer[right_value_count] = parse_value2(module, parser, scope, zero);
+                        right_value_count += 1;
+
+                        for_kind = .range;
+                    }
+                    else
+                    {
+                        right_value_buffer[0].kind = .left;
+                        for_kind = .slice;
+                    }
+
+                    expect_token(parser, .right_parenthesis);
+
+                    statement.content.for.kind = for_kind;
+
+                    if (for_kind == .slice and left_value_count != right_value_count)
+                    {
+                        report_error(module, "TODO: for slice left/right mismatch");
+                    }
+
+                    >left_values = arena_allocate_slice[ValueKind](module.arena, left_value_count);
+                    memcpy(@pointer_cast(left_values.pointer), @pointer_cast(&left_value_buffer), left_value_count * @byte_size(ValueKind));
+
+                    >right_values = arena_allocate_slice[&Value](module.arena, right_value_count);
+                    memcpy(@pointer_cast(right_values.pointer), @pointer_cast(&right_value_buffer), right_value_count * @byte_size(&Value));
+
+                    statement.content.for.kinds = left_values;
+                    statement.content.for.iteratables = right_values;
+
+                    >predicate = parse_statement2(module, scope, parser);
+                    if (!statement_is_block_like(predicate))
+                    {
+                        report_error(module, "For loop predicates must be block-like statements");
+                    }
+                    statement.content.for.predicate = predicate;
+
+                    require_semicolon = 0;
+                },
+                .break =>
+                {
+                    statement.id = .break;
+                },
+                .continue =>
+                {
+                    statement.id = .continue;
+                },
+                else =>
+                {
+                    @trap();
+                },
+            }
+        },
+        .left_brace =>
+        {
+            >block = parse_block2(module, scope, parser, statement_first_token);
+            statement.content = {
+                .block = block,
+            };
+            statement.id = .block;
+
+            require_semicolon = 0;
+        },
+        .value_keyword,
+        .at =>
+        {
+            rewind_token(parser);
+            >expression = parse_value2(module, parser, scope, zero);
+            statement.content = {
+                .expression = expression,
+            };
+            statement.id = .expression;
+        },
+        .identifier =>
+        {
+            if (consume_token_if(parser, .colon))
+            {
+                >local_name = statement_first_token.content.string;
+                >local_type: &Type = zero;
+                if (!consume_token_if(parser, .assign))
+                {
+                    local_type = parse_type2(module, scope, parser);
+                    expect_token(parser, .assign);
+                }
+
+                >initial_value = parse_value2(module, parser, scope, zero);
+                >local = new_local(module, scope);
+                local.& = {
+                    .variable = {
+                        .type = local_type,
+                        .scope = scope,
+                        .name = local_name,
+                        .line = statement_first_token.line,
+                        .column = statement_first_token.column,
+                        zero,
+                    },
+                    .initial_value = initial_value,
+                    zero,
+                };
+
+                statement.content = {
+                    .local = local,
+                };
+                statement.id = .local;
+            }
+            else
+            {
+                rewind_token(parser);
+
+                >left = parse_value2(module, parser, scope, { .kind = .left, zero });
+
+                if (consume_token_if(parser, .semicolon))
+                {
+                    require_semicolon = 0;
+                    
+                    statement.content = {
+                        .expression = left,
+                    };
+                    statement.id = .expression;
+                }
+                else
+                {
+                    >assignment_token = consume_token(parser);
+
+                    >id: StatementAssignmentId = undefined;
+
+                    switch (assignment_token.id)
+                    {
+                        .assign => { id = .assign; },
+                        .add_assign => { id = .assign_add; },
+                        .sub_assign => { id = .assign_sub; },
+                        .mul_assign => { id = .assign_mul; },
+                        .slash_assign => { id = .assign_div; },
+                        .rem_assign => { id = .assign_rem; },
+                        .shift_left_equal => { id = .assign_shift_left; },
+                        .shift_right_equal => { id = .assign_shift_right; },
+                        .bitwise_and_assign => { id = .assign_and; },
+                        .bitwise_or_assign => { id = .assign_or; },
+                        .bitwise_xor_assign => { id = .assign_xor; },
+                        else => { unreachable; },
+                    }
+
+                    >right = parse_value2(module, parser, scope, zero);
+                    statement.content = {
+                        .assignment = {
+                            .left = left,
+                            .right = right,
+                            .id = id,
+                        },
+                    };
+                    statement.id = .assignment;
+                }
+            }
+        },
+        else =>
+        {
+            @trap();
+        },
+    }
+
+    if (require_semicolon)
+    {
+        expect_token(parser, .semicolon);
+    }
+
+    return statement;
+}
+
+parse_block2 = fn (module: &Module, parent_scope: &Scope, parser: &Parser, left_brace: &Token2) &Block
+{
+    >block = arena_allocate[Block](module.arena, 1);
+    block.& = {
+        .scope = {
+            .parent = parent_scope,
+            .line = left_brace.line,
+            .column = left_brace.column,
+            .kind = .local,
+            zero,
+        },
+        zero,
+    };
+
+    >scope = &block.scope;
+
+    >current_statement: &Statement = zero;
+
+    while (tokens_left(parser) and? !consume_token_if(parser, .right_brace))
+    {
+        >statement = parse_statement2(module, scope, parser);
+
+        if (!block.first_statement)
+        {
+            block.first_statement = statement;
+        }
+
+        if (current_statement)
+        {
+            current_statement.next = statement;
+        }
+
+        assert(!statement.next);
+        current_statement = statement;
+    }
+
+    return block;
+}
+
+parse2 = fn (module: &Module, tokens: []Token2) void
+{
+    >p = parser_initialize(tokens);
+    >parser = &p;
+    >scope = &module.scope;
+
+    while (tokens_left(parser))
+    {
+        >token = consume_token(parser);
+
+        switch (token.id)
+        {
+            // This means global variable
+            .identifier =>
+            {
+                // TODO: properly parse
+                if (consume_token_if(parser, .left_bracket))
+                {
+                    expect_token(parser, .identifier);
+                    expect_token(parser, .right_bracket);
+                }
+
+                >type: &Type = zero;
+                if (consume_token_if(parser, .colon))
+                {
+                    type = parse_type2(module, scope, parser);
+                }
+
+                >identifier = token.content.string;
+                >last_global = module.first_global;
+                >global_forward_declaration: &Global = zero;
+
+                while (last_global)
+                {
+                    if (string_equal(identifier, last_global.variable.name))
+                    {
+                        global_forward_declaration = last_global;
+
+                        if (last_global.variable.storage.id != .forward_declared_function)
+                        {
+                            report_error(module, "Previously declared global must be forward-declared function");
+                        }
+
+                        // TODO: only forbid extern, not exports
+                        if (last_global.linkage == .external)
+                        {
+                            report_error(module, "Function forward declarations with later definition must not have external linkage");
+                        }
+
+                        break;
+                    }
+
+                    if (!last_global.next)
+                    {
+                        break;
+                    }
+
+                    last_global = last_global.next;
+                }
+
+                if (!consume_token_if(parser, .semicolon))
+                {
+                    expect_token(parser, .assign);
+
+                    if (type != zero and? type.id == .function)
+                    {
+                        >block = parse_block2(module, scope, parser, expect_token(parser, .left_brace));
+                    }
+                    else
+                    {
+                        parse_value2(module, parser, scope, zero);
+                        expect_token(parser, .semicolon);
+                    }
+                }
+            },
+            .type_start_keyword =>
+            {
+                >keyword = token.content.type_start_keyword;
+
+                switch (keyword)
+                {
+                    .struct =>
+                    {
+                        >identifier = expect_token(parser, .identifier);
+
+                        if (!consume_token_if(parser, .semicolon))
+                        {
+                            expect_token(parser, .left_brace);
+
+                            while (1)
+                            {
+                                >field_identifier = expect_token(parser, .identifier);
+
+                                expect_token(parser, .colon);
+
+                                >field_type = parse_type2(module, scope, parser);
+
+                                if (!consume_token_if(parser, .comma) or? get_token_if(parser, .right_brace) != zero)
+                                {
+                                    break;
+                                }
+                            }
+
+                            expect_token(parser, .right_brace);
+                        }
+
+                        consume_token_if(parser, .semicolon);
+                    },
+                    .enum =>
+                    {
+                        >identifier = expect_token(parser, .identifier);
+
+                        expect_token(parser, .left_brace);
+
+                        while (1)
+                        {
+                            >field_identifier = expect_token(parser, .identifier);
+
+                            if (consume_token_if(parser, .assign))
+                            {
+                                >field_value = parse_value2(module, parser, scope, zero);
+                            }
+
+                            if (!consume_token_if(parser, .comma) or? get_token_if(parser, .right_brace) != zero)
+                            {
+                                break;
+                            }
+                        }
+
+                        expect_token(parser, .right_brace);
+
+                        consume_token_if(parser, .semicolon);
+                    },
+                    .fn =>
+                    {
+                        report_error(module, "'fn' not allowed here");
+                    },
+                    .bits =>
+                    {
+                        >name = expect_token(parser, .identifier);
+
+                        >is_implicit_type = get_token_if(parser, .left_brace);
+
+                        >backing_type: &Type = zero;
+
+                        if (!is_implicit_type)
+                        {
+                            backing_type = parse_type2(module, scope, parser);
+                        }
+
+                        expect_token(parser, .left_brace);
+
+                        >field_buffer: [64]Field = undefined;
+                        >field_bit_offset: u64 = 0;
+                        >field_count: u64 = 0;
+
+                        while (!consume_token_if(parser, .right_brace))
+                        {
+                            assert(field_count < field_buffer.length);
+
+                            >identifier_token = expect_token(parser, .identifier);
+
+                            >field_line = identifier_token.line;
+                            >field_name = arena_duplicate_string(module.arena, identifier_token.content.string);
+
+                            expect_token(parser, .colon);
+
+                            >field_type = parse_type2(module, scope, parser);
+
+                            >field_bit_count = get_bit_size(field_type);
+
+                            if (!consume_token_if(parser, .comma))
+                            {
+                                expect_token(parser, .right_brace);
+                                break;
+                            }
+
+                            field_buffer[field_count] = {
+                                .name = field_name,
+                                .type = field_type,
+                                .offset = field_bit_offset,
+                                .line = field_line,
+                            };
+
+                            field_bit_offset += field_bit_count;
+                            field_count += 1;
+                        }
+
+                        consume_token_if(parser, .semicolon);
+
+                        >fields = arena_allocate_slice[Field](module.arena, field_count);
+                        memcpy(@pointer_cast(fields.pointer), @pointer_cast(&field_buffer), field_count * @byte_size(Field));
+
+                        >needed_bit_count = @max(next_power_of_two(field_bit_offset), 8);
+                        if (needed_bit_count > @integer_max(u32))
+                        {
+                            report_error(module, "TODO: Needed bit count must be less or equal than 32?");
+                        }
+
+                        >bit_count = needed_bit_count;
+
+                        if (!backing_type)
+                        {
+                            backing_type = get_integer_type(module, { .bit_count = bit_count, .signed = 0 });
+                        }
+
+                        if (backing_type.id != .integer)
+                        {
+                            report_error(module, "Backing type must be integer");
+                        }
+
+                        >backing_type_bit_size = get_bit_size(backing_type);
+
+                        if (backing_type_bit_size > 64)
+                        {
+                            if (backing_type_bit_size != 128)
+                            {
+                                report_error(module, "Backing type bit size must be less or equal than 64 or 128");
+                            }
+                        }
+
+                        //new_type(module, {
+                        //    .content = {
+                        //        .bits = {
+                        //            .fields = fields,
+                        //            .backing_type = backing_type,
+                        //            .line = global_line,
+                        //            .is_implicit_backing_type = is_implicit_type,
+                        //        },
+                        //    },
+                        //    .id = .bits,
+                        //    .name = global_name,
+                        //    .scope = &module.scope,
+                        //    zero,
+                        //});
+                    },
+                    .union =>
+                    {
+                        >identifier = expect_token(parser, .identifier);
+
+                        if (!consume_token_if(parser, .semicolon))
+                        {
+                            expect_token(parser, .left_brace);
+
+                            while (1)
+                            {
+                                >field_identifier = expect_token(parser, .identifier);
+
+                                expect_token(parser, .colon);
+
+                                >field_type = parse_type2(module, scope, parser);
+
+                                if (!consume_token_if(parser, .comma) or? get_token_if(parser, .right_brace) != zero)
+                                {
+                                    break;
+                                }
+                            }
+
+                            expect_token(parser, .right_brace);
+
+                            consume_token_if(parser, .semicolon);
+                        }
+                    },
+                    .typealias =>
+                    {
+                        >alias_name = expect_token(parser, .identifier);
+                        expect_token(parser, .assign);
+                        >aliased_type = parse_type2(module, scope, parser);
+                        expect_token(parser, .semicolon);
+                    },
+                    .macro =>
+                    {
+                        >constant_argument_buffer: [64]ConstantArgument = undefined;
+                        >constant_argument_count: u64 = 0;
+
+                        >macro_declaration = arena_allocate[MacroDeclaration](module.arena, 1);
+
+                        >name_token = expect_token(parser, .identifier);
+                        >name = name_token.content.string;
+
+                        expect_token(parser, .colon);
+
+                        macro_declaration.& = {
+                            .name = name,
+                            .scope = {
+                                .parent = scope,
+                                .line = token.line,
+                                .column = token.column,
+                                .kind = .macro_declaration,
+                                zero,
+                            },
+                            zero,
+                        };
+
+                        >is_generic = consume_token_if(parser, .left_bracket);
+                        if (is_generic)
+                        {
+                            while (!consume_token_if(parser, .right_bracket))
+                            {
+                                >argument_name_token = expect_token(parser, .identifier);
+                                >argument_name = arena_duplicate_string(module.arena, argument_name_token.content.string);
+
+                                >constant_argument_index = constant_argument_count;
+
+                                if (consume_token_if(parser, .colon))
+                                {
+                                    report_error(module, "TODO: implement compile-time value arguments");
+                                }
+                                else
+                                {
+                                    >ty = new_type(module, {
+                                        .id = .unresolved,
+                                        .name = argument_name,
+                                        .scope = &macro_declaration.scope,
+                                        zero,
+                                    });
+
+                                    constant_argument_buffer[constant_argument_index] = {
+                                        .name = argument_name,
+                                        .content = {
+                                            .type = ty,
+                                        },
+                                        .id = .type,
+                                    };
+                                }
+
+                                constant_argument_count += 1;
+                            }
+
+                            // END OF SCOPE
+                            if (constant_argument_count == 0)
+                            {
+                                report_error(module, "Constant argument must not be zero");
+                            }
+                        }
+                        else
+                        {
+                            assert(constant_argument_count == 0);
+                        }
+
+                        expect_token(parser, .left_parenthesis);
+
+                        macro_declaration.constant_arguments = arena_allocate_slice[ConstantArgument](module.arena, constant_argument_count);
+                        memcpy(@pointer_cast(macro_declaration.constant_arguments.pointer), @pointer_cast(&constant_argument_buffer), constant_argument_count * @byte_size(ConstantArgument));
+
+                        if (module.first_macro_declaration)
+                        {
+                            assert(module.first_macro_declaration != zero);
+                            module.last_macro_declaration.next = macro_declaration;
+                        }
+                        else
+                        {
+                            assert(!module.first_macro_declaration);
+                            module.first_macro_declaration = macro_declaration;
+                        }
+
+                        module.last_macro_declaration = macro_declaration;
+                        module.current_macro_declaration = macro_declaration;
+
+                        >scope = &macro_declaration.scope;
+
+                        >argument_buffer: [64]Argument = undefined;
+                        >argument_count: u64 = 0;
+
+                        while (!consume_token_if(parser, .right_parenthesis))
+                        {
+                            >argument_index = argument_count;
+
+                            >argument_name_token = expect_token(parser, .identifier);
+
+                            >argument_line = argument_name_token.line;
+                            >argument_column = argument_name_token.column;
+
+                            >argument_name = arena_duplicate_string(module.arena, argument_name_token.content.string);
+
+                            expect_token(parser, .colon);
+
+                            >argument_type = parse_type2(module, scope, parser);
+
+                            >argument = &argument_buffer[argument_index];
+                            argument.& = {
+                                .variable = {
+                                    .type = argument_type,
+                                    .scope = scope,
+                                    .name = argument_name,
+                                    .line = argument_line,
+                                    .column = argument_column,
+                                    zero,
+                                },
+                                .index = @truncate(argument_index + 1),
+                            };
+
+                            argument_count += 1;
+
+                            if (!consume_token_if(parser, .comma))
+                            {
+                                expect_token(parser, .right_parenthesis);
+                                break;
+                            }
+                        }
+
+                        >return_type = parse_type2(module, scope, parser);
+                        macro_declaration.return_type = return_type;
+
+                        >arguments = arena_allocate_slice[Argument](module.arena, argument_count);
+                        memcpy(@pointer_cast(arguments.pointer), @pointer_cast(&argument_buffer), argument_count * @byte_size(Argument));
+                        macro_declaration.arguments = arguments;
+
+                        expect_token(parser, .assign);
+
+                        >block = parse_block2(module, scope, parser, expect_token(parser, .left_brace));
+                        macro_declaration.block = block;
+
+                        // END OF SCOPE
+                        module.current_macro_declaration = zero;
+                    },
+                    .opaque =>
+                    {
+                        >name_token = expect_token(parser, .identifier);
+                        expect_token(parser, .semicolon);
+                    },
+                    else => { @trap(); },
+                }
+            },
+            else => { @trap(); },
+        }
+    }
+}
+
 compile = fn (arena: &Arena, options: CompileOptions) void
 {
     >module: Module = undefined;
@@ -21928,10 +24857,20 @@ compile = fn (arena: &Arena, options: CompileOptions) void
         };
     }
 
-    parse(&module);
-    analyze(&module);
-    emit(&module);
-    link(&module);
+    >new_path: u1 = 1;
+
+    if (new_path)
+    {
+        >tokens = lex(module.arena, module.content);
+        parse2(&module, tokens);
+    }
+    else
+    {
+        parse(&module);
+        analyze(&module);
+        emit(&module);
+        link(&module);
+    }
 }
 
 parse_target_triple = fn (target_triple: []u8) Target
