@@ -1,0 +1,19 @@
+type BitsU1 = bits u32
+{
+    a: u1,
+    b: u1,
+    c: u1,
+    d: u29,
+}
+
+bits_return_u1_function: fn () u1 =
+{
+    b1: BitsU1 = {
+        .a = 1,
+        .b = 1,
+        .c = 0,
+        .d = 0,
+    };
+
+    return b1.c;
+}
