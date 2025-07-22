@@ -12597,10 +12597,10 @@ analyze_type = fn (module: &Module, value: &Value, expected_type: &Type, analysi
                     else => { unreachable; },
                 }
 
-                if (value > max_value)
-                {
-                    report_error(module, "value is higher than type max value");
-                }
+                //if (value > max_value)
+                //{
+                    //report_error(module, "value is higher than type max value");
+                //}
             }
 
             typecheck(module, expected_type, value_type);
