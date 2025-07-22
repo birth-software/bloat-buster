@@ -1583,7 +1583,7 @@ TypeUnion = struct
 {
     fields: []UnionField,
     byte_size: u64,
-    biggest_field: u64,
+    most_aligned_field: u64,
     byte_alignment: u32,
     line: u32,
 }
@@ -9074,7 +9074,7 @@ parse = fn (module: &Module) void
                         }
 
                         >field_count: u64 = 0;
-                        >biggest_field: u64 = 0;
+                        >most_aligned_field: u64 = 0;
                         >alignment: u32 = 1;
                         >byte_size: u64 = 0;
 
@@ -9110,7 +9110,7 @@ parse = fn (module: &Module) void
                                 .line = field_line,
                             };
 
-                            biggest_field = @select(field_size > byte_size or (field_size == byte_size and field_alignment > alignment), field_index, biggest_field);
+                            most_aligned_field = @select(field_alignment > alignment or (field_alignment == alignment and field_size > byte_size), field_index, most_aligned_field);
                             alignment = @max(alignment, field_alignment);
                             byte_size = @max(byte_size, field_size);
 
@@ -9119,23 +9119,27 @@ parse = fn (module: &Module) void
                             consume_character_if_match(module, ',');
                         }
 
+                        byte_size = align_forward(byte_size, @extend(alignment));
+
                         skip_space(module);
                         consume_character_if_match(module, ';');
 
                         >fields = arena_allocate_slice[UnionField](module.arena, field_count);
                         memcpy(@pointer_cast(fields.pointer), @pointer_cast(&field_buffer), field_count * @byte_size(UnionField));
 
-                        >biggest_field_type = fields[biggest_field].type;
+                        >most_aligned_field_type = fields[most_aligned_field].type;
 
-                        >biggest_size = get_byte_size(biggest_field_type);
-                        assert(biggest_size == byte_size);
+                        >most_aligned_type_size = get_byte_size(most_aligned_field_type);
+                        >most_aligned_type_alignment = get_byte_alignment(most_aligned_field_type);
+
+                        assert(alignment == most_aligned_type_alignment);
 
                         union_type.content.union = {
                             .fields = fields,
                             .byte_size = byte_size,
                             .byte_alignment = alignment,
                             .line = global_line,
-                            .biggest_field = biggest_field,
+                            .most_aligned_field = most_aligned_field,
                         };
                         union_type.id = .union;
                     },
@@ -9258,12 +9262,34 @@ resolve_type_in_place_abi = fn (module: &Module, type: &Type) void
             },
             .union =>
             {
-                >biggest_type = type.content.union.fields[type.content.union.biggest_field].type;
-                resolve_type_in_place_memory(module, biggest_type);
-                result = LLVMStructTypeInContext(module.llvm.context, &biggest_type.llvm.memory, 1, 0);
+                >size = get_byte_size(type);
+                >most_aligned_field_type = type.content.union.fields[type.content.union.most_aligned_field].type;
+                resolve_type_in_place_memory(module, most_aligned_field_type);
+                >most_aligned_type_size = get_byte_size(most_aligned_field_type);
+                >most_aligned_type_alignment = get_byte_alignment(most_aligned_field_type);
+                >alignment = type.content.union.byte_alignment;
+
+                if (size == most_aligned_type_size)
+                {
+                    result = LLVMStructTypeInContext(module.llvm.context, &most_aligned_field_type.llvm.memory, 1, 0);
+                }
+                else
+                {
+                    assert(size > most_aligned_type_size);
+                    assert(alignment == most_aligned_type_alignment);
+                    >padding_byte_count = size - most_aligned_type_size;
+                    assert(padding_byte_count != 0);
+
+                    >u8_type = uint8(module);
+                    resolve_type_in_place(module, u8_type);
+
+                    >padding_array_type = LLVMArrayType2(u8_type.llvm.memory, padding_byte_count);
+                    >types: [_]&LLVMType = [ most_aligned_field_type.llvm.memory, padding_array_type ];
+
+                    result = LLVMStructTypeInContext(module.llvm.context, &types[0], types.length, 0);
+                }
                 
                 >llvm_size = LLVMStoreSizeOfType(module.llvm.target_data_layout, result);
-                >size = get_byte_size(type);
                 assert(llvm_size == size);
             },
             .alias =>
@@ -9350,6 +9376,7 @@ resolve_type_in_place_memory = fn (module: &Module, type: &Type) void
             .enum_array,
             .float,
             .vector,
+            .union,
             =>
             {
                 result = type.llvm.abi;
@@ -9371,16 +9398,6 @@ resolve_type_in_place_memory = fn (module: &Module, type: &Type) void
                 >backing_type = type.content.bits.backing_type;
                 resolve_type_in_place_memory(module, backing_type);
                 result = backing_type.llvm.memory;
-            },
-            .union =>
-            {
-                >biggest_type = type.content.union.fields[type.content.union.biggest_field].type;
-                resolve_type_in_place_memory(module, biggest_type);
-                result = LLVMStructTypeInContext(module.llvm.context, &biggest_type.llvm.memory, 1, 0);
-                
-                >llvm_size = LLVMStoreSizeOfType(module.llvm.target_data_layout, result);
-                >size = get_byte_size(type);
-                assert(llvm_size == size);
             },
             .alias =>
             {
@@ -10206,13 +10223,11 @@ abi_system_v_get_integer_type_at_offset = fn (module: &Module, type: &Type, offs
                 {
                     >union_ty = &type.content.union;
                     >fields = union_ty.fields;
-                    >field = &fields[union_ty.biggest_field];
+                    >field = &fields[union_ty.most_aligned_field];
                     >field_type = field.type;
                     return abi_system_v_get_integer_type_at_offset(module, field_type, offset, source_type, source_offset);
                 }
             }
-
-            @trap();
         },
         .bits =>
         {
@@ -18405,14 +18420,19 @@ emit_assignment = fn (module: &Module, right: &Value, address: Address) void
                                 assert(elements.length == 1);
 
                                 >fields = resolved_value_type.content.union.fields;
-                                >biggest_field_index = resolved_value_type.content.union.biggest_field;
-                                >biggest_field = &fields[biggest_field_index];
-                                >biggest_field_type = biggest_field.type;
+
+                                >most_aligned_field_index = resolved_value_type.content.union.most_aligned_field;
+                                >most_aligned_field = &fields[most_aligned_field_index];
+                                >most_aligned_field_type = most_aligned_field.type;
+
                                 >value = elements[0].value;
                                 >name = elements[0].name;
+
                                 >field_value_type = value.type;
                                 >field_type_size = get_byte_size(field_value_type);
                                 >union_size = get_byte_size(resolved_value_type);
+
+                                resolve_type_in_place(module, field_value_type);
 
                                 if (field_type_size < union_size)
                                 {
@@ -18425,16 +18445,7 @@ emit_assignment = fn (module: &Module, right: &Value, address: Address) void
                                     unreachable;
                                 }
 
-                                >struct_type: &LLVMType = zero;
-
-                                if (type_is_abi_equal(module, field_value_type, biggest_field_type))
-                                {
-                                    struct_type = resolved_value_type.llvm.memory;
-                                }
-                                else
-                                {
-                                    struct_type = LLVMStructTypeInContext(module.llvm.context, &field_value_type.llvm.memory, 1, 0);
-                                }
+                                >struct_type = LLVMStructTypeInContext(module.llvm.context, &field_value_type.llvm.memory, 1, 0);
 
                                 assert(struct_type != zero);
 
@@ -18442,7 +18453,7 @@ emit_assignment = fn (module: &Module, right: &Value, address: Address) void
                                 >destination: Address = {
                                     .pointer = destination_pointer,
                                     .element_type = field_value_type,
-                                    .alignment = get_byte_alignment(field_value_type),
+                                    .alignment = get_byte_alignment(resolved_value_type),
                                     .offset = zero,
                                 };
                                 emit_assignment(module, value, destination);

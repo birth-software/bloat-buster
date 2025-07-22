@@ -8086,6 +8086,34 @@ integer_max_128 = fn () u1
     return max128 > max64;
 }
 
+AlignedUnionStruct = struct
+{
+    a: u64,
+    b: u64,
+    c: u64,
+}
+
+AlignedUnion = union
+{
+    a: u128,
+    s: AlignedUnionStruct,
+}
+
+union_alignment = fn () void
+{
+    >u: AlignedUnion = { .a = 123 };
+    require(u.a == 123);
+    u.s = {
+        .a = 1,
+        .b = 2,
+        .c = 3,
+    };
+
+    require(u.s.a == 1);
+    require(u.s.b == 2);
+    require(u.s.c == 3);
+}
+
 [export] main = fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32
 {
     >rc = return_constant();
@@ -8372,6 +8400,8 @@ integer_max_128 = fn () u1
     struct_union_alignment();
 
     require(integer_max_128());
+
+    union_alignment();
 
     return 0;
 }
