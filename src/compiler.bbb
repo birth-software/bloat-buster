@@ -5226,9 +5226,9 @@ parse_function_header = fn (module: &Module, scope: &Scope, mandate_argument_nam
 
     expect_character(module, left_parenthesis);
 
-    >semantic_argument_type_buffer: [64]&Type = undefined;
-    >semantic_argument_name_buffer: [64][]u8 = undefined;
-    >argument_line_buffer: [64]u32 = undefined;
+    >semantic_argument_type_buffer: [256]&Type = undefined;
+    >semantic_argument_name_buffer: [256][]u8 = undefined;
+    >argument_line_buffer: [256]u32 = undefined;
     >semantic_argument_count: u64 = 0;
 
     while (module.offset < module.content.length)
@@ -5250,8 +5250,11 @@ parse_function_header = fn (module: &Module, scope: &Scope, mandate_argument_nam
             break;
         }
 
+        >semantic_argument_index = semantic_argument_count;
+        assert(semantic_argument_index < semantic_argument_type_buffer.length);
+
         >line = get_line(module);
-        argument_line_buffer[semantic_argument_count] = line;
+        argument_line_buffer[semantic_argument_index] = line;
 
         >argument_name: []u8 = zero;
 
@@ -5264,10 +5267,10 @@ parse_function_header = fn (module: &Module, scope: &Scope, mandate_argument_nam
             skip_space(module);
         }
 
-        semantic_argument_name_buffer[semantic_argument_count] = argument_name;
+        semantic_argument_name_buffer[semantic_argument_index] = argument_name;
 
         >argument_type = parse_type(module, scope);
-        semantic_argument_type_buffer[semantic_argument_count] = argument_type;
+        semantic_argument_type_buffer[semantic_argument_index] = argument_type;
 
         skip_space(module);
 
@@ -6268,7 +6271,7 @@ parse_aggregate_initialization = fn (module: &Module, scope: &Scope, builder: Va
 {
     skip_space(module);
 
-    >element_buffer: [64]AggregateInitializationElement = undefined;
+    >element_buffer: [256]AggregateInitializationElement = undefined;
     >field_count: u64 = 0;
     >is_zero: u1 = 0;
 
@@ -6282,6 +6285,7 @@ parse_aggregate_initialization = fn (module: &Module, scope: &Scope, builder: Va
         }
 
         >field_index = field_count;
+        assert(field_index < element_buffer.length);
         >checkpoint = get_checkpoint(module);
 
         if (consume_character_if_match(module, '.'))
@@ -7190,6 +7194,7 @@ parse_call_arguments = fn (module: &Module, scope: &Scope) []&Value
 
         >argument = parse_value(module, scope, zero);
         >argument_index = argument_count;
+        assert(argument_index < argument_buffer.length);
         argument_buffer[argument_index] = argument;
 
         skip_space(module);
@@ -7882,8 +7887,9 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                                     };
 
                                     >kind: ValueKind = @select(is_left, .left, .right);
-
-                                    left_value_buffer[left_value_count] = kind;
+                                    >left_value_index = left_value_count;
+                                    assert(left_value_index < left_value_buffer.length);
+                                    left_value_buffer[left_value_index] = kind;
                                     left_value_count += 1;
                                 }
                                 else
@@ -7925,7 +7931,9 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                                         report_error(module, "Expected left_value_count");
                                     }
 
-                                    right_value_buffer[right_value_count] = parse_value(module, scope, zero);
+                                    >right_value_index = right_value_count;
+                                    assert(right_value_index < right_value_buffer.length);
+                                    right_value_buffer[right_value_index] = parse_value(module, scope, zero);
                                     right_value_count += 1;
 
                                     expect_character(module, right_parenthesis);
@@ -8094,7 +8102,9 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
                                             },
                                         }
 
-                                        case_buffer[case_count] = clause_discriminant;
+                                        >case_index = case_count;
+                                        assert(case_index < case_buffer.length);
+                                        case_buffer[case_index] = clause_discriminant;
                                         case_count += 1;
 
                                         skip_space(module);
@@ -8114,7 +8124,9 @@ parse_statement = fn (module: &Module, scope: &Scope) &Statement
 
                                 >clause_block = parse_block(module, scope);
 
-                                clause_buffer[clause_count] = {
+                                >clause_index = clause_count;
+                                assert(clause_index < clause_buffer.length);
+                                clause_buffer[clause_index] = {
                                     .values = clause_values,
                                     .block = clause_block,
                                     zero,
@@ -8453,7 +8465,7 @@ parse = fn (module: &Module) void
                         skip_space(module);
                         expect_character(module, left_brace);
 
-                        >field_buffer: [64]Field = undefined;
+                        >field_buffer: [256]Field = undefined;
                         >field_bit_offset: u64 = 0;
                         >field_count: u64 = 0;
 
@@ -8481,6 +8493,8 @@ parse = fn (module: &Module) void
 
                             consume_character_if_match(module, ',');
 
+                            >field_index = field_count;
+                            assert(field_index < field_buffer.length);
                             field_buffer[field_count] = {
                                 .name = field_name,
                                 .type = field_type,
@@ -8552,8 +8566,8 @@ parse = fn (module: &Module) void
                         skip_space(module);
                         expect_character(module, left_brace);
 
-                        >name_buffer: [64][]u8 = undefined;
-                        >int_value_buffer: [64]u64 = undefined;
+                        >name_buffer: [256][]u8 = undefined;
+                        >int_value_buffer: [256]u64 = undefined;
                         >field_count: u64 = 0;
                         >is_resolved: u1 = 1;
 
@@ -8567,6 +8581,8 @@ parse = fn (module: &Module) void
                             }
 
                             >field_index = field_count;
+                            assert(field_index < name_buffer.length);
+                            assert(field_index < int_value_buffer.length);
                             field_count += 1;
 
                             >field_name = parse_name(module);
@@ -8803,6 +8819,7 @@ parse = fn (module: &Module) void
                                 >has_value = consume_character_if_match(module, ':');
 
                                 >constant_argument_index = constant_argument_count;
+                                assert(constant_argument_index < constant_argument_buffer.length);
 
                                 if (has_value)
                                 {
@@ -8876,6 +8893,7 @@ parse = fn (module: &Module) void
                             }
 
                             >argument_index = argument_count;
+                            assert(argument_index < argument_buffer.length);
 
                             >argument_line = get_line(module);
                             >argument_column = get_column(module);
@@ -8972,6 +8990,7 @@ parse = fn (module: &Module) void
                                 }
 
                                 >field_index = field_count;
+                                assert(field_index < field_buffer.length);
                                 >field_line = get_line(module);
                                 >field_name = arena_duplicate_string(module.arena, parse_identifier(module));
 
@@ -9082,7 +9101,7 @@ parse = fn (module: &Module) void
                         >alignment: u32 = 1;
                         >byte_size: u64 = 0;
 
-                        >field_buffer: [64]UnionField = undefined;
+                        >field_buffer: [256]UnionField = undefined;
 
                         while (1)
                         {
@@ -9094,6 +9113,7 @@ parse = fn (module: &Module) void
                             }
 
                             >field_index = field_count;
+                            assert(field_index < field_buffer.length);
                             field_count += 1;
 
                             >field_line = get_line(module);
@@ -9237,8 +9257,9 @@ resolve_type_in_place_abi = fn (module: &Module, type: &Type) void
             },
             .struct =>
             {
-                >llvm_type_buffer: [64]&LLVMType = undefined;
+                >llvm_type_buffer: [256]&LLVMType = undefined;
                 >fields = type.content.struct.fields;
+                assert(fields.length <= llvm_type_buffer.length); 
 
                 for (i: 0..fields.length)
                 {
@@ -9505,8 +9526,9 @@ resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
                     >backing_type = type.content.enum.backing_type;
                     resolve_type_in_place_debug(module, backing_type);
 
-                    >field_buffer: [64]&LLVMMetadata = undefined;
+                    >field_buffer: [256]&LLVMMetadata = undefined;
                     >fields = type.content.enum.fields;
+                    assert(fields.length <= field_buffer.length);
 
                     for (i: 0..fields.length)
                     {
@@ -9534,6 +9556,7 @@ resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
                     >llvm_type_buffer: [64]&LLVMMetadata = undefined;
 
                     >fields = type.content.struct.fields;
+                    assert(fields.length <= llvm_type_buffer.length);
 
                     for (i: 0..fields.length)
                     {
@@ -9557,8 +9580,9 @@ resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
                 .bits =>
                 {
                     >llvm_type_buffer: [64]&LLVMMetadata = undefined;
-
                     >fields = type.content.bits.fields;
+                    assert(fields.length <= llvm_type_buffer.length);
+
                     >backing_type = type.content.bits.backing_type;
                     >flags: LLVMDIFlags = zero;
 
@@ -9591,8 +9615,8 @@ resolve_type_in_place_debug = fn (module: &Module, type: &Type) void
                     type.llvm.debug = forward_declaration;
 
                     >llvm_type_buffer: [64]&LLVMMetadata = undefined;
-
                     >fields = type.content.union.fields;
+                    assert(fields.length <= llvm_type_buffer.length);
 
                     for (i: 0..fields.length)
                     {
@@ -11592,6 +11616,7 @@ get_enum_name_array_global = fn (module: &Module, enum_type: &Type) &Global
         resolve_type_in_place(module, u64_type);
         
         >name_constant_buffer: [64]&LLVMValue = undefined;
+        assert(fields.length <= name_constant_buffer.length);
 
         for (i: 0..fields.length)
         {
@@ -16174,6 +16199,7 @@ emit_macro_instantiation = fn (module: &Module, value: &Value) void
     {
         >type_buffer: [64]&LLVMMetadata = undefined;
         >type_count = instantiation_arguments.length + 1;
+        assert(type_count <= type_buffer.length);
 
         resolve_type_in_place_debug(module, value.type);
         type_buffer[0] = value.type.llvm.debug;
@@ -17223,6 +17249,8 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                             if (is_constant)
                             {
                                 >constant_buffer: [64]&LLVMValue = undefined;
+                                assert(fields.length <= constant_buffer.length);
+
                                 for (i: 0..elements.length)
                                 {
                                     >value = elements[i].value;
@@ -17406,8 +17434,9 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                         .enum_array =>
                         {
                             assert(is_constant);
-                            assert(elements.length <= 64);
+
                             >value_buffer: [64]&Value = undefined;
+                            assert(elements.length <= value_buffer.length);
 
                             for (i: 0..elements.length)
                             {
@@ -17510,6 +17539,7 @@ emit_value = fn (module: &Module, value: &Value, type_kind: TypeKind, expect_con
                 >enum_value_type = enum_type.llvm.memory;
 
                 >value_constant_buffer: [64]&LLVMValue = undefined;
+                assert(fields.length <= value_constant_buffer.length);
                 for (i: 0..fields.length)
                 {
                     >field = &fields[i];
@@ -20994,9 +21024,9 @@ emit = fn (module: &Module) void
                     >semantic_return_type = function_type.base.semantic_return_type;
                     >calling_convention = function_type.base.calling_convention;
 
-                    >llvm_abi_argument_type_buffer: [64]&LLVMType = undefined;
-
                     >abi_argument_types = function_type.abi.abi_argument_types;
+                    >llvm_abi_argument_type_buffer: [64]&LLVMType = undefined;
+                    assert(abi_argument_types.length <= llvm_abi_argument_type_buffer.length);
 
                     for (semantic_argument_type: semantic_argument_types)
                     {
@@ -21024,7 +21054,10 @@ emit = fn (module: &Module) void
                     if (module.has_debug_info)
                     {
                         >debug_argument_type_buffer: [64]&LLVMMetadata = undefined;
-                        >debug_argument_types = debug_argument_type_buffer[..function_type.abi.argument_abis.length + 1 + @extend(function_type.base.is_variable_argument)];
+                        >debug_argument_type_count = function_type.abi.argument_abis.length + 1 + @extend(function_type.base.is_variable_argument);
+                        assert(debug_argument_type_count <= debug_argument_type_buffer.length);
+
+                        >debug_argument_types = debug_argument_type_buffer[..debug_argument_type_count];
                         debug_argument_types[0] = function_type.abi.return_abi.semantic_type.llvm.debug;
                         assert(debug_argument_types[0] != zero);
 
@@ -21191,6 +21224,8 @@ emit = fn (module: &Module) void
                 assert(llvm_function != zero);
 
                 >llvm_abi_argument_buffer: [64]&LLVMValue = undefined;
+                assert(function_type.abi.abi_argument_types.length <= llvm_abi_argument_buffer.length);
+
                 >llvm_abi_arguments = llvm_abi_argument_buffer[..function_type.abi.abi_argument_types.length];
                 LLVMGetParams(llvm_function, &llvm_abi_argument_buffer[0]);
 
