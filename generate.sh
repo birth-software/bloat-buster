@@ -55,5 +55,11 @@ if [[ -z "${BB_CACHE_DIR:-}" ]]; then
 fi
 
 mkdir -p $BB_CACHE_DIR
-$CLANG_PATH -c tests/c_abi.c -o $BB_CACHE_DIR/c_abi_generic.o $OPT_ARGS -std=gnu2x
-$CLANG_PATH -c tests/c_abi.c -o $BB_CACHE_DIR/c_abi_native.o $OPT_ARGS -std=gnu2x -march=native
+#$CLANG_PATH -c tests/c_abi.c -o $BB_CACHE_DIR/c_abi_generic.o $OPT_ARGS -std=gnu2x
+#$CLANG_PATH -c tests/c_abi.c -o $BB_CACHE_DIR/c_abi_native.o $OPT_ARGS -std=gnu2x -march=native
+
+rm -rf build || true
+mkdir -p build
+cd build
+cmake --log-level=VERBOSE .. -G Ninja -DCMAKE_CXX_COMPILER=$CLANGXX_PATH -DCMAKE_C_COMPILER=$CLANG_PATH -DCMAKE_LINKER_TYPE=MOLD -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_COLOR_DIAGNOSTICS=ON -DCMAKE_C_STANDARD=23
+cd ..
