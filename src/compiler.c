@@ -2,11 +2,33 @@
 #include <compiler.h>
 #include <lexer.h>
 #include <stdatomic.h>
-#include <time.h>
+//#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <pthread.h>
+
 #include <liburing.h>
+#define USE_IO_URING 1
+
+#define SPALL_USE 0
+#if SPALL_USE
+#include <spall.h>
+
+static SpallProfile spall_profile;
+static SpallBuffer spall_buffer;
+#endif
+#if SPALL_USE
+#define SPALL_FUNCTION_BEGIN() do { \
+	spall_buffer_begin(&spall_profile, &spall_buffer, __FUNCTION__, sizeof(__FUNCTION__) - 1, __rdtsc()); \
+} while(0)
+#define SPALL_FUNCTION_END() do { \
+	spall_buffer_end(&spall_profile, &spall_buffer, __rdtsc()); \
+} while(0)
+#else
+#define SPALL_FUNCTION_BEGIN()
+#define SPALL_FUNCTION_END()
+#endif
 
 STRUCT(CompileUnitSlice)
 {
@@ -76,11 +98,11 @@ static u64 ns_between(struct timespec start, struct timespec end)
 static CompilationResult llvm_compile_file(CompileUnit* unit, str path)
 {
     Arena* arena = unit->arena;
-    let file_read_start = take_timestamp();
+    //let file_read_start = take_timestamp();
     let file_content = file_read(arena, path);
-    let file_read_end = take_timestamp();
-    let file_read_ns = ns_between(file_read_start, file_read_end);
-    printf("File read: %lu ns\n", file_read_ns);
+    //let file_read_end = take_timestamp();
+    //let file_read_ns = ns_between(file_read_start, file_read_end);
+    //printf("File read: %lu ns\n", file_read_ns);
     if (!file_content.pointer)
     {
         return (CompilationResult) { .id = COMPILATION_RESULT_FILE_ERROR };
@@ -92,11 +114,11 @@ static CompilationResult llvm_compile_file(CompileUnit* unit, str path)
 
 static void llvm_compile_unit(StringSlice paths)
 {
-    let arena_init_start = take_timestamp();
+    //let arena_init_start = take_timestamp();
     let arena = arena_initialize((ArenaInitialization){});
-    let arena_init_end = take_timestamp();
-    let arena_init_ns = ns_between(arena_init_start, arena_init_end);
-    printf("Arena initialization time: %lu ns\n", arena_init_ns);
+    //let arena_init_end = take_timestamp();
+    //let arena_init_ns = ns_between(arena_init_start, arena_init_end);
+    //printf("Arena initialization time: %lu ns\n", arena_init_ns);
 
     let unit = arena_allocate(arena, CompileUnit, 1);
     memset(unit, 0, sizeof(CompileUnit));
@@ -1169,6 +1191,7 @@ typedef enum IoUringTask
 
 static u64 io_uring_task(Arena* file_arena, Arena* else_arena, struct io_uring* restrict ring, StringSlice file_paths, int* restrict fd_array, struct statx* restrict statx_array, str* restrict file_array, TokenList* restrict list_array)
 {
+    SPALL_FUNCTION_BEGIN();
     let file_count = file_paths.length;
     if (file_count > UINT32_MAX)
     {
@@ -1189,8 +1212,47 @@ static u64 io_uring_task(Arena* file_arena, Arena* else_arena, struct io_uring* 
         trap();
     }
 
-    u64 completed_file_count = 0;
+    struct io_uring_cqe* open_cqes;
+
+    for (u64 cqe_i = 0; cqe_i < file_count; cqe_i += 1)
+    {
+        struct io_uring_cqe* cqe;
+        ret = io_uring_wait_cqe(ring, &cqe);
+        if (ret < 0)
+        {
+            trap();
+        }
+
+        let user_data = cqe->user_data;
+        let result = cqe->res;
+        let i = (u32)user_data;
+        let task = (IoUringTask)(user_data >> 32);
+
+        assert(task == IO_URING_TASK_OPEN);
+        io_uring_cqe_seen(ring, cqe);
+
+        let fd = result;
+        if (fd < 0)
+        {
+            trap();
+        }
+        fd_array[i] = fd;
+
+        struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
+        int flags = AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_STATX_DONT_SYNC;
+        int mask = STATX_SIZE;
+        io_uring_prep_statx(sqe, fd, "", flags, mask, &statx_array[i]);
+        sqe->user_data = ((u64)(IO_URING_TASK_STAT) << 32) | i;
+    }
+
+    ret = io_uring_submit(ring);
+    if (ret < 0)
+    {
+        trap();
+    }
+
     pending = file_count;
+
     while (pending)
     {
         struct io_uring_cqe* cqe;
@@ -1207,35 +1269,16 @@ static u64 io_uring_task(Arena* file_arena, Arena* else_arena, struct io_uring* 
         let task = (IoUringTask)(user_data >> 32);
 
         io_uring_cqe_seen(ring, cqe);
-        pending -= 1;
 
         switch (task)
         {
             break; case IO_URING_TASK_OPEN:
             {
-                let fd = result;
-                if (fd < 0)
-                {
-                    trap();
-                }
-                fd_array[i] = fd;
-
-                struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
-                int flags = AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_STATX_DONT_SYNC;
-                int mask = STATX_SIZE;
-                io_uring_prep_statx(sqe, fd, "", flags, mask, &statx_array[i]);
-                sqe->user_data = ((u64)(IO_URING_TASK_STAT) << 32) | i;
-
-                ret = io_uring_submit(ring);
-                if (ret < 0)
-                {
-                    trap();
-                }
-
-                pending += 1;
+                UNREACHABLE();
             }
             break; case IO_URING_TASK_STAT:
             {
+                pending -= 1;
                 let fd = fd_array[i];
                 if (result != 0)
                 {
@@ -1261,14 +1304,12 @@ static u64 io_uring_task(Arena* file_arena, Arena* else_arena, struct io_uring* 
                     sqe->user_data = user_data;
                     io_uring_prep_read(sqe, fd, file.pointer, to_be_read, read_byte_count);
                     read_byte_count += to_be_read;
-                    pending += 1;
                 }
 
                 struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
                 io_uring_prep_close(sqe, fd);
                 u64 user_data = ((u64)(IO_URING_TASK_CLOSE) << 32) | i;
                 sqe->user_data = user_data;
-                pending += 1;
 
                 ret = io_uring_submit(ring);
                 if (ret < 0)
@@ -1281,89 +1322,187 @@ static u64 io_uring_task(Arena* file_arena, Arena* else_arena, struct io_uring* 
             }
             break; case IO_URING_TASK_CLOSE:
             {
-                LexerError error = {};
-                let token_list = lex(file_arena, else_arena, file_array[i], &error);
-                if (error.id != LEXER_ERROR_ID_NONE)
-                {
-                    trap();
-                }
-                list_array[i] = token_list;
-                completed_file_count += 1;
+                printf("file first: %c\n", file_array[i].pointer[0]);
             }
         }
     }
 
-    return completed_file_count;
+    // for (u64 i = 0; i < file_count; i += 1)
+    // {
+    //     LexerError error = {};
+    //     let token_list = lex(file_arena, else_arena, file_array[i], &error);
+    //     if (error.id != LEXER_ERROR_ID_NONE)
+    //     {
+    //         trap();
+    //     }
+    //     list_array[i] = token_list;
+    // }
+
+    SPALL_FUNCTION_END();
+    return file_count;
+}
+
+STRUCT(Thread)
+{
+    pthread_t handle;
+    StringSlice work;
+    void* return_value;
+    u8 padding[64 - 4 * sizeof(u64)];
+};
+
+static_assert(sizeof(Thread) % 64 == 0);
+
+#define THREAD_COUNT 5
+static Thread threads[5];
+static u32 thread_count;
+static u32 per_thread_work;
+
+void* thread_worker(void* arg)
+{
+    let thread_index = (u64)arg;
+    u64 result_code = 0;
+    Thread* thread = &threads[thread_index];
+    let thread_file_count = thread->work.length;
+    Arena* thread_arena = arena_initialize((ArenaInitialization){});
+    struct io_uring ring;
+    let ret = io_uring_queue_init(thread_file_count * 2, &ring, 0);
+    if (ret == 0)
+    {
+        trap();
+    }
+    else
+    {
+        let er = strerror(-ret);
+        printf("io_uring_queue_init failed: %s\n", er);
+        result_code = 1;
+    }
+
+    return (void*)result_code;
 }
 
 bool compiler_main(int argc, const char* argv[], char** envp)
 {
     bool result = 1;
-    global_arena = arena_initialize((ArenaInitialization){
-        .reserved_size = GB(32) - sizeof(Arena),
-        .initial_size = GB(32) - sizeof(Arena),
-    });
-
-    Arena* random_arena = arena_initialize((ArenaInitialization){
-        .reserved_size = GB(8) - sizeof(Arena),
-        .initial_size = GB(8) - sizeof(Arena),
-    });
-
     StringSlice file_path_slice = { file_paths, array_length(file_paths) };
-#if 0
-    for (u64 i = 0; i < file_path_slice.length; i += 1)
+    bool is_single_threaded = 1;
+    u64 thread_file_count = is_single_threaded ? file_path_slice.length : file_path_slice.length / 5;
+    thread_count = is_single_threaded ? 1 : THREAD_COUNT;
+
+    if (is_single_threaded)
     {
-        write_random_file(file_path_slice.pointer[i]);
+        Thread* restrict thread = &threads[0];
+        thread->work = file_path_slice;
+        void* thread_result = thread_worker((void*)0);
+        result = (u64)thread_result == 0;
     }
-#else
-
-    // TODO: parse command-line arguments
-    // SliceOfStringSlice paths_array = { &string_array_to_slice(files), 1 };
-    // u64 compile_unit_count = paths_array.length;
-    // global_compile_units = (CompileUnitSlice){ arena_allocate(global_arena, CompileUnit, compile_unit_count), compile_unit_count };
-    struct io_uring ring;
-    let queue_init = io_uring_queue_init(file_path_slice.length * 2, &ring, 0);
-    if (queue_init < 0)
+    else
     {
-        let er = strerror(-queue_init);
-        printf("io_uring_queue_init failed: %s\n", er);
-        return false;
-    }
-
-    int iteration_times = 10;
-
-    u64 io_uring_max_ns = 0;
-    u64 io_uring_min_ns = UINT64_MAX;
-    u64 io_uring_accumulator = 0;
-
-    let previous_timestamp = take_timestamp();
-
-    for (int i = 0; i < iteration_times; i += 1)
-    {
-        let start_timestamp = previous_timestamp;
-
-        arena_reset_to_start(global_arena);
-        arena_reset_to_start(random_arena);
-
-        let completed_file_count = io_uring_task(global_arena, random_arena, &ring, file_path_slice, fds, statxs, file_contents, io_uring_tl);
-        if (completed_file_count != file_path_slice.length)
+        for (u64 i = 0; i < thread_count; i += 1)
         {
-            trap();
+            Thread* restrict thread = &threads[i];
+            thread->work = (StringSlice){ file_path_slice.pointer + thread_file_count * i, thread_file_count };
+            let result = pthread_create(&thread->handle, 0, &thread_worker, (void*)i);
+            if (result != 0)
+            {
+                trap();
+            }
         }
 
-        let end_timestamp = take_timestamp();
-        let iteration_ns = ns_between(start_timestamp, end_timestamp);
-
-        io_uring_max_ns = iteration_ns > io_uring_max_ns ? iteration_ns : io_uring_max_ns;
-        io_uring_min_ns = iteration_ns < io_uring_min_ns ? iteration_ns : io_uring_min_ns;
-        io_uring_accumulator += iteration_ns;
-
-        previous_timestamp = end_timestamp;
+        for (u64 i = 0; i < thread_count; i += 1)
+        {
+            Thread* restrict thread = &threads[i];
+            let result = pthread_join(thread->handle, &thread->return_value);
+            if (result != 0)
+            {
+                trap();
+            }
+        }
     }
 
-    let io_uring_average = (f64)io_uring_accumulator / iteration_times;
-    printf("io_uring:\n\taverage: %f ns\n\tmin: %lu ns\n\tmax: %lu ns\n", io_uring_average, io_uring_min_ns, io_uring_max_ns);
-#endif
+//     assert(sr == 0);
+//
+//     Arena* random_arena = arena_initialize((ArenaInitialization){
+//         .reserved_size = GB(8) - sizeof(Arena),
+//         .initial_size = GB(8) - sizeof(Arena),
+//     });
+//
+// #if SPALL_USE
+//     if (!spall_init_file("build/profile.spall", 1, &spall_profile))
+//     {
+//         return 0;
+//     }
+// #endif
+//
+// #if 0
+//     for (u64 i = 0; i < file_path_slice.length; i += 1)
+//     {
+//         write_random_file(file_path_slice.pointer[i]);
+//     }
+// #else
+//
+//     // TODO: parse command-line arguments
+//     // SliceOfStringSlice paths_array = { &string_array_to_slice(files), 1 };
+//     // u64 compile_unit_count = paths_array.length;
+//     // global_compile_units = (CompileUnitSlice){ arena_allocate(global_arena, CompileUnit, compile_unit_count), compile_unit_count };
+//     struct io_uring ring;
+//     let queue_init = io_uring_queue_init(file_path_slice.length * 2, &ring, 0);
+//     if (queue_init < 0)
+//     {
+//         let er = strerror(-queue_init);
+//         printf("io_uring_queue_init failed: %s\n", er);
+//         return false;
+//     }
+//
+//     int iteration_times = 10;
+//
+//     u64 io_uring_max_ns = 0;
+//     u64 io_uring_min_ns = UINT64_MAX;
+//     u64 io_uring_accumulator = 0;
+//     
+// #if SPALL_USE
+//     let spall_buffer_size = MB(100);
+//     let spall_buffer_pointer = arena_allocate_bytes(global_arena, spall_buffer_size, 1);
+//     spall_buffer = (SpallBuffer) {
+//         .pid = 0,
+//         .tid = 0,
+//         .length = spall_buffer_size,
+//         .data = spall_buffer_pointer,
+//     };
+//     spall_buffer_init(&spall_profile, &spall_buffer);
+// #endif
+//
+//     let previous_timestamp = take_timestamp();
+//
+//     for (int i = 0; i < iteration_times; i += 1)
+//     {
+//         let start_timestamp = previous_timestamp;
+//
+//         arena_reset_to_start(global_arena);
+//         arena_reset_to_start(random_arena);
+//
+//         let completed_file_count = io_uring_task(global_arena, random_arena, &ring, file_path_slice, fds, statxs, file_contents, io_uring_tl);
+//         if (completed_file_count != file_path_slice.length)
+//         {
+//             trap();
+//         }
+//
+//         let end_timestamp = take_timestamp();
+//         let iteration_ns = ns_between(start_timestamp, end_timestamp);
+//
+//         io_uring_max_ns = iteration_ns > io_uring_max_ns ? iteration_ns : io_uring_max_ns;
+//         io_uring_min_ns = iteration_ns < io_uring_min_ns ? iteration_ns : io_uring_min_ns;
+//         io_uring_accumulator += iteration_ns;
+//
+//         previous_timestamp = end_timestamp;
+//     }
+
+// #if SPALL_USE
+//     spall_buffer_quit(&spall_profile, &spall_buffer);
+// #endif
+//
+//     let io_uring_average = (f64)io_uring_accumulator / iteration_times;
+//     printf("io_uring:\n\taverage: %f ns\n\tmin: %lu ns\n\tmax: %lu ns\n", io_uring_average, io_uring_min_ns, io_uring_max_ns);
+// #endif
 
     //u64 sync_max_ns = 0;
     //u64 sync_min_ns = UINT64_MAX;
@@ -1381,7 +1520,10 @@ bool compiler_main(int argc, const char* argv[], char** envp)
     // {
     //     trap();
     // }
-
+    
+#if SPALL_USE
+    spall_quit(&spall_profile);
+#endif
 
     return result;
 }
