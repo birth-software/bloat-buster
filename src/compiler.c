@@ -10,7 +10,7 @@
 #include <pthread.h>
 
 #include <liburing.h>
-#define USE_IO_URING 1
+#define USE_IO_URING 0
 #else
 #define USE_IO_URING 0
 #endif
@@ -135,69 +135,66 @@ bool compiler_is_single_threaded()
     return is_single_threaded;
 }
 
-static char buffer[1024 * 1024 * 128];
+static char buffer[1024 * 1024 * 256];
 
-static void write_random_file(str path)
+static void write_random_token(u64* out_file_i, bool is_comment)
 {
-    u64 file_i = 0;
+    let file_i = *out_file_i;
+    int random_n = rand();
 
-    for (u64 i = 0; i < 5000000; i += 1)
+    TokenId token_id = random_n % TOKEN_COUNT;
+
+    assert(file_i < array_length(buffer));
+
+    switch (token_id)
     {
-        int random_n = rand();
-       
-        TokenId token_id = random_n % TOKEN_COUNT;
-
-        assert(file_i < array_length(buffer));
-
-        switch (token_id)
+        break; case TOKEN_ID_IDENTIFIER:
         {
-            break; case TOKEN_ID_IDENTIFIER:
+            int identifier_character_count = random_n % 64;
+            char* identifier_start = &buffer[file_i];
+
+            for (int i = 0; i < identifier_character_count; i += 1)
             {
-                int identifier_character_count = random_n % 64;
-                char* identifier_start = &buffer[file_i];
+                int id_ch_rand = rand();
+                int choice = id_ch_rand % (3 - (i == 0));
 
-                for (int i = 0; i < identifier_character_count; i += 1)
+                char c;
+
+                switch (choice)
                 {
-                    int id_ch_rand = rand();
-                    int choice = id_ch_rand % (3 - (i == 0));
-
-                    char c;
-
-                    switch (choice)
+                    break; case 0:
                     {
-                        break; case 0:
-                        {
-                            c = 'a' + (id_ch_rand % ('z' - 'a'));
-                        }
-                        break; case 1:
-                        {
-                            c = 'A' + (id_ch_rand % ('Z' - 'A'));
-                        }
-                        break; case 2:
-                        {
-                            char first_ch = i != 0 ? *identifier_start : 0;
-                            c = ((first_ch == 's') | (first_ch == 'u') | (first_ch == 'f')) ? first_ch : ('0' + (id_ch_rand % ('9' - '0')));
-                        }
+                        c = 'a' + (id_ch_rand % ('z' - 'a'));
                     }
-
-                    buffer[file_i] = c;
-                    file_i += 1;
+                    break; case 1:
+                    {
+                        c = 'A' + (id_ch_rand % ('Z' - 'A'));
+                    }
+                    break; case 2:
+                    {
+                        char first_ch = i != 0 ? *identifier_start : 0;
+                        c = ((first_ch == 's') | (first_ch == 'u') | (first_ch == 'f')) ? first_ch : ('0' + (id_ch_rand % ('9' - '0')));
+                    }
                 }
+
+                buffer[file_i] = c;
+                file_i += 1;
             }
-            break; case TOKEN_ID_INTEGER:
+        }
+        break; case TOKEN_ID_INTEGER:
+        {
+            int integer_literal_character_count = random_n % 32;
+
+            for (int i = 0; i < integer_literal_character_count; i += 1)
             {
-                int integer_literal_character_count = random_n % 32;
+                int id_ch_rand = rand();
+                char c = '0' + (id_ch_rand % ('9' - '0'));
 
-                for (int i = 0; i < integer_literal_character_count; i += 1)
-                {
-                    int id_ch_rand = rand();
-                    char c = '0' + (id_ch_rand % ('9' - '0'));
-
-                    buffer[file_i] = c;
-                    file_i += 1;
-                }
+                buffer[file_i] = c;
+                file_i += 1;
             }
-            break; case TOKEN_ID_FLOAT:
+        }
+        break; case TOKEN_ID_FLOAT:
             break; case TOKEN_ID_FLOAT_STRING_LITERAL:
             {
                 int integer_literal_character_count = random_n % 16;
@@ -223,48 +220,15 @@ static void write_random_file(str path)
                     file_i += 1;
                 }
             }
-            break; case TOKEN_ID_STRING_LITERAL:
+        break; case TOKEN_ID_STRING_LITERAL:
+        {
+            buffer[file_i] = '"';
+            file_i += 1;
+
+            int identifier_character_count = random_n % 64;
+
+            for (int i = 0; i < identifier_character_count; i += 1)
             {
-                buffer[file_i] = '"';
-                file_i += 1;
-
-                int identifier_character_count = random_n % 64;
-
-                for (int i = 0; i < identifier_character_count; i += 1)
-                {
-                    int id_ch_rand = rand();
-                    int choice = id_ch_rand % 3;
-
-                    char c;
-
-                    switch (choice)
-                    {
-                        break; case 0:
-                        {
-                            c = 'a' + (id_ch_rand % ('z' - 'a'));
-                        }
-                        break; case 1:
-                        {
-                            c = 'A' + (id_ch_rand % ('Z' - 'A'));
-                        }
-                        break; case 2:
-                        {
-                            c = '0' + (id_ch_rand % ('9' - '0'));
-                        }
-                    }
-
-                    buffer[file_i] = c;
-                    file_i += 1;
-                }
-
-                buffer[file_i] = '"';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_CHARACTER_LITERAL:
-            {
-                buffer[file_i] = '\'';
-                file_i += 1;
-
                 int id_ch_rand = rand();
                 int choice = id_ch_rand % 3;
 
@@ -288,759 +252,828 @@ static void write_random_file(str path)
 
                 buffer[file_i] = c;
                 file_i += 1;
+            }
 
-                buffer[file_i] = '\'';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_TYPE_INTEGER:
-            {
-                int r = rand();
-
-                bool is_signed = r % 2;
-                char first_ch = is_signed ? 's' : 'u';
-
-                buffer[file_i] = first_ch;
-                file_i += 1;
-
-                int bit_count = (r % 64) + 1;
-
-                if (bit_count >= 10)
-                {
-                    buffer[file_i] = '0' + (bit_count / 10);
-                    file_i += 1;
-
-                    buffer[file_i] = '0' + (bit_count % 10);
-                    file_i += 1;
-                }
-                else
-                {
-                    char c = bit_count + '0';
-
-                    buffer[file_i] = c;
-                    file_i += 1;
-                }
-            }
-            break; case TOKEN_ID_KEYWORD_TYPE_FLOAT:
-            {
-                int r = rand();
-
-                buffer[file_i] = 'f';
-                file_i += 1;
-
-                int choice = r % 3;
-
-                switch (choice)
-                {
-                    break; case 0:
-                    {
-                        buffer[file_i] = '3';
-                        file_i += 1;
-                        buffer[file_i] = '2';
-                        file_i += 1;
-                    }
-                    break; case 1:
-                    {
-                        buffer[file_i] = '6';
-                        file_i += 1;
-                        buffer[file_i] = '4';
-                        file_i += 1;
-                    }
-                    break; case 2:
-                    {
-                        buffer[file_i] = '1';
-                        file_i += 1;
-                        buffer[file_i] = '2';
-                        file_i += 1;
-                        buffer[file_i] = '8';
-                        file_i += 1;
-                    }
-                }
-            }
-            break; case TOKEN_ID_KEYWORD_TYPE:
-            {
-                buffer[file_i] = 't';
-                file_i += 1;
-                buffer[file_i] = 'y';
-                file_i += 1;
-                buffer[file_i] = 'p';
-                file_i += 1;
-                buffer[file_i] = 'e';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_TYPE_VOID:
-            {
-                buffer[file_i] = 'v';
-                file_i += 1;
-                buffer[file_i] = 'o';
-                file_i += 1;
-                buffer[file_i] = 'i';
-                file_i += 1;
-                buffer[file_i] = 'd';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_TYPE_NORETURN:
-            {
-                buffer[file_i] = 'n';
-                file_i += 1;
-                buffer[file_i] = 'o';
-                file_i += 1;
-                buffer[file_i] = 'r';
-                file_i += 1;
-                buffer[file_i] = 'e';
-                file_i += 1;
-                buffer[file_i] = 't';
-                file_i += 1;
-                buffer[file_i] = 'u';
-                file_i += 1;
-                buffer[file_i] = 'r';
-                file_i += 1;
-                buffer[file_i] = 'n';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_TYPE_ENUM:
-            {
-                buffer[file_i] = 'e';
-                file_i += 1;
-                buffer[file_i] = 'n';
-                file_i += 1;
-                buffer[file_i] = 'u';
-                file_i += 1;
-                buffer[file_i] = 'm';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_TYPE_STRUCT:
-            {
-                buffer[file_i] = 's';
-                file_i += 1;
-                buffer[file_i] = 't';
-                file_i += 1;
-                buffer[file_i] = 'r';
-                file_i += 1;
-                buffer[file_i] = 'u';
-                file_i += 1;
-                buffer[file_i] = 'c';
-                file_i += 1;
-                buffer[file_i] = 't';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_TYPE_BITS:
-            {
-                buffer[file_i] = 'b';
-                file_i += 1;
-                buffer[file_i] = 'i';
-                file_i += 1;
-                buffer[file_i] = 't';
-                file_i += 1;
-                buffer[file_i] = 's';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_TYPE_UNION:
-            {
-                buffer[file_i] = 'u';
-                file_i += 1;
-                buffer[file_i] = 'n';
-                file_i += 1;
-                buffer[file_i] = 'i';
-                file_i += 1;
-                buffer[file_i] = 'o';
-                file_i += 1;
-                buffer[file_i] = 'n';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_TYPE_FN:
-            {
-                buffer[file_i] = 'f';
-                file_i += 1;
-                buffer[file_i] = 'n';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_TYPE_ALIAS:
-            {
-                buffer[file_i] = 'a';
-                file_i += 1;
-                buffer[file_i] = 'l';
-                file_i += 1;
-                buffer[file_i] = 'i';
-                file_i += 1;
-                buffer[file_i] = 'a';
-                file_i += 1;
-                buffer[file_i] = 's';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_TYPE_VECTOR:
-            {
-                buffer[file_i] = 'v';
-                file_i += 1;
-                buffer[file_i] = 'e';
-                file_i += 1;
-                buffer[file_i] = 'c';
-                file_i += 1;
-                buffer[file_i] = 't';
-                file_i += 1;
-                buffer[file_i] = 'o';
-                file_i += 1;
-                buffer[file_i] = 'r';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_TYPE_ENUM_ARRAY:
-            {
-                buffer[file_i] = 'e';
-                file_i += 1;
-                buffer[file_i] = 'n';
-                file_i += 1;
-                buffer[file_i] = 'u';
-                file_i += 1;
-                buffer[file_i] = 'm';
-                file_i += 1;
-                buffer[file_i] = '_';
-                file_i += 1;
-                buffer[file_i] = 'a';
-                file_i += 1;
-                buffer[file_i] = 'r';
-                file_i += 1;
-                buffer[file_i] = 'r';
-                file_i += 1;
-                buffer[file_i] = 'a';
-                file_i += 1;
-                buffer[file_i] = 'y';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_TYPE_OPAQUE:
-            {
-                buffer[file_i] = 'o';
-                file_i += 1;
-                buffer[file_i] = 'p';
-                file_i += 1;
-                buffer[file_i] = 'a';
-                file_i += 1;
-                buffer[file_i] = 'q';
-                file_i += 1;
-                buffer[file_i] = 'u';
-                file_i += 1;
-                buffer[file_i] = 'e';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_STATEMENT_UNDERSCORE:
-            {
-                buffer[file_i] = '_';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_STATEMENT_RETURN:
-            {
-                buffer[file_i] = 'r';
-                file_i += 1;
-                buffer[file_i] = 'e';
-                file_i += 1;
-                buffer[file_i] = 't';
-                file_i += 1;
-                buffer[file_i] = 'u';
-                file_i += 1;
-                buffer[file_i] = 'r';
-                file_i += 1;
-                buffer[file_i] = 'n';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_STATEMENT_IF:
-            {
-                buffer[file_i] = 'i';
-                file_i += 1;
-                buffer[file_i] = 'f';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_STATEMENT_WHEN:
-            {
-                buffer[file_i] = 'w';
-                file_i += 1;
-                buffer[file_i] = 'h';
-                file_i += 1;
-                buffer[file_i] = 'e';
-                file_i += 1;
-                buffer[file_i] = 'n';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_STATEMENT_FOR:
-            {
-                buffer[file_i] = 'f';
-                file_i += 1;
-                buffer[file_i] = 'o';
-                file_i += 1;
-                buffer[file_i] = 'r';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_STATEMENT_WHILE:
-            {
-                buffer[file_i] = 'w';
-                file_i += 1;
-                buffer[file_i] = 'h';
-                file_i += 1;
-                buffer[file_i] = 'i';
-                file_i += 1;
-                buffer[file_i] = 'l';
-                file_i += 1;
-                buffer[file_i] = 'e';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_STATEMENT_SWITCH:
-            {
-                buffer[file_i] = 's';
-                file_i += 1;
-                buffer[file_i] = 'w';
-                file_i += 1;
-                buffer[file_i] = 'i';
-                file_i += 1;
-                buffer[file_i] = 't';
-                file_i += 1;
-                buffer[file_i] = 'c';
-                file_i += 1;
-                buffer[file_i] = 'h';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_STATEMENT_BREAK:
-            {
-                buffer[file_i] = 'b';
-                file_i += 1;
-                buffer[file_i] = 'r';
-                file_i += 1;
-                buffer[file_i] = 'e';
-                file_i += 1;
-                buffer[file_i] = 'a';
-                file_i += 1;
-                buffer[file_i] = 'k';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_STATEMENT_CONTINUE:
-            {
-                buffer[file_i] = 'c';
-                file_i += 1;
-                buffer[file_i] = 'o';
-                file_i += 1;
-                buffer[file_i] = 'n';
-                file_i += 1;
-                buffer[file_i] = 't';
-                file_i += 1;
-                buffer[file_i] = 'i';
-                file_i += 1;
-                buffer[file_i] = 'n';
-                file_i += 1;
-                buffer[file_i] = 'u';
-                file_i += 1;
-                buffer[file_i] = 'e';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_STATEMENT_UNREACHABLE:
-            {
-                buffer[file_i] = 'u';
-                file_i += 1;
-                buffer[file_i] = 'n';
-                file_i += 1;
-                buffer[file_i] = 'r';
-                file_i += 1;
-                buffer[file_i] = 'e';
-                file_i += 1;
-                buffer[file_i] = 'a';
-                file_i += 1;
-                buffer[file_i] = 'c';
-                file_i += 1;
-                buffer[file_i] = 'h';
-                file_i += 1;
-                buffer[file_i] = 'a';
-                file_i += 1;
-                buffer[file_i] = 'b';
-                file_i += 1;
-                buffer[file_i] = 'l';
-                file_i += 1;
-                buffer[file_i] = 'e';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_STATEMENT_ELSE:
-            {
-                buffer[file_i] = 'e';
-                file_i += 1;
-                buffer[file_i] = 'l';
-                file_i += 1;
-                buffer[file_i] = 's';
-                file_i += 1;
-                buffer[file_i] = 'e';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_VALUE_UNDEFINED:
-            {
-                buffer[file_i] = 'u';
-                file_i += 1;
-                buffer[file_i] = 'n';
-                file_i += 1;
-                buffer[file_i] = 'd';
-                file_i += 1;
-                buffer[file_i] = 'e';
-                file_i += 1;
-                buffer[file_i] = 'f';
-                file_i += 1;
-                buffer[file_i] = 'i';
-                file_i += 1;
-                buffer[file_i] = 'n';
-                file_i += 1;
-                buffer[file_i] = 'e';
-                file_i += 1;
-                buffer[file_i] = 'd';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_VALUE_ZERO:
-            {
-                buffer[file_i] = 'z';
-                file_i += 1;
-                buffer[file_i] = 'e';
-                file_i += 1;
-                buffer[file_i] = 'r';
-                file_i += 1;
-                buffer[file_i] = 'o';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_OPERATOR_AND:
-            {
-                buffer[file_i] = 'a';
-                file_i += 1;
-                buffer[file_i] = 'n';
-                file_i += 1;
-                buffer[file_i] = 'd';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_OPERATOR_OR:
-            {
-                buffer[file_i] = 'o';
-                file_i += 1;
-                buffer[file_i] = 'r';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_OPERATOR_AND_SHORTCIRCUIT:
-            {
-                buffer[file_i] = 'a';
-                file_i += 1;
-                buffer[file_i] = 'n';
-                file_i += 1;
-                buffer[file_i] = 'd';
-                file_i += 1;
-                buffer[file_i] = '?';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_KEYWORD_OPERATOR_OR_SHORTCIRCUIT:
-            {
-                buffer[file_i] = 'o';
-                file_i += 1;
-                buffer[file_i] = 'r';
-                file_i += 1;
-                buffer[file_i] = '?';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_ASSIGN:
-            {
-                buffer[file_i] = '=';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_COMPARE_EQUAL:
-            {
-                buffer[file_i] = '=';
-                file_i += 1;
-                buffer[file_i] = '=';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_SWITCH_CASE:
-            {
-                buffer[file_i] = '=';
-                file_i += 1;
-                buffer[file_i] = '>';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_EXCLAMATION_DOWN:
-            {
-                buffer[file_i] = '!';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_COMPARE_NOT_EQUAL:
-            {
-                buffer[file_i] = '!';
-                file_i += 1;
-                buffer[file_i] = '=';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_COMPARE_LESS:
-            {
-                buffer[file_i] = '<';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_COMPARE_LESS_EQUAL:
-            {
-                buffer[file_i] = '<';
-                file_i += 1;
-                buffer[file_i] = '=';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_SHIFT_LEFT:
-            {
-                buffer[file_i] = '<';
-                file_i += 1;
-                buffer[file_i] = '<';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_SHIFT_LEFT_ASSIGN:
-            {
-                buffer[file_i] = '<';
-                file_i += 1;
-                buffer[file_i] = '<';
-                file_i += 1;
-                buffer[file_i] = '=';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_COMPARE_GREATER:
-            {
-                buffer[file_i] = '>';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_COMPARE_GREATER_EQUAL:
-            {
-                buffer[file_i] = '>';
-                file_i += 1;
-                buffer[file_i] = '=';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_SHIFT_RIGHT:
-            {
-                buffer[file_i] = '>';
-                file_i += 1;
-                buffer[file_i] = '>';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_SHIFT_RIGHT_ASSIGN:
-            {
-                buffer[file_i] = '>';
-                file_i += 1;
-                buffer[file_i] = '>';
-                file_i += 1;
-                buffer[file_i] = '=';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_PLUS:
-            {
-                buffer[file_i] = '+';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_ADD_ASSIGN:
-            {
-                buffer[file_i] = '+';
-                file_i += 1;
-                buffer[file_i] = '=';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_DASH:
-            {
-                buffer[file_i] = '-';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_SUB_ASSIGN:
-            {
-                buffer[file_i] = '-';
-                file_i += 1;
-                buffer[file_i] = '=';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_ASTERISK:
-            {
-                buffer[file_i] = '*';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_MUL_ASSIGN:
-            {
-                buffer[file_i] = '*';
-                file_i += 1;
-                buffer[file_i] = '=';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_FORWARD_SLASH:
-            {
-                buffer[file_i] = '/';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_DIV_ASSIGN:
-            {
-                buffer[file_i] = '/';
-                file_i += 1;
-                buffer[file_i] = '=';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_PERCENTAGE:
-            {
-                buffer[file_i] = '%';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_REM_ASSIGN:
-            {
-                buffer[file_i] = '%';
-                file_i += 1;
-                buffer[file_i] = '=';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_AMPERSAND:
-            {
-                buffer[file_i] = '&';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_BITWISE_AND_ASSIGN:
-            {
-                buffer[file_i] = '&';
-                file_i += 1;
-                buffer[file_i] = '=';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_BAR:
-            {
-                buffer[file_i] = '|';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_BITWISE_OR_ASSIGN:
-            {
-                buffer[file_i] = '|';
-                file_i += 1;
-                buffer[file_i] = '=';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_CARET:
-            {
-                buffer[file_i] = '^';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_BITWISE_XOR_ASSIGN:
-            {
-                buffer[file_i] = '^';
-                file_i += 1;
-                buffer[file_i] = '=';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_DOT:
-            {
-                buffer[file_i] = '.';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_POINTER_DEREFERENCE:
-            {
-                buffer[file_i] = '.';
-                file_i += 1;
-                buffer[file_i] = '&';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_OPTIONAL_DEREFERENCE:
-            {
-                buffer[file_i] = '.';
-                file_i += 1;
-                buffer[file_i] = '?';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_DOUBLE_DOT:
-            {
-                buffer[file_i] = '.';
-                file_i += 1;
-                buffer[file_i] = '.';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_TRIPLE_DOT:
-            {
-                buffer[file_i] = '.';
-                file_i += 1;
-                buffer[file_i] = '.';
-                file_i += 1;
-                buffer[file_i] = '.';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_LEFT_PARENTHESIS:
-            {
-                buffer[file_i] = '(';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_RIGHT_PARENTHESIS:
-            {
-                buffer[file_i] = ')';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_LEFT_BRACE:
-            {
-                buffer[file_i] = '{';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_RIGHT_BRACE:
-            {
-                buffer[file_i] = '}';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_LEFT_BRACKET:
-            {
-                buffer[file_i] = '[';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_RIGHT_BRACKET:
-            {
-                buffer[file_i] = ']';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_COMMA:
-            {
-                buffer[file_i] = ',';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_SEMICOLON:
-            {
-                buffer[file_i] = ';';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_COLON:
-            {
-                buffer[file_i] = ':';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_QUESTION:
-            {
-                buffer[file_i] = '?';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_AT:
-            {
-                buffer[file_i] = '@';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_BACKTICK:
-            {
-                buffer[file_i] = '`';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_BACKSLASH:
-            {
-                buffer[file_i] = '\\';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_HASH:
-            {
-                buffer[file_i] = '#';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_DOLLAR:
-            {
-                buffer[file_i] = '$';
-                file_i += 1;
-            }
-            break; case TOKEN_ID_TILDE:
-            {
-                buffer[file_i] = '~';
-                file_i += 1;
-            }
-            break; case TOKEN_COUNT: UNREACHABLE();
-            break; default: continue;
-        }
-
-        buffer[file_i] = ' ';
-        file_i += 1;
-
-        if (random_n % 8 == 0)
-        {
-            buffer[file_i] = '\n';
+            buffer[file_i] = '"';
             file_i += 1;
         }
+        break; case TOKEN_ID_CHARACTER_LITERAL:
+        {
+            buffer[file_i] = '\'';
+            file_i += 1;
+
+            int id_ch_rand = rand();
+            int choice = id_ch_rand % 3;
+
+            char c;
+
+            switch (choice)
+            {
+                break; case 0:
+                {
+                    c = 'a' + (id_ch_rand % ('z' - 'a'));
+                }
+                break; case 1:
+                {
+                    c = 'A' + (id_ch_rand % ('Z' - 'A'));
+                }
+                break; case 2:
+                {
+                    c = '0' + (id_ch_rand % ('9' - '0'));
+                }
+            }
+
+            buffer[file_i] = c;
+            file_i += 1;
+
+            buffer[file_i] = '\'';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_TYPE_INTEGER:
+        {
+            int r = rand();
+
+            bool is_signed = r % 2;
+            char first_ch = is_signed ? 's' : 'u';
+
+            buffer[file_i] = first_ch;
+            file_i += 1;
+
+            int bit_count = (r % 64) + 1;
+
+            if (bit_count >= 10)
+            {
+                buffer[file_i] = '0' + (bit_count / 10);
+                file_i += 1;
+
+                buffer[file_i] = '0' + (bit_count % 10);
+                file_i += 1;
+            }
+            else
+            {
+                char c = bit_count + '0';
+
+                buffer[file_i] = c;
+                file_i += 1;
+            }
+        }
+        break; case TOKEN_ID_KEYWORD_TYPE_FLOAT:
+        {
+            int r = rand();
+
+            buffer[file_i] = 'f';
+            file_i += 1;
+
+            int choice = r % 3;
+
+            switch (choice)
+            {
+                break; case 0:
+                {
+                    buffer[file_i] = '3';
+                    file_i += 1;
+                    buffer[file_i] = '2';
+                    file_i += 1;
+                }
+                break; case 1:
+                {
+                    buffer[file_i] = '6';
+                    file_i += 1;
+                    buffer[file_i] = '4';
+                    file_i += 1;
+                }
+                break; case 2:
+                {
+                    buffer[file_i] = '1';
+                    file_i += 1;
+                    buffer[file_i] = '2';
+                    file_i += 1;
+                    buffer[file_i] = '8';
+                    file_i += 1;
+                }
+            }
+        }
+        break; case TOKEN_ID_KEYWORD_TYPE:
+        {
+            buffer[file_i] = 't';
+            file_i += 1;
+            buffer[file_i] = 'y';
+            file_i += 1;
+            buffer[file_i] = 'p';
+            file_i += 1;
+            buffer[file_i] = 'e';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_TYPE_VOID:
+        {
+            buffer[file_i] = 'v';
+            file_i += 1;
+            buffer[file_i] = 'o';
+            file_i += 1;
+            buffer[file_i] = 'i';
+            file_i += 1;
+            buffer[file_i] = 'd';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_TYPE_NORETURN:
+        {
+            buffer[file_i] = 'n';
+            file_i += 1;
+            buffer[file_i] = 'o';
+            file_i += 1;
+            buffer[file_i] = 'r';
+            file_i += 1;
+            buffer[file_i] = 'e';
+            file_i += 1;
+            buffer[file_i] = 't';
+            file_i += 1;
+            buffer[file_i] = 'u';
+            file_i += 1;
+            buffer[file_i] = 'r';
+            file_i += 1;
+            buffer[file_i] = 'n';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_TYPE_ENUM:
+        {
+            buffer[file_i] = 'e';
+            file_i += 1;
+            buffer[file_i] = 'n';
+            file_i += 1;
+            buffer[file_i] = 'u';
+            file_i += 1;
+            buffer[file_i] = 'm';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_TYPE_STRUCT:
+        {
+            buffer[file_i] = 's';
+            file_i += 1;
+            buffer[file_i] = 't';
+            file_i += 1;
+            buffer[file_i] = 'r';
+            file_i += 1;
+            buffer[file_i] = 'u';
+            file_i += 1;
+            buffer[file_i] = 'c';
+            file_i += 1;
+            buffer[file_i] = 't';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_TYPE_BITS:
+        {
+            buffer[file_i] = 'b';
+            file_i += 1;
+            buffer[file_i] = 'i';
+            file_i += 1;
+            buffer[file_i] = 't';
+            file_i += 1;
+            buffer[file_i] = 's';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_TYPE_UNION:
+        {
+            buffer[file_i] = 'u';
+            file_i += 1;
+            buffer[file_i] = 'n';
+            file_i += 1;
+            buffer[file_i] = 'i';
+            file_i += 1;
+            buffer[file_i] = 'o';
+            file_i += 1;
+            buffer[file_i] = 'n';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_TYPE_FN:
+        {
+            buffer[file_i] = 'f';
+            file_i += 1;
+            buffer[file_i] = 'n';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_TYPE_ALIAS:
+        {
+            buffer[file_i] = 'a';
+            file_i += 1;
+            buffer[file_i] = 'l';
+            file_i += 1;
+            buffer[file_i] = 'i';
+            file_i += 1;
+            buffer[file_i] = 'a';
+            file_i += 1;
+            buffer[file_i] = 's';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_TYPE_VECTOR:
+        {
+            buffer[file_i] = 'v';
+            file_i += 1;
+            buffer[file_i] = 'e';
+            file_i += 1;
+            buffer[file_i] = 'c';
+            file_i += 1;
+            buffer[file_i] = 't';
+            file_i += 1;
+            buffer[file_i] = 'o';
+            file_i += 1;
+            buffer[file_i] = 'r';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_TYPE_ENUM_ARRAY:
+        {
+            buffer[file_i] = 'e';
+            file_i += 1;
+            buffer[file_i] = 'n';
+            file_i += 1;
+            buffer[file_i] = 'u';
+            file_i += 1;
+            buffer[file_i] = 'm';
+            file_i += 1;
+            buffer[file_i] = '_';
+            file_i += 1;
+            buffer[file_i] = 'a';
+            file_i += 1;
+            buffer[file_i] = 'r';
+            file_i += 1;
+            buffer[file_i] = 'r';
+            file_i += 1;
+            buffer[file_i] = 'a';
+            file_i += 1;
+            buffer[file_i] = 'y';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_TYPE_OPAQUE:
+        {
+            buffer[file_i] = 'o';
+            file_i += 1;
+            buffer[file_i] = 'p';
+            file_i += 1;
+            buffer[file_i] = 'a';
+            file_i += 1;
+            buffer[file_i] = 'q';
+            file_i += 1;
+            buffer[file_i] = 'u';
+            file_i += 1;
+            buffer[file_i] = 'e';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_STATEMENT_UNDERSCORE:
+        {
+            buffer[file_i] = '_';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_STATEMENT_RETURN:
+        {
+            buffer[file_i] = 'r';
+            file_i += 1;
+            buffer[file_i] = 'e';
+            file_i += 1;
+            buffer[file_i] = 't';
+            file_i += 1;
+            buffer[file_i] = 'u';
+            file_i += 1;
+            buffer[file_i] = 'r';
+            file_i += 1;
+            buffer[file_i] = 'n';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_STATEMENT_IF:
+        {
+            buffer[file_i] = 'i';
+            file_i += 1;
+            buffer[file_i] = 'f';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_STATEMENT_WHEN:
+        {
+            buffer[file_i] = 'w';
+            file_i += 1;
+            buffer[file_i] = 'h';
+            file_i += 1;
+            buffer[file_i] = 'e';
+            file_i += 1;
+            buffer[file_i] = 'n';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_STATEMENT_FOR:
+        {
+            buffer[file_i] = 'f';
+            file_i += 1;
+            buffer[file_i] = 'o';
+            file_i += 1;
+            buffer[file_i] = 'r';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_STATEMENT_WHILE:
+        {
+            buffer[file_i] = 'w';
+            file_i += 1;
+            buffer[file_i] = 'h';
+            file_i += 1;
+            buffer[file_i] = 'i';
+            file_i += 1;
+            buffer[file_i] = 'l';
+            file_i += 1;
+            buffer[file_i] = 'e';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_STATEMENT_SWITCH:
+        {
+            buffer[file_i] = 's';
+            file_i += 1;
+            buffer[file_i] = 'w';
+            file_i += 1;
+            buffer[file_i] = 'i';
+            file_i += 1;
+            buffer[file_i] = 't';
+            file_i += 1;
+            buffer[file_i] = 'c';
+            file_i += 1;
+            buffer[file_i] = 'h';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_STATEMENT_BREAK:
+        {
+            buffer[file_i] = 'b';
+            file_i += 1;
+            buffer[file_i] = 'r';
+            file_i += 1;
+            buffer[file_i] = 'e';
+            file_i += 1;
+            buffer[file_i] = 'a';
+            file_i += 1;
+            buffer[file_i] = 'k';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_STATEMENT_CONTINUE:
+        {
+            buffer[file_i] = 'c';
+            file_i += 1;
+            buffer[file_i] = 'o';
+            file_i += 1;
+            buffer[file_i] = 'n';
+            file_i += 1;
+            buffer[file_i] = 't';
+            file_i += 1;
+            buffer[file_i] = 'i';
+            file_i += 1;
+            buffer[file_i] = 'n';
+            file_i += 1;
+            buffer[file_i] = 'u';
+            file_i += 1;
+            buffer[file_i] = 'e';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_STATEMENT_UNREACHABLE:
+        {
+            buffer[file_i] = 'u';
+            file_i += 1;
+            buffer[file_i] = 'n';
+            file_i += 1;
+            buffer[file_i] = 'r';
+            file_i += 1;
+            buffer[file_i] = 'e';
+            file_i += 1;
+            buffer[file_i] = 'a';
+            file_i += 1;
+            buffer[file_i] = 'c';
+            file_i += 1;
+            buffer[file_i] = 'h';
+            file_i += 1;
+            buffer[file_i] = 'a';
+            file_i += 1;
+            buffer[file_i] = 'b';
+            file_i += 1;
+            buffer[file_i] = 'l';
+            file_i += 1;
+            buffer[file_i] = 'e';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_STATEMENT_ELSE:
+        {
+            buffer[file_i] = 'e';
+            file_i += 1;
+            buffer[file_i] = 'l';
+            file_i += 1;
+            buffer[file_i] = 's';
+            file_i += 1;
+            buffer[file_i] = 'e';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_VALUE_UNDEFINED:
+        {
+            buffer[file_i] = 'u';
+            file_i += 1;
+            buffer[file_i] = 'n';
+            file_i += 1;
+            buffer[file_i] = 'd';
+            file_i += 1;
+            buffer[file_i] = 'e';
+            file_i += 1;
+            buffer[file_i] = 'f';
+            file_i += 1;
+            buffer[file_i] = 'i';
+            file_i += 1;
+            buffer[file_i] = 'n';
+            file_i += 1;
+            buffer[file_i] = 'e';
+            file_i += 1;
+            buffer[file_i] = 'd';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_VALUE_ZERO:
+        {
+            buffer[file_i] = 'z';
+            file_i += 1;
+            buffer[file_i] = 'e';
+            file_i += 1;
+            buffer[file_i] = 'r';
+            file_i += 1;
+            buffer[file_i] = 'o';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_OPERATOR_AND:
+        {
+            buffer[file_i] = 'a';
+            file_i += 1;
+            buffer[file_i] = 'n';
+            file_i += 1;
+            buffer[file_i] = 'd';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_OPERATOR_OR:
+        {
+            buffer[file_i] = 'o';
+            file_i += 1;
+            buffer[file_i] = 'r';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_OPERATOR_AND_SHORTCIRCUIT:
+        {
+            buffer[file_i] = 'a';
+            file_i += 1;
+            buffer[file_i] = 'n';
+            file_i += 1;
+            buffer[file_i] = 'd';
+            file_i += 1;
+            buffer[file_i] = '?';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_KEYWORD_OPERATOR_OR_SHORTCIRCUIT:
+        {
+            buffer[file_i] = 'o';
+            file_i += 1;
+            buffer[file_i] = 'r';
+            file_i += 1;
+            buffer[file_i] = '?';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_ASSIGN:
+        {
+            buffer[file_i] = '=';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_COMPARE_EQUAL:
+        {
+            buffer[file_i] = '=';
+            file_i += 1;
+            buffer[file_i] = '=';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_SWITCH_CASE:
+        {
+            buffer[file_i] = '=';
+            file_i += 1;
+            buffer[file_i] = '>';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_EXCLAMATION_DOWN:
+        {
+            buffer[file_i] = '!';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_COMPARE_NOT_EQUAL:
+        {
+            buffer[file_i] = '!';
+            file_i += 1;
+            buffer[file_i] = '=';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_COMPARE_LESS:
+        {
+            buffer[file_i] = '<';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_COMPARE_LESS_EQUAL:
+        {
+            buffer[file_i] = '<';
+            file_i += 1;
+            buffer[file_i] = '=';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_SHIFT_LEFT:
+        {
+            buffer[file_i] = '<';
+            file_i += 1;
+            buffer[file_i] = '<';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_SHIFT_LEFT_ASSIGN:
+        {
+            buffer[file_i] = '<';
+            file_i += 1;
+            buffer[file_i] = '<';
+            file_i += 1;
+            buffer[file_i] = '=';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_COMPARE_GREATER:
+        {
+            buffer[file_i] = '>';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_COMPARE_GREATER_EQUAL:
+        {
+            buffer[file_i] = '>';
+            file_i += 1;
+            buffer[file_i] = '=';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_SHIFT_RIGHT:
+        {
+            buffer[file_i] = '>';
+            file_i += 1;
+            buffer[file_i] = '>';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_SHIFT_RIGHT_ASSIGN:
+        {
+            buffer[file_i] = '>';
+            file_i += 1;
+            buffer[file_i] = '>';
+            file_i += 1;
+            buffer[file_i] = '=';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_PLUS:
+        {
+            buffer[file_i] = '+';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_ADD_ASSIGN:
+        {
+            buffer[file_i] = '+';
+            file_i += 1;
+            buffer[file_i] = '=';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_DASH:
+        {
+            buffer[file_i] = '-';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_SUB_ASSIGN:
+        {
+            buffer[file_i] = '-';
+            file_i += 1;
+            buffer[file_i] = '=';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_ASTERISK:
+        {
+            buffer[file_i] = '*';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_MUL_ASSIGN:
+        {
+            buffer[file_i] = '*';
+            file_i += 1;
+            buffer[file_i] = '=';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_FORWARD_SLASH:
+        {
+            buffer[file_i] = '/';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_DIV_ASSIGN:
+        {
+            buffer[file_i] = '/';
+            file_i += 1;
+            buffer[file_i] = '=';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_PERCENTAGE:
+        {
+            buffer[file_i] = '%';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_REM_ASSIGN:
+        {
+            buffer[file_i] = '%';
+            file_i += 1;
+            buffer[file_i] = '=';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_AMPERSAND:
+        {
+            buffer[file_i] = '&';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_BITWISE_AND_ASSIGN:
+        {
+            buffer[file_i] = '&';
+            file_i += 1;
+            buffer[file_i] = '=';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_BAR:
+        {
+            buffer[file_i] = '|';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_BITWISE_OR_ASSIGN:
+        {
+            buffer[file_i] = '|';
+            file_i += 1;
+            buffer[file_i] = '=';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_CARET:
+        {
+            buffer[file_i] = '^';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_BITWISE_XOR_ASSIGN:
+        {
+            buffer[file_i] = '^';
+            file_i += 1;
+            buffer[file_i] = '=';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_DOT:
+        {
+            buffer[file_i] = '.';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_POINTER_DEREFERENCE:
+        {
+            buffer[file_i] = '.';
+            file_i += 1;
+            buffer[file_i] = '&';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_OPTIONAL_DEREFERENCE:
+        {
+            buffer[file_i] = '.';
+            file_i += 1;
+            buffer[file_i] = '?';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_DOUBLE_DOT:
+        {
+            buffer[file_i] = '.';
+            file_i += 1;
+            buffer[file_i] = '.';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_TRIPLE_DOT:
+        {
+            buffer[file_i] = '.';
+            file_i += 1;
+            buffer[file_i] = '.';
+            file_i += 1;
+            buffer[file_i] = '.';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_LEFT_PARENTHESIS:
+        {
+            buffer[file_i] = '(';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_RIGHT_PARENTHESIS:
+        {
+            buffer[file_i] = ')';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_LEFT_BRACE:
+        {
+            buffer[file_i] = '{';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_RIGHT_BRACE:
+        {
+            buffer[file_i] = '}';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_LEFT_BRACKET:
+        {
+            buffer[file_i] = '[';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_RIGHT_BRACKET:
+        {
+            buffer[file_i] = ']';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_COMMA:
+        {
+            buffer[file_i] = ',';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_SEMICOLON:
+        {
+            buffer[file_i] = ';';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_COLON:
+        {
+            buffer[file_i] = ':';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_QUESTION:
+        {
+            buffer[file_i] = '?';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_AT:
+        {
+            buffer[file_i] = '@';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_BACKTICK:
+        {
+            buffer[file_i] = '`';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_BACKSLASH:
+        {
+            buffer[file_i] = '\\';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_HASH:
+        {
+            buffer[file_i] = '#';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_DOLLAR:
+        {
+            buffer[file_i] = '$';
+            file_i += 1;
+        }
+        break; case TOKEN_ID_TILDE:
+        {
+            buffer[file_i] = '~';
+            file_i += 1;
+        }
+        break; case TOKEN_COUNT: UNREACHABLE();
+        break; default: {};
+    }
+
+    buffer[file_i] = ' ';
+    file_i += 1;
+
+    if (random_n % 8 == 0)
+    {
+        buffer[file_i] = '\n';
+        file_i += 1;
+    }
+
+    *out_file_i = file_i;
+
+    if (!is_comment && random_n % 100 == 0)
+    {
+        buffer[file_i] = '/';
+        file_i += 1;
+        buffer[file_i] = '/';
+        file_i += 1;
+        *out_file_i = file_i;
+
+        let token_count = random_n % 64;
+
+        for (u64 i = 0; i < token_count; i += 1)
+        {
+            write_random_token(out_file_i, 1);
+        }
+
+        file_i = *out_file_i;
+
+        buffer[file_i] = '\n';
+        file_i += 1;
+
+        *out_file_i = file_i;
+    }
+
+    *out_file_i = file_i;
+}
+
+static void write_random_file(str path)
+{
+    u64 file_i = 0;
+
+    for (u64 i = 0; i < 20000000; i += 1)
+    {
+        write_random_token(&file_i, 0);
     }
 
     let fd = os_file_open(path, (OpenFlags) {
@@ -1184,7 +1217,7 @@ static u64 io_uring_task(Arena* file_arena, Arena* else_arena, struct io_uring* 
     let file_count = file_paths.length;
     if (file_count > UINT32_MAX)
     {
-        trap();
+        fail();
     }
 
     u64 pending = file_count;
@@ -1198,7 +1231,7 @@ static u64 io_uring_task(Arena* file_arena, Arena* else_arena, struct io_uring* 
     int ret = io_uring_submit(ring);
     if (ret < 0)
     {
-        trap();
+        fail();
     }
 
     struct io_uring_cqe* open_cqes;
@@ -1209,7 +1242,7 @@ static u64 io_uring_task(Arena* file_arena, Arena* else_arena, struct io_uring* 
         ret = io_uring_wait_cqe(ring, &cqe);
         if (ret < 0)
         {
-            trap();
+            fail();
         }
 
         let user_data = cqe->user_data;
@@ -1223,7 +1256,7 @@ static u64 io_uring_task(Arena* file_arena, Arena* else_arena, struct io_uring* 
         let fd = result;
         if (fd < 0)
         {
-            trap();
+            fail();
         }
         fd_array[i] = fd;
 
@@ -1237,7 +1270,7 @@ static u64 io_uring_task(Arena* file_arena, Arena* else_arena, struct io_uring* 
     ret = io_uring_submit(ring);
     if (ret < 0)
     {
-        trap();
+        fail();
     }
 
     pending = file_count;
@@ -1249,7 +1282,7 @@ static u64 io_uring_task(Arena* file_arena, Arena* else_arena, struct io_uring* 
 
         if (ret < 0)
         {
-            trap();
+            fail();
         }
 
         let user_data = cqe->user_data;
@@ -1274,7 +1307,7 @@ static u64 io_uring_task(Arena* file_arena, Arena* else_arena, struct io_uring* 
                     let er = strerror(result);
                     printf("Error in stat task: %s\n", er);
                     fflush(stdout);
-                    trap();
+                    fail();
                 }
                 let statx_struct = &statx_array[i];
                 let file_size = statx_struct->stx_size;
@@ -1303,7 +1336,7 @@ static u64 io_uring_task(Arena* file_arena, Arena* else_arena, struct io_uring* 
                 ret = io_uring_submit(ring);
                 if (ret < 0)
                 {
-                    trap();
+                    fail();
                 }
             }
             break; case IO_URING_TASK_READ:
@@ -1322,7 +1355,7 @@ static u64 io_uring_task(Arena* file_arena, Arena* else_arena, struct io_uring* 
     //     let token_list = lex(file_arena, else_arena, file_array[i], &error);
     //     if (error.id != LEXER_ERROR_ID_NONE)
     //     {
-    //         trap();
+    //         fail();
     //     }
     //     list_array[i] = token_list;
     // }
@@ -1359,20 +1392,21 @@ void* thread_worker(void* arg)
     let thread_file_count = thread->work.length;
     Arena* thread_arena = arena_initialize((ArenaInitialization){});
     Arena* else_arena = arena_initialize((ArenaInitialization){});
-    str file_content = file_read(thread_arena, file_paths[0]);
+    str file_content = file_read(thread_arena, S("build/file0"));
 
     LexerError error = {};
     let tl = lex(thread_arena, else_arena, file_content, &error);
     if (error.id != LEXER_ERROR_ID_NONE)
     {
-        trap();
+        printf("Error lexing: %u:%u:%lu code: %u\n", error.line, error.column, error.offset, error.id);
+        fail();
     }
 #if USE_IO_URING
     struct io_uring ring;
     let ret = io_uring_queue_init(thread_file_count * 2, &ring, 0);
     if (ret == 0)
     {
-        trap();
+        fail();
     }
     else
     {
@@ -1415,7 +1449,7 @@ bool compiler_main(int argc, const char* argv[], char** envp)
             let result = pthread_create(&thread->handle, 0, &thread_worker, (void*)i);
             if (result != 0)
             {
-                trap();
+                fail();
             }
 #else
 #endif
@@ -1428,7 +1462,7 @@ bool compiler_main(int argc, const char* argv[], char** envp)
             let result = pthread_join(thread->handle, &thread->return_value);
             if (result != 0)
             {
-                trap();
+                fail();
             }
 #else
 #endif
@@ -1499,7 +1533,7 @@ bool compiler_main(int argc, const char* argv[], char** envp)
 //         let completed_file_count = io_uring_task(global_arena, random_arena, &ring, file_path_slice, fds, statxs, file_contents, io_uring_tl);
 //         if (completed_file_count != file_path_slice.length)
 //         {
-//             trap();
+//             fail();
 //         }
 //
 //         let end_timestamp = take_timestamp();
@@ -1534,7 +1568,7 @@ bool compiler_main(int argc, const char* argv[], char** envp)
     // }
     // else
     // {
-    //     trap();
+    //     fail();
     // }
     
 #if SPALL_USE

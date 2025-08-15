@@ -93,6 +93,29 @@ static str str_slice_start(str s, u64 start)
     return s;
 }
 
+static bool memory_compare(void* a, void* b, u64 i)
+{
+    bool result = 1;
+
+    let p1 = (u8*)a;
+    let p2 = (u8*)b;
+
+    while (i--)
+    {
+        bool is_equal = *p1 == *p2;
+        if (!is_equal)
+        {
+            result = 0;
+            break;
+        }
+
+        p1 += 1;
+        p2 += 1;
+    }
+
+    return result;
+}
+
 static str str_slice(str s, u64 start, u64 end)
 {
     s.pointer += start;
@@ -105,7 +128,7 @@ static bool str_equal(str s1, str s2)
     bool is_equal = s1.length == s2.length;
     if (is_equal & (s1.length != 0))
     {
-        is_equal = memcmp(s1.pointer, s2.pointer, s1.length) == 0;
+        is_equal = memory_compare(s1.pointer, s2.pointer, s1.length);
     }
 
     return is_equal;
@@ -177,3 +200,5 @@ void os_file_close(FileDescriptor* file_descriptor);
 #define arena_allocate(arena, T, count) (T*) arena_allocate_bytes(arena, sizeof(T) * count, alignof(T))
 
 str file_read(Arena* arena, str path);
+
+[[noreturn]] void fail();

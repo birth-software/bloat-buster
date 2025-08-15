@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <time.h>
+#include <sys/ptrace.h>
 #elif _WIN32
 #define WIN32_LEAN_AND_MEAN 1
 #include <windows.h>
@@ -406,7 +407,7 @@ static TimeDataType take_timestamp()
     struct timespec ts;
     let result = clock_gettime(CLOCK_MONOTONIC, &ts);
     assert(result == 0);
-    return ts;
+    return *(u128*)&ts;
 #elif _WIN32
     LARGE_INTEGER c;
     BOOL result = QueryPerformanceCounter(&c);
@@ -420,8 +421,10 @@ static TimeDataType frequency;
 u64 ns_between(TimeDataType start, TimeDataType end)
 {
 #ifdef __linux__
-    let second_diff = end.tv_sec - start.tv_sec;
-    let ns_diff = end.tv_nsec - start.tv_nsec;
+    let start_ts = *(struct timespec*)&start;
+    let end_ts = *(struct timespec*)&end;
+    let second_diff = end_ts.tv_sec - start_ts.tv_sec;
+    let ns_diff = end_ts.tv_nsec - start_ts.tv_nsec;
 
     let result = second_diff * 1000000000LL + ns_diff;
     return result;
@@ -453,4 +456,20 @@ void os_init()
     assert(result);
 #else
 #endif
+}
+
+static bool is_debugger_present()
+{
+    let result = ptrace(PTRACE_TRACEME, 0, 0, 0) == -1;
+    return result;
+}
+
+[[noreturn]] void fail()
+{
+    if (is_debugger_present())
+    {
+        trap();
+    }
+
+    exit(1);
 }

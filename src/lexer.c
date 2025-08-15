@@ -2,6 +2,7 @@
 
 #include <time.h>
 #include <stdio.h>
+#include <immintrin.h>
 
 static bool is_space(char ch)
 {
@@ -232,45 +233,149 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
 
     while (1)
     {
-        bool skip_space = 1;
-        while (skip_space)
+        // Skipping whitespace
         {
-            let iteration_offset = i;
+            char first_ch = file.pointer[i];
+            char second_ch = file.pointer[i + 1];
+            char third_ch = file.pointer[i + 2];
 
-            bool space = 1;
-
-            while ((i < file.length) & space)
+            if (is_space(first_ch) | ((first_ch == '/') & (second_ch == '/')))
             {
-                let ch = file.pointer[i];
-                let is_line_feed = ch == '\n';
-                space = is_space(ch);
-                i += space;
-
-                line_offset += is_line_feed;
-                line_character_offset = is_line_feed ? i : line_character_offset;
-            }
-
-            if (i + 1 < file.length)
-            {
-                let is_comment = file.pointer[i] == '/' && file.pointer[i + 1] == '/';
-
-                if (is_comment)
+#define OPTIMIZE_FOR_COMMON_CASE 1
+#if OPTIMIZE_FOR_COMMON_CASE
+                if (!is_space(second_ch) & !((second_ch == '/') & (third_ch == '/')))
                 {
-                    while (i < file.length && file.pointer[i] != '\n')
-                    {
-                        i += 1;
-                    }
+                    i += 1;
+                    line_offset += first_ch == '\n';
+                    line_character_offset = first_ch == '\n' ? i : line_character_offset;
+                }
+                else
+#endif
+                {
+#define CHECK 0
+#define SCALAR 0
+#if CHECK
+                    let original_i = i;
+                    let original_line_offset = line_offset;
+                    let original_line_character_offset = line_character_offset;
+#endif
 
-                    if (i < file.length)
+#if SCALAR == 0 || CHECK == 1
+                    u64 skipped_ws_count = 1;
+
+                    let line_feed = _mm512_set1_epi8('\n');
+                    let r = _mm512_set1_epi8('\r');
+                    let t = _mm512_set1_epi8('\t');
+                    let space = _mm512_set1_epi8(' ');
+                    let slash = _mm512_set1_epi8('/');
+
+                    while (skipped_ws_count)
                     {
-                        line_offset += 1;
-                        line_character_offset = i;
-                        i += 1;
+                        let ws_start = i;
+                        let chunk = _mm512_loadu_epi8(&file.pointer[i]);
+                        u64 left = file.length - i;
+                        u64 clamped_int_mask = left < 64 ? (1 << left) - 1 : UINT64_MAX;
+                        u64 clamped_slash_int_mask = 0b11 & (clamped_int_mask);
+                        let clamped_mask = _cvtu64_mask64(clamped_int_mask);
+                        let clamped_slash_mask = _cvtu64_mask64(clamped_slash_int_mask);
+
+                        let is_line_feed = _mm512_mask_cmpeq_epu8_mask(clamped_mask, chunk, line_feed);
+                        let is_space = _mm512_mask_cmpeq_epu8_mask(clamped_mask, chunk, space);
+                        let is_r = _mm512_mask_cmpeq_epu8_mask(clamped_mask, chunk, r);
+                        let is_t = _mm512_mask_cmpeq_epu8_mask(clamped_mask, chunk, t);
+
+                        let traditional_ws_mask = _kor_mask64(_kor_mask64(is_line_feed, is_space), _kor_mask64(is_r, is_t));
+                        let traditional_ws_int = _cvtmask64_u64(traditional_ws_mask);
+                        let traditional_ws = _tzcnt_u64(~traditional_ws_int);
+
+                        let is_line_feed_int = _cvtmask64_u64(is_line_feed);
+                        let is_line_feed_int_mask = (1 << traditional_ws) - 1;
+                        let line_bit_mask = is_line_feed_int & is_line_feed_int_mask;
+                        let traditional_line_counts = _mm_popcnt_u64(line_bit_mask);
+                        let character_after_line_offset = 64 - _lzcnt_u64(line_bit_mask);
+
+                        let original_i = i;
+                        i = original_i + traditional_ws;
+                        line_offset += traditional_line_counts;
+                        line_character_offset = traditional_line_counts ? (original_i + character_after_line_offset) : line_character_offset;
+
+                        let is_first_slash = _mm512_mask_cmpeq_epu8_mask(_cvtu64_mask64(3), _mm512_loadu_epi8(&file.pointer[i]), slash);
+                        
+                        let is_comment_int = _cvtmask64_u64(is_first_slash);
+                        assert((is_comment_int & 3) == is_comment_int);
+                        let is_next_comment = is_comment_int == 3;
+                        let offset = i + 2;
+
+                        u64 not_line_count = (u64)is_next_comment << 6;
+                        while (not_line_count == 64)
+                        {
+                            let chunk = _mm512_loadu_epi8(&file.pointer[offset]);
+                            let is_line_feed = _mm512_cmpeq_epu8_mask(chunk, line_feed);
+                            let is_line_feed_int = _cvtmask64_u64(is_line_feed);
+                            let advance = _tzcnt_u64(is_line_feed_int);
+                            not_line_count = advance;
+                            offset += advance;
+                        }
+
+                        i = is_next_comment ? offset + 1: i;
+                        skipped_ws_count = i - ws_start;
+                        line_offset += is_next_comment ? 1 : 0;
+                        line_character_offset = is_next_comment ? i : line_character_offset;
                     }
+#endif
+                    
+#if CHECK
+                    let vector_i = i;
+                    let vector_line_offset = line_offset;
+                    let vector_line_character_offset = line_character_offset;
+
+                    i = original_i;
+                    line_offset = original_line_offset;
+                    line_character_offset = original_line_character_offset;
+#endif
+
+#if SCALAR
+                    bool skip_space = 1;
+
+                    while (skip_space)
+                    {
+                        let iteration_offset = i;
+                        bool space = 1;
+                        while ((i < file.length) & space)
+                        {
+                            let ch = file.pointer[i];
+                            let is_line_feed = ch == '\n';
+                            space = is_space(ch);
+                            i += space;
+
+                            line_offset += is_line_feed;
+                            line_character_offset = is_line_feed ? i : line_character_offset;
+                        }
+                        let is_comment = (i + 1 < file.length) & (file.pointer[i] == '/') & (file.pointer[i + 1] == '/');
+
+                        if (is_comment)
+                        {
+                            while ((i < file.length) & (file.pointer[i] != '\n'))
+                            {
+                                i += 1;
+                            }
+
+                            i += 1;
+                            line_offset += 1;
+                            line_character_offset = i;
+                        }
+
+                        skip_space = (i - iteration_offset) != 0;
+                    }
+#endif
+
+#if CHECK
+                    assert(vector_i == i);
+                    assert(vector_line_offset == line_offset);
+                    assert(vector_line_character_offset == line_character_offset);
+#endif
                 }
             }
-
-            skip_space = (i - iteration_offset) != 0;
         }
 
         let start_index = i;
@@ -314,15 +419,36 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
 
         if (is_identifier_start(start))
         {
-            while (i < file.length)
-            {
-                let ch = file.pointer[i];
-                if (!is_identifier(ch))
-                {
-                    break;
-                }
+            let a = _mm512_set1_epi8('a');
+            let z = _mm512_set1_epi8('z');
+            let A = _mm512_set1_epi8('A');
+            let Z = _mm512_set1_epi8('Z');
+            let zero = _mm512_set1_epi8('0');
+            let nine = _mm512_set1_epi8('9');
+            let underscore = _mm512_set1_epi8('_');
 
-                i += 1;
+            u64 identifier_character_count = 64;
+
+            while (identifier_character_count == 64)
+            {
+                let chunk = _mm512_loadu_epi8(&file.pointer[i]);
+                let cmp_a = _mm512_cmpge_epu8_mask(chunk, a);
+                let cmp_z = _mm512_cmple_epu8_mask(chunk, z);
+                let cmp_A = _mm512_cmpge_epu8_mask(chunk, A);
+                let cmp_Z = _mm512_cmple_epu8_mask(chunk, Z);
+                let cmp_zero = _mm512_cmpge_epu8_mask(chunk, zero);
+                let cmp_nine = _mm512_cmple_epu8_mask(chunk, nine);
+                let cmp_u = _mm512_cmpeq_epu8_mask(chunk, underscore);
+
+                let is_lower = _kand_mask64(cmp_a, cmp_z);
+                let is_upper = _kand_mask64(cmp_A, cmp_Z);
+                let is_decimal = _kand_mask64(cmp_zero, cmp_nine);
+                let is_identifier_mask = _kor_mask64(_kor_mask64(is_lower, is_upper), _kor_mask64(is_decimal, cmp_u));
+
+                let is_identifier_int = _cvtmask64_u64(is_identifier_mask);
+                identifier_character_count = _tzcnt_u64(~is_identifier_int);
+
+                i += identifier_character_count;
             }
 
             let candidate_identifier = str_from_ptr_start_end(file.pointer, start_index, i);
@@ -478,8 +604,15 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
                 };
                 static_assert(array_length(candidate_strings) == array_length(candidate_ids));
 
+                u64 max_string_length = 0;
+                for (u64 i = 0; i < array_length(candidate_strings); i += 1)
+                {
+                    let candidate_string = candidate_strings[i];
+                    max_string_length = candidate_string.length > max_string_length ? candidate_string.length : max_string_length;
+                }
+
                 u64 search_index;
-                for (search_index = 0; search_index < array_length(candidate_strings); search_index += 1)
+                for (search_index = candidate_identifier.length > max_string_length ? array_length(candidate_strings) : 0; search_index < array_length(candidate_strings); search_index += 1)
                 {
                     str candidate_string = candidate_strings[search_index];
                     if (str_equal(candidate_identifier, candidate_string))
