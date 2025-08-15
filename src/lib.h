@@ -40,7 +40,9 @@ typedef signed __int128 s128;
 
 typedef float f32;
 typedef double f64;
+#ifndef _WIN32
 typedef __float128 f128;
+#endif
 
 #define GB(x) 1024ull * MB(x)
 #define MB(x) 1024ull * KB(x)
@@ -152,6 +154,15 @@ STRUCT(ArenaInitialization)
 
 typedef struct FileDescriptor FileDescriptor;
 
+typedef 
+#ifdef _WIN32
+u64
+#else
+u128
+#endif
+TimeDataType;
+
+void os_init();
 Arena* arena_initialize(ArenaInitialization initialization);
 void arena_set_position(Arena* arena, u64 position);
 void arena_reset_to_start(Arena* arena);

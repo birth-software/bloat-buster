@@ -1,5 +1,11 @@
 #include <lib.h>
 
+#ifdef _WIN32
+typedef f64 FloatLiteral;
+#else
+typedef f128 FloatLiteral;
+#endif
+
 typedef enum TokenId : u8
 {
     TOKEN_ID_IDENTIFIER,
@@ -123,7 +129,7 @@ UNION(TokenContent)
 {
     str string;
     u128 integer;
-    f128 float_literal;
+    FloatLiteral float_literal;
     TokenIntegerType integer_type;
 };
 

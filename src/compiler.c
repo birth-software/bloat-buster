@@ -5,11 +5,15 @@
 //#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef __linux__
 #include <unistd.h>
 #include <pthread.h>
 
 #include <liburing.h>
 #define USE_IO_URING 1
+#else
+#define USE_IO_URING 0
+#endif
 
 #define SPALL_USE 0
 #if SPALL_USE
@@ -77,23 +81,6 @@ static bool is_single_threaded = true;
 static Arena* global_arena;
 static CompileUnitSlice global_compile_units;
 static _Atomic(u64) global_completed_compile_unit_count = 0;
-
-static struct timespec take_timestamp()
-{
-    struct timespec ts;
-    let result = clock_gettime(CLOCK_MONOTONIC, &ts);
-    assert(result == 0);
-    return ts;
-}
-
-static u64 ns_between(struct timespec start, struct timespec end)
-{
-    let second_diff = end.tv_sec - start.tv_sec;
-    let ns_diff = end.tv_nsec - start.tv_nsec;
-
-    let result = second_diff * 1000000000LL + ns_diff;
-    return result;
-}
 
 static CompilationResult llvm_compile_file(CompileUnit* unit, str path)
 {
@@ -1173,9 +1160,10 @@ static str file_paths[] = {
     S("build/file99"),
 };
 
-
 static int fds[array_length(file_paths)];
+#ifdef __linux__
 static struct statx statxs[array_length(file_paths)];
+#endif
 static str file_contents[array_length(file_paths)];
 
 TokenList io_uring_tl[array_length(file_paths)];
@@ -1189,6 +1177,7 @@ typedef enum IoUringTask
     IO_URING_TASK_CLOSE,
 } IoUringTask;
 
+#ifdef __linux__
 static u64 io_uring_task(Arena* file_arena, Arena* else_arena, struct io_uring* restrict ring, StringSlice file_paths, int* restrict fd_array, struct statx* restrict statx_array, str* restrict file_array, TokenList* restrict list_array)
 {
     SPALL_FUNCTION_BEGIN();
@@ -1341,10 +1330,15 @@ static u64 io_uring_task(Arena* file_arena, Arena* else_arena, struct io_uring* 
     SPALL_FUNCTION_END();
     return file_count;
 }
+#endif
 
 STRUCT(Thread)
 {
+#ifdef __linux__
     pthread_t handle;
+#elif _WIN32
+    void* handle;
+#endif
     StringSlice work;
     void* return_value;
     u8 padding[64 - 4 * sizeof(u64)];
@@ -1364,6 +1358,16 @@ void* thread_worker(void* arg)
     Thread* thread = &threads[thread_index];
     let thread_file_count = thread->work.length;
     Arena* thread_arena = arena_initialize((ArenaInitialization){});
+    Arena* else_arena = arena_initialize((ArenaInitialization){});
+    str file_content = file_read(thread_arena, file_paths[0]);
+
+    LexerError error = {};
+    let tl = lex(thread_arena, else_arena, file_content, &error);
+    if (error.id != LEXER_ERROR_ID_NONE)
+    {
+        trap();
+    }
+#if USE_IO_URING
     struct io_uring ring;
     let ret = io_uring_queue_init(thread_file_count * 2, &ring, 0);
     if (ret == 0)
@@ -1376,12 +1380,14 @@ void* thread_worker(void* arg)
         printf("io_uring_queue_init failed: %s\n", er);
         result_code = 1;
     }
+#endif
 
     return (void*)result_code;
 }
 
 bool compiler_main(int argc, const char* argv[], char** envp)
 {
+    os_init();
     bool result = 1;
     StringSlice file_path_slice = { file_paths, array_length(file_paths) };
     bool is_single_threaded = 1;
@@ -1392,8 +1398,12 @@ bool compiler_main(int argc, const char* argv[], char** envp)
     {
         Thread* restrict thread = &threads[0];
         thread->work = file_path_slice;
+#if 0
+        write_random_file(file_paths[0]);
+#else
         void* thread_result = thread_worker((void*)0);
         result = (u64)thread_result == 0;
+#endif
     }
     else
     {
@@ -1401,21 +1411,27 @@ bool compiler_main(int argc, const char* argv[], char** envp)
         {
             Thread* restrict thread = &threads[i];
             thread->work = (StringSlice){ file_path_slice.pointer + thread_file_count * i, thread_file_count };
+#ifdef __linux__
             let result = pthread_create(&thread->handle, 0, &thread_worker, (void*)i);
             if (result != 0)
             {
                 trap();
             }
+#else
+#endif
         }
 
         for (u64 i = 0; i < thread_count; i += 1)
         {
             Thread* restrict thread = &threads[i];
+#ifdef __linux__
             let result = pthread_join(thread->handle, &thread->return_value);
             if (result != 0)
             {
                 trap();
             }
+#else
+#endif
         }
     }
 

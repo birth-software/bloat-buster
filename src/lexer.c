@@ -219,23 +219,6 @@ static u8 escape_character(u8 ch)
     }
 }
 
-static struct timespec take_timestamp()
-{
-    struct timespec ts;
-    let result = clock_gettime(CLOCK_MONOTONIC, &ts);
-    assert(result == 0);
-    return ts;
-}
-
-static u64 ns_between(struct timespec start, struct timespec end)
-{
-    let second_diff = end.tv_sec - start.tv_sec;
-    let ns_diff = end.tv_nsec - start.tv_nsec;
-
-    let result = second_diff * 1000000000LL + ns_diff;
-    return result;
-}
-
 TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* error)
 {
 #if 0

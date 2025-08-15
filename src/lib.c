@@ -4,14 +4,16 @@
 #include <immintrin.h>
 #endif
 
+#include <stdio.h>
 #ifdef __linux__
 #include <unistd.h>
 #include <liburing.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <time.h>
-#include <stdio.h>
-#else
+#elif _WIN32
+#define WIN32_LEAN_AND_MEAN 1
+#include <windows.h>
 #endif
 
 STRUCT(ProtectionFlags)
@@ -51,6 +53,7 @@ static int os_linux_map_flags(MapFlags flags)
 
     return result;
 }
+#elif _WIN32
 #endif
 
 static void* os_reserve(void* base, u64 size, ProtectionFlags protection, MapFlags map)
@@ -65,7 +68,9 @@ static void* os_reserve(void* base, u64 size, ProtectionFlags protection, MapFla
         UNREACHABLE();
     }
     return address;
-#else
+#elif _WIN32
+    let result = VirtualAlloc(base, size, MEM_RESERVE, PAGE_READWRITE);
+    return result;
 #endif
 }
 
@@ -75,13 +80,17 @@ static void os_commit(void* address, u64 size, ProtectionFlags protection)
     let protection_flags = os_linux_protection_flags(protection);
     let result = mprotect(address, size, protection_flags);
     assert(result == 0);
-#else
+#elif _WIN32
+    let result = VirtualAlloc(address, size, MEM_COMMIT, PAGE_READWRITE);
+    assert(result != 0);
 #endif
 }
 
 FileDescriptor* os_file_open(str path, OpenFlags flags, OpenPermissions permissions)
 {
     assert(!path.pointer[path.length]);
+    FileDescriptor* result = 0;
+#if defined (__linux__)
 
     int o = 0;
     if (flags.read & flags.write)
@@ -108,12 +117,78 @@ FileDescriptor* os_file_open(str path, OpenFlags flags, OpenPermissions permissi
     mode_t mode = permissions.execute ? 0755 : 0644;
     int fd = open(path.pointer, o, mode);
 
-    FileDescriptor* result = 0;
     if (fd >= 0)
     {
         result = (void*)(u64)fd;
     }
 
+    return result;
+#elif _WIN32
+    DWORD desired_access = 0;
+    DWORD shared_mode = 0;
+    SECURITY_ATTRIBUTES security_attributes = { sizeof(security_attributes), 0, 0 };
+    DWORD creation_disposition = 0;
+    DWORD flags_and_attributes = 0;
+    HANDLE template_file = 0;
+
+    if (flags.read)
+    {
+        desired_access |= GENERIC_READ;
+    }
+
+    if (flags.write)
+    {
+        desired_access |= GENERIC_WRITE;
+    }
+
+    if (flags.execute)
+    {
+        desired_access |= GENERIC_EXECUTE;
+    }
+
+    if (permissions.read)
+    {
+        shared_mode |= FILE_SHARE_READ;
+    }
+    
+    if (permissions.write)
+    {
+        shared_mode |= FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    }
+
+    if (permissions.write)
+    {
+        creation_disposition |= CREATE_ALWAYS;
+    }
+    else
+    {
+        creation_disposition |= OPEN_EXISTING;
+    }
+
+    let fd = CreateFileA(path.pointer, desired_access, shared_mode, &security_attributes, creation_disposition, flags_and_attributes, template_file);
+    if (fd != INVALID_HANDLE_VALUE)
+    {
+        result = (FileDescriptor*)fd;
+    }
+    else
+    {
+        DWORD error = GetLastError();
+        LPVOID msgBuffer;
+
+        FormatMessageA(
+                FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                NULL,
+                error,
+                MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                (LPSTR)&msgBuffer,
+                0,
+                NULL
+                );
+
+        printf("Error %lu: %s\n", error, (char*)msgBuffer);
+        LocalFree(msgBuffer);
+    }
+#endif
     return result;
 }
 
@@ -129,23 +204,45 @@ static int generic_fd_to_posix(FileDescriptor* fd)
     return (int)(u64)fd;
 }
 
+static void* generic_fd_to_windows(FileDescriptor* fd)
+{
+    assert(fd);
+    return (void*)fd;
+}
+
 u64 os_file_get_size(FileDescriptor* file_descriptor)
 {
+#ifdef __linux__
     int fd = generic_fd_to_posix(file_descriptor);
     struct stat sb;
     let fstat_result = fstat(fd, &sb);
     assert(fstat_result == 0);
 
     return (u64)sb.st_size;
+#elif _WIN32
+    HANDLE fd = generic_fd_to_windows(file_descriptor);
+    LARGE_INTEGER file_size = {};
+    BOOL result = GetFileSizeEx(fd, &file_size);
+    assert(result);
+    return file_size.QuadPart;
+#endif
 }
 
 static u64 os_file_read_partially(FileDescriptor* file_descriptor, void* buffer, u64 byte_count)
 {
+#ifdef __linux__
     let fd = generic_fd_to_posix(file_descriptor);
     let read_byte_count = read(fd, buffer, byte_count);
     assert(read_byte_count > 0);
 
     return (u64)read_byte_count;
+#elif _WIN32
+    let fd = generic_fd_to_windows(file_descriptor);
+    DWORD read_byte_count = 0;
+    BOOL result = ReadFile(fd, buffer, (u32)byte_count, &read_byte_count, 0);
+    assert(result);
+    return read_byte_count;
+#endif
 }
 
 static void os_file_read(FileDescriptor* file_descriptor, str buffer, u64 byte_count)
@@ -161,10 +258,18 @@ static void os_file_read(FileDescriptor* file_descriptor, str buffer, u64 byte_c
 
 static u64 os_file_write_partially(FileDescriptor* file_descriptor, void* pointer, u64 length)
 {
+#ifdef __linux__
     let fd = generic_fd_to_posix(file_descriptor);
     let result = write(fd, pointer, length);
     assert(result > 0);
     return result;
+#elif _WIN32
+    let fd = generic_fd_to_windows(file_descriptor);
+    DWORD written_byte_count = 0;
+    BOOL result = WriteFile(fd, pointer, (u32)length, &written_byte_count, 0);
+    assert(result);
+    return written_byte_count;
+#endif
 }
 
 void os_file_write(FileDescriptor* file_descriptor, str buffer)
@@ -180,9 +285,15 @@ void os_file_write(FileDescriptor* file_descriptor, str buffer)
 
 void os_file_close(FileDescriptor* file_descriptor)
 {
+#ifdef __linux__
     let fd = generic_fd_to_posix(file_descriptor);
     let close_result = close(fd);
     assert(close_result == 0);
+#elif _WIN32
+    let fd = generic_fd_to_windows(file_descriptor);
+    let result = CloseHandle(fd);
+    assert(result);
+#endif
 }
 
 static u64 page_size = KB(4);
@@ -289,46 +400,57 @@ str arena_join_string(Arena* arena, StringSlice strings)
     return str_from_ptr_len(pointer, size);
 }
 
-static struct timespec take_timestamp()
+static TimeDataType take_timestamp()
 {
+#ifdef __linux__
     struct timespec ts;
     let result = clock_gettime(CLOCK_MONOTONIC, &ts);
     assert(result == 0);
     return ts;
+#elif _WIN32
+    LARGE_INTEGER c;
+    BOOL result = QueryPerformanceCounter(&c);
+    assert(result);
+    return c.QuadPart;
+#endif
 }
 
-static u64 ns_between(struct timespec start, struct timespec end)
+static TimeDataType frequency;
+
+u64 ns_between(TimeDataType start, TimeDataType end)
 {
+#ifdef __linux__
     let second_diff = end.tv_sec - start.tv_sec;
     let ns_diff = end.tv_nsec - start.tv_nsec;
 
     let result = second_diff * 1000000000LL + ns_diff;
     return result;
+#elif _WIN32
+    let ns = (f64)((end - start) * 1000 * 1000 * 1000) / frequency;
+    return ns;
+#endif
 }
 
 str file_read(Arena* arena, str path)
 {
-    let open_start = take_timestamp();
     let fd = os_file_open(path, (OpenFlags) { .read = 1 }, (OpenPermissions){ .read = 1 });
-    let open_end = take_timestamp();
     str result = {};
     if (fd)
     {
-        let stat_start = open_end;
         let file_size = os_file_get_size(fd);
-        let stat_end = take_timestamp();
-        let allocation_start = stat_end;
         let file_buffer = arena_allocate_bytes(arena, file_size, 1);
-        let allocation_end = take_timestamp();
-        let read_start = allocation_end;
         os_file_read(fd, (str) { file_buffer, file_size }, file_size);
-        let read_end = take_timestamp();
-        let close_start = read_end;
         os_file_close(fd);
-        let close_end = take_timestamp();
         result = (str) { file_buffer, file_size };
-
-        printf("\tOpen: %lu ns\n\tStat: %lu ns\n\tArena: %lu ns\n\tRead: %lu ns\n\tClose: %lu ns\n", ns_between(open_start, open_end), ns_between(stat_start, stat_end), ns_between(allocation_start, allocation_end), ns_between(read_start, read_end), ns_between(close_start, close_end));
     }
     return result;
+}
+
+void os_init()
+{
+#ifdef _WIN32
+    BOOL result = QueryPerformanceFrequency((LARGE_INTEGER*)&frequency);
+    assert(result);
+#else
+#endif
 }
