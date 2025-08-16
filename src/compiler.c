@@ -135,7 +135,7 @@ bool compiler_is_single_threaded()
     return is_single_threaded;
 }
 
-static char buffer[1024 * 1024 * 256];
+static char buffer[1024 * 1024 * 1024 * 2ULL];
 
 static void write_random_token(u64* out_file_i, bool is_comment)
 {
@@ -1071,7 +1071,7 @@ static void write_random_file(str path)
 {
     u64 file_i = 0;
 
-    for (u64 i = 0; i < 20000000; i += 1)
+    for (u64 i = 0; i < 300000000; i += 1)
     {
         write_random_token(&file_i, 0);
     }
@@ -1390,8 +1390,14 @@ void* thread_worker(void* arg)
     u64 result_code = 0;
     Thread* thread = &threads[thread_index];
     let thread_file_count = thread->work.length;
-    Arena* thread_arena = arena_initialize((ArenaInitialization){});
-    Arena* else_arena = arena_initialize((ArenaInitialization){});
+    Arena* thread_arena = arena_initialize((ArenaInitialization){
+        .reserved_size = GB(32),
+        .initial_size = GB(32),
+    });
+    Arena* else_arena = arena_initialize((ArenaInitialization){
+        .reserved_size = GB(12),
+        .initial_size = GB(12),
+    });
     str file_content = file_read(thread_arena, S("build/file0"));
 
     LexerError error = {};
