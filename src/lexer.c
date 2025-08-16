@@ -1,7 +1,5 @@
 #include <lexer.h>
 
-#include <time.h>
-#include <stdio.h>
 #include <immintrin.h>
 
 static bool is_space(char ch)
@@ -220,6 +218,67 @@ static u8 escape_character(u8 ch)
     }
 }
 
+static inline u32 str4(str str)
+{
+    assert(str.length <= 4);
+    assert(str.length > 0);
+
+    u32 value = 0;
+
+    value |= str.pointer[0] << 0;
+    value |= str.length >= 2 ? str.pointer[1] << 8 : 0;
+    value |= str.length >= 3 ? str.pointer[2] << 16 : 0;
+    value |= str.length >= 4 ? str.pointer[3] << 24 : 0;
+
+    return value;
+}
+
+static inline u64 str8(str str)
+{
+    assert(str.length <= 8);
+
+    u64 value = 0;
+
+    value |= str.pointer[0] << 0;
+    value |= str.length >= 2 ? str.pointer[1] << 8 : 0;
+    value |= str.length >= 3 ? str.pointer[2] << 16 : 0;
+    value |= str.length >= 4 ? str.pointer[3] << 24 : 0;
+    value |= str.length >= 5 ? (u64)str.pointer[4] << 32 : 0;
+    value |= str.length >= 6 ? (u64)str.pointer[5] << 40 : 0;
+    value |= str.length >= 7 ? (u64)str.pointer[6] << 48 : 0;
+    value |= str.length >= 8 ? (u64)str.pointer[7] << 56 : 0;
+
+    return value;
+}
+
+static inline u64 identifier_character_count(__m512i chunk)
+{
+    let a = _mm512_set1_epi8('a');
+    let z = _mm512_set1_epi8('z');
+    let A = _mm512_set1_epi8('A');
+    let Z = _mm512_set1_epi8('Z');
+    let zero = _mm512_set1_epi8('0');
+    let nine = _mm512_set1_epi8('9');
+    let underscore = _mm512_set1_epi8('_');
+
+    let cmp_a = _mm512_cmpge_epu8_mask(chunk, a);
+    let cmp_z = _mm512_cmple_epu8_mask(chunk, z);
+    let cmp_A = _mm512_cmpge_epu8_mask(chunk, A);
+    let cmp_Z = _mm512_cmple_epu8_mask(chunk, Z);
+    let cmp_zero = _mm512_cmpge_epu8_mask(chunk, zero);
+    let cmp_nine = _mm512_cmple_epu8_mask(chunk, nine);
+    let cmp_u = _mm512_cmpeq_epu8_mask(chunk, underscore);
+
+    let is_lower = _kand_mask64(cmp_a, cmp_z);
+    let is_upper = _kand_mask64(cmp_A, cmp_Z);
+    let is_decimal = _kand_mask64(cmp_zero, cmp_nine);
+    let is_identifier_mask = _kor_mask64(_kor_mask64(is_lower, is_upper), _kor_mask64(is_decimal, cmp_u));
+
+    let is_identifier_int = _cvtmask64_u64(is_identifier_mask);
+    let result = _tzcnt_u64(~is_identifier_int);
+    return result;
+}
+
 TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* error)
 {
 #if 0
@@ -382,9 +441,9 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
         let line = line_offset + 1;
         let column = start_index - line_character_offset + 1;
 
-        if ((i == file.length) | (line > UINT32_MAX) | (column > UINT32_MAX))
+        if (unlikely((i == file.length) | (line > UINT32_MAX) | (column > UINT32_MAX)))
         {
-            if (line > UINT32_MAX)
+            if (unlikely(line > UINT32_MAX))
             {
                 *error = (LexerError){
                     .id = LEXER_ERROR_ID_LINE_NUMBER_TOO_HIGH,
@@ -395,7 +454,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
                 return (TokenList) { tokens, token_count };
             }
 
-            if (column > UINT32_MAX)
+            if (unlikely(column > UINT32_MAX))
             {
                 *error = (LexerError){
                     .id = LEXER_ERROR_ID_COLUMN_NUMBER_TOO_HIGH,
@@ -409,6 +468,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
             break;
         }
 
+        let chunk = _mm512_loadu_epi8(&file.pointer[start_index]);
         let start = file.pointer[start_index];
 
         Token* token = arena_allocate(stable_arena, Token, 1);
@@ -419,45 +479,45 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
 
         if (is_identifier_start(start))
         {
-            let a = _mm512_set1_epi8('a');
-            let z = _mm512_set1_epi8('z');
-            let A = _mm512_set1_epi8('A');
-            let Z = _mm512_set1_epi8('Z');
-            let zero = _mm512_set1_epi8('0');
-            let nine = _mm512_set1_epi8('9');
-            let underscore = _mm512_set1_epi8('_');
+            let count = identifier_character_count(chunk);
+            i += count;
 
-            u64 identifier_character_count = 64;
-
-            while (identifier_character_count == 64)
+            while (unlikely(count == 64))
             {
                 let chunk = _mm512_loadu_epi8(&file.pointer[i]);
-                let cmp_a = _mm512_cmpge_epu8_mask(chunk, a);
-                let cmp_z = _mm512_cmple_epu8_mask(chunk, z);
-                let cmp_A = _mm512_cmpge_epu8_mask(chunk, A);
-                let cmp_Z = _mm512_cmple_epu8_mask(chunk, Z);
-                let cmp_zero = _mm512_cmpge_epu8_mask(chunk, zero);
-                let cmp_nine = _mm512_cmple_epu8_mask(chunk, nine);
-                let cmp_u = _mm512_cmpeq_epu8_mask(chunk, underscore);
-
-                let is_lower = _kand_mask64(cmp_a, cmp_z);
-                let is_upper = _kand_mask64(cmp_A, cmp_Z);
-                let is_decimal = _kand_mask64(cmp_zero, cmp_nine);
-                let is_identifier_mask = _kor_mask64(_kor_mask64(is_lower, is_upper), _kor_mask64(is_decimal, cmp_u));
-
-                let is_identifier_int = _cvtmask64_u64(is_identifier_mask);
-                identifier_character_count = _tzcnt_u64(~is_identifier_int);
-
-                i += identifier_character_count;
+                count = identifier_character_count(chunk);
+                i += count;
             }
 
             let candidate_identifier = str_from_ptr_start_end(file.pointer, start_index, i);
+            if (candidate_identifier.length == 0) UNREACHABLE();
 
-            let first_ch = candidate_identifier.pointer[0];
-            let is_signed = first_ch == 's';
-            let is_unsigned = first_ch == 'u';
+            if (unlikely(candidate_identifier.length > UINT16_MAX))
+            {
+                *error = (LexerError){
+                    .id = LEXER_ERROR_ID_IDENTIFIER_TOO_LONG,
+                    .offset = start_index,
+                    .line = line,
+                    .column = column,
+                };
+
+                return (TokenList){ tokens, token_count };
+            }
+
+            let candidate_str64 = chunk;
+            let candidate_str32 = _mm512_extracti32x8_epi32(candidate_str64, 0);
+            let candidate_str16 = _mm256_extracti128_si256(candidate_str32, 0);
+            let candidate_str4 = _mm_extract_epi32(candidate_str16, 0);
+
+            let ch0 = ((u8*)&candidate_str4)[0];
+            let ch1 = ((u8*)&candidate_str4)[1];
+            let ch2 = ((u8*)&candidate_str4)[2];
+            let ch3 = ((u8*)&candidate_str4)[3];
+
+            let is_signed = ch0 == 's';
+            let is_unsigned = ch1 == 'u';
             let is_plausible_primitive_type = (candidate_identifier.length > 1) & (candidate_identifier.length <= 4);
-            let is_float_type = (first_ch == 'f') & is_plausible_primitive_type;
+            let is_float_type = (ch0 == 'f') & is_plausible_primitive_type;
             let is_integer_type = (is_signed | is_unsigned) & is_plausible_primitive_type;
 
             if (is_integer_type | is_float_type)
@@ -568,6 +628,8 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
                     S("and?"),
                     S("or?"),
                 };
+
+#if SCALAR
                 TokenId candidate_ids[] = {
                     TOKEN_ID_KEYWORD_TYPE,
                     TOKEN_ID_KEYWORD_TYPE_VOID,
@@ -602,7 +664,49 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
                     TOKEN_ID_KEYWORD_OPERATOR_AND_SHORTCIRCUIT,
                     TOKEN_ID_KEYWORD_OPERATOR_OR_SHORTCIRCUIT,
                 };
+#else
+
+                TokenId candidate_ids[] = {
+                    TOKEN_ID_KEYWORD_TYPE,
+                    TOKEN_ID_KEYWORD_TYPE_VOID,
+                    TOKEN_ID_KEYWORD_TYPE_ENUM,
+                    TOKEN_ID_KEYWORD_TYPE_BITS,
+                    TOKEN_ID_KEYWORD_STATEMENT_WHEN,
+                    TOKEN_ID_KEYWORD_STATEMENT_ELSE,
+                    TOKEN_ID_KEYWORD_VALUE_ZERO,
+                    TOKEN_ID_KEYWORD_OPERATOR_AND_SHORTCIRCUIT,
+
+                    TOKEN_ID_KEYWORD_STATEMENT_UNDERSCORE,
+
+                    TOKEN_ID_KEYWORD_TYPE_FN,
+                    TOKEN_ID_KEYWORD_STATEMENT_IF,
+                    TOKEN_ID_KEYWORD_OPERATOR_OR,
+
+                    TOKEN_ID_KEYWORD_STATEMENT_FOR,
+                    TOKEN_ID_KEYWORD_OPERATOR_AND,
+                    TOKEN_ID_KEYWORD_OPERATOR_OR_SHORTCIRCUIT,
+
+                    TOKEN_ID_KEYWORD_TYPE_UNION,
+                    TOKEN_ID_KEYWORD_TYPE_ALIAS,
+                    TOKEN_ID_KEYWORD_STATEMENT_WHILE,
+                    TOKEN_ID_KEYWORD_STATEMENT_BREAK,
+
+                    TOKEN_ID_KEYWORD_TYPE_STRUCT,
+                    TOKEN_ID_KEYWORD_TYPE_VECTOR,
+                    TOKEN_ID_KEYWORD_TYPE_OPAQUE,
+                    TOKEN_ID_KEYWORD_STATEMENT_RETURN,
+                    TOKEN_ID_KEYWORD_STATEMENT_SWITCH,
+
+                    TOKEN_ID_KEYWORD_TYPE_NORETURN,
+                    TOKEN_ID_KEYWORD_STATEMENT_CONTINUE,
+
+                    TOKEN_ID_KEYWORD_VALUE_UNDEFINED,
+                    TOKEN_ID_KEYWORD_TYPE_ENUM_ARRAY,
+                    TOKEN_ID_KEYWORD_STATEMENT_UNREACHABLE,
+                };
+
                 static_assert(array_length(candidate_strings) == array_length(candidate_ids));
+#endif
 
                 u64 max_string_length = 0;
                 for (u64 i = 0; i < array_length(candidate_strings); i += 1)
@@ -611,8 +715,14 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
                     max_string_length = candidate_string.length > max_string_length ? candidate_string.length : max_string_length;
                 }
 
-                u64 search_index;
-                for (search_index = candidate_identifier.length > max_string_length ? array_length(candidate_strings) : 0; search_index < array_length(candidate_strings); search_index += 1)
+                let is_and_sc = ((ch0 == 'a') & (ch1 == 'n')) & ((ch2 == 'd') & (ch3 == '?')) & candidate_identifier.length == 3;
+                let is_or_sc = ((ch0 == 'o') & (ch1 == 'r')) & ((ch2 == '?') & (candidate_identifier.length == 2));
+                candidate_identifier.length += (is_and_sc | is_or_sc);
+
+                assert(candidate_identifier.length <= UINT16_MAX);
+                u32 search_index = candidate_identifier.length > max_string_length ? array_length(candidate_ids) : 0;
+#if SCALAR
+                for (; search_index < array_length(candidate_strings); search_index += 1)
                 {
                     str candidate_string = candidate_strings[search_index];
                     if (str_equal(candidate_identifier, candidate_string))
@@ -620,21 +730,113 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
                         break;
                     }
                 }
+#else
+                if (candidate_identifier.length <= max_string_length)
+                {
+                    // Candidate 4
 
+                    let candidates4 = _mm512_setr_epi32(
+                            // 4-bit candidates
+                            str4(S("type")),
+                            str4(S("void")),
+                            str4(S("enum")),
+                            str4(S("bits")),
+                            str4(S("when")),
+                            str4(S("else")),
+                            str4(S("zero")),
+                            str4(S("and?")),
+                            // 1-bit candidates
+                            str4(S("_")),
+                            // 2-bit candidates
+                            str4(S("fn")),
+                            str4(S("if")),
+                            str4(S("or")),
+                            // 3-bit candidates
+                            str4(S("for")),
+                            str4(S("and")),
+                            str4(S("or?")),
+                            // unre-achable start
+                            str4(S("unre"))
+                                );
+
+                    __mmask64 mov_mask4 = _cvtu64_mask64((0xf777ULL << 48) | (0x333ULL << 36) | (1ULL << 32) | 0xffffffff);
+                    let candidate4 = _mm512_set1_epi32(candidate_str4);
+                    candidate4 = _mm512_maskz_mov_epi8(mov_mask4, candidate4);
+
+                    __mmask16 candidate_mask4 = (u16)(((u32)(candidate_identifier.length == 11) << 16) - 1) & 0x8000 | (u16)(((u32)(candidate_identifier.length == 3) << 16) - 1) & 0x7000 | (((u16)(candidate_identifier.length == 2) << (9 + 3)) - 1) & 0xe00 | ((candidate_identifier.length == 1) << 8) | (((u16)(candidate_identifier.length) << 8) - 1);
+                    let is_candidate4 = _mm512_mask_cmpeq_epi32_mask(candidate_mask4, candidates4, candidate4);
+
+                    // =========================================================
+                    // Candidate 8
+                    // =========================================================
+
+                    let candidate8 = _mm512_broadcast_i32x2(candidate_str16);
+                    let candidate8_shr4 = _mm_bsrli_si128(candidate_str16, 4);
+                    let candidate8_shr8 = _mm_bsrli_si128(candidate_str16, 8);
+
+                    let candidates8_0 = _mm512_setr_epi64(
+                            // 5-bit candidates
+                            str8(S("union")),
+                            str8(S("alias")),
+                            str8(S("while")),
+                            str8(S("break")),
+                            // Split
+                            str8(S("undefine")),
+                            str8(S("d")),
+                            str8(S("enum_arr")),
+                            str8(S("ay"))
+                            );
+                    let candidate8_0_shr8_512 = _mm512_broadcast_i32x2(candidate8_shr8);
+                    let candidate8_0_second_part = _mm512_maskz_mov_epi8(_cvtu64_mask64(1ULL << 40 | 3ULL << 56), candidate8_0_shr8_512);
+                    let candidate8_0_before_masking = _mm512_mask_mov_epi64(candidate8, _cvtu32_mask8(1 << 7 | 1 << 5), candidate8_0_second_part);
+
+                    __mmask64 mov_mask8_0 = _cvtu64_mask64((3ULL << 56) | (0xffULL << 48) | (1ULL << 40) | (0xffULL << 32) | 0x1f1f1f1f);
+                    let candidate_8_0 = _mm512_maskz_mov_epi8(mov_mask8_0, candidate8_0_before_masking);
+                    __mmask8 candidate_mask8_0 = ((u8)(((candidate_identifier.length == 10) << 8) - 1) & 0xc0) | ((((candidate_identifier.length == 9) << 6) - 1) & 0x30) | (((candidate_identifier.length == 5) << 4) - 1);
+                    let is_candidate8_0 = _mm512_mask_cmpeq_epi64_mask(candidate_mask8_0, candidates8_0, candidate_8_0);
+
+                    let candidates8_1 = _mm512_setr_epi64(
+                            // 6-bit candidates
+                            str8(S("struct")),
+                            str8(S("vector")),
+                            str8(S("opaque")),
+                            str8(S("return")),
+                            str8(S("switch")),
+                            // 8-bit candidates
+                            str8(S("noreturn")),
+                            str8(S("continue")),
+                            // unreachable second half
+                            str8(S("achable"))
+                            );
+
+                    let candidate8_1_shr4_512 = _mm512_broadcast_i32x2(candidate8_shr4);
+                    let candidate8_1_second_part = _mm512_maskz_mov_epi8(_cvtu64_mask64(0x7fULL << 56), candidate8_1_shr4_512);
+                    let candidate8_1_before_masking = _mm512_mask_mov_epi64(candidate8, _cvtu32_mask8(1 << 7), candidate8_1_second_part);
+
+                    __mmask64 mov_mask8_1 = _cvtu64_mask64(0x7fULL << 56 | (0xffffULL << 40) | 0x3f3f3f3f3f);
+                    let candidate_8_1 = _mm512_maskz_mov_epi8(mov_mask8_1, candidate8_1_before_masking);
+                    __mmask8 candidate_mask8_1 = ((u8)(((candidate_identifier.length == 11) << 8) - 1) & 0xc0) | ((((candidate_identifier.length == 8) << 7) - 1) & 0x60) | (((candidate_identifier.length == 6) << 5) - 1);
+                    let is_candidate8_1 = _mm512_mask_cmpeq_epi64_mask(candidate_mask8_1, candidates8_1, candidate_8_1);
+
+                    let is_candidate4_int = _cvtmask16_u32(is_candidate4);
+                    let is_candidate8_0_int = _cvtmask8_u32(is_candidate8_0);
+                    let is_candidate8_1_int = _cvtmask8_u32(is_candidate8_1);
+
+                    bool is_unreachable = ((is_candidate4_int & (1 << 15)) != 0) & ((is_candidate8_1_int & (1 << 7)) != 0);
+                    bool is_undefined = ((is_candidate8_0_int & (1 << 4)) != 0) & ((is_candidate8_0_int & (1 << 5)) != 0);
+                    bool is_enum_array = ((is_candidate8_0_int & (1 << 6)) != 0) & ((is_candidate8_0_int & (1 << 7)) != 0);
+
+                    let is_candidate_mask = (is_candidate4_int & 0x7fff) | ((is_candidate8_0_int & 0xf) << 15) | ((is_candidate8_1_int & 0x7f) << 19) | ((u32)is_undefined << 26) | ((u32)is_enum_array << 27) | ((u32)is_unreachable << 28);
+                    search_index = _tzcnt_u32(is_candidate_mask);
+                }
+#endif
                 if (search_index < array_length(candidate_strings))
                 {
                     let candidate_id = candidate_ids[search_index];
-                    let next_ch = file.pointer[i];
-                    let is_question = next_ch == '?';
-                    let is_and_or_operators = (candidate_id == TOKEN_ID_KEYWORD_OPERATOR_AND) | (candidate_id == TOKEN_ID_KEYWORD_OPERATOR_OR);
-                    i += is_and_or_operators;
-                    search_index += 2 * (u64)is_and_or_operators;
-                    candidate_id = candidate_ids[search_index];
                     token->id = candidate_id;
                 }
                 else
                 {
-                    assert(search_index == array_length(candidate_strings));
                     token->content = (TokenContent){
                         .string = candidate_identifier,
                     };
