@@ -965,6 +965,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
 
             u64 escape_character_count = 0;
 
+#if 0
             while (i < l)
             {
                 let ch = p[i];
@@ -974,9 +975,38 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
                     break;
                 }
 
-                escape_character_count += ch == '\\';
-                i += 1;
+                let is_escape = ch == '\\';
+                escape_character_count += is_escape;
+
+                i += 1 + is_escape;
             }
+#else
+
+            // Taken from https://lemire.me/blog/2022/09/14/escaping-strings-faster-with-avx-512/
+            let escape_ch = _mm512_set1_epi8('\\');
+            let double_quote = _mm512_set1_epi8('"');
+
+            u64 string_character_count = 64;
+
+            while (string_character_count == 64)
+            {
+                let chunk = _mm512_loadu_epi8(&p[i]);
+                let is_escape_character = _mm512_cmpeq_epu8_mask(chunk, escape_ch);
+                let is_double_quote = _mm512_cmpeq_epu8_mask(chunk, double_quote);
+
+                if (_mm_popcnt_u64(_cvtmask64_u64(is_escape_character)))
+                {
+                    trap();
+                }
+                else
+                {
+                    let mask = _cvtmask64_u64(is_double_quote);
+                    string_character_count = _tzcnt_u64(_cvtmask64_u64(mask));
+                    i += string_character_count;
+                    trap();
+                }
+            }
+#endif
 
             let is_properly_finished = p[i] == '"';
             if (!is_properly_finished)
