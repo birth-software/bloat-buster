@@ -222,6 +222,7 @@ static void write_random_token(u64* out_file_i, bool is_comment)
             }
         break; case TOKEN_ID_STRING_LITERAL:
         {
+            assert(buffer[file_i - 1] != '\\');
             buffer[file_i] = '"';
             file_i += 1;
 
