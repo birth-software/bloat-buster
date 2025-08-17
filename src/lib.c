@@ -401,7 +401,7 @@ str arena_join_string(Arena* arena, StringSlice strings)
     return str_from_ptr_len(pointer, size);
 }
 
-static TimeDataType take_timestamp()
+TimeDataType take_timestamp()
 {
 #ifdef __linux__
     struct timespec ts;

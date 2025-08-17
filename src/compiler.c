@@ -1071,7 +1071,7 @@ static void write_random_file(str path)
 {
     u64 file_i = 0;
 
-    for (u64 i = 0; i < 300000000; i += 1)
+    for (u64 i = 0; i < 50000000; i += 1)
     {
         write_random_token(&file_i, 0);
     }
@@ -1398,7 +1398,13 @@ void* thread_worker(void* arg)
         .reserved_size = GB(12),
         .initial_size = GB(12),
     });
-    str file_content = file_read(thread_arena, S("build/file0"));
+    str file_content = file_read(thread_arena,
+#if 1
+            S("build/file0")
+#else
+            S("tests/tests.bbb")
+#endif
+        );
 
     LexerError error = {};
     let tl = lex(thread_arena, else_arena, file_content.pointer, file_content.length, &error);

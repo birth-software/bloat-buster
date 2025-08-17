@@ -1,11 +1,3 @@
-require: fn (ok: u1) void = 
-{
-    if (!ok)
-    {
-        @trap();
-    }
-}
-
 return_constant: fn () s32 = // This is a comment
 // This is a comment
 { // This is a comment
@@ -13,6 +5,14 @@ return_constant: fn () s32 = // This is a comment
     return 0; // This is a comment
 }// This is a comment
 // This is a comment
+
+require: fn (ok: u1) void = 
+{
+    if (!ok)
+    {
+        @trap();
+    }
+}
 
 constant_add: fn () s32 =
 {

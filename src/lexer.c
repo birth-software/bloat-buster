@@ -1,6 +1,7 @@
 #include <lexer.h>
 
 #include <immintrin.h>
+#include <stdio.h>
 
 static bool is_space(char ch)
 {
@@ -109,11 +110,17 @@ static u128 parse_integer_decimal_assume_valid(str string)
     return value;
 }
 
-static u128 parse_hexadecimal(const char* restrict p, u64* offset_pointer)
+STRUCT(IntegerParsing)
 {
-    u128 value = 0;
+    u64 value;
+    u64 i;
+};
 
-    let i = *offset_pointer;
+
+static IntegerParsing parse_hexadecimal(const char* restrict p)
+{
+    u64 value = 0;
+    u64 i = 0;
 
     while (1)
     {
@@ -128,16 +135,13 @@ static u128 parse_hexadecimal(const char* restrict p, u64* offset_pointer)
         value = accumulate_hexadecimal(value, ch);
     }
 
-    *offset_pointer = i;
-
-    return value;
+    return (IntegerParsing){ .value = value, .i = i };
 }
 
-static u128 parse_decimal(const char* restrict p, u64* offset_pointer)
+static IntegerParsing parse_decimal(const char* restrict p)
 {
-    u128 value = 0;
-
-    let i = *offset_pointer;
+    u64 value = 0;
+    u64 i = 0;
 
     while (1)
     {
@@ -152,16 +156,13 @@ static u128 parse_decimal(const char* restrict p, u64* offset_pointer)
         value = accumulate_decimal(value, ch);
     }
 
-    *offset_pointer = i;
-
-    return value;
+    return (IntegerParsing){ .value = value, .i = i };
 }
 
-static u128 parse_octal(const char* restrict p, u64* offset_pointer)
+static IntegerParsing parse_octal(const char* restrict p)
 {
-    u128 value = 0;
-
-    let i = *offset_pointer;
+    u64 value = 0;
+    u64 i = 0;
 
     while (1)
     {
@@ -176,20 +177,17 @@ static u128 parse_octal(const char* restrict p, u64* offset_pointer)
         value = accumulate_octal(value, ch);
     }
 
-    *offset_pointer = i;
-
-    return value;
+    return (IntegerParsing) { .value = value, .i = i };
 }
 
-static u128 parse_binary(str content, u64* offset_pointer)
+static IntegerParsing parse_binary(const char* restrict p)
 {
-    u128 value = 0;
-
-    let i = *offset_pointer;
+    u64 value = 0;
+    u64 i = 0;
 
     while (1)
     {
-        let ch = content.pointer[i];
+        let ch = p[i];
 
         if (!is_binary(ch))
         {
@@ -200,16 +198,8 @@ static u128 parse_binary(str content, u64* offset_pointer)
         value = accumulate_binary(value, ch);
     }
 
-    *offset_pointer = i;
-
-    return value;
+    return (IntegerParsing){ .value = value, .i = i };
 }
-
-STRUCT(IntegerParsing)
-{
-    u64 value;
-    u64 i;
-};
 
 static inline IntegerParsing parse_binary_vectorized(const char* restrict f)
 {
@@ -315,7 +305,7 @@ static inline u64 identifier_character_count(__m512i chunk)
 
 TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u64 l, LexerError* error)
 {
-#define MEASURE_LEXING 0
+#define MEASURE_LEXING 1
 #if MEASURE_LEXING
     let lexing_start = take_timestamp();
 #endif
@@ -441,9 +431,9 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
                     {
                         let iteration_offset = i;
                         bool space = 1;
-                        while ((i < file.length) & space)
+                        while ((i < l) & space)
                         {
-                            let ch = file.pointer[i];
+                            let ch = p[i];
                             let is_line_feed = ch == '\n';
                             space = is_space(ch);
                             i += space;
@@ -451,11 +441,11 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
                             line_offset += is_line_feed;
                             line_character_offset = is_line_feed ? i : line_character_offset;
                         }
-                        let is_comment = (i + 1 < file.length) & (file.pointer[i] == '/') & (file.pointer[i + 1] == '/');
+                        let is_comment = (i + 1 < l) & (p[i] == '/') & (p[i + 1] == '/');
 
                         if (is_comment)
                         {
-                            while ((i < file.length) & (file.pointer[i] != '\n'))
+                            while ((i < l) & (p[i] != '\n'))
                             {
                                 i += 1;
                             }
@@ -509,11 +499,13 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
             break;
         }
 
+
         let chunk64 = _mm512_loadu_epi8(&p[start_index]);
         let chunk32 = _mm512_extracti32x8_epi32(chunk64, 0);
         let chunk16 = _mm256_extracti128_si256(chunk32, 0);
         let chunk4 = _mm_extract_epi32(chunk16, 0);
 
+        static_assert(sizeof(chunk4) == 4);
         let ch0 = ((u8*)&chunk4)[0];
         let ch1 = ((u8*)&chunk4)[1];
         let ch2 = ((u8*)&chunk4)[2];
@@ -551,15 +543,17 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
                 return (TokenList){ tokens, token_count };
             }
 
+            let identifier_length = (u16)candidate_identifier.length;
+
             let is_signed = ch0 == 's';
-            let is_unsigned = ch1 == 'u';
-            let is_plausible_primitive_type = (candidate_identifier.length > 1) & (candidate_identifier.length <= 4);
+            let is_unsigned = ch0 == 'u';
+            let is_plausible_primitive_type = (identifier_length > 1) & (identifier_length <= 4);
             let is_float_type = (ch0 == 'f') & is_plausible_primitive_type;
             let is_integer_type = (is_signed | is_unsigned) & is_plausible_primitive_type;
 
             let is_decimal1 = is_decimal(ch1);
-            let is_decimal2 = candidate_identifier.length > 2 ? is_decimal(ch1) : 0;
-            let is_decimal3 = candidate_identifier.length > 3 ? is_decimal(ch1) : 0;
+            let is_decimal2 = identifier_length > 2 ? is_decimal(ch1) : 1;
+            let is_decimal3 = identifier_length > 3 ? is_decimal(ch1) : 1;
 
             is_integer_type = (is_integer_type & is_decimal1) & (is_decimal2 & is_decimal3);
             is_float_type = (is_float_type & is_decimal1) & (is_decimal2 & is_decimal3);
@@ -912,24 +906,29 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
             u128 value = 0;
             let before_i = i;
 
+            IntegerParsing r;
+
+            let number_start = p + i;
+
             switch (format)
             {
-                break; case INTEGER_FORMAT_HEXADECIMAL: value = parse_hexadecimal(p, &i);
-                break; case INTEGER_FORMAT_DECIMAL: value = parse_decimal(p, &i);
-                break; case INTEGER_FORMAT_OCTAL: value = parse_octal(p, &i);
+                break; case INTEGER_FORMAT_HEXADECIMAL: r = parse_hexadecimal(number_start);
+                break; case INTEGER_FORMAT_DECIMAL: r = parse_decimal(number_start);
+                break; case INTEGER_FORMAT_OCTAL: r = parse_octal(number_start);
 #if SCALAR
-                break; case INTEGER_FORMAT_BINARY: value = parse_binary(file, &i);
+                break; case INTEGER_FORMAT_BINARY: r = parse_binary(number_start);
 #else
                 break; case INTEGER_FORMAT_BINARY:
                 {
-                    let r = parse_binary_vectorized(p + i);
-                    value = r.value;
-                    i += r.i;
+                    r = parse_binary_vectorized(number_start);
                 }
 #endif
                 break; default:
                     UNREACHABLE();
             }
+
+            value = r.value;
+            i += r.i;
 
             if (unlikely(i == before_i))
             {
@@ -940,7 +939,9 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
             {
                 i += 1;
 
-                let mantissa = parse_decimal(p + i, &i);
+                let r = parse_decimal(p + i);
+                let mantissa = r.value;
+                i += r.i;
 
                 let float_string_literal = str_from_ptr_start_end((char*)p, start_index, i);
                 token.content = (TokenContent) {
@@ -1043,17 +1044,16 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
         }
         else if (ch0 == '\'')
         {
-            i += 1;
-
-            u8 ch = ch1;
-            if (ch == '\\')
+            u8 ch;
+            let is_escape_character = ch1 == '\\';
+            if (is_escape_character)
             {
-                i += 1;
                 ch = escape_character(ch2);
             }
             else
             {
-                if (ch == '\'')
+                ch = ch1;
+                if (ch1 == '\'')
                 {
                     *error = (LexerError){
                         .id = LEXER_ERROR_ID_CHARACTER_LITERAL_EMPTY,
@@ -1065,9 +1065,10 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
                 }
             }
 
-            i += 1;
+            i += 3 + is_escape_character;
+            let terminating_character = is_escape_character ? ch3 : ch2;
 
-            if (p[i] != '\'')
+            if (terminating_character != '\'')
             {
                 *error = (LexerError){
                     .id = LEXER_ERROR_ID_CHARACTER_LITERAL_BADLY_TERMINATED,
@@ -1077,8 +1078,6 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
                 };
                 return (TokenList) { tokens, token_count };
             }
-
-            i += 1;
 
             token.content = (TokenContent) {
                 .integer = ch,
@@ -1417,7 +1416,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
         *new_token = token;
 #else
         static_assert(sizeof(Token) == 32);
-        _mm256_storeu_epi8(new_token, _mm256_loadu_epi8(new_token));
+        _mm256_storeu_epi8(new_token, _mm256_loadu_epi8(&token));
 #endif
         token_count += 1;
     }
@@ -1426,7 +1425,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
     let lexing_end = take_timestamp();
 
     let lexing_ns = ns_between(lexing_start, lexing_end);
-    let gbytes_per_s = (f64)(file.length * 1000000000ULL) / (lexing_ns * 1024 * 1024 * 1024);
+    let gbytes_per_s = (f64)(l * 1000000000ULL) / (lexing_ns * 1024 * 1024 * 1024);
     let lines = line_offset + 1;
     let millions_lines_s = (f64)(lines * 1000) / lexing_ns;
     printf("Lexing: %lu ns. %f GB/s. %f MLOCs/s\n", lexing_ns, gbytes_per_s, millions_lines_s);

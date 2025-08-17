@@ -6,6 +6,7 @@
 #define STRUCT(n) typedef struct n n; struct n
 #define UNION(n) typedef union n n; union n
 #define trap() __builtin_trap()
+#define breakpoint() __builtin_debugtrap()
 #define likely(x) __builtin_expect(x, 1)
 #define unlikely(x) __builtin_expect(x, 0)
 
@@ -200,5 +201,8 @@ void os_file_close(FileDescriptor* file_descriptor);
 #define arena_allocate(arena, T, count) (T*) arena_allocate_bytes(arena, sizeof(T) * count, alignof(T))
 
 str file_read(Arena* arena, str path);
+
+TimeDataType take_timestamp();
+u64 ns_between(TimeDataType start, TimeDataType end);
 
 [[noreturn]] void fail();
