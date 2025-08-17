@@ -171,4 +171,4 @@ STRUCT(LexerError)
     LexerErrorId id;
 };
 
-TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* error_list);
+TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u64 l, LexerError* error_list);

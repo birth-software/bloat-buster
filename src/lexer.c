@@ -109,7 +109,7 @@ static u128 parse_integer_decimal_assume_valid(str string)
     return value;
 }
 
-static u128 parse_hexadecimal(str content, u64* offset_pointer)
+static u128 parse_hexadecimal(const char* restrict p, u64* offset_pointer)
 {
     u128 value = 0;
 
@@ -117,7 +117,7 @@ static u128 parse_hexadecimal(str content, u64* offset_pointer)
 
     while (1)
     {
-        let ch = content.pointer[i];
+        let ch = p[i];
 
         if (!is_hexadecimal(ch))
         {
@@ -133,7 +133,7 @@ static u128 parse_hexadecimal(str content, u64* offset_pointer)
     return value;
 }
 
-static u128 parse_decimal(str content, u64* offset_pointer)
+static u128 parse_decimal(const char* restrict p, u64* offset_pointer)
 {
     u128 value = 0;
 
@@ -141,7 +141,7 @@ static u128 parse_decimal(str content, u64* offset_pointer)
 
     while (1)
     {
-        let ch = content.pointer[i];
+        let ch = p[i];
 
         if (!is_decimal(ch))
         {
@@ -157,7 +157,7 @@ static u128 parse_decimal(str content, u64* offset_pointer)
     return value;
 }
 
-static u128 parse_octal(str content, u64* offset_pointer)
+static u128 parse_octal(const char* restrict p, u64* offset_pointer)
 {
     u128 value = 0;
 
@@ -165,7 +165,7 @@ static u128 parse_octal(str content, u64* offset_pointer)
 
     while (1)
     {
-        let ch = content.pointer[i];
+        let ch = p[i];
 
         if (!is_octal(ch))
         {
@@ -313,9 +313,10 @@ static inline u64 identifier_character_count(__m512i chunk)
     return result;
 }
 
-TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* error)
+TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u64 l, LexerError* error)
 {
-#if 0
+#define MEASURE_LEXING 0
+#if MEASURE_LEXING
     let lexing_start = take_timestamp();
 #endif
     Token* tokens = (Token*)((u8*)stable_arena + align_forward(stable_arena->position, alignof(Token)));
@@ -328,19 +329,25 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
     {
         // Skipping whitespace
         {
-            char first_ch = file.pointer[i];
-            char second_ch = file.pointer[i + 1];
-            char third_ch = file.pointer[i + 2];
+            let chunk64 = _mm512_loadu_epi8(&p[i]);
+            let chunk32 = _mm512_extracti32x8_epi32(chunk64, 0);
+            let chunk16 = _mm256_extracti128_si256(chunk32, 0);
+            let chunk4 = _mm_extract_epi32(chunk16, 0);
 
-            if (is_space(first_ch) | ((first_ch == '/') & (second_ch == '/')))
+            let ch0 = ((u8*)&chunk4)[0];
+            let ch1 = ((u8*)&chunk4)[1];
+            let ch2 = ((u8*)&chunk4)[2];
+            let ch3 = ((u8*)&chunk4)[3];
+
+            if (is_space(ch0) | ((ch0 == '/') & (ch1 == '/')))
             {
 #define OPTIMIZE_FOR_COMMON_CASE 1
 #if OPTIMIZE_FOR_COMMON_CASE
-                if (!is_space(second_ch) & !((second_ch == '/') & (third_ch == '/')))
+                if (!is_space(ch1) & !((ch1 == '/') & (ch2 == '/')))
                 {
                     i += 1;
-                    line_offset += first_ch == '\n';
-                    line_character_offset = first_ch == '\n' ? i : line_character_offset;
+                    line_offset += ch0 == '\n';
+                    line_character_offset = ch0 == '\n' ? i : line_character_offset;
                 }
                 else
 #endif
@@ -365,8 +372,8 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
                     while (skipped_ws_count)
                     {
                         let ws_start = i;
-                        let chunk = _mm512_loadu_epi8(&file.pointer[i]);
-                        u64 left = file.length - i;
+                        let chunk = _mm512_loadu_epi8(&p[i]);
+                        u64 left = l - i;
                         u64 clamped_int_mask = left < 64 ? (1 << left) - 1 : UINT64_MAX;
                         u64 clamped_slash_int_mask = 0b11 & (clamped_int_mask);
                         let clamped_mask = _cvtu64_mask64(clamped_int_mask);
@@ -392,7 +399,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
                         line_offset += traditional_line_counts;
                         line_character_offset = traditional_line_counts ? (original_i + character_after_line_offset) : line_character_offset;
 
-                        let is_first_slash = _mm512_mask_cmpeq_epu8_mask(_cvtu64_mask64(3), _mm512_loadu_epi8(&file.pointer[i]), slash);
+                        let is_first_slash = _mm512_mask_cmpeq_epu8_mask(_cvtu64_mask64(3), _mm512_loadu_epi8(&p[i]), slash);
                         
                         let is_comment_int = _cvtmask64_u64(is_first_slash);
                         assert((is_comment_int & 3) == is_comment_int);
@@ -402,7 +409,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
                         u64 not_line_count = (u64)is_next_comment << 6;
                         while (not_line_count == 64)
                         {
-                            let chunk = _mm512_loadu_epi8(&file.pointer[offset]);
+                            let chunk = _mm512_loadu_epi8(&p[offset]);
                             let is_line_feed = _mm512_cmpeq_epu8_mask(chunk, line_feed);
                             let is_line_feed_int = _cvtmask64_u64(is_line_feed);
                             let advance = _tzcnt_u64(is_line_feed_int);
@@ -475,7 +482,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
         let line = line_offset + 1;
         let column = start_index - line_character_offset + 1;
 
-        if (unlikely((i == file.length) | (line > UINT32_MAX) | (column > UINT32_MAX)))
+        if (unlikely((unlikely(i == l)) | unlikely(line > UINT32_MAX) | unlikely(column > UINT32_MAX)))
         {
             if (unlikely(line > UINT32_MAX))
             {
@@ -502,27 +509,34 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
             break;
         }
 
-        let chunk = _mm512_loadu_epi8(&file.pointer[start_index]);
-        let start = file.pointer[start_index];
+        let chunk64 = _mm512_loadu_epi8(&p[start_index]);
+        let chunk32 = _mm512_extracti32x8_epi32(chunk64, 0);
+        let chunk16 = _mm256_extracti128_si256(chunk32, 0);
+        let chunk4 = _mm_extract_epi32(chunk16, 0);
+
+        let ch0 = ((u8*)&chunk4)[0];
+        let ch1 = ((u8*)&chunk4)[1];
+        let ch2 = ((u8*)&chunk4)[2];
+        let ch3 = ((u8*)&chunk4)[3];
 
         Token* new_token = arena_allocate(stable_arena, Token, 1);
         Token token = {};
         token.line = line;
         token.column = column;
 
-        if (is_identifier_start(start))
+        if (is_identifier_start(ch0))
         {
-            let count = identifier_character_count(chunk);
+            let count = identifier_character_count(chunk64);
             i += count;
 
             while (unlikely(count == 64))
             {
-                let chunk = _mm512_loadu_epi8(&file.pointer[i]);
+                let chunk = _mm512_loadu_epi8(&p[i]);
                 count = identifier_character_count(chunk);
                 i += count;
             }
 
-            let candidate_identifier = str_from_ptr_start_end(file.pointer, start_index, i);
+            let candidate_identifier = str_from_ptr_start_end((char*)p, start_index, i);
             if (candidate_identifier.length == 0) UNREACHABLE();
 
             if (unlikely(candidate_identifier.length > UINT16_MAX))
@@ -536,16 +550,6 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
 
                 return (TokenList){ tokens, token_count };
             }
-
-            let candidate_str64 = chunk;
-            let candidate_str32 = _mm512_extracti32x8_epi32(candidate_str64, 0);
-            let candidate_str16 = _mm256_extracti128_si256(candidate_str32, 0);
-            let candidate_str4 = _mm_extract_epi32(candidate_str16, 0);
-
-            let ch0 = ((u8*)&candidate_str4)[0];
-            let ch1 = ((u8*)&candidate_str4)[1];
-            let ch2 = ((u8*)&candidate_str4)[2];
-            let ch3 = ((u8*)&candidate_str4)[3];
 
             let is_signed = ch0 == 's';
             let is_unsigned = ch1 == 'u';
@@ -786,8 +790,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
                                 );
 
                     __mmask64 mov_mask4 = _cvtu64_mask64((0xf777ULL << 48) | (0x333ULL << 36) | (1ULL << 32) | 0xffffffff);
-                    let candidate4 = _mm512_set1_epi32(candidate_str4);
-                    candidate4 = _mm512_maskz_mov_epi8(mov_mask4, candidate4);
+                    let candidate4 = _mm512_maskz_mov_epi8(mov_mask4, _mm512_set1_epi32(chunk4));
 
                     __mmask16 candidate_mask4 = (u16)(((u32)(candidate_identifier.length == 11) << 16) - 1) & 0x8000 | (u16)(((u32)(candidate_identifier.length == 3) << 16) - 1) & 0x7000 | (((u16)(candidate_identifier.length == 2) << (9 + 3)) - 1) & 0xe00 | ((candidate_identifier.length == 1) << 8) | (((u16)(candidate_identifier.length) << 8) - 1);
                     let is_candidate4 = _mm512_mask_cmpeq_epi32_mask(candidate_mask4, candidates4, candidate4);
@@ -796,9 +799,9 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
                     // Candidate 8
                     // =========================================================
 
-                    let candidate8 = _mm512_broadcast_i32x2(candidate_str16);
-                    let candidate8_shr4 = _mm_bsrli_si128(candidate_str16, 4);
-                    let candidate8_shr8 = _mm_bsrli_si128(candidate_str16, 8);
+                    let candidate8 = _mm512_broadcast_i32x2(chunk16);
+                    let candidate8_shr4 = _mm_bsrli_si128(chunk16, 4);
+                    let candidate8_shr8 = _mm_bsrli_si128(chunk16, 8);
 
                     let candidates8_0 = _mm512_setr_epi64(
                             // 5-bit candidates
@@ -870,12 +873,12 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
                 }
             }
         }
-        else if (is_decimal(start))
+        else if (is_decimal(ch0))
         {
-            let is_first_zero = start == '0';
+            let is_first_zero = ch0 == '0';
             i += 1;
 
-            let prefix_ch = file.pointer[i];
+            let prefix_ch = ch0;
             let is_valid_prefix_ch = ((prefix_ch == 'x') | (prefix_ch == 'd')) | ((prefix_ch == 'o') | (prefix_ch == 'b'));
             let is_valid_prefix = is_first_zero & is_valid_prefix_ch;
 
@@ -911,15 +914,15 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
 
             switch (format)
             {
-                break; case INTEGER_FORMAT_HEXADECIMAL: value = parse_hexadecimal(file, &i);
-                break; case INTEGER_FORMAT_DECIMAL: value = parse_decimal(file, &i);
-                break; case INTEGER_FORMAT_OCTAL: value = parse_octal(file, &i);
+                break; case INTEGER_FORMAT_HEXADECIMAL: value = parse_hexadecimal(p, &i);
+                break; case INTEGER_FORMAT_DECIMAL: value = parse_decimal(p, &i);
+                break; case INTEGER_FORMAT_OCTAL: value = parse_octal(p, &i);
 #if SCALAR
                 break; case INTEGER_FORMAT_BINARY: value = parse_binary(file, &i);
 #else
                 break; case INTEGER_FORMAT_BINARY:
                 {
-                    let r = parse_binary_vectorized(file.pointer + i);
+                    let r = parse_binary_vectorized(p + i);
                     value = r.value;
                     i += r.i;
                 }
@@ -933,13 +936,13 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
                 trap();
             }
 
-            if (inferred_decimal & ((file.pointer[i] == '.') & (file.pointer[i + 1] != '.')))
+            if (inferred_decimal & ((p[i] == '.') & (p[i + 1] != '.')))
             {
                 i += 1;
 
-                let mantissa = parse_decimal(file, &i);
+                let mantissa = parse_decimal(p + i, &i);
 
-                let float_string_literal = str_slice(file, start_index, i);
+                let float_string_literal = str_from_ptr_start_end((char*)p, start_index, i);
                 token.content = (TokenContent) {
                     .string = float_string_literal,
                 };
@@ -953,7 +956,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
                 token.id = TOKEN_ID_INTEGER;
             }
         }
-        else if (start == '"')
+        else if (ch0 == '"')
         {
             i += 1;
 
@@ -961,9 +964,9 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
 
             u64 escape_character_count = 0;
 
-            while (i < file.length)
+            while (i < l)
             {
-                let ch = file.pointer[i];
+                let ch = p[i];
 
                 if (ch == '"')
                 {
@@ -974,7 +977,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
                 i += 1;
             }
 
-            let is_properly_finished = file.pointer[i] == '"';
+            let is_properly_finished = p[i] == '"';
             if (!is_properly_finished)
             {
                 *error = (LexerError){
@@ -991,24 +994,24 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
 
             let length = string_literal_end - start_index - escape_character_count;
             let pointer = arena_allocate_bytes(else_arena, length, 1);
-            let original_string_bytes = str_slice(file, string_literal_start, string_literal_end);
+            let original_string_bytes = str_from_ptr_start_end((char*)p, string_literal_start, string_literal_end);
             let string_literal = str_from_ptr_len(pointer, length);
 
             if (escape_character_count != 0)
             {
                 assert(original_string_bytes.length < string_literal.length);
 
-                let source_i = start;
+                let source_i = start_index;
                 u64 destination_i = 0;
 
                 while (source_i < string_literal_end)
                 {
-                    let ch = file.pointer[source_i];
+                    let ch = p[source_i];
 
                     if (ch == '\\')
                     {
                         source_i += 1;
-                        ch = file.pointer[source_i];
+                        ch = p[source_i];
                         string_literal.pointer[destination_i] = escape_character(ch);
                         if (!ch)
                         {
@@ -1038,15 +1041,15 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
             };
             token.id = TOKEN_ID_STRING_LITERAL;
         }
-        else if (start == '\'')
+        else if (ch0 == '\'')
         {
             i += 1;
 
-            u8 ch = file.pointer[i];
+            u8 ch = ch1;
             if (ch == '\\')
             {
                 i += 1;
-                ch = escape_character(file.pointer[i]);
+                ch = escape_character(ch2);
             }
             else
             {
@@ -1064,7 +1067,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
 
             i += 1;
 
-            if (file.pointer[i] != '\'')
+            if (p[i] != '\'')
             {
                 *error = (LexerError){
                     .id = LEXER_ERROR_ID_CHARACTER_LITERAL_BADLY_TERMINATED,
@@ -1084,17 +1087,14 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
         }
         else
         {
-            if (start == '=')
+            if (ch0 == '=')
             {
                 i += 1;
 
-                let ch = file.pointer[i];
+                let is_compare_equal = ch1 == '=';
+                let is_switch_token = ch1 == '>';
 
-                let is_compare_equal = ch == '=';
-                let is_switch_token = ch == '>';
-
-                i += is_compare_equal;
-                i += is_switch_token;
+                i += (is_compare_equal | is_switch_token);
 
                 TokenId id;
 
@@ -1113,27 +1113,21 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
 
                 token.id = id;
             }
-            else if (start == '!')
+            else if (ch0 == '!')
             {
                 i += 1;
 
-                let ch = file.pointer[i];
-
-                let is_compare_not_equal = ch == '=';
+                let is_compare_not_equal = ch1 == '=';
                 i += is_compare_not_equal;
 
                 token.id = is_compare_not_equal ? TOKEN_ID_COMPARE_NOT_EQUAL : TOKEN_ID_EXCLAMATION_DOWN;
             }
-            else if (start == '<')
+            else if (ch0 == '<')
             {
-                let ch2 = file.pointer[i + 1];
-
                 TokenId id;
-                if (ch2 == '<')
+                if (ch1 == '<')
                 {
-                    let ch3 = file.pointer[i + 2];
-
-                    if (ch3 == '=')
+                    if (ch2 == '=')
                     {
                         id = TOKEN_ID_SHIFT_LEFT_ASSIGN;
                         i += 3;
@@ -1144,7 +1138,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
                         i += 2;
                     }
                 }
-                else if (ch2 == '=')
+                else if (ch1 == '=')
                 {
                     id = TOKEN_ID_COMPARE_LESS_EQUAL;
                     i += 2;
@@ -1157,16 +1151,12 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
 
                 token.id = id;
             }
-            else if (start == '>')
+            else if (ch0 == '>')
             {
-                let ch2 = file.pointer[i + 1];
-
                 TokenId id;
-                if (ch2 == '>')
+                if (ch1 == '>')
                 {
-                    let ch3 = file.pointer[i + 2];
-
-                    if (ch3 == '=')
+                    if (ch2 == '=')
                     {
                         id = TOKEN_ID_SHIFT_RIGHT_ASSIGN;
                         i += 3;
@@ -1177,7 +1167,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
                         i += 2;
                     }
                 }
-                else if (ch2 == '=')
+                else if (ch1 == '=')
                 {
                     id = TOKEN_ID_COMPARE_GREATER_EQUAL;
                     i += 2;
@@ -1190,122 +1180,111 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
 
                 token.id = id;
             }
-            else if (start == '+')
+            else if (ch0 == '+')
             {
                 i += 1;
 
-                let ch = file.pointer[i];
-                let is_assign = ch == '=';
+                let is_assign = ch1 == '=';
 
                 i += is_assign;
 
                 token.id = is_assign ? TOKEN_ID_ADD_ASSIGN : TOKEN_ID_PLUS;
             }
-            else if (start == '-')
+            else if (ch0 == '-')
             {
                 i += 1;
 
-                let ch = file.pointer[i];
-                let is_assign = ch == '=';
+                let is_assign = ch1 == '=';
 
                 i += is_assign;
 
                 token.id = is_assign ? TOKEN_ID_SUB_ASSIGN : TOKEN_ID_DASH;
             }
-            else if (start == '*')
+            else if (ch0 == '*')
             {
                 i += 1;
 
-                let ch = file.pointer[i];
-                let is_assign = ch == '=';
+                let is_assign = ch1 == '=';
 
                 i += is_assign;
 
                 token.id = is_assign ? TOKEN_ID_MUL_ASSIGN : TOKEN_ID_ASTERISK;
             }
-            else if (start == '/')
+            else if (ch0 == '/')
             {
                 i += 1;
 
-                let ch = file.pointer[i];
-                let is_assign = ch == '=';
+                let is_assign = ch1 == '=';
 
                 i += is_assign;
 
                 token.id = is_assign ? TOKEN_ID_DIV_ASSIGN : TOKEN_ID_FORWARD_SLASH;
             }
-            else if (start == '%')
+            else if (ch0 == '%')
             {
                 i += 1;
 
-                let ch = file.pointer[i];
-                let is_assign = ch == '=';
+                let is_assign = ch1 == '=';
 
                 i += is_assign;
 
                 token.id = is_assign ? TOKEN_ID_REM_ASSIGN : TOKEN_ID_PERCENTAGE;
             }
-            else if (start == '&')
+            else if (ch0 == '&')
             {
                 i += 1;
 
-                let ch = file.pointer[i];
-                let is_assign = ch == '=';
+                let is_assign = ch1 == '=';
 
                 i += is_assign;
 
                 token.id = is_assign ? TOKEN_ID_BITWISE_AND_ASSIGN : TOKEN_ID_AMPERSAND;
             }
-            else if (start == '|')
+            else if (ch0 == '|')
             {
                 i += 1;
 
-                let ch = file.pointer[i];
-                let is_assign = ch == '=';
+                let is_assign = ch1 == '=';
 
                 i += is_assign;
 
                 token.id = is_assign ? TOKEN_ID_BITWISE_OR_ASSIGN : TOKEN_ID_BAR;
             }
-            else if (start == '^')
+            else if (ch0 == '^')
             {
                 i += 1;
 
-                let ch = file.pointer[i];
-                let is_assign = ch == '=';
+                let is_assign = ch1 == '=';
 
                 i += is_assign;
 
                 token.id = is_assign ? TOKEN_ID_BITWISE_XOR_ASSIGN : TOKEN_ID_CARET;
             }
-            else if (start == '.')
+            else if (ch0 == '.')
             {
-                let ch2 = file.pointer[i + 1];
-                let ch3 = file.pointer[i + 2];
-
+                let is_ch1_dot = ch1 == '.';
+                let is_ch1_address = ch1 == '&';
+                let is_ch1_question = ch1 == '?';
                 let is_ch2_dot = ch2 == '.';
-                let is_ch2_address = ch2 == '&';
-                let is_ch2_question = ch2 == '?';
-                let is_ch3_dot = ch3 == '.';
 
                 TokenId id;
 
-                if (is_ch3_dot & is_ch2_dot)
+                if (is_ch2_dot & is_ch1_dot)
                 {
                     id = TOKEN_ID_TRIPLE_DOT;
                     i += 3;
                 }
-                else if (is_ch2_dot)
+                else if (is_ch1_dot)
                 {
                     id = TOKEN_ID_DOUBLE_DOT;
                     i += 2;
                 }
-                else if (is_ch2_address)
+                else if (is_ch1_address)
                 {
                     id = TOKEN_ID_POINTER_DEREFERENCE;
                     i += 2;
                 }
-                else if (is_ch2_question)
+                else if (is_ch1_question)
                 {
                     id = TOKEN_ID_OPTIONAL_DEREFERENCE;
                     i += 2;
@@ -1318,87 +1297,87 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
 
                 token.id = id;
             }
-            else if (start == ',')
+            else if (ch0 == ',')
             {
                 i += 1;
                 token.id = TOKEN_ID_COMMA;
             }
-            else if (start == ';')
+            else if (ch0 == ';')
             {
                 i += 1;
                 token.id = TOKEN_ID_SEMICOLON;
             }
-            else if (start == ':')
+            else if (ch0 == ':')
             {
                 i += 1;
                 token.id = TOKEN_ID_COLON;
             }
-            else if (start == '?')
+            else if (ch0 == '?')
             {
                 i += 1;
                 token.id = TOKEN_ID_QUESTION;
             }
-            else if (start == '(')
+            else if (ch0 == '(')
             {
                 i += 1;
                 token.id = TOKEN_ID_LEFT_PARENTHESIS;
             }
-            else if (start == ')')
+            else if (ch0 == ')')
             {
                 i += 1;
                 token.id = TOKEN_ID_RIGHT_PARENTHESIS;
             }
-            else if (start == '{')
+            else if (ch0 == '{')
             {
                 i += 1;
                 token.id = TOKEN_ID_LEFT_BRACE;
             }
-            else if (start == '}')
+            else if (ch0 == '}')
             {
                 i += 1;
                 token.id = TOKEN_ID_RIGHT_BRACE;
             }
-            else if (start == '[')
+            else if (ch0 == '[')
             {
                 i += 1;
                 token.id = TOKEN_ID_LEFT_BRACKET;
             }
-            else if (start == ']')
+            else if (ch0 == ']')
             {
                 i += 1;
                 token.id = TOKEN_ID_RIGHT_BRACKET;
             }
-            else if (start == '@')
+            else if (ch0 == '@')
             {
                 i += 1;
                 token.id = TOKEN_ID_AT;
             }
-            else if (start == '\\')
+            else if (ch0 == '\\')
             {
                 i += 1;
                 token.id = TOKEN_ID_BACKSLASH;
             }
-            else if (start == '`')
+            else if (ch0 == '`')
             {
                 i += 1;
                 token.id = TOKEN_ID_BACKTICK;
             }
-            else if (start == '#')
+            else if (ch0 == '#')
             {
                 i += 1;
                 token.id = TOKEN_ID_HASH;
             }
-            else if (start == '$')
+            else if (ch0 == '$')
             {
                 i += 1;
                 token.id = TOKEN_ID_DOLLAR;
             }
-            else if (start == '~')
+            else if (ch0 == '~')
             {
                 i += 1;
                 token.id = TOKEN_ID_TILDE;
             }
-            else if (start > 0x7f)
+            else if (ch0 > 0x7f)
             {
                 *error = (LexerError){
                     .id = LEXER_ERROR_ID_NOT_SUPPORTED_X_ASCII_OR_UNICODE,
@@ -1408,7 +1387,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
                 };
                 return (TokenList) { tokens, token_count };
             }
-            else if (start < ' ')
+            else if (ch0 < ' ')
             {
                 *error = (LexerError){
                     .id = LEXER_ERROR_ID_NON_PRINTABLE_ASCII,
@@ -1418,7 +1397,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
                 };
                 return (TokenList) { tokens, token_count };
             }
-            else if (start == 0x7f) // DEL
+            else if (ch0 == 0x7f) // DEL
             {
                 *error = (LexerError){
                     .id = LEXER_ERROR_ID_FOUND_DEL,
@@ -1443,7 +1422,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, str file, LexerError* erro
         token_count += 1;
     }
 
-#if 0
+#if MEASURE_LEXING
     let lexing_end = take_timestamp();
 
     let lexing_ns = ns_between(lexing_start, lexing_end);

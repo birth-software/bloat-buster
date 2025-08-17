@@ -1401,7 +1401,7 @@ void* thread_worker(void* arg)
     str file_content = file_read(thread_arena, S("build/file0"));
 
     LexerError error = {};
-    let tl = lex(thread_arena, else_arena, file_content, &error);
+    let tl = lex(thread_arena, else_arena, file_content.pointer, file_content.length, &error);
     if (error.id != LEXER_ERROR_ID_NONE)
     {
         printf("Error lexing: %u:%u:%lu code: %u\n", error.line, error.column, error.offset, error.id);
