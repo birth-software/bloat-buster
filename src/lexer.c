@@ -1112,8 +1112,6 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
                 i += 1 + is_escape;
             }
 #else
-
-            // Taken from https://lemire.me/blog/2022/09/14/escaping-strings-faster-with-avx-512/
             let escape_ch = _mm512_set1_epi8('\\');
             let double_quote = _mm512_set1_epi8('"');
 
@@ -1246,335 +1244,465 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
             };
             token.id = TOKEN_ID_CHARACTER_LITERAL;
         }
+        else if (unlikely(unlikely(ch0 >= 0x7f) | unlikely(ch0 <= ' ')))
+        {
+            trap();
+        }
         else
         {
-            if (ch0 == '=')
+#if 0
+            let ch0_splat = _mm256_set1_epi8(ch0);
+            let ch1_splat = _mm256_set1_epi8(ch1);
+            let ch2_splat = _mm256_set1_epi8(ch2);
+
+            let characters_to_compare = _mm256_set_epi8(
+                    // // Group 4
+                    // '~',
+                    // '}',
+                    // '|',
+                    // '{',
+                    // // Group 3
+                    // '`',
+                    // '_',
+                    // '^',
+                    // ']',
+                    // '\\',
+                    // '[',
+                    // // Group 2
+                    // '@',
+                    // '?',
+                    // '>',
+                    // '=',
+                    // '<',
+                    // ';',
+                    // ':',
+                    // // Group 1
+                    // '/',
+                    // '.',
+                    // '-',
+                    // ',',
+                    // '+',
+                    // '*',
+                    // ')',
+                    // '(',
+                    // '\'',
+                    // '&',
+                    // '%',
+                    // '$',
+                    // '#',
+                    // '"',
+                    // '!',
+                    
+                    // Group 4
+                    '~',
+                    '}',
+                    '|',
+                    '{',
+                    // Group 3
+                    '`',
+                    '_',
+                    '^',
+                    ']',
+                    '\\',
+                    '[',
+                    // Group 2
+                    '@',
+                    '?',
+                    '>',
+                    '=',
+                    '<',
+                    ';',
+                    ':',
+                    // Group 1
+                    '/',
+                    '.',
+                    '-',
+                    ',',
+                    '+',
+                    '*',
+                    ')',
+                    '(',
+                    '\'',
+                    '&',
+                    '%',
+                    '$',
+                    '#',
+                    '"',
+                    '!');
+
+            let cmp0 = _mm256_cmpeq_epi8_mask(ch0_splat, characters_to_compare);
+            let cmp1 = _mm256_cmpeq_epi8_mask(ch1_splat, characters_to_compare);
+            let cmp2 = _mm256_cmpeq_epi8_mask(ch2_splat, characters_to_compare);
+
+            let equal_splat = _mm256_set1_epi8('=');
+            let less_splat = _mm256_set1_epi8('<');
+            let greater_splat = _mm256_set1_epi8('>');
+
+            let mask_is_equal = _cvtu32_mask32(0b00100010000011100101011000110001);
+            let is_equal_1 = _mm256_mask_cmpeq_epi8_mask(mask_is_equal, ch1_splat, equal_splat);
+            let is_equal_op = _kor_mask32(cmp0, is_equal_1);
+
+            let is_less_1 = _mm256_cmpeq_epi8_mask(ch1_splat, less_splat);
+            let is_greater_1 = _mm256_cmpeq_epi8_mask(ch1_splat, greater_splat);
+                    //// Group 4
+                    //'~',
+                    //'}',
+                    //'|',
+                    //'{',
+                    //// Group 3
+                    //'`',
+                    //'_',
+                    //'^',
+                    //']',
+                    //'\\',
+                    //'[',
+                    //// Group 2
+                    //'@',
+                    //'?',
+                    //'>',
+                    //'=',
+                    //'<',
+                    //';',
+                    //':',
+                    //// Group 1
+                    //'/',
+                    //'.',
+                    //'-',
+                    //',',
+                    //'+',
+                    //'*',
+                    //')',
+                    //'(',
+                    //'\'',
+                    //'&',
+                    //'%',
+                    //'$',
+                    //'#',
+                    //'"',
+                    //'!');
+
+
+            // let is_compare_equal = is_equal_0 & is_equal_1; // ==
+            // let is_switch_token = is_equal_0 & is_greater_1; // =>
+            // let is_assign = is_equal_0 & !(is_equal_0 | is_greater_1); // =
+            // let is_not_equal = is_exclamation_0 & is_equal_1; // !=
+            // let is_negation = is_exclamation_0 & !is_equal_1; // !
+            //
+            // let is_shift_left_generic = is_less_0 & is_less_1;
+            //
+            // let is_shift_left_assign = is_shift_left_generic & is_equal_2; // <<=
+            // let is_shift_left = is_shift_left_generic & !is_equal_2; // <<
+            //
+            // let is_compare_less_equal = is_less_0 & is_equal_1; // <=
+            // let is_compare_less = is_less_0 & !(is_less_1 | is_equal_1); // <
+            //
+            // let is_shift_right_generic = is_greater_0 & is_greater_0;
+            //
+            // let is_shift_right_assign = is_shift_right_generic & is_equal_2; // >>=
+            // let is_shift_right = is_shift_right_generic & !is_equal_2; // >>
+            //
+            // let is_compare_greater_equal = is_greater_0 & is_equal_1; // >=
+            // let is_compare_greater = is_greater_0 & !(is_greater_1 | is_equal_1); // >
+            //
+            // let is_add_assign = is_plus_0 & is_equal_1; // +=
+            // let is_add = is_plus_0 & !is_equal_1; // +
+            //
+            // let is_sub_assign = is_minus_0 & is_equal_1; // -=
+            // let is_sub = is_minus_0 & !is_equal_1; // -
+            //
+            // let is_mul_assign = is_asterisk_0 & is_equal_1; // *=
+            // let is_mul = is_asterisk_0 & !is_equal_1; // *
+            //
+            // let is_div_assign = is_slash_0 & is_equal_1; // /=
+            // let is_div = is_slash_0 & !is_equal_1; // /
+            //
+            // let is_rem_assign = is_percentage_0 & is_equal_1; // %=
+            // let is_rem = is_percentage_0 & !is_equal_1; // %
+            //
+            // let is_bitwise_and_assign = is_ampersand_0 & is_equal_1; // &=
+            // let is_bitwise_and = is_ampersand_0 & !is_equal_1; // =
+            //
+            // let is_bitwise_or_assign = is_bar_0 & is_equal_1; // |=
+            // let is_bitwise_or = is_bar_0 & !is_equal_1; // |
+            //
+            // let is_bitwise_xor_assign = is_caret_0 & is_equal_1; // ^=
+            // let is_bitwise_xor = is_caret_0 & !is_equal_1; // ^
+            //
+            // let is_triple_dot = is_dot_0 & is_dot_1 & is_dot_2; // ...
+            // let is_double_dot = is_dot_0 & is_dot_1 & !is_dot_2; // ..
+            // let is_pointer_dereference = is_dot_0 & is_ampersand_1; // .&
+            // let is_optional_dereference = is_dot_0 & is_question_1; // .?
+            // let is_dot = is_dot_0 & !(is_dot_1 | is_ampersand_1 | is_question_1); // .
+            
+            trap();
+#else
+            let is_equal_0 = ch0 == '=';
+            let is_equal_1 = ch1 == '=';
+            let is_equal_2 = ch2 == '=';
+
+            let is_greater_0 = ch0 == '>';
+            let is_greater_1 = ch1 == '>';
+
+            let is_less_0 = ch0 == '<';
+            let is_less_1 = ch1 == '<';
+
+            let is_exclamation_0 = ch0 == '!';
+            let is_plus_0 = ch0 == '+';
+            let is_minus_0 = ch0 == '-';
+            let is_asterisk_0 = ch0 == '*';
+            let is_slash_0 = ch0 == '/';
+            let is_percentage_0 = ch0 == '%';
+            let is_ampersand_0 = ch0 == '&';
+            let is_ampersand_1 = ch1 == '&';
+            let is_bar_0 = ch0 == '|';
+            let is_caret_0 = ch0 == '^';
+            let is_at_0 = ch0 == '@';
+
+            let is_comma_0 = ch0 == ',';
+            let is_semicolon_0 = ch0 == ';';
+            let is_colon_0 = ch0 == ':';
+
+            let is_dot_0 = ch0 == '.';
+            let is_dot_1 = ch1 == '.';
+            let is_dot_2 = ch2 == '.';
+
+            let is_question_0 = ch0 == '?';
+            let is_question_1 = ch1 == '?';
+
+            let is_left_parenthesis_0 = ch0 == '(';
+            let is_right_parenthesis_0 = ch0 == ')';
+
+            let is_left_bracket_0 = ch0 == '[';
+            let is_right_bracket_0 = ch0 == ']';
+
+            let is_left_brace_0 = ch0 == '{';
+            let is_right_brace_0 = ch0 == '}';
+
+            let is_backslash_0 = ch0 == '\\';
+            let is_backtick_0 = ch0 == '`';
+            let is_hash_0 = ch0 == '#';
+            let is_dollar_0 = ch0 == '$';
+            let is_tilde_0 = ch0 == '~';
+
+            let is_compare_equal = is_equal_0 & is_equal_1; // ==
+            let is_switch_token = is_equal_0 & is_greater_1; // =>
+            let is_assign = is_equal_0 & !(is_equal_0 | is_greater_1); // =
+            let is_not_equal = is_exclamation_0 & is_equal_1; // !=
+            let is_negation = is_exclamation_0 & !is_equal_1; // !
+
+            let is_shift_left_generic = is_less_0 & is_less_1;
+
+            let is_shift_left_assign = is_shift_left_generic & is_equal_2; // <<=
+            let is_shift_left = is_shift_left_generic & !is_equal_2; // <<
+
+            let is_compare_less_equal = is_less_0 & is_equal_1; // <=
+            let is_compare_less = is_less_0 & !(is_less_1 | is_equal_1); // <
+
+            let is_shift_right_generic = is_greater_0 & is_greater_0;
+
+            let is_shift_right_assign = is_shift_right_generic & is_equal_2; // >>=
+            let is_shift_right = is_shift_right_generic & !is_equal_2; // >>
+
+            let is_compare_greater_equal = is_greater_0 & is_equal_1; // >=
+            let is_compare_greater = is_greater_0 & !(is_greater_1 | is_equal_1); // >
+
+            let is_add_assign = is_plus_0 & is_equal_1; // +=
+            let is_add = is_plus_0 & !is_equal_1; // +
+
+            let is_sub_assign = is_minus_0 & is_equal_1; // -=
+            let is_sub = is_minus_0 & !is_equal_1; // -
+
+            let is_mul_assign = is_asterisk_0 & is_equal_1; // *=
+            let is_mul = is_asterisk_0 & !is_equal_1; // *
+
+            let is_div_assign = is_slash_0 & is_equal_1; // /=
+            let is_div = is_slash_0 & !is_equal_1; // /
+
+            let is_rem_assign = is_percentage_0 & is_equal_1; // %=
+            let is_rem = is_percentage_0 & !is_equal_1; // %
+
+            let is_bitwise_and_assign = is_ampersand_0 & is_equal_1; // &=
+            let is_bitwise_and = is_ampersand_0 & !is_equal_1; // =
+
+            let is_bitwise_or_assign = is_bar_0 & is_equal_1; // |=
+            let is_bitwise_or = is_bar_0 & !is_equal_1; // |
+
+            let is_bitwise_xor_assign = is_caret_0 & is_equal_1; // ^=
+            let is_bitwise_xor = is_caret_0 & !is_equal_1; // ^
+
+            let is_triple_dot = is_dot_0 & is_dot_1 & is_dot_2; // ...
+            let is_double_dot = is_dot_0 & is_dot_1 & !is_dot_2; // ..
+            let is_pointer_dereference = is_dot_0 & is_ampersand_1; // .&
+            let is_optional_dereference = is_dot_0 & is_question_1; // .?
+            let is_dot = is_dot_0 & !(is_dot_1 | is_ampersand_1 | is_question_1); // .
+
+            u8 group_start_0 = '!';
+            u8 group_start_1 = ':';
+            u8 group_start_2 = 0x5B; // left bracket
+            u8 group_start_3 = 0x7B; // left brace
+
+            u8 group_end_0 = '/';
+            u8 group_end_1 = '@';
+            u8 group_end_2 = '`';
+            u8 group_end_3 = '~';
+
+            let is_ch0_group0 = (ch0 >= group_start_0) & (ch0 <= group_end_0);
+            let is_ch0_group1 = (ch0 >= group_start_1) & (ch0 <= group_end_1);
+            let is_ch0_group2 = (ch0 >= group_start_2) & (ch0 <= group_end_2);
+            let is_ch0_group3 = (ch0 >= group_start_3) & (ch0 <= group_end_3);
+
+            let is_ch1_group0 = (ch1 >= group_start_0) & (ch1 <= group_end_0);
+            let is_ch1_group1 = (ch1 >= group_start_1) & (ch1 <= group_end_1);
+            let is_ch1_group2 = (ch1 >= group_start_2) & (ch1 <= group_end_2);
+            let is_ch1_group3 = (ch1 >= group_start_3) & (ch1 <= group_end_3);
+
+            let is_ch2_group0 = (ch2 >= group_start_0) & (ch2 <= group_end_0);
+            let is_ch2_group1 = (ch2 >= group_start_1) & (ch2 <= group_end_1);
+            let is_ch2_group2 = (ch2 >= group_start_2) & (ch2 <= group_end_2);
+            let is_ch2_group3 = (ch2 >= group_start_3) & (ch2 <= group_end_3);
+
+            let group_0_sub = group_start_0;
+            let group_1_sub = group_start_1 - ((group_end_0 - group_start_0) + 1);
+            let group_2_sub = group_start_2 - ((group_end_0 - group_start_0) + 1 + (group_end_1 - group_start_1) + 1);
+            let group_3_sub = group_start_3 - ((group_end_0 - group_start_0) + 1 + (group_end_1 - group_start_1) + 1 + (group_end_2 - group_start_2) + 1);
+
+            let ch0_group_0 = is_ch0_group0 ? (ch0 - group_0_sub) : 0;
+            let ch0_group_1 = is_ch0_group1 ? (ch0 - group_1_sub) : 0;
+            let ch0_group_2 = is_ch0_group2 ? (ch0 - group_2_sub) : 0;
+            let ch0_group_3 = is_ch0_group3 ? (ch0 - group_3_sub) : 0;
+
+            let ch1_group_0 = is_ch1_group0 ? (ch1 - group_0_sub) : 0;
+            let ch1_group_1 = is_ch1_group1 ? (ch1 - group_1_sub) : 0;
+            let ch1_group_2 = is_ch1_group2 ? (ch1 - group_2_sub) : 0;
+            let ch1_group_3 = is_ch1_group3 ? (ch1 - group_3_sub) : 0;
+
+            let ch2_group_0 = is_ch2_group0 ? (ch2 - group_0_sub) : 0;
+            let ch2_group_1 = is_ch2_group1 ? (ch2 - group_1_sub) : 0;
+            let ch2_group_2 = is_ch2_group2 ? (ch2 - group_2_sub) : 0;
+            let ch2_group_3 = is_ch2_group3 ? (ch2 - group_3_sub) : 0;
+
+            let base_ch0_index = (ch0_group_0 | ch0_group_1) | (ch0_group_2 | ch0_group_3);
+            let base_ch1_index = (ch1_group_0 | ch1_group_1) | (ch1_group_2 | ch1_group_3);
+            let base_ch2_index = (ch2_group_0 | ch2_group_1) | (ch2_group_2 | ch2_group_3);
+
+            u8 extended_index_0 = is_compare_equal ? 1 : 0;
+            u8 extended_index_1 = is_switch_token ? 2 : 0;
+            u8 extended_index_2 = is_not_equal ? 3 : 0;
+            u8 extended_index_3 = is_shift_left_assign ? 4 : 0;
+            u8 extended_index_4 = is_shift_left ? 5 : 0;
+            u8 extended_index_5 = is_compare_less_equal ? 6 : 0;
+            u8 extended_index_6 = is_shift_right_assign ? 7 : 0;
+            u8 extended_index_7 = is_shift_right ? 8 : 0;
+            u8 extended_index_8 = is_compare_greater_equal ? 9 : 0;
+            u8 extended_index_9 = is_add_assign ? 10 : 0;
+            u8 extended_index_10 = is_sub_assign ? 11 : 0;
+            u8 extended_index_11 = is_mul_assign ? 12 : 0;
+            u8 extended_index_12 = is_div_assign ? 13 : 0;
+            u8 extended_index_13 = is_rem_assign ? 14 : 0;
+            u8 extended_index_14 = is_bitwise_and_assign ? 15 : 0;
+            u8 extended_index_15 = is_bitwise_or_assign ? 16 : 0;
+            u8 extended_index_16 = is_bitwise_xor_assign ? 17 : 0;
+            u8 extended_index_17 = is_triple_dot ? 18 : 0;
+            u8 extended_index_18 = is_double_dot ? 19 : 0;
+            u8 extended_index_19 = is_pointer_dereference ? 20 : 0;
+            u8 extended_index_20 = is_optional_dereference ? 21 : 0;
+
+            let extended_index =
+                (extended_index_0 + extended_index_1) +
+                (extended_index_2 + extended_index_3) +
+                (extended_index_4 + extended_index_5) +
+                (extended_index_6 + extended_index_7) +
+                (extended_index_8 + extended_index_9) +
+                (extended_index_10 + extended_index_11) +
+                (extended_index_12 + extended_index_13) +
+                (extended_index_14 + extended_index_15) +
+                (extended_index_16 + extended_index_17) +
+                (extended_index_18 + extended_index_19) +
+                (extended_index_20);
+
+            let index = base_ch0_index + (extended_index - (extended_index != 0));
+
+            TokenId lookup_table[64] =
             {
-                i += 1;
+                [0] = TOKEN_ID_EXCLAMATION_DOWN, // !
+                [1] = 0, // "
+                [2] = TOKEN_ID_HASH, // #
+                [3] = TOKEN_ID_DOLLAR, // $
+                [4] = TOKEN_ID_PERCENTAGE, // %
+                [5] = TOKEN_ID_AMPERSAND, // &
+                [6] = 0, // '
+                [7] = TOKEN_ID_LEFT_PARENTHESIS, // (
+                [8] = TOKEN_ID_RIGHT_PARENTHESIS, // )
+                [9] = TOKEN_ID_ASTERISK, // *
+                [10] = TOKEN_ID_PLUS, // +
+                [11] = TOKEN_ID_COMMA, // ,
+                [12] = TOKEN_ID_DASH, // -
+                [13] = TOKEN_ID_DOT, // .
+                [14] = TOKEN_ID_FORWARD_SLASH, // /
 
-                let is_compare_equal = ch1 == '=';
-                let is_switch_token = ch1 == '>';
+                [15] = TOKEN_ID_COLON, // :
+                [16] = TOKEN_ID_SEMICOLON, // ;
+                [17] = TOKEN_ID_COMPARE_LESS, // <
+                [18] = TOKEN_ID_ASSIGN, // =
+                [19] = TOKEN_ID_COMPARE_GREATER, // >
+                [20] = TOKEN_ID_QUESTION, // 
+                [21] = TOKEN_ID_AT,
 
-                i += (is_compare_equal | is_switch_token);
+                [22] = TOKEN_ID_LEFT_BRACKET,
+                [23] = TOKEN_ID_BACKSLASH,
+                [24] = TOKEN_ID_RIGHT_BRACKET,
+                [25] = TOKEN_ID_CARET,
+                [26] = 0, // _ (used for identifiers)
+                [27] = TOKEN_ID_BACKTICK,
 
-                TokenId id;
+                [28] = TOKEN_ID_LEFT_BRACE,
+                [29] = TOKEN_ID_BAR,
+                [30] = TOKEN_ID_RIGHT_BRACE,
+                [31] = TOKEN_ID_TILDE,
 
-                if (is_compare_equal)
-                {
-                    id = TOKEN_ID_COMPARE_EQUAL;
-                }
-                else if (is_switch_token)
-                {
-                    id = TOKEN_ID_SWITCH_CASE;
-                }
-                else
-                {
-                    id = TOKEN_ID_ASSIGN;
-                }
+                [32] = TOKEN_ID_COMPARE_EQUAL,
+                [33] = TOKEN_ID_SWITCH_CASE,
+                [34] = TOKEN_ID_COMPARE_NOT_EQUAL,
+                [35] = TOKEN_ID_SHIFT_LEFT_ASSIGN,
+                [36] = TOKEN_ID_SHIFT_LEFT,
+                [37] = TOKEN_ID_COMPARE_LESS_EQUAL,
+                [38] = TOKEN_ID_SHIFT_RIGHT_ASSIGN,
+                [39] = TOKEN_ID_SHIFT_RIGHT,
+                [40] = TOKEN_ID_COMPARE_GREATER_EQUAL,
+                [41] = TOKEN_ID_ADD_ASSIGN,
+                [42] = TOKEN_ID_SUB_ASSIGN,
+                [43] = TOKEN_ID_MUL_ASSIGN,
+                [44] = TOKEN_ID_DIV_ASSIGN,
+                [45] = TOKEN_ID_REM_ASSIGN,
+                [46] = TOKEN_ID_BITWISE_AND_ASSIGN,
+                [47] = TOKEN_ID_BITWISE_OR_ASSIGN,
+                [48] = TOKEN_ID_BITWISE_XOR_ASSIGN,
+                [49] = TOKEN_ID_TRIPLE_DOT,
+                [50] = TOKEN_ID_DOUBLE_DOT,
+                [51] = TOKEN_ID_POINTER_DEREFERENCE,
+                [52] = TOKEN_ID_OPTIONAL_DEREFERENCE,
 
-                token.id = id;
-            }
-            else if (ch0 == '!')
-            {
-                i += 1;
+                [53] = 0,
+                [54] = 0,
+                [55] = 0,
+                [56] = 0,
+                [57] = 0,
+                [58] = 0,
+                [59] = 0,
+                [60] = 0,
+                [61] = 0,
+                [62] = 0,
+                [63] = 0,
+            };
 
-                let is_compare_not_equal = ch1 == '=';
-                i += is_compare_not_equal;
-
-                token.id = is_compare_not_equal ? TOKEN_ID_COMPARE_NOT_EQUAL : TOKEN_ID_EXCLAMATION_DOWN;
-            }
-            else if (ch0 == '<')
-            {
-                TokenId id;
-                if (ch1 == '<')
-                {
-                    if (ch2 == '=')
-                    {
-                        id = TOKEN_ID_SHIFT_LEFT_ASSIGN;
-                        i += 3;
-                    }
-                    else
-                    {
-                        id = TOKEN_ID_SHIFT_LEFT;
-                        i += 2;
-                    }
-                }
-                else if (ch1 == '=')
-                {
-                    id = TOKEN_ID_COMPARE_LESS_EQUAL;
-                    i += 2;
-                }
-                else
-                {
-                    id = TOKEN_ID_COMPARE_LESS;
-                    i += 1;
-                }
-
-                token.id = id;
-            }
-            else if (ch0 == '>')
-            {
-                TokenId id;
-                if (ch1 == '>')
-                {
-                    if (ch2 == '=')
-                    {
-                        id = TOKEN_ID_SHIFT_RIGHT_ASSIGN;
-                        i += 3;
-                    }
-                    else
-                    {
-                        id = TOKEN_ID_SHIFT_RIGHT;
-                        i += 2;
-                    }
-                }
-                else if (ch1 == '=')
-                {
-                    id = TOKEN_ID_COMPARE_GREATER_EQUAL;
-                    i += 2;
-                }
-                else
-                {
-                    id = TOKEN_ID_COMPARE_GREATER;
-                    i += 1;
-                }
-
-                token.id = id;
-            }
-            else if (ch0 == '+')
-            {
-                i += 1;
-
-                let is_assign = ch1 == '=';
-
-                i += is_assign;
-
-                token.id = is_assign ? TOKEN_ID_ADD_ASSIGN : TOKEN_ID_PLUS;
-            }
-            else if (ch0 == '-')
-            {
-                i += 1;
-
-                let is_assign = ch1 == '=';
-
-                i += is_assign;
-
-                token.id = is_assign ? TOKEN_ID_SUB_ASSIGN : TOKEN_ID_DASH;
-            }
-            else if (ch0 == '*')
-            {
-                i += 1;
-
-                let is_assign = ch1 == '=';
-
-                i += is_assign;
-
-                token.id = is_assign ? TOKEN_ID_MUL_ASSIGN : TOKEN_ID_ASTERISK;
-            }
-            else if (ch0 == '/')
-            {
-                i += 1;
-
-                let is_assign = ch1 == '=';
-
-                i += is_assign;
-
-                token.id = is_assign ? TOKEN_ID_DIV_ASSIGN : TOKEN_ID_FORWARD_SLASH;
-            }
-            else if (ch0 == '%')
-            {
-                i += 1;
-
-                let is_assign = ch1 == '=';
-
-                i += is_assign;
-
-                token.id = is_assign ? TOKEN_ID_REM_ASSIGN : TOKEN_ID_PERCENTAGE;
-            }
-            else if (ch0 == '&')
-            {
-                i += 1;
-
-                let is_assign = ch1 == '=';
-
-                i += is_assign;
-
-                token.id = is_assign ? TOKEN_ID_BITWISE_AND_ASSIGN : TOKEN_ID_AMPERSAND;
-            }
-            else if (ch0 == '|')
-            {
-                i += 1;
-
-                let is_assign = ch1 == '=';
-
-                i += is_assign;
-
-                token.id = is_assign ? TOKEN_ID_BITWISE_OR_ASSIGN : TOKEN_ID_BAR;
-            }
-            else if (ch0 == '^')
-            {
-                i += 1;
-
-                let is_assign = ch1 == '=';
-
-                i += is_assign;
-
-                token.id = is_assign ? TOKEN_ID_BITWISE_XOR_ASSIGN : TOKEN_ID_CARET;
-            }
-            else if (ch0 == '.')
-            {
-                let is_ch1_dot = ch1 == '.';
-                let is_ch1_address = ch1 == '&';
-                let is_ch1_question = ch1 == '?';
-                let is_ch2_dot = ch2 == '.';
-
-                TokenId id;
-
-                if (is_ch2_dot & is_ch1_dot)
-                {
-                    id = TOKEN_ID_TRIPLE_DOT;
-                    i += 3;
-                }
-                else if (is_ch1_dot)
-                {
-                    id = TOKEN_ID_DOUBLE_DOT;
-                    i += 2;
-                }
-                else if (is_ch1_address)
-                {
-                    id = TOKEN_ID_POINTER_DEREFERENCE;
-                    i += 2;
-                }
-                else if (is_ch1_question)
-                {
-                    id = TOKEN_ID_OPTIONAL_DEREFERENCE;
-                    i += 2;
-                }
-                else
-                {
-                    id = TOKEN_ID_DOT;
-                    i += 1;
-                }
-
-                token.id = id;
-            }
-            else if (ch0 == ',')
-            {
-                i += 1;
-                token.id = TOKEN_ID_COMMA;
-            }
-            else if (ch0 == ';')
-            {
-                i += 1;
-                token.id = TOKEN_ID_SEMICOLON;
-            }
-            else if (ch0 == ':')
-            {
-                i += 1;
-                token.id = TOKEN_ID_COLON;
-            }
-            else if (ch0 == '?')
-            {
-                i += 1;
-                token.id = TOKEN_ID_QUESTION;
-            }
-            else if (ch0 == '(')
-            {
-                i += 1;
-                token.id = TOKEN_ID_LEFT_PARENTHESIS;
-            }
-            else if (ch0 == ')')
-            {
-                i += 1;
-                token.id = TOKEN_ID_RIGHT_PARENTHESIS;
-            }
-            else if (ch0 == '{')
-            {
-                i += 1;
-                token.id = TOKEN_ID_LEFT_BRACE;
-            }
-            else if (ch0 == '}')
-            {
-                i += 1;
-                token.id = TOKEN_ID_RIGHT_BRACE;
-            }
-            else if (ch0 == '[')
-            {
-                i += 1;
-                token.id = TOKEN_ID_LEFT_BRACKET;
-            }
-            else if (ch0 == ']')
-            {
-                i += 1;
-                token.id = TOKEN_ID_RIGHT_BRACKET;
-            }
-            else if (ch0 == '@')
-            {
-                i += 1;
-                token.id = TOKEN_ID_AT;
-            }
-            else if (ch0 == '\\')
-            {
-                i += 1;
-                token.id = TOKEN_ID_BACKSLASH;
-            }
-            else if (ch0 == '`')
-            {
-                i += 1;
-                token.id = TOKEN_ID_BACKTICK;
-            }
-            else if (ch0 == '#')
-            {
-                i += 1;
-                token.id = TOKEN_ID_HASH;
-            }
-            else if (ch0 == '$')
-            {
-                i += 1;
-                token.id = TOKEN_ID_DOLLAR;
-            }
-            else if (ch0 == '~')
-            {
-                i += 1;
-                token.id = TOKEN_ID_TILDE;
-            }
-            else if (ch0 > 0x7f)
-            {
-                *error = (LexerError){
-                    .id = LEXER_ERROR_ID_NOT_SUPPORTED_X_ASCII_OR_UNICODE,
-                        .offset = start_index,
-                        .line = line,
-                        .column = column,
-                };
-                return (TokenList) { tokens, token_count };
-            }
-            else if (ch0 < ' ')
-            {
-                *error = (LexerError){
-                    .id = LEXER_ERROR_ID_NON_PRINTABLE_ASCII,
-                        .offset = start_index,
-                        .line = line,
-                        .column = column,
-                };
-                return (TokenList) { tokens, token_count };
-            }
-            else if (ch0 == 0x7f) // DEL
-            {
-                *error = (LexerError){
-                    .id = LEXER_ERROR_ID_FOUND_DEL,
-                        .offset = start_index,
-                        .line = line,
-                        .column = column,
-                };
-                return (TokenList) { tokens, token_count };
-            }
-            else
-            {
-                UNREACHABLE();
-            }
+            let token_id = lookup_table[index];
+            token.id = token_id;
+            let advance = 1 + (index > 31) + (is_shift_left_assign | is_shift_right_assign | is_triple_dot);
+            i += advance;
+#endif
         }
 
-#if 0
+#if SCALAR
         *new_token = token;
 #else
         static_assert(sizeof(Token) == 32);

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 4.0)
 project(bb)
 
-set(CMAKE_BUILD_TYPE RelWithDebInfo)
+set(CMAKE_BUILD_TYPE Release)
 add_compile_options(-march=native -masm=intel)
 include_directories(BEFORE src)
 

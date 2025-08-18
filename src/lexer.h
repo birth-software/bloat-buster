@@ -8,6 +8,8 @@ typedef f128 FloatLiteral;
 
 typedef enum TokenId : u8
 {
+    TOKEN_ID_NONE,
+
     TOKEN_ID_IDENTIFIER,
     TOKEN_ID_INTEGER,
     TOKEN_ID_FLOAT,
