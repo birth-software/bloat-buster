@@ -1,6 +1,11 @@
 #pragma once
 
 #define array_length(x) (sizeof(x) / sizeof((x)[0]))
+#ifdef __cplusplus
+#define EXPORT extern "C"
+#else
+#define EXPORT
+#endif
 
 #define let __auto_type
 #define STRUCT(n) typedef struct n n; struct n
@@ -14,6 +19,11 @@
 #define CACHE_LINE_GUESS (128)
 #else
 #define CACHE_LINE_GUESS (64)
+#endif
+
+#ifdef __cplusplus
+#define restrict __restrict
+#else
 #endif
 
 
@@ -186,23 +196,23 @@ u128
 #endif
 TimeDataType;
 
-void os_init();
-Arena* arena_initialize(ArenaInitialization initialization);
-void arena_set_position(Arena* arena, u64 position);
-void arena_reset_to_start(Arena* arena);
-void* arena_allocate_bytes(Arena* arena, u64 size, u64 alignment);
-str arena_join_string(Arena* arena, StringSlice strings);
+EXPORT void os_init();
+EXPORT Arena* arena_initialize(ArenaInitialization initialization);
+EXPORT void arena_set_position(Arena* arena, u64 position);
+EXPORT void arena_reset_to_start(Arena* arena);
+EXPORT void* arena_allocate_bytes(Arena* arena, u64 size, u64 alignment);
+EXPORT str arena_join_string(Arena* arena, StringSlice strings);
 
-FileDescriptor* os_file_open(str path, OpenFlags flags, OpenPermissions permissions);
-u64 os_file_get_size(FileDescriptor* file_descriptor);
-void os_file_write(FileDescriptor* file_descriptor, str buffer);
-void os_file_close(FileDescriptor* file_descriptor);
+EXPORT FileDescriptor* os_file_open(str path, OpenFlags flags, OpenPermissions permissions);
+EXPORT u64 os_file_get_size(FileDescriptor* file_descriptor);
+EXPORT void os_file_write(FileDescriptor* file_descriptor, str buffer);
+EXPORT void os_file_close(FileDescriptor* file_descriptor);
 
 #define arena_allocate(arena, T, count) (T*) arena_allocate_bytes(arena, sizeof(T) * count, alignof(T))
 
-str file_read(Arena* arena, str path);
+EXPORT str file_read(Arena* arena, str path);
 
-TimeDataType take_timestamp();
-u64 ns_between(TimeDataType start, TimeDataType end);
+EXPORT TimeDataType take_timestamp();
+EXPORT u64 ns_between(TimeDataType start, TimeDataType end);
 
 [[noreturn]] void fail();

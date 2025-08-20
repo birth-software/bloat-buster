@@ -137,10 +137,8 @@ UNION(TokenContent)
 
 STRUCT(Token)
 {
-    TokenContent content;
-    u32 line;
-    u32 column;
-    TokenId id;
+    u8 type;
+    u8 tag;
 };
 
 STRUCT(TokenList)
@@ -173,4 +171,4 @@ STRUCT(LexerError)
     LexerErrorId id;
 };
 
-TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u64 l, LexerError* error_list);
+EXPORT TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u64 l, LexerError* error_list);
