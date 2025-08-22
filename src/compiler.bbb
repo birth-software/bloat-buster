@@ -24234,7 +24234,6 @@ parse_type2 = fn (module: &Module, scope: &Scope, parser: &Parser, arguments: &[
                     >argument_buffer: [64]Argument = undefined;
                     >argument_count: u64 = 0;
 
-
                     while (!consume_token_if(parser, .right_parenthesis))
                     {
                         if (consume_token_if(parser, .triple_dot))

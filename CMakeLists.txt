@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 4.0)
 project(bb)
 
-set(CMAKE_BUILD_TYPE RelWithDebInfo)
+set(CMAKE_BUILD_TYPE Debug)
+set(CMAKE_C_STANDARD 23)
+set(CMAKE_CXX_STANDARD 23)
 add_compile_options(-march=native -masm=intel)
 include_directories(BEFORE src)
 

@@ -300,8 +300,6 @@ void os_file_close(FileDescriptor* file_descriptor)
 static u64 page_size = KB(4);
 static u64 default_granularity = MB(2);
 
-static_assert(sizeof(Arena) % CACHE_LINE_GUESS == 0);
-
 static u64 minimum_position = sizeof(Arena);
 
 Arena* arena_initialize(ArenaInitialization initialization)
@@ -310,6 +308,19 @@ Arena* arena_initialize(ArenaInitialization initialization)
     {
         initialization.reserved_size = GB(4);
     }
+
+    if (!initialization.count)
+    {
+        initialization.count = 1;
+    }
+
+    let count = initialization.count;
+    let individual_reserved_size = initialization.reserved_size;
+    let total_reserved_size = individual_reserved_size * count;
+
+    ProtectionFlags protection_flags = { .read = 1, .write = 1 };
+    MapFlags map_flags = { .private = 1, .anonymous = 1, .no_reserve = 1, .populate = 0 };
+    let raw_pointer = os_reserve(0, total_reserved_size, protection_flags, map_flags);
 
     if (!initialization.granularity)
     {
@@ -321,20 +332,19 @@ Arena* arena_initialize(ArenaInitialization initialization)
         initialization.initial_size = default_granularity * 4;
     }
 
-    ProtectionFlags protection_flags = { .read = 1, .write = 1 };
-    MapFlags map_flags = { .private = 1, .anonymous = 1, .no_reserve = 1, .populate = 0 };
-    let raw_pointer = os_reserve(0, initialization.reserved_size, protection_flags, map_flags);
-    let arena = (Arena*)raw_pointer;
-    os_commit(raw_pointer, initialization.initial_size, protection_flags);
+    for (u64 i = 0; i < count; i += 1)
+    {
+        let arena = (Arena*)(raw_pointer + (individual_reserved_size * i));
+        os_commit(raw_pointer, initialization.initial_size, protection_flags);
+        *arena = (Arena){ 
+            .reserved_size = individual_reserved_size,
+            .position = minimum_position,
+            .os_position = initialization.initial_size,
+            .granularity = initialization.granularity,
+        };
+    }
 
-    *arena = (Arena){ 
-        .reserved_size = initialization.reserved_size,
-        .position = minimum_position,
-        .os_position = initialization.initial_size,
-        .granularity = initialization.granularity,
-    };
-
-    return arena;
+    return (Arena*)raw_pointer;
 }
 
 void arena_align_bits()

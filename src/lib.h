@@ -7,8 +7,8 @@
 #define UNION(n) typedef union n n; union n
 #define trap() __builtin_trap()
 #define breakpoint() __builtin_debugtrap()
-#define likely(x) __builtin_expect(x, 1)
-#define unlikely(x) __builtin_expect(x, 0)
+#define likely(x) __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
 
 #if __APPLE__ &&  __aarch64__
 #define CACHE_LINE_GUESS (128)
@@ -166,7 +166,6 @@ STRUCT(Arena)
     u64 position;
     u64 os_position;
     u64 granularity;
-    u8 reserved[CACHE_LINE_GUESS - (sizeof(u64) * 4)];
 };
 
 STRUCT(ArenaInitialization)
@@ -174,6 +173,7 @@ STRUCT(ArenaInitialization)
     u64 reserved_size;
     u64 granularity;
     u64 initial_size;
+    u64 count;
 };
 
 typedef struct FileDescriptor FileDescriptor;

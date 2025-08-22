@@ -432,7 +432,17 @@ static inline u64 identifier_character_count(__m512i chunk)
     return result;
 }
 
-TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u64 l, LexerError* error)
+#define left_bracket '['
+#define right_bracket ']'
+#define left_brace '{'
+#define right_brace '}'
+
+static bool is_good_finishing_decimal_character(u8 ch)
+{
+    return is_space(ch) | ((ch >= '!') & (ch <= '/')) | ((ch >= ':') & (ch <= '@')) | ((ch >= left_bracket) & (ch <= '`')) | ((ch >= left_brace) & (ch <= '~'));
+}
+
+TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u64 l)
 {
 #define MEASURE_LEXING 1
 #if MEASURE_LEXING
@@ -442,6 +452,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
     u64 token_count = 0;
     u64 i = 0;
     u64 line_offset = 0;
+    u64 previous_line_offset = 0;
     u64 line_character_offset = 0;
 
     while (1)
@@ -598,52 +609,53 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
         }
 
         let start_index = i;
-        let line = line_offset + 1;
-        let column = start_index - line_character_offset + 1;
+        let start_line = line_offset + 1;
+        let start_column_offset = start_index - line_character_offset;
+        let start_column = start_column_offset + 1;
 
-        if (unlikely((unlikely(i == l)) | unlikely(line > UINT32_MAX) | unlikely(column > UINT32_MAX)))
+        if (unlikely(i == l))
         {
-            if (unlikely(line > UINT32_MAX))
-            {
-                *error = (LexerError){
-                    .id = LEXER_ERROR_ID_LINE_NUMBER_TOO_HIGH,
-                    .offset = start_index,
-                    .line = UINT32_MAX,
-                    .column = column > UINT32_MAX ? UINT32_MAX : (u32)column,
-                };
-                return (TokenList) { tokens, token_count };
-            }
-
-            if (unlikely(column > UINT32_MAX))
-            {
-                *error = (LexerError){
-                    .id = LEXER_ERROR_ID_COLUMN_NUMBER_TOO_HIGH,
-                    .offset = start_index,
-                    .line = line > UINT32_MAX ? UINT32_MAX : (u32)line,
-                    .column = UINT32_MAX,
-                };
-                return (TokenList) { tokens, token_count };
-            }
-
             break;
         }
 
+        if (line_offset != previous_line_offset)
+        {
+            Token* line_byte_offset = arena_allocate(stable_arena, Token, 2);
+            Token* line_number_offset = line_byte_offset + 1;
+            token_count += 2;
+            *line_byte_offset = (Token) {
+                .offset = line_character_offset,
+                .id = TOKEN_ID_LINE_BYTE_OFFSET,
+            };
+            *line_number_offset = (Token) {
+                .offset = line_offset,
+                .id = TOKEN_ID_LINE_NUMBER_OFFSET,
+            };
+        }
 
         let chunk64 = _mm512_loadu_epi8(&p[start_index]);
         let chunk32 = _mm512_extracti32x8_epi32(chunk64, 0);
         let chunk16 = _mm256_extracti128_si256(chunk32, 0);
-        let chunk4 = _mm_extract_epi32(chunk16, 0);
+        let chunk4_0 = _mm_extract_epi32(chunk16, 0);
+        let chunk4_1 = _mm_extract_epi32(chunk16, 1);
 
-        static_assert(sizeof(chunk4) == 4);
-        let ch0 = ((u8*)&chunk4)[0];
-        let ch1 = ((u8*)&chunk4)[1];
-        let ch2 = ((u8*)&chunk4)[2];
-        let ch3 = ((u8*)&chunk4)[3];
+        static_assert(sizeof(chunk4_0) == 4);
+        static_assert(sizeof(chunk4_1) == 4);
+        let ch0 = ((u8*)&chunk4_0)[0];
+        let ch1 = ((u8*)&chunk4_0)[1];
+        let ch2 = ((u8*)&chunk4_0)[2];
+        let ch3 = ((u8*)&chunk4_0)[3];
+        let ch4 = ((u8*)&chunk4_1)[0];
+        let ch5 = ((u8*)&chunk4_1)[1];
+        let ch6 = ((u8*)&chunk4_1)[2];
+        let ch7 = ((u8*)&chunk4_1)[3];
 
-        Token* new_token = arena_allocate(stable_arena, Token, 1);
-        Token token = {};
-        token.line = line;
-        token.column = column;
+        Token* token = arena_allocate(stable_arena, Token, 1);
+        *token = (Token) {
+            .offset = start_column_offset,
+            .id = TOKEN_ID_NONE,
+        };
+        token_count += 1;
 
         if (is_identifier_start(ch0))
         {
@@ -661,13 +673,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
 
             if (unlikely(candidate_identifier.length > UINT16_MAX))
             {
-                *error = (LexerError){
-                    .id = LEXER_ERROR_ID_IDENTIFIER_TOO_LONG,
-                    .offset = start_index,
-                    .line = line,
-                    .column = column,
-                };
-
+                token->id = TOKEN_ID_ERROR_IDENTIFIER_TOO_LONG;
                 return (TokenList){ tokens, token_count };
             }
 
@@ -679,9 +685,9 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
             let is_float_type = (ch0 == 'f') & is_plausible_primitive_type;
             let is_integer_type = (is_signed | is_unsigned) & is_plausible_primitive_type;
 
-            let is_decimal1 = is_decimal(ch1);
-            let is_decimal2 = identifier_length > 2 ? is_decimal(ch1) : 1;
-            let is_decimal3 = identifier_length > 3 ? is_decimal(ch1) : 1;
+            let is_decimal1 = is_decimal(ch1) & is_good_finishing_decimal_character(ch2);
+            let is_decimal2 = identifier_length > 2 ? (is_decimal(ch2) & is_good_finishing_decimal_character(ch3)) : 1;
+            let is_decimal3 = identifier_length > 3 ? (is_decimal(ch3) & is_good_finishing_decimal_character(ch4)) : 1;
 
             is_integer_type = (is_integer_type & is_decimal1) & (is_decimal2 & is_decimal3);
             is_float_type = (is_float_type & is_decimal1) & (is_decimal2 & is_decimal3);
@@ -700,12 +706,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
                         type_name,
                         S(" type cannot have 0 bit count"),
                     };
-                    *error = (LexerError){
-                        .id = LEXER_ERROR_ID_PRIMITIVE_TYPE_0_BIT_COUNT,
-                        .offset = start_index,
-                        .line = line,
-                        .column = column,
-                    };
+                    token->id = TOKEN_ID_ERROR_PRIMITIVE_TYPE_0_BIT_COUNT;
 
                     return (TokenList){ tokens, token_count };
                 }
@@ -716,32 +717,24 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
                         type_name,
                         S(" type cannot have that bit count"),
                     };
-                    *error = (LexerError){
-                        .id = LEXER_ERROR_ID_PRIMITIVE_TYPE_UNKNOWN_BIT_COUNT,
-                        .offset = start_index,
-                        .line = line,
-                        .column = column,
-                    };
+                    token->id = TOKEN_ID_ERROR_PRIMITIVE_TYPE_UNKNOWN_BIT_COUNT;
 
                     return (TokenList){ tokens, token_count };
                 }
 
                 if (is_integer_type)
                 {
-                    token.content = (TokenContent) {
-                        .integer_type = {
-                            .bit_count = bit_count,
-                            .is_signed = is_signed,
-                        },
-                    };
-                    token.id = TOKEN_ID_KEYWORD_TYPE_INTEGER;
+                    // token.content = (TokenContent) {
+                    //     .integer_type = {
+                    //         .bit_count = bit_count,
+                    //         .is_signed = is_signed,
+                    //     },
+                    // };
+                    token->id = TOKEN_ID_KEYWORD_TYPE_INTEGER;
                 }
                 else
                 {
-                    token.content = (TokenContent) {
-                        .integer = bit_count_128,
-                    };
-                    token.id = TOKEN_ID_KEYWORD_TYPE_FLOAT;
+                    token->id = TOKEN_ID_KEYWORD_TYPE_FLOAT;
                 }
             }
             else
@@ -912,7 +905,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
                                 );
 
                     __mmask64 mov_mask4 = _cvtu64_mask64((0xf777ULL << 48) | (0x333ULL << 36) | (1ULL << 32) | 0xffffffff);
-                    let candidate4 = _mm512_maskz_mov_epi8(mov_mask4, _mm512_set1_epi32(chunk4));
+                    let candidate4 = _mm512_maskz_mov_epi8(mov_mask4, _mm512_set1_epi32(chunk4_0));
 
                     __mmask16 candidate_mask4 = (u16)(((u32)(candidate_identifier.length == 11) << 16) - 1) & 0x8000 | (u16)(((u32)(candidate_identifier.length == 3) << 16) - 1) & 0x7000 | (((u16)(candidate_identifier.length == 2) << (9 + 3)) - 1) & 0xe00 | ((candidate_identifier.length == 1) << 8) | (((u16)(candidate_identifier.length) << 8) - 1);
                     let is_candidate4 = _mm512_mask_cmpeq_epi32_mask(candidate_mask4, candidates4, candidate4);
@@ -984,14 +977,19 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
                 if (search_index < array_length(candidate_strings))
                 {
                     let candidate_id = candidate_ids[search_index];
-                    token.id = candidate_id;
+                    token->id = candidate_id;
                 }
                 else
                 {
-                    token.content = (TokenContent){
-                        .string = candidate_identifier,
+                    token->id = TOKEN_ID_IDENTIFIER_START;
+
+                    Token* end_token = arena_allocate(stable_arena, Token, 1);
+                    token_count += 1;
+
+                    *end_token = (Token) {
+                        .offset = i - line_character_offset,
+                        .id = TOKEN_ID_IDENTIFIER_END,
                     };
-                    token.id = TOKEN_ID_IDENTIFIER;
                 }
             }
         }
@@ -1062,7 +1060,8 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
                 trap();
             }
 
-            if (inferred_decimal & ((p[i] == '.') & (p[i + 1] != '.')))
+            let is_float = inferred_decimal & ((p[i] == '.') & (p[i + 1] != '.'));
+            if (is_float)
             {
                 i += 1;
 
@@ -1075,18 +1074,18 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
                 i += r.i;
 
                 let float_string_literal = str_from_ptr_start_end((char*)p, start_index, i);
-                token.content = (TokenContent) {
-                    .string = float_string_literal,
-                };
-                token.id = TOKEN_ID_FLOAT_STRING_LITERAL;
+
             }
-            else
-            {
-                token.content = (TokenContent) {
-                    .integer = value,
-                };
-                token.id = TOKEN_ID_INTEGER;
-            }
+
+            token->id = is_float ? TOKEN_ID_FLOAT_START : TOKEN_ID_INTEGER_START;
+
+            let end = arena_allocate(stable_arena, Token, 1);
+            token_count += 1;
+
+            *end = (Token) {
+                .offset = i - line_character_offset,
+                    .id = is_float ? TOKEN_ID_FLOAT_END : TOKEN_ID_INTEGER_END,
+            };
         }
         else if (ch0 == '"')
         {
@@ -1143,13 +1142,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
             let is_properly_finished = p[i] == '"';
             if (!is_properly_finished)
             {
-                *error = (LexerError){
-                    .id = LEXER_ERROR_ID_STRING_LITERAL_NO_DOUBLE_QUOTE_EOF,
-                    .offset = start_index,
-                    .line = line,
-                    .column = column,
-                };
-
+                token->id = TOKEN_ID_ERROR_STRING_LITERAL_NO_DOUBLE_QUOTE_EOF;
                 return (TokenList){ tokens, token_count };
             }
 
@@ -1197,12 +1190,16 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
                 memcpy(pointer, original_string_bytes.pointer, original_string_bytes.length);
             }
 
-            i += 1;
+            token->id = TOKEN_ID_STRING_LITERAL_START;
 
-            token.content = (TokenContent) {
-                .string = string_literal,
+            let end = arena_allocate(stable_arena, Token, 1);
+            token_count += 1;
+            *end = (Token) {
+                .offset = i - line_character_offset,
+                .id = TOKEN_ID_STRING_LITERAL_END,
             };
-            token.id = TOKEN_ID_STRING_LITERAL;
+
+            i += 1;
         }
         else if (ch0 == '\'')
         {
@@ -1217,12 +1214,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
                 ch = ch1;
                 if (ch1 == '\'')
                 {
-                    *error = (LexerError){
-                        .id = LEXER_ERROR_ID_CHARACTER_LITERAL_EMPTY,
-                        .offset = start_index,
-                        .line = line,
-                        .column = column,
-                    };
+                    token->id = TOKEN_ID_ERROR_CHARACTER_LITERAL_EMPTY;
                     return (TokenList) { tokens, token_count };
                 }
             }
@@ -1232,19 +1224,11 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
 
             if (terminating_character != '\'')
             {
-                *error = (LexerError){
-                    .id = LEXER_ERROR_ID_CHARACTER_LITERAL_BADLY_TERMINATED,
-                    .offset = start_index,
-                    .line = line,
-                    .column = column,
-                };
+                token->id = TOKEN_ID_ERROR_CHARACTER_LITERAL_BADLY_TERMINATED;
                 return (TokenList) { tokens, token_count };
             }
 
-            token.content = (TokenContent) {
-                .integer = ch,
-            };
-            token.id = TOKEN_ID_CHARACTER_LITERAL;
+            token->id = TOKEN_ID_CHARACTER_LITERAL;
         }
         else
         {
@@ -1257,22 +1241,18 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
 
                 i += (is_compare_equal | is_switch_token);
 
-                TokenId id;
-
                 if (is_compare_equal)
                 {
-                    id = TOKEN_ID_COMPARE_EQUAL;
+                    token->id = TOKEN_ID_COMPARE_EQUAL;
                 }
                 else if (is_switch_token)
                 {
-                    id = TOKEN_ID_SWITCH_CASE;
+                    token->id = TOKEN_ID_SWITCH_CASE;
                 }
                 else
                 {
-                    id = TOKEN_ID_ASSIGN;
+                    token->id = TOKEN_ID_ASSIGN;
                 }
-
-                token.id = id;
             }
             else if (ch0 == '!')
             {
@@ -1281,65 +1261,59 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
                 let is_compare_not_equal = ch1 == '=';
                 i += is_compare_not_equal;
 
-                token.id = is_compare_not_equal ? TOKEN_ID_COMPARE_NOT_EQUAL : TOKEN_ID_EXCLAMATION_DOWN;
+                token->id = is_compare_not_equal ? TOKEN_ID_COMPARE_NOT_EQUAL : TOKEN_ID_EXCLAMATION_DOWN;
             }
             else if (ch0 == '<')
             {
-                TokenId id;
                 if (ch1 == '<')
                 {
                     if (ch2 == '=')
                     {
-                        id = TOKEN_ID_SHIFT_LEFT_ASSIGN;
+                        token->id = TOKEN_ID_SHIFT_LEFT_ASSIGN;
                         i += 3;
                     }
                     else
                     {
-                        id = TOKEN_ID_SHIFT_LEFT;
+                        token->id = TOKEN_ID_SHIFT_LEFT;
                         i += 2;
                     }
                 }
                 else if (ch1 == '=')
                 {
-                    id = TOKEN_ID_COMPARE_LESS_EQUAL;
+                    token->id = TOKEN_ID_COMPARE_LESS_EQUAL;
                     i += 2;
                 }
                 else
                 {
-                    id = TOKEN_ID_COMPARE_LESS;
+                    token->id = TOKEN_ID_COMPARE_LESS;
                     i += 1;
                 }
-
-                token.id = id;
             }
             else if (ch0 == '>')
             {
-                TokenId id;
                 if (ch1 == '>')
                 {
                     if (ch2 == '=')
                     {
-                        id = TOKEN_ID_SHIFT_RIGHT_ASSIGN;
+                        token->id = TOKEN_ID_SHIFT_RIGHT_ASSIGN;
                         i += 3;
                     }
                     else
                     {
-                        id = TOKEN_ID_SHIFT_RIGHT;
+                        token->id = TOKEN_ID_SHIFT_RIGHT;
                         i += 2;
                     }
                 }
                 else if (ch1 == '=')
                 {
-                    id = TOKEN_ID_COMPARE_GREATER_EQUAL;
+                    token->id = TOKEN_ID_COMPARE_GREATER_EQUAL;
                     i += 2;
                 }
                 else
                 {
-                    id = TOKEN_ID_COMPARE_GREATER;
+                    token->id = TOKEN_ID_COMPARE_GREATER;
                     i += 1;
                 }
-
-                token.id = id;
             }
             else if (ch0 == '+')
             {
@@ -1349,7 +1323,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
 
                 i += is_assign;
 
-                token.id = is_assign ? TOKEN_ID_ADD_ASSIGN : TOKEN_ID_PLUS;
+                token->id = is_assign ? TOKEN_ID_ADD_ASSIGN : TOKEN_ID_PLUS;
             }
             else if (ch0 == '-')
             {
@@ -1359,7 +1333,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
 
                 i += is_assign;
 
-                token.id = is_assign ? TOKEN_ID_SUB_ASSIGN : TOKEN_ID_DASH;
+                token->id = is_assign ? TOKEN_ID_SUB_ASSIGN : TOKEN_ID_DASH;
             }
             else if (ch0 == '*')
             {
@@ -1369,7 +1343,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
 
                 i += is_assign;
 
-                token.id = is_assign ? TOKEN_ID_MUL_ASSIGN : TOKEN_ID_ASTERISK;
+                token->id = is_assign ? TOKEN_ID_MUL_ASSIGN : TOKEN_ID_ASTERISK;
             }
             else if (ch0 == '/')
             {
@@ -1379,7 +1353,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
 
                 i += is_assign;
 
-                token.id = is_assign ? TOKEN_ID_DIV_ASSIGN : TOKEN_ID_FORWARD_SLASH;
+                token->id = is_assign ? TOKEN_ID_DIV_ASSIGN : TOKEN_ID_FORWARD_SLASH;
             }
             else if (ch0 == '%')
             {
@@ -1389,7 +1363,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
 
                 i += is_assign;
 
-                token.id = is_assign ? TOKEN_ID_REM_ASSIGN : TOKEN_ID_PERCENTAGE;
+                token->id = is_assign ? TOKEN_ID_REM_ASSIGN : TOKEN_ID_PERCENTAGE;
             }
             else if (ch0 == '&')
             {
@@ -1399,7 +1373,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
 
                 i += is_assign;
 
-                token.id = is_assign ? TOKEN_ID_BITWISE_AND_ASSIGN : TOKEN_ID_AMPERSAND;
+                token->id = is_assign ? TOKEN_ID_BITWISE_AND_ASSIGN : TOKEN_ID_AMPERSAND;
             }
             else if (ch0 == '|')
             {
@@ -1409,7 +1383,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
 
                 i += is_assign;
 
-                token.id = is_assign ? TOKEN_ID_BITWISE_OR_ASSIGN : TOKEN_ID_BAR;
+                token->id = is_assign ? TOKEN_ID_BITWISE_OR_ASSIGN : TOKEN_ID_BAR;
             }
             else if (ch0 == '^')
             {
@@ -1419,7 +1393,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
 
                 i += is_assign;
 
-                token.id = is_assign ? TOKEN_ID_BITWISE_XOR_ASSIGN : TOKEN_ID_CARET;
+                token->id = is_assign ? TOKEN_ID_BITWISE_XOR_ASSIGN : TOKEN_ID_CARET;
             }
             else if (ch0 == '.')
             {
@@ -1428,144 +1402,127 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
                 let is_ch1_question = ch1 == '?';
                 let is_ch2_dot = ch2 == '.';
 
-                TokenId id;
-
                 if (is_ch2_dot & is_ch1_dot)
                 {
-                    id = TOKEN_ID_TRIPLE_DOT;
+                    token->id = TOKEN_ID_TRIPLE_DOT;
                     i += 3;
                 }
                 else if (is_ch1_dot)
                 {
-                    id = TOKEN_ID_DOUBLE_DOT;
+                    token->id = TOKEN_ID_DOUBLE_DOT;
                     i += 2;
                 }
                 else if (is_ch1_address)
                 {
-                    id = TOKEN_ID_POINTER_DEREFERENCE;
+                    token->id = TOKEN_ID_POINTER_DEREFERENCE;
                     i += 2;
                 }
                 else if (is_ch1_question)
                 {
-                    id = TOKEN_ID_OPTIONAL_DEREFERENCE;
+                    token->id = TOKEN_ID_OPTIONAL_DEREFERENCE;
                     i += 2;
                 }
                 else
                 {
-                    id = TOKEN_ID_DOT;
+                    token->id = TOKEN_ID_DOT;
                     i += 1;
                 }
-
-                token.id = id;
             }
             else if (ch0 == ',')
             {
                 i += 1;
-                token.id = TOKEN_ID_COMMA;
+                token->id = TOKEN_ID_COMMA;
             }
             else if (ch0 == ';')
             {
                 i += 1;
-                token.id = TOKEN_ID_SEMICOLON;
+                token->id = TOKEN_ID_SEMICOLON;
             }
             else if (ch0 == ':')
             {
                 i += 1;
-                token.id = TOKEN_ID_COLON;
+                token->id = TOKEN_ID_COLON;
             }
             else if (ch0 == '?')
             {
                 i += 1;
-                token.id = TOKEN_ID_QUESTION;
+                token->id = TOKEN_ID_QUESTION;
             }
             else if (ch0 == '(')
             {
                 i += 1;
-                token.id = TOKEN_ID_LEFT_PARENTHESIS;
+                token->id = TOKEN_ID_LEFT_PARENTHESIS;
             }
             else if (ch0 == ')')
             {
                 i += 1;
-                token.id = TOKEN_ID_RIGHT_PARENTHESIS;
+                token->id = TOKEN_ID_RIGHT_PARENTHESIS;
             }
             else if (ch0 == '{')
             {
                 i += 1;
-                token.id = TOKEN_ID_LEFT_BRACE;
+                token->id = TOKEN_ID_LEFT_BRACE;
             }
             else if (ch0 == '}')
             {
                 i += 1;
-                token.id = TOKEN_ID_RIGHT_BRACE;
+                token->id = TOKEN_ID_RIGHT_BRACE;
             }
             else if (ch0 == '[')
             {
                 i += 1;
-                token.id = TOKEN_ID_LEFT_BRACKET;
+                token->id = TOKEN_ID_LEFT_BRACKET;
             }
             else if (ch0 == ']')
             {
                 i += 1;
-                token.id = TOKEN_ID_RIGHT_BRACKET;
+                token->id = TOKEN_ID_RIGHT_BRACKET;
             }
             else if (ch0 == '@')
             {
                 i += 1;
-                token.id = TOKEN_ID_AT;
+                token->id = TOKEN_ID_AT;
             }
             else if (ch0 == '\\')
             {
                 i += 1;
-                token.id = TOKEN_ID_BACKSLASH;
+                token->id = TOKEN_ID_BACKSLASH;
             }
             else if (ch0 == '`')
             {
                 i += 1;
-                token.id = TOKEN_ID_BACKTICK;
+                token->id = TOKEN_ID_BACKTICK;
             }
             else if (ch0 == '#')
             {
                 i += 1;
-                token.id = TOKEN_ID_HASH;
+                token->id = TOKEN_ID_HASH;
             }
             else if (ch0 == '$')
             {
                 i += 1;
-                token.id = TOKEN_ID_DOLLAR;
+                token->id = TOKEN_ID_DOLLAR;
             }
             else if (ch0 == '~')
             {
                 i += 1;
-                token.id = TOKEN_ID_TILDE;
+                token->id = TOKEN_ID_TILDE;
             }
-            else if (ch0 > 0x7f)
+            else if (unlikely(unlikely(ch0 >= 0x7f) | unlikely(ch0 < ' ')))
             {
-                *error = (LexerError){
-                    .id = LEXER_ERROR_ID_NOT_SUPPORTED_X_ASCII_OR_UNICODE,
-                        .offset = start_index,
-                        .line = line,
-                        .column = column,
-                };
-                return (TokenList) { tokens, token_count };
-            }
-            else if (ch0 < ' ')
-            {
-                *error = (LexerError){
-                    .id = LEXER_ERROR_ID_NON_PRINTABLE_ASCII,
-                        .offset = start_index,
-                        .line = line,
-                        .column = column,
-                };
-                return (TokenList) { tokens, token_count };
-            }
-            else if (ch0 == 0x7f) // DEL
-            {
-                *error = (LexerError){
-                    .id = LEXER_ERROR_ID_FOUND_DEL,
-                        .offset = start_index,
-                        .line = line,
-                        .column = column,
-                };
+                if (ch0 > 0x7f)
+                {
+                    token->id = TOKEN_ID_ERROR_NOT_SUPPORTED_X_ASCII_OR_UNICODE;
+                }
+                else if (ch0 < ' ')
+                {
+                    token->id = TOKEN_ID_ERROR_NON_PRINTABLE_ASCII;
+                }
+                else
+                {
+                    token->id = TOKEN_ID_ERROR_FOUND_DEL;
+                }
+
                 return (TokenList) { tokens, token_count };
             }
             else
@@ -1574,14 +1531,15 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
             }
         }
 
-#if 0
-        *new_token = token;
-#else
-        static_assert(sizeof(Token) == 32);
-        _mm256_storeu_epi8(new_token, _mm256_loadu_epi8(&token));
-#endif
-        token_count += 1;
+        assert(token->id != TOKEN_ID_NONE);
     }
+
+    let eof = arena_allocate(stable_arena, Token, 1);
+    *eof = (Token) {
+        .offset = i - line_character_offset,
+        .id = TOKEN_ID_EOF,
+    };
+    token_count += 1;
 
 #if MEASURE_LEXING
     let lexing_end = take_timestamp();
