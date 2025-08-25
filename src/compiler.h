@@ -28,6 +28,11 @@ typedef enum ScopeId : u8
     SCOPE_ID_BLOCK,
 } ScopeId;
 
+STRUCT(StringReference)
+{
+    RawReference v;
+};
+
 STRUCT(ScopeReference)
 {
     RawReference v;
@@ -58,6 +63,16 @@ STRUCT(TopLevelDeclarationReference)
     RawReference v;
 };
 
+STRUCT(VariableReference)
+{
+    RawReference v;
+};
+
+STRUCT(ArgumentReference)
+{
+    RawReference v;
+};
+
 STRUCT(Value)
 {
     ValueId id;
@@ -70,6 +85,22 @@ STRUCT(Type)
     TypeReference next;
 };
 
+STRUCT(Variable)
+{
+    StringReference name;
+    ValueReference storage;
+    TypeReference type;
+    ScopeReference scope;
+    u32 line;
+    u32 column;
+};
+
+STRUCT(Argument)
+{
+    Variable variable;
+    u32 index;
+};
+
 STRUCT(Scope)
 {
     ScopeReference parent;
@@ -78,8 +109,8 @@ STRUCT(Scope)
 
 STRUCT(File)
 {
-    str content;
-    str path;
+    StringReference content;
+    StringReference path;
     Scope scope;
     FileReference next;
 };
@@ -113,6 +144,8 @@ STRUCT(TopLevelDeclaration)
 typedef enum UnitArenaKind
 {
     UNIT_ARENA_COMPILE_UNIT,
+    UNIT_ARENA_TOKEN,
+    UNIT_ARENA_STRING,
     UNIT_ARENA_TYPE,
     UNIT_ARENA_VALUE,
     UNIT_ARENA_COUNT,
@@ -132,36 +165,51 @@ static inline Arena* unit_arena(CompileUnit* unit, UnitArenaKind kind)
     return result;
 }
 
-static inline ScopeReference scope_offset_from_pointer(CompileUnit* restrict unit, Scope* scope)
-{
-    let arena = unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
-    let scope_byte_pointer = (u8*)scope;
-    let arena_byte_pointer = (u8*)arena;
-    let arena_bottom = arena_byte_pointer;
-    let arena_top = arena_byte_pointer + arena->position;
-    assert(scope_byte_pointer > arena_bottom && scope_byte_pointer < arena_top);
-    let sub = scope_byte_pointer - arena_byte_pointer;
-    assert(sub < UINT32_MAX);
-    return (ScopeReference) {
-        .v = (u32)(sub + 1),
-    };
+#define reference_offset_functions(O, o, AU) \
+static inline O ## Reference o ## _reference_from_pointer(CompileUnit* restrict unit, O* restrict o) \
+{\
+    let arena = unit_arena(unit, AU);\
+    let o ## _byte_pointer = (u8*)o;\
+    let arena_byte_pointer = (u8*)arena;\
+    let arena_bottom = arena_byte_pointer;\
+    let arena_top = arena_byte_pointer + arena->position;\
+    assert(o ## _byte_pointer > arena_bottom && o ## _byte_pointer < arena_top);\
+    let sub = o ## _byte_pointer - arena_byte_pointer;\
+    assert(sub < UINT32_MAX);\
+    return (O ## Reference) {\
+        .v = (u32)(sub + 1),\
+    };\
+}\
+static inline O* restrict o ## _pointer_from_reference(CompileUnit* restrict unit, O ## Reference o_reference) \
+{\
+    assert(o_reference.v != 0);\
+    let arena = unit_arena(unit, AU);\
+    let arena_byte_pointer = (u8*)arena;\
+    let arena_bottom = arena_byte_pointer;\
+    let arena_top = arena_byte_pointer + arena->position;\
+    let o ## _byte_pointer = arena_byte_pointer + (o_reference.v - 1);\
+    assert(o ## _byte_pointer > arena_bottom && o ## _byte_pointer < arena_top);\
+    let o = (O* restrict)o ## _byte_pointer; \
+    return o;\
 }
 
-static FileReference file_offset_from_pointer(CompileUnit* restrict unit, File* restrict file)
-{
-    let arena = unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
-    let file_byte_pointer = (u8*)file;
-    let arena_byte_pointer = (u8*)arena;
-    let arena_bottom = arena_byte_pointer;
-    let arena_top = arena_byte_pointer + arena->position;
-    assert(file_byte_pointer > arena_bottom && file_byte_pointer < arena_top);
-    let sub = file_byte_pointer - arena_byte_pointer;
-    assert(sub < UINT32_MAX);
-    return (FileReference) {
-        .v = (u32)(sub + 1),
-    };
-}
+reference_offset_functions(Scope, scope, UNIT_ARENA_COMPILE_UNIT)
+reference_offset_functions(File, file, UNIT_ARENA_COMPILE_UNIT)
 
+// static FileReference file_offset_from_pointer(CompileUnit* restrict unit, File* restrict file)
+// {
+//     let arena = unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
+//     let file_byte_pointer = (u8*)file;
+//     let arena_byte_pointer = (u8*)arena;
+//     let arena_bottom = arena_byte_pointer;
+//     let arena_top = arena_byte_pointer + arena->position;
+//     assert(file_byte_pointer > arena_bottom && file_byte_pointer < arena_top);
+//     let sub = file_byte_pointer - arena_byte_pointer;
+//     assert(sub < UINT32_MAX);
+//     return (FileReference) {
+//         .v = (u32)(sub + 1),
+//     };
+// }
 
 void compile_unit(StringSlice paths);
 bool compiler_is_single_threaded(void);

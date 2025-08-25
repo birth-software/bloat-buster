@@ -2,7 +2,7 @@
 
 STRUCT(Parser)
 {
-    str content;
+    StringReference content;
     Token* restrict pointer;
     u32 offset;
     u32 line_byte_offset;
@@ -71,6 +71,12 @@ static bool identifier_parsing_valid(IdentifierParsing p)
     return p.string.pointer != 0;
 }
 
+static str file_content(CompileUnit* unit, FileReference file_index)
+{
+    let file = file_pointer_from_reference(unit, file_index);
+    trap();
+}
+
 static IdentifierParsing end_identifier(CompileUnit* restrict unit, Parser* restrict parser, Token* restrict identifier_start)
 {
     assert(identifier_start);
@@ -84,13 +90,14 @@ static IdentifierParsing end_identifier(CompileUnit* restrict unit, Parser* rest
         u32 start = identifier_start->offset;
         u32 end = identifier_end->offset;
         assert(end > start);
-        char* restrict pointer = parser->content.pointer + parser->line_byte_offset + start;
-        u64 length = (end - start);
-
-        result = (IdentifierParsing) {
-            .string = (str) { pointer, length },
-            .line_offset = start,
-        };
+        trap();
+        // char* restrict pointer = parser->content.pointer + parser->line_byte_offset + start;
+        // u64 length = (end - start);
+        //
+        // result = (IdentifierParsing) {
+        //     .string = (str) { pointer, length },
+        //     .line_offset = start,
+        // };
     }
 
     return result;
@@ -143,27 +150,16 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
     trap();
 }
 
-void parse_file(CompileUnit* restrict unit, str path, str content, TokenList tl)
+void parse_file(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
 {
-    let global_scope = scope_offset_from_pointer(unit, &unit->scope);
     Parser p = {
-        .content = content,
+        .content = file_pointer->content,
         .pointer = tl.pointer,
     };
     Parser* restrict parser = &p;
-    let arena = unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
-    let file = arena_allocate(arena, File, 1);
-    *file = (File) {
-        .content = content,
-        .path = path,
-        .scope = {
-            .parent = global_scope,
-            .id = SCOPE_ID_FILE,
-        },
-        .next = 0,
-    };
 
-    let scope = scope_offset_from_pointer(unit, &file->scope);
+    let arena = unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
+    let scope = scope_reference_from_pointer(unit, &file_pointer->scope);
 
     Token* global_token;
     while ((global_token = consume_token(parser))->id != TOKEN_ID_EOF)

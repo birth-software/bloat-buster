@@ -1368,7 +1368,7 @@ static Thread threads[5];
 static u32 thread_count;
 static u32 per_thread_work;
 
-static CompileUnit* compile_unit_create(str path, str content)
+static CompileUnit* compile_unit_create()
 {
     let arena = arena_initialize((ArenaInitialization) {
         .count = UNIT_ARENA_COUNT,
@@ -1378,6 +1378,70 @@ static CompileUnit* compile_unit_create(str path, str content)
     *compile_unit = (CompileUnit) {};
 
     return compile_unit;
+}
+
+static StringReference string_reference_from_string(CompileUnit* restrict unit, str s)
+{
+    let arena = unit_arena(unit, UNIT_ARENA_STRING);
+    let arena_byte_pointer = (char*)arena;
+    let arena_bottom = arena_byte_pointer;
+    let arena_top = arena_byte_pointer + arena->position;
+    assert((arena_bottom > s.pointer) & (s.pointer < arena_top));
+    let string_top = s.pointer + s.length;
+    assert(string_top <= arena_top);
+
+    trap();
+}
+
+static StringReference allocate_string_if_needed(CompileUnit* restrict unit, str s)
+{
+    let arena = unit_arena(unit, UNIT_ARENA_STRING);
+    let arena_byte_pointer = (char*)arena;
+    let arena_bottom = arena_byte_pointer;
+    let arena_top = arena_byte_pointer + arena->position;
+
+    if ((s.pointer > arena_bottom) & (s.pointer < arena_top))
+    {
+        // let string_reference = string_reference_from_string(unit, s);
+        trap();
+    }
+    else
+    {
+        assert(s.length <= UINT32_MAX);
+        let string = (char* restrict) arena_allocate_bytes(arena, s.length + sizeof(u32) + 1, alignof(u32));
+        *(u32*)string = (u32)s.length;
+        memcpy(string + sizeof(u32), s.pointer, s.length);
+        *(string + sizeof(u32) + s.length) = 0;
+        let big_offset = string - arena_byte_pointer;
+        assert(big_offset + 1 < UINT32_MAX);
+        let offset = (u32)big_offset;
+        let reference = (StringReference) {
+            .v = offset + 1,
+        };
+        return reference;
+    }
+}
+
+static void crunch_file(CompileUnit* restrict unit, str path)
+{
+    let arena = unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
+    str content = file_read(arena, path, (FileReadOptions){});
+    let path_reference = allocate_string_if_needed(unit, path);
+
+    let global_scope = scope_reference_from_pointer(unit, &unit->scope);
+    let file = arena_allocate(arena, File, 1);
+    trap();
+    // *file = (File) {
+    //     .content = content,
+    //     .path = path,
+    //     .scope = {
+    //         .parent = global_scope,
+    //         .id = SCOPE_ID_FILE,
+    //     },
+    //     .next = 0,
+    // };
+    // let scope = scope_offset_from_pointer(unit, &file->scope);
+    // let tl = lex(thread_arena, else_arena, content.pointer, content.length);
 }
 
 void* thread_worker(void* arg)
@@ -1400,21 +1464,23 @@ void* thread_worker(void* arg)
 #else
             S("tests/tests.bbb");
 #endif
-    str content = file_read(thread_arena, path);
 
-    let tl = lex(thread_arena, else_arena, content.pointer, content.length);
-    if (tl.length)
-    {
-        let last_token = tl.pointer[tl.length - 1];
-        if (last_token.id != TOKEN_ID_EOF)
-        {
-            trap();
-        }
+    let unit = compile_unit_create();
 
-        let compile_unit = compile_unit_create(path, content);
+    crunch_file(unit, path);
 
-        parse_file(compile_unit, path, content, tl);
-    }
+    // if (tl.length)
+    // {
+    //     let last_token = tl.pointer[tl.length - 1];
+    //     if (last_token.id != TOKEN_ID_EOF)
+    //     {
+    //         trap();
+    //     }
+    //
+    //     parse_file(unit, path, content, tl);
+    // }
+
+    trap();
 #if USE_IO_URING
     struct io_uring ring;
     let ret = io_uring_queue_init(thread_file_count * 2, &ring, 0);

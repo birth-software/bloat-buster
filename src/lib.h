@@ -10,6 +10,9 @@
 #define likely(x) __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
 
+#define MIN(a,b) (((a)<(b))?(a):(b))
+#define MAX(a,b) (((a)>(b))?(a):(b))
+
 #if __APPLE__ &&  __aarch64__
 #define CACHE_LINE_GUESS (128)
 #else
@@ -176,6 +179,14 @@ STRUCT(ArenaInitialization)
     u64 count;
 };
 
+STRUCT(FileReadOptions)
+{
+    u32 start_padding;
+    u32 start_alignment;
+    u32 end_padding;
+    u32 end_alignment;
+};
+
 typedef struct FileDescriptor FileDescriptor;
 
 typedef 
@@ -200,7 +211,7 @@ void os_file_close(FileDescriptor* file_descriptor);
 
 #define arena_allocate(arena, T, count) (T*) arena_allocate_bytes(arena, sizeof(T) * count, alignof(T))
 
-str file_read(Arena* arena, str path);
+str file_read(Arena* arena, str path, FileReadOptions options);
 
 TimeDataType take_timestamp();
 u64 ns_between(TimeDataType start, TimeDataType end);
