@@ -451,6 +451,16 @@ str file_read(Arena* arena, str path, FileReadOptions options)
 
     if (fd)
     {
+        if (!options.start_alignment)
+        {
+            options.start_alignment = 1;
+        }
+
+        if (!options.end_alignment)
+        {
+            options.end_alignment = 1;
+        }
+
         let file_size = os_file_get_size(fd);
         let allocation_size = align_forward(file_size + options.start_padding + options.end_padding, options.end_alignment);
         let allocation_bottom = allocation_size - (file_size + options.start_padding);

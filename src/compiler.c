@@ -1386,11 +1386,18 @@ static StringReference string_reference_from_string(CompileUnit* restrict unit, 
     let arena_byte_pointer = (char*)arena;
     let arena_bottom = arena_byte_pointer;
     let arena_top = arena_byte_pointer + arena->position;
-    assert((arena_bottom > s.pointer) & (s.pointer < arena_top));
+    assert((arena_bottom < s.pointer) & (arena_top > s.pointer));
     let string_top = s.pointer + s.length;
     assert(string_top <= arena_top);
+    let length_pointer = (u32*)s.pointer - 1;
+    let length = *length_pointer;
+    assert(s.length == length);
 
-    trap();
+    let diff = (char*)length_pointer - arena_top;
+    assert(diff < UINT32_MAX);
+    return (StringReference) {
+        .v = diff + 1,
+    };
 }
 
 static StringReference allocate_string_if_needed(CompileUnit* restrict unit, str s)
@@ -1424,12 +1431,29 @@ static StringReference allocate_string_if_needed(CompileUnit* restrict unit, str
 
 static void crunch_file(CompileUnit* restrict unit, str path)
 {
-    let arena = unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
-    str content = file_read(arena, path, (FileReadOptions){});
+    let string_arena = unit_arena(unit, UNIT_ARENA_STRING);
+    str content = file_read(string_arena, path, (FileReadOptions){
+        .start_padding = sizeof(u32),
+        .start_alignment = alignof(u32),
+    });
+    assert(content.length < UINT32_MAX);
+    *((u32*)content.pointer - 1) = content.length;
+    let content_reference = string_reference_from_string(unit, content);
+
     let path_reference = allocate_string_if_needed(unit, path);
 
     let global_scope = scope_reference_from_pointer(unit, &unit->scope);
+
+    let arena = unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
     let file = arena_allocate(arena, File, 1);
+    *file = (File) {
+        .content = content_reference,
+        .path = path_reference,
+        .scope = {
+            .parent = global_scope,
+            .id = SCOPE_ID_FILE,
+        },
+    };
     trap();
     // *file = (File) {
     //     .content = content,
