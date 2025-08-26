@@ -269,9 +269,37 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
             }
 
             let return_type = parse_type(unit, parser, scope, 0);
-            let argument_types = arena_allocate(unit_arena(unit, UNIT_ARENA_COMPILE_UNIT), TypeReference, argument_count);
+            let allocation_size = (sizeof(TypeReference) * (argument_count + 1)) + (sizeof(AbiInformation) * (argument_count + 1));
+            static_assert(alignof(TypeReference) == alignof(AbiInformation));
+            let semantic_type_allocation = arena_allocate_bytes(unit_arena(unit, UNIT_ARENA_COMPILE_UNIT), allocation_size, MAX(alignof(TypeReference), alignof(AbiInformation)));
+            let semantic_types = (TypeReference*)semantic_type_allocation;
+            semantic_types[0] = return_type;
 
-            todo();
+            if (argument_count)
+            {
+                let first_argument_index = argument_reference_from_pointer(unit, first_argument);
+                trap();
+            }
+
+            let function_type = arena_allocate(unit_arena(unit, UNIT_ARENA_TYPE), Type, 1);
+            *function_type = (Type) {
+                .function = {
+                    .semantic_types = semantic_types,
+                    .abi_types = 0,
+                    .register_count = {},
+                    .semantic_argument_count = argument_count,
+                    .abi_argument_count = 0,
+                    .calling_convention = calling_convention,
+                    .is_variable_argument = is_variable_argument,
+                },
+                .name = {},
+                .scope = scope,
+                .id = TYPE_ID_FUNCTION,
+                .analyzed = 0,
+            };
+
+            let reference = type_reference_from_pointer(unit, function_type);
+            return reference;
         }
         break; case TOKEN_ID_IDENTIFIER_START:
         {
@@ -285,17 +313,17 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
             assert(*token_start == 's' || *token_start == 'u');
             let parsing_result = parse_decimal_vectorized(token_start + 1);
             assert(parsing_result.i);
+            let bit_count = parsing_result.value;
             let is_signed = *token_start == 's';
 
-            todo();
+            let integer_type = get_integer_type(unit, bit_count, is_signed);
+            return integer_type;
         }
         break; default:
         {
             todo();
         }
     }
-
-    todo();
 }
 
 void parse_file(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
@@ -337,7 +365,7 @@ void parse_file(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
                 if (unlikely(!assign))
                 {
                     global_type = parse_type(unit, parser, scope, 0);
-                    assign = expect_token(parser, TOKEN_ID_COLON);
+                    assign = expect_token(parser, TOKEN_ID_ASSIGN);
                 }
 
                 if (!assign)

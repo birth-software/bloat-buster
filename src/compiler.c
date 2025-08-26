@@ -5,7 +5,6 @@
 #include <stdatomic.h>
 //#include <time.h>
 #include <stdio.h>
-#include <stdlib.h>
 #ifdef __linux__
 #include <unistd.h>
 #include <pthread.h>
@@ -1385,8 +1384,11 @@ static CompileUnit* compile_unit_create()
     let unit = arena_allocate(arena, CompileUnit, 1);
     *unit = (CompileUnit) {};
     let global_scope = scope_reference_from_pointer(unit, &unit->scope);
+    let type_arena = unit_arena(unit, UNIT_ARENA_TYPE);
+    assert(type_arena->position == sizeof(Arena));
 
-    let base_type_allocation = arena_allocate(arena, Type, classic_integer_type_count + big_integer_type_count + void_noreturn_type_count);
+    let base_type_count = classic_integer_type_count + big_integer_type_count + void_noreturn_type_count;
+    let base_type_allocation = arena_allocate(type_arena, Type, base_type_count);
 
     let type = base_type_allocation;
 
@@ -1511,9 +1513,27 @@ static CompileUnit* compile_unit_create()
         .analyzed = 1,
     };
 
-    trap();
+    let void_value = arena_allocate(unit_arena(unit, UNIT_ARENA_VALUE), Value, 1);
+    *void_value = (Value) {
+        .type = get_void_type(unit),
+        .id = VALUE_ID_DISCARD,
+    };
 
     return unit;
+}
+
+TypeReference get_void_type(CompileUnit* restrict unit)
+{
+    let void_offset = classic_integer_type_count + big_integer_type_count;
+    let void_type = type_reference_from_index(unit, void_offset);
+    return void_type;
+}
+
+TypeReference get_noreturn_type(CompileUnit* restrict unit)
+{
+    let void_type = get_void_type(unit);
+    void_type.v += 1;
+    return void_type;
 }
 
 StringReference allocate_string(CompileUnit* restrict unit, str s)
@@ -1643,7 +1663,11 @@ void* thread_worker(void* arg)
 
 TypeReference get_integer_type(CompileUnit* restrict unit, u64 bit_count, bool is_signed)
 {
-    trap();
+    let type_arena = unit_arena(unit, UNIT_ARENA_TYPE);
+    assert(bit_count != 0);
+    assert(bit_count <= 64 || bit_count == 128 || bit_count == 256 || bit_count == 512);
+    let type_index = bit_count > 64 ? (1ULL << __builtin_ctzg(bit_count - 128)) * 2 + is_signed : is_signed * 64 + (bit_count - 1);
+    return type_reference_from_index(unit, type_index);
 }
 
 bool compiler_main(int argc, const char* argv[], char** envp)

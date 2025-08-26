@@ -90,8 +90,9 @@ STRUCT(ArgumentReference)
 
 STRUCT(Value)
 {
-    ValueId id;
+    TypeReference type;
     ValueReference next;
+    ValueId id;
 };
 
 STRUCT(TypeInteger)
@@ -110,16 +111,134 @@ typedef enum TypeFloat : u8
     TYPE_FLOAT_COUNT,
 } TypeFloat;
 
+UNION(AbiRegisterCount)
+{
+    struct
+    {
+        u32 gpr;
+        u32 sse;
+    } system_v;
+};
+
+typedef enum AbiKind : u8
+{
+    ABI_KIND_IGNORE,
+    ABI_KIND_DIRECT,
+    ABI_KIND_EXTEND,
+    ABI_KIND_INDIRECT,
+    ABI_KIND_INDIRECT_ALIASED,
+    ABI_KIND_EXPAND,
+    ABI_KIND_COERCE_AND_EXPAND,
+    ABI_KIND_IN_ALLOCA,
+} AbiKind;
+
+STRUCT(AbiFlags)
+{
+    AbiKind kind;
+};
+
+STRUCT(AbiInformation)
+{
+    TypeReference semantic_type;
+    TypeReference coerce_to_type;
+    union
+    {
+        TypeReference type;
+        TypeReference unpadded_coerce_and_expand_type;
+    } padding;
+    union
+    {
+        struct
+        {
+            u32 offset;
+            u32 alignment;
+        } direct;
+        struct
+        {
+            u32 alignment;
+            u32 address_space;
+        } indirect;
+        u32 alloca_field_index;
+    } attributes;
+    struct
+    {
+        u16 padding_in_reg: 1;
+        u16 in_alloca_sret: 1;
+        u16 in_alloca_indirect: 1;
+        u16 indirect_by_value: 1;
+        u16 indirect_realign: 1;
+        u16 sret_after_this: 1;
+        u16 in_reg: 1;
+        u16 can_be_flattened: 1;
+        u16 sign_extension: 1;
+        AbiKind kind:3;
+    } flags;
+    u16 padding_argument_index;
+    u16 abi_start;
+    u16 abi_count;
+};
+
+static_assert(alignof(AbiInformation) == alignof(TypeReference));
+
+STRUCT(TypeFunction)
+{
+    TypeReference* semantic_types; // This hides inside the same allocation AbiInformation* abi_informations;
+    TypeReference* abi_types;
+    AbiRegisterCount register_count;
+    u16 semantic_argument_count;
+    u16 abi_argument_count;
+    CallingConvention calling_convention;
+    bool is_variable_argument;
+};
+
+static inline TypeReference get_semantic_return_type(TypeFunction* restrict function)
+{
+    return function->semantic_types[0];
+}
+
+static inline TypeReference get_semantic_argument_type(TypeFunction* restrict function, u16 semantic_argument_index)
+{
+    assert(semantic_argument_index < function->semantic_argument_count);
+    return function->semantic_types[semantic_argument_index + 1];
+}
+
+static inline TypeReference get_abi_return_type(TypeFunction* restrict function)
+{
+    return function->abi_types[0];
+}
+
+static inline TypeReference get_abi_argument_type(TypeFunction* restrict function, u16 abi_argument_index)
+{
+    assert(abi_argument_index < function->abi_argument_count);
+    return function->abi_types[abi_argument_index + 1];
+}
+
+static inline AbiInformation* restrict get_abi_informations(TypeFunction* restrict function)
+{
+    return (AbiInformation*)(function->semantic_types + function->semantic_argument_count);
+}
+
+static inline AbiInformation* restrict get_return_abi_information(TypeFunction* restrict function)
+{
+    return &get_abi_informations(function)[0];
+}
+
+static inline AbiInformation* restrict get_argument_abi_information(TypeFunction* restrict function, u16 semantic_argument_index)
+{
+    assert(semantic_argument_index < function->semantic_argument_count);
+    return &get_abi_informations(function)[semantic_argument_index + 1];
+}
+
 STRUCT(Type)
 {
     union
     {
         TypeInteger integer;
         TypeFloat fp;
+        TypeFunction function;
     };
     StringReference name;
     ScopeReference scope;
-    TypeReference next;
     TypeId id;
     bool analyzed;
 };
@@ -237,6 +356,7 @@ static inline O* restrict o ## _pointer_from_reference(CompileUnit* restrict uni
 
 reference_offset_functions(Scope, scope, UNIT_ARENA_COMPILE_UNIT)
 reference_offset_functions(File, file, UNIT_ARENA_COMPILE_UNIT)
+reference_offset_functions(Argument, argument, UNIT_ARENA_COMPILE_UNIT)
 
 static inline StringReference string_reference_from_string(CompileUnit* restrict unit, str s)
 {
@@ -278,6 +398,35 @@ static inline str string_from_reference(CompileUnit* restrict unit, StringRefere
     return (str){ .pointer = string_pointer, .length = string_length };
 }
 
+static inline TypeReference type_reference_from_pointer(CompileUnit* restrict unit, Type* type)
+{
+    let type_arena = unit_arena(unit, UNIT_ARENA_TYPE);
+    let arena_byte_pointer = (u8*)type_arena;
+    let arena_position = type_arena->position;
+    let arena_bottom = arena_byte_pointer;
+    let arena_top = arena_byte_pointer + arena_position;
+    let type_byte_pointer = (u8*)type;
+    assert(type_byte_pointer > arena_bottom && type_byte_pointer < arena_top);
+    let diff = type_byte_pointer - (arena_bottom + sizeof(Arena));
+    assert(diff % sizeof(Type) == 0);
+    assert(diff < UINT32_MAX);
+    diff /= sizeof(Type);
+    return (TypeReference) {
+        .v = diff + 1,
+    };
+}
+
+static inline TypeReference type_reference_from_index(CompileUnit* restrict unit, u32 type_index)
+{
+    let type_arena = unit_arena(unit, UNIT_ARENA_TYPE);
+    let byte_offset = type_index * sizeof(Type);
+    let arena_byte_pointer = (u8*)type_arena;
+    let arena_position = type_arena->position;
+    assert(sizeof(Arena) + byte_offset + sizeof(Type) < arena_position);
+    return (TypeReference) {
+        .v = type_index + 1,
+    };
+}
 
 // static FileReference file_offset_from_pointer(CompileUnit* restrict unit, File* restrict file)
 // {
@@ -301,4 +450,6 @@ bool compiler_main(int argc, const char* argv[], char** envp);
 StringReference allocate_string(CompileUnit* restrict unit, str s);
 StringReference allocate_string_if_needed(CompileUnit* restrict unit, str s);
 
+TypeReference get_void_type(CompileUnit* restrict unit);
+TypeReference get_noreturn_type(CompileUnit* restrict unit);
 TypeReference get_integer_type(CompileUnit* restrict unit, u64 bit_count, bool is_signed);

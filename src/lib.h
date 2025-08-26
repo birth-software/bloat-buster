@@ -210,7 +210,7 @@ u64 os_file_get_size(FileDescriptor* file_descriptor);
 void os_file_write(FileDescriptor* file_descriptor, str buffer);
 void os_file_close(FileDescriptor* file_descriptor);
 
-#define arena_allocate(arena, T, count) (T*) arena_allocate_bytes(arena, sizeof(T) * count, alignof(T))
+#define arena_allocate(arena, T, count) (T*) arena_allocate_bytes(arena, sizeof(T) * (count), alignof(T))
 
 str file_read(Arena* arena, str path, FileReadOptions options);
 
