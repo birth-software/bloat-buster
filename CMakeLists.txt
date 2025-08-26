@@ -4,7 +4,7 @@ project(bb)
 set(CMAKE_BUILD_TYPE Debug)
 set(CMAKE_C_STANDARD 23)
 set(CMAKE_CXX_STANDARD 23)
-add_compile_options(-march=native -masm=intel)
+add_compile_options(-march=native -masm=intel -funsigned-char -fwrapv)
 include_directories(BEFORE src)
 
 add_executable(bb

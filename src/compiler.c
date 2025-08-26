@@ -1368,19 +1368,178 @@ static Thread threads[5];
 static u32 thread_count;
 static u32 per_thread_work;
 
+static u64 classic_integer_type_count = 64 * 2;
+static u64 big_integer_type_count = (
+        1 +  // 128
+        1 +  // 256
+        1    // 512
+        ) * 2;
+static u64 void_noreturn_type_count = 2;
+
 static CompileUnit* compile_unit_create()
 {
     let arena = arena_initialize((ArenaInitialization) {
         .count = UNIT_ARENA_COUNT,
     });
 
-    let compile_unit = arena_allocate(arena, CompileUnit, 1);
-    *compile_unit = (CompileUnit) {};
+    let unit = arena_allocate(arena, CompileUnit, 1);
+    *unit = (CompileUnit) {};
+    let global_scope = scope_reference_from_pointer(unit, &unit->scope);
 
-    return compile_unit;
+    let base_type_allocation = arena_allocate(arena, Type, classic_integer_type_count + big_integer_type_count + void_noreturn_type_count);
+
+    let type = base_type_allocation;
+
+    for (u8 is_signed = 0; is_signed < 2; is_signed += 1)
+    {
+        for (u64 bit_count = 1; bit_count <= 64; bit_count += 1)
+        {
+            char first_digit = bit_count < 10 ? bit_count % 10 + '0' : bit_count / 10 + '0';
+            char second_digit = bit_count > 9 ? bit_count % 10 + '0' : 0;
+            char buffer[] = { is_signed ? 's' : 'u', first_digit, second_digit };
+            u64 name_length = 2 + (bit_count > 9);
+
+            let name = allocate_string(unit, (str){ buffer, name_length });
+            
+            *type = (Type){
+                .integer = {
+                    .bit_count = bit_count,
+                    .is_signed = is_signed,
+                },
+                .name = name,
+                .scope = global_scope,
+                .id = TYPE_ID_INTEGER,
+                .analyzed = 1,
+            };
+            type += 1;
+        }
+    }
+
+    const static str names[] = { S("u128"), S("s128"), S("u256"), S("s256"), S("u512"), S("s512") };
+    assert(array_length(names) == big_integer_type_count);
+    for (u64 i = 0; i < (big_integer_type_count / 2); i += 1)
+    {
+        for (u8 is_signed = 0; is_signed < 2; is_signed += 1)
+        {
+            let bit_count = 128ULL << i;
+            let name = allocate_string(unit, names[i * 2 + is_signed]);
+            *type = (Type) {
+                .integer = {
+                    .bit_count = bit_count,
+                    .is_signed = is_signed,
+                },
+                .name = name,
+                .scope = global_scope,
+                .id = TYPE_ID_INTEGER,
+                .analyzed = 1,
+            };
+        }
+    }
+
+    let f16_type = type;
+    type += 1;
+
+    let bf16_type = type;
+    type += 1;
+
+    let f32_type = type;
+    type += 1;
+
+    let f64_type = type;
+    type += 1;
+
+    let f128_type = type;
+    type += 1;
+
+    let void_type = type;
+    type += 1;
+
+    let noreturn_type = type;
+    type += 1;
+
+    *f16_type = (Type) {
+        .fp = TYPE_FLOAT_F16,
+        .name = allocate_string(unit, S("f16")),
+        .scope = global_scope,
+        .id = TYPE_ID_FLOAT,
+        .analyzed = 1,
+    };
+
+    *bf16_type = (Type) {
+        .fp = TYPE_FLOAT_BF16,
+        .name = allocate_string(unit, S("bf16")),
+        .scope = global_scope,
+        .id = TYPE_ID_FLOAT,
+        .analyzed = 1,
+    };
+
+    *f32_type = (Type) {
+        .fp = TYPE_FLOAT_F32,
+        .name = allocate_string(unit, S("f32")),
+        .scope = global_scope,
+        .id = TYPE_ID_FLOAT,
+        .analyzed = 1,
+    };
+
+    *f64_type = (Type) {
+        .fp = TYPE_FLOAT_F64,
+        .name = allocate_string(unit, S("f64")),
+        .scope = global_scope,
+        .id = TYPE_ID_FLOAT,
+        .analyzed = 1,
+    };
+
+    *f128_type = (Type) {
+        .fp = TYPE_FLOAT_F128,
+        .name = allocate_string(unit, S("f128")),
+        .scope = global_scope,
+        .id = TYPE_ID_FLOAT,
+        .analyzed = 1,
+    };
+
+    *void_type = (Type) {
+        .name = allocate_string(unit, S("void")),
+        .scope = global_scope,
+        .id = TYPE_ID_VOID,
+        .analyzed = 1,
+    };
+
+    *noreturn_type = (Type) {
+        .name = allocate_string(unit, S("noreturn")),
+        .scope = global_scope,
+        .id = TYPE_ID_NORETURN,
+        .analyzed = 1,
+    };
+
+    trap();
+
+    return unit;
 }
 
-static StringReference allocate_string_if_needed(CompileUnit* restrict unit, str s)
+StringReference allocate_string(CompileUnit* restrict unit, str s)
+{
+    let arena = unit_arena(unit, UNIT_ARENA_STRING);
+    let arena_byte_pointer = (char*)arena;
+    let arena_bottom = arena_byte_pointer;
+    let arena_top = arena_byte_pointer + arena->position;
+
+    assert(!((s.pointer > arena_bottom) & (s.pointer < arena_top))); // Repeated string
+    assert(s.length <= UINT32_MAX);
+
+    let string = (char* restrict) arena_allocate_bytes(arena, s.length + sizeof(u32) + 1, alignof(u32));
+    *(u32*)string = (u32)s.length;
+    memcpy(string + sizeof(u32), s.pointer, s.length);
+    *(string + sizeof(u32) + s.length) = 0;
+    let big_offset = string - arena_byte_pointer;
+    assert(big_offset + 1 < UINT32_MAX);
+    let offset = (u32)big_offset;
+    let reference = (StringReference) {
+        .v = offset + 1,
+    };
+    return reference;
+}
+
+StringReference allocate_string_if_needed(CompileUnit* restrict unit, str s)
 {
     let arena = unit_arena(unit, UNIT_ARENA_STRING);
     let arena_byte_pointer = (char*)arena;
@@ -1394,18 +1553,7 @@ static StringReference allocate_string_if_needed(CompileUnit* restrict unit, str
     }
     else
     {
-        assert(s.length <= UINT32_MAX);
-        let string = (char* restrict) arena_allocate_bytes(arena, s.length + sizeof(u32) + 1, alignof(u32));
-        *(u32*)string = (u32)s.length;
-        memcpy(string + sizeof(u32), s.pointer, s.length);
-        *(string + sizeof(u32) + s.length) = 0;
-        let big_offset = string - arena_byte_pointer;
-        assert(big_offset + 1 < UINT32_MAX);
-        let offset = (u32)big_offset;
-        let reference = (StringReference) {
-            .v = offset + 1,
-        };
-        return reference;
+        return allocate_string(unit, s);
     }
 }
 
@@ -1491,6 +1639,11 @@ void* thread_worker(void* arg)
 #endif
 
     return (void*)result_code;
+}
+
+TypeReference get_integer_type(CompileUnit* restrict unit, u64 bit_count, bool is_signed)
+{
+    trap();
 }
 
 bool compiler_main(int argc, const char* argv[], char** envp)

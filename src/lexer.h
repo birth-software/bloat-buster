@@ -172,5 +172,10 @@ STRUCT(TokenList)
     u64 length;
 };
 
+STRUCT(IntegerParsing)
+{
+    u64 value;
+    u64 i;
+};
 
 TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u64 l);

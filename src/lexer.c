@@ -110,13 +110,6 @@ static u128 parse_integer_decimal_assume_valid(str string)
     return value;
 }
 
-STRUCT(IntegerParsing)
-{
-    u64 value;
-    u64 i;
-};
-
-
 static IntegerParsing parse_hexadecimal(const char* restrict p)
 {
     u64 value = 0;
@@ -685,9 +678,9 @@ TokenList lex(Arena* token_arena, Arena* string_arena, const char* restrict p, u
             let is_float_type = (ch0 == 'f') & is_plausible_primitive_type;
             let is_integer_type = (is_signed | is_unsigned) & is_plausible_primitive_type;
 
-            let is_decimal1 = is_decimal(ch1) & is_good_finishing_decimal_character(ch2);
-            let is_decimal2 = identifier_length > 2 ? (is_decimal(ch2) & is_good_finishing_decimal_character(ch3)) : 1;
-            let is_decimal3 = identifier_length > 3 ? (is_decimal(ch3) & is_good_finishing_decimal_character(ch4)) : 1;
+            let is_decimal1 = is_decimal(ch1) & ((identifier_length != 2) | is_good_finishing_decimal_character(ch2));
+            let is_decimal2 = identifier_length > 2 ? (is_decimal(ch2) & ((identifier_length != 3) | is_good_finishing_decimal_character(ch3))) : 1;
+            let is_decimal3 = identifier_length > 3 ? (is_decimal(ch3) & ((identifier_length != 4) | is_good_finishing_decimal_character(ch4))) : 1;
 
             is_integer_type = (is_integer_type & is_decimal1) & (is_decimal2 & is_decimal3);
             is_float_type = (is_float_type & is_decimal1) & (is_decimal2 & is_decimal3);

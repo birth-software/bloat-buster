@@ -18,6 +18,21 @@ typedef enum ValueId : u8
 typedef enum TypeId : u8
 {
     TYPE_ID_VOID,
+    TYPE_ID_NORETURN,
+    TYPE_ID_INTEGER,
+    TYPE_ID_FLOAT,
+    TYPE_ID_FUNCTION,
+    TYPE_ID_ENUM,
+    TYPE_ID_POINTER,
+    TYPE_ID_OPAQUE,
+    TYPE_ID_ARRAY,
+    TYPE_ID_STRUCT,
+    TYPE_ID_UNION,
+    TYPE_ID_BITS,
+    TYPE_ID_VECTOR,
+    TYPE_ID_ENUM_ARRAY,
+
+    TYPE_ID_COUNT,
 } TypeId;
 
 typedef enum ScopeId : u8
@@ -79,10 +94,34 @@ STRUCT(Value)
     ValueReference next;
 };
 
+STRUCT(TypeInteger)
+{
+    u64 bit_count;
+    bool is_signed;
+};
+
+typedef enum TypeFloat : u8
+{
+    TYPE_FLOAT_F16,
+    TYPE_FLOAT_BF16,
+    TYPE_FLOAT_F32,
+    TYPE_FLOAT_F64,
+    TYPE_FLOAT_F128,
+    TYPE_FLOAT_COUNT,
+} TypeFloat;
+
 STRUCT(Type)
 {
-    TypeId id;
+    union
+    {
+        TypeInteger integer;
+        TypeFloat fp;
+    };
+    StringReference name;
+    ScopeReference scope;
     TypeReference next;
+    TypeId id;
+    bool analyzed;
 };
 
 STRUCT(Variable)
@@ -212,20 +251,31 @@ static inline StringReference string_reference_from_string(CompileUnit* restrict
     let length = *length_pointer;
     assert(s.length == length);
 
-    let diff = (char*)length_pointer - arena_top;
+    let diff = (char*)length_pointer - arena_bottom;
     assert(diff < UINT32_MAX);
     return (StringReference) {
         .v = diff + 1,
     };
 }
 
-static inline StringReference string_from_reference(CompileUnit* restrict unit, StringReference reference)
+static inline str string_from_reference(CompileUnit* restrict unit, StringReference reference)
 {
+    assert(reference.v);
+
     let arena = unit_arena(unit, UNIT_ARENA_STRING);
     let arena_byte_pointer = (char*)arena;
     let arena_bottom = arena_byte_pointer;
-    let arena_top = arena_byte_pointer + arena->position;
-    trap();
+    let arena_position = arena->position;
+    let arena_top = arena_byte_pointer + arena_position;
+
+    let length_offset = reference.v - 1;
+    assert(length_offset >= sizeof(Arena));
+    assert(length_offset < arena_position);
+    let length_byte_pointer = arena_bottom + length_offset;
+    let length_pointer = (u32*)length_byte_pointer;
+    let string_pointer = (char* restrict) (length_pointer + 1);
+    u64 string_length = *length_pointer;
+    return (str){ .pointer = string_pointer, .length = string_length };
 }
 
 
@@ -247,3 +297,8 @@ static inline StringReference string_from_reference(CompileUnit* restrict unit, 
 void compile_unit(StringSlice paths);
 bool compiler_is_single_threaded(void);
 bool compiler_main(int argc, const char* argv[], char** envp);
+
+StringReference allocate_string(CompileUnit* restrict unit, str s);
+StringReference allocate_string_if_needed(CompileUnit* restrict unit, str s);
+
+TypeReference get_integer_type(CompileUnit* restrict unit, u64 bit_count, bool is_signed);
