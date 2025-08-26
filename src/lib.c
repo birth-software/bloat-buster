@@ -347,10 +347,6 @@ Arena* arena_initialize(ArenaInitialization initialization)
     return (Arena*)raw_pointer;
 }
 
-void arena_align_bits()
-{
-}
-
 void arena_set_position(Arena* arena, u64 position)
 {
     arena->position = position;
@@ -359,6 +355,11 @@ void arena_set_position(Arena* arena, u64 position)
 void arena_reset_to_start(Arena* arena)
 {
     arena_set_position(arena, minimum_position);
+}
+
+void* arena_current_position(Arena* arena, u64 alignment)
+{
+    return (u8*)arena + align_forward(arena->position, alignment);
 }
 
 void* arena_allocate_bytes(Arena* arena, u64 size, u64 alignment)

@@ -1380,26 +1380,6 @@ static CompileUnit* compile_unit_create()
     return compile_unit;
 }
 
-static StringReference string_reference_from_string(CompileUnit* restrict unit, str s)
-{
-    let arena = unit_arena(unit, UNIT_ARENA_STRING);
-    let arena_byte_pointer = (char*)arena;
-    let arena_bottom = arena_byte_pointer;
-    let arena_top = arena_byte_pointer + arena->position;
-    assert((arena_bottom < s.pointer) & (arena_top > s.pointer));
-    let string_top = s.pointer + s.length;
-    assert(string_top <= arena_top);
-    let length_pointer = (u32*)s.pointer - 1;
-    let length = *length_pointer;
-    assert(s.length == length);
-
-    let diff = (char*)length_pointer - arena_top;
-    assert(diff < UINT32_MAX);
-    return (StringReference) {
-        .v = diff + 1,
-    };
-}
-
 static StringReference allocate_string_if_needed(CompileUnit* restrict unit, str s)
 {
     let arena = unit_arena(unit, UNIT_ARENA_STRING);
@@ -1431,14 +1411,12 @@ static StringReference allocate_string_if_needed(CompileUnit* restrict unit, str
 
 static void crunch_file(CompileUnit* restrict unit, str path)
 {
-    let string_arena = unit_arena(unit, UNIT_ARENA_STRING);
-    str content = file_read(string_arena, path, (FileReadOptions){
+    str content = file_read(unit_arena(unit, UNIT_ARENA_FILE_CONTENT), path, (FileReadOptions){
         .start_padding = sizeof(u32),
         .start_alignment = alignof(u32),
     });
     assert(content.length < UINT32_MAX);
     *((u32*)content.pointer - 1) = content.length;
-    let content_reference = string_reference_from_string(unit, content);
 
     let path_reference = allocate_string_if_needed(unit, path);
 
@@ -1447,25 +1425,17 @@ static void crunch_file(CompileUnit* restrict unit, str path)
     let arena = unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
     let file = arena_allocate(arena, File, 1);
     *file = (File) {
-        .content = content_reference,
+        .content = content,
         .path = path_reference,
         .scope = {
             .parent = global_scope,
             .id = SCOPE_ID_FILE,
         },
     };
+    let file_reference = file_reference_from_pointer(unit, file);
+    let tl = lex(unit_arena(unit, UNIT_ARENA_TOKEN), unit_arena(unit, UNIT_ARENA_STRING), content.pointer, content.length);
+    parse_file(unit, file, tl);
     trap();
-    // *file = (File) {
-    //     .content = content,
-    //     .path = path,
-    //     .scope = {
-    //         .parent = global_scope,
-    //         .id = SCOPE_ID_FILE,
-    //     },
-    //     .next = 0,
-    // };
-    // let scope = scope_offset_from_pointer(unit, &file->scope);
-    // let tl = lex(thread_arena, else_arena, content.pointer, content.length);
 }
 
 void* thread_worker(void* arg)

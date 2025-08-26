@@ -203,6 +203,7 @@ void arena_set_position(Arena* arena, u64 position);
 void arena_reset_to_start(Arena* arena);
 void* arena_allocate_bytes(Arena* arena, u64 size, u64 alignment);
 str arena_join_string(Arena* arena, StringSlice strings);
+void* arena_current_position(Arena* arena, u64 alignment);
 
 FileDescriptor* os_file_open(str path, OpenFlags flags, OpenPermissions permissions);
 u64 os_file_get_size(FileDescriptor* file_descriptor);

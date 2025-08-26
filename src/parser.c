@@ -2,12 +2,17 @@
 
 STRUCT(Parser)
 {
-    StringReference content;
+    str content;
     Token* restrict pointer;
     u32 offset;
     u32 line_byte_offset;
     u32 line_number_offset;
 };
+
+[[noreturn]] static void parser_error()
+{
+    trap();
+}
 
 static Token* get_token_internal(Parser* restrict parser)
 {
@@ -62,19 +67,19 @@ static Token* restrict expect_token(Parser* restrict parser, TokenId id)
 
 STRUCT(IdentifierParsing)
 {
-    str string;
+    StringReference string;
     u32 line_offset;
 };
 
 static bool identifier_parsing_valid(IdentifierParsing p)
 {
-    return p.string.pointer != 0;
+    return p.string.v != 0;
 }
 
 static str file_content(CompileUnit* unit, FileReference file_index)
 {
     let file = file_pointer_from_reference(unit, file_index);
-    trap();
+    parser_error();
 }
 
 static IdentifierParsing end_identifier(CompileUnit* restrict unit, Parser* restrict parser, Token* restrict identifier_start)
@@ -90,7 +95,7 @@ static IdentifierParsing end_identifier(CompileUnit* restrict unit, Parser* rest
         u32 start = identifier_start->offset;
         u32 end = identifier_end->offset;
         assert(end > start);
-        trap();
+        parser_error();
         // char* restrict pointer = parser->content.pointer + parser->line_byte_offset + start;
         // u64 length = (end - start);
         //
@@ -117,7 +122,7 @@ static IdentifierParsing expect_identifier(CompileUnit* restrict unit, Parser* r
     return result;
 }
 
-static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope)
+static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ArgumentReference* argument_list)
 {
     let token = consume_token(parser);
 
@@ -131,23 +136,72 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
             if (expect_token(parser, TOKEN_ID_LEFT_BRACKET))
             {
                 let identifier = expect_identifier(unit, parser);
-                trap();
+                parser_error();
             }
 
             if (!expect_token(parser, TOKEN_ID_LEFT_PARENTHESIS))
             {
-                trap();
+                parser_error();
             }
 
+            u64 argument_count = 0;
+            let argument_arena = unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
+            let first_argument = arena_current_position(argument_arena, alignof(Argument));
+
+            while (!expect_token(parser, TOKEN_ID_RIGHT_PARENTHESIS))
+            {
+                if (expect_token(parser, TOKEN_ID_TRIPLE_DOT))
+                {
+                    is_variable_argument = 1;
+
+                    if (!expect_token(parser, TOKEN_ID_RIGHT_PARENTHESIS))
+                    {
+                        parser_error();
+                    }
+
+                    break;
+                }
+
+                let argument = arena_allocate(argument_arena, Argument, 1);
+
+                let identifier_token = consume_token(parser);
+                IdentifierParsing identifier_parsing = {};
+
+                if (identifier_token->id == TOKEN_ID_IDENTIFIER_START)
+                {
+                    identifier_parsing = end_identifier(unit, parser, identifier_token);
+                }
+                else if (identifier_token->id != TOKEN_ID_KEYWORD_STATEMENT_UNDERSCORE)
+                {
+                    parser_error();
+                }
+
+                if (!expect_token(parser, TOKEN_ID_COLON))
+                {
+                    parser_error();
+                }
+
+                parser_error();
+            }
+
+            let return_type = parse_type(unit, parser, scope, 0);
+            let argument_types = arena_allocate(unit_arena(unit, UNIT_ARENA_COMPILE_UNIT), TypeReference, argument_count);
+
+            parser_error();
+        }
+        break; case TOKEN_ID_IDENTIFIER_START:
+        {
+            IdentifierParsing identifier_parsing = end_identifier(unit, parser, token);
+            let identifier = string_from_reference(unit, identifier_parsing.string);
             trap();
         }
         break; default:
         {
-            trap();
+            parser_error();
         }
     }
 
-    trap();
+    parser_error();
 }
 
 void parse_file(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
@@ -175,12 +229,12 @@ void parse_file(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
 
                 if (unlikely(!identifier_end))
                 {
-                    trap();
+                    parser_error();
                 }
 
                 if (unlikely(!expect_token(parser, TOKEN_ID_COLON)))
                 {
-                    trap();
+                    parser_error();
                 }
 
                 TypeReference global_type = {};
@@ -188,27 +242,27 @@ void parse_file(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
                 let assign = expect_token(parser, TOKEN_ID_ASSIGN);
                 if (unlikely(!assign))
                 {
-                    global_type = parse_type(unit, parser, scope);
+                    global_type = parse_type(unit, parser, scope, 0);
                     assign = expect_token(parser, TOKEN_ID_COLON);
                 }
 
                 if (!assign)
                 {
-                    trap();
+                    parser_error();
                 }
 
-                trap();
+                parser_error();
             }
             break; case TOKEN_ID_KEYWORD_TYPE:
             {
-                trap();
+                parser_error();
             }
             break; default: UNREACHABLE();
         }
 
-        trap();
+        parser_error();
         *top_level_declaration = (TopLevelDeclaration) {
         };
-        trap();
+        parser_error();
     }
 }

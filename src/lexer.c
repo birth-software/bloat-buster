@@ -442,13 +442,13 @@ static bool is_good_finishing_decimal_character(u8 ch)
     return is_space(ch) | ((ch >= '!') & (ch <= '/')) | ((ch >= ':') & (ch <= '@')) | ((ch >= left_bracket) & (ch <= '`')) | ((ch >= left_brace) & (ch <= '~'));
 }
 
-TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u64 l)
+TokenList lex(Arena* token_arena, Arena* string_arena, const char* restrict p, u64 l)
 {
 #define MEASURE_LEXING 1
 #if MEASURE_LEXING
     let lexing_start = take_timestamp();
 #endif
-    Token* tokens = (Token*)((u8*)stable_arena + align_forward(stable_arena->position, alignof(Token)));
+    Token* tokens = (Token*)((u8*)token_arena + align_forward(token_arena->position, alignof(Token)));
     u64 token_count = 0;
     u64 i = 0;
     u64 line_offset = 0;
@@ -620,7 +620,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
 
         if (line_offset != previous_line_offset)
         {
-            Token* line_byte_offset = arena_allocate(stable_arena, Token, 2);
+            Token* line_byte_offset = arena_allocate(token_arena, Token, 2);
             Token* line_number_offset = line_byte_offset + 1;
             token_count += 2;
             *line_byte_offset = (Token) {
@@ -650,7 +650,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
         let ch6 = ((u8*)&chunk4_1)[2];
         let ch7 = ((u8*)&chunk4_1)[3];
 
-        Token* token = arena_allocate(stable_arena, Token, 1);
+        Token* token = arena_allocate(token_arena, Token, 1);
         *token = (Token) {
             .offset = start_column_offset,
             .id = TOKEN_ID_NONE,
@@ -983,7 +983,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
                 {
                     token->id = TOKEN_ID_IDENTIFIER_START;
 
-                    Token* end_token = arena_allocate(stable_arena, Token, 1);
+                    Token* end_token = arena_allocate(token_arena, Token, 1);
                     token_count += 1;
 
                     *end_token = (Token) {
@@ -1079,7 +1079,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
 
             token->id = is_float ? TOKEN_ID_FLOAT_START : TOKEN_ID_INTEGER_START;
 
-            let end = arena_allocate(stable_arena, Token, 1);
+            let end = arena_allocate(token_arena, Token, 1);
             token_count += 1;
 
             *end = (Token) {
@@ -1149,7 +1149,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
             let string_literal_end = i;
 
             let length = string_literal_end - start_index - escape_character_count;
-            let pointer = arena_allocate_bytes(else_arena, length, 1);
+            let pointer = arena_allocate_bytes(string_arena, length, 1);
             let original_string_bytes = str_from_ptr_start_end((char*)p, string_literal_start, string_literal_end);
             let string_literal = str_from_ptr_len(pointer, length);
 
@@ -1192,7 +1192,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
 
             token->id = TOKEN_ID_STRING_LITERAL_START;
 
-            let end = arena_allocate(stable_arena, Token, 1);
+            let end = arena_allocate(token_arena, Token, 1);
             token_count += 1;
             *end = (Token) {
                 .offset = i - line_character_offset,
@@ -1534,7 +1534,7 @@ TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u6
         assert(token->id != TOKEN_ID_NONE);
     }
 
-    let eof = arena_allocate(stable_arena, Token, 1);
+    let eof = arena_allocate(token_arena, Token, 1);
     *eof = (Token) {
         .offset = i - line_character_offset,
         .id = TOKEN_ID_EOF,

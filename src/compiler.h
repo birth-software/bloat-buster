@@ -98,6 +98,7 @@ STRUCT(Variable)
 STRUCT(Argument)
 {
     Variable variable;
+    ArgumentReference next;
     u32 index;
 };
 
@@ -109,7 +110,7 @@ STRUCT(Scope)
 
 STRUCT(File)
 {
-    StringReference content;
+    str content;
     StringReference path;
     Scope scope;
     FileReference next;
@@ -146,6 +147,7 @@ typedef enum UnitArenaKind
     UNIT_ARENA_COMPILE_UNIT,
     UNIT_ARENA_TOKEN,
     UNIT_ARENA_STRING,
+    UNIT_ARENA_FILE_CONTENT,
     UNIT_ARENA_TYPE,
     UNIT_ARENA_VALUE,
     UNIT_ARENA_COUNT,
@@ -154,6 +156,7 @@ typedef enum UnitArenaKind
 STRUCT(CompileUnit)
 {
     Scope scope;
+    FileReference files;
     TypeReference free_types;
     ValueReference free_values;
 };
@@ -195,6 +198,36 @@ static inline O* restrict o ## _pointer_from_reference(CompileUnit* restrict uni
 
 reference_offset_functions(Scope, scope, UNIT_ARENA_COMPILE_UNIT)
 reference_offset_functions(File, file, UNIT_ARENA_COMPILE_UNIT)
+
+static inline StringReference string_reference_from_string(CompileUnit* restrict unit, str s)
+{
+    let arena = unit_arena(unit, UNIT_ARENA_STRING);
+    let arena_byte_pointer = (char*)arena;
+    let arena_bottom = arena_byte_pointer;
+    let arena_top = arena_byte_pointer + arena->position;
+    assert((arena_bottom < s.pointer) & (arena_top > s.pointer));
+    let string_top = s.pointer + s.length;
+    assert(string_top <= arena_top);
+    let length_pointer = (u32*)s.pointer - 1;
+    let length = *length_pointer;
+    assert(s.length == length);
+
+    let diff = (char*)length_pointer - arena_top;
+    assert(diff < UINT32_MAX);
+    return (StringReference) {
+        .v = diff + 1,
+    };
+}
+
+static inline StringReference string_from_reference(CompileUnit* restrict unit, StringReference reference)
+{
+    let arena = unit_arena(unit, UNIT_ARENA_STRING);
+    let arena_byte_pointer = (char*)arena;
+    let arena_bottom = arena_byte_pointer;
+    let arena_top = arena_byte_pointer + arena->position;
+    trap();
+}
+
 
 // static FileReference file_offset_from_pointer(CompileUnit* restrict unit, File* restrict file)
 // {
