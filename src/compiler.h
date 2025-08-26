@@ -3,6 +3,7 @@
 #include <lib.h>
 
 typedef u32 RawReference;
+#define is_ref_valid(x) !!((x).v)
 
 typedef enum CallingConvention : u8
 {
@@ -13,6 +14,7 @@ typedef enum CallingConvention : u8
 typedef enum ValueId : u8
 {
     VALUE_ID_DISCARD,
+    VALUE_ID_FUNCTION,
 } ValueId;
 
 typedef enum TypeId : u8
@@ -43,53 +45,57 @@ typedef enum ScopeId : u8
     SCOPE_ID_BLOCK,
 } ScopeId;
 
-STRUCT(StringReference)
+#define Ref(T) T ## Reference
+#define declare_ref(T) STRUCT(Ref(T)) { RawReference v; }
+
+declare_ref(String);
+declare_ref(Scope);
+declare_ref(File);
+declare_ref(Type);
+declare_ref(Value);
+declare_ref(Global);
+declare_ref(TopLevelDeclaration);
+declare_ref(Variable);
+declare_ref(Argument);
+declare_ref(Block);
+
+STRUCT(Scope)
 {
-    RawReference v;
+    ScopeReference parent;
+    ScopeId id;
 };
 
-STRUCT(ScopeReference)
+typedef enum InlineBehavior : u8
 {
-    RawReference v;
+    INLINE_DEFAULT,
+    INLINE_ALWAYS,
+    INLINE_NO,
+    INLINE_HINT,
+} InlineBehavior;
+
+STRUCT(FunctionAttributes)
+{
+    InlineBehavior inline_behavior;
+    bool is_naked;
 };
 
-STRUCT(FileReference)
+STRUCT(ValueFunction)
 {
-    RawReference v;
-};
-
-STRUCT(TypeReference)
-{
-    RawReference v;
-};
-
-STRUCT(ValueReference)
-{
-    RawReference v;
-};
-
-STRUCT(GlobalReference)
-{
-    RawReference v;
-};
-
-STRUCT(TopLevelDeclarationReference)
-{
-    RawReference v;
-};
-
-STRUCT(VariableReference)
-{
-    RawReference v;
-};
-
-STRUCT(ArgumentReference)
-{
-    RawReference v;
+    struct
+    {
+    } llvm;
+    Scope scope;
+    ArgumentReference arguments;
+    BlockReference block;
+    FunctionAttributes attributes;
 };
 
 STRUCT(Value)
 {
+    union
+    {
+        ValueFunction function;
+    };
     TypeReference type;
     ValueReference next;
     ValueId id;
@@ -110,6 +116,11 @@ typedef enum TypeFloat : u8
     TYPE_FLOAT_F128,
     TYPE_FLOAT_COUNT,
 } TypeFloat;
+
+STRUCT(TypePointer)
+{
+    TypeReference element_type;
+};
 
 UNION(AbiRegisterCount)
 {
@@ -236,6 +247,7 @@ STRUCT(Type)
         TypeInteger integer;
         TypeFloat fp;
         TypeFunction function;
+        TypePointer pointer;
     };
     StringReference name;
     ScopeReference scope;
@@ -260,10 +272,23 @@ STRUCT(Argument)
     u32 index;
 };
 
-STRUCT(Scope)
+STRUCT(Local)
 {
-    ScopeReference parent;
-    ScopeId id;
+    Variable variable;
+    ValueReference initial_value;
+};
+
+typedef enum Linkage : u8
+{
+    LINKAGE_INTERNAL,
+    LINKAGE_EXTERNAL,
+} Linkage;
+
+STRUCT(Global)
+{
+    Variable variable;
+    ValueReference initial_value;
+    Linkage linkage;
 };
 
 STRUCT(File)
@@ -315,8 +340,13 @@ STRUCT(CompileUnit)
 {
     Scope scope;
     FileReference files;
+
+    TypeReference first_pointer_type;
+
     TypeReference free_types;
     ValueReference free_values;
+
+    GlobalReference current_function;
 };
 
 static inline Arena* unit_arena(CompileUnit* unit, UnitArenaKind kind)
@@ -357,6 +387,7 @@ static inline O* restrict o ## _pointer_from_reference(CompileUnit* restrict uni
 reference_offset_functions(Scope, scope, UNIT_ARENA_COMPILE_UNIT)
 reference_offset_functions(File, file, UNIT_ARENA_COMPILE_UNIT)
 reference_offset_functions(Argument, argument, UNIT_ARENA_COMPILE_UNIT)
+reference_offset_functions(Global, global, UNIT_ARENA_COMPILE_UNIT)
 
 static inline StringReference string_reference_from_string(CompileUnit* restrict unit, str s)
 {
@@ -380,13 +411,12 @@ static inline StringReference string_reference_from_string(CompileUnit* restrict
 
 static inline str string_from_reference(CompileUnit* restrict unit, StringReference reference)
 {
-    assert(reference.v);
+    assert(is_ref_valid(reference));
 
     let arena = unit_arena(unit, UNIT_ARENA_STRING);
     let arena_byte_pointer = (char*)arena;
     let arena_bottom = arena_byte_pointer;
     let arena_position = arena->position;
-    let arena_top = arena_byte_pointer + arena_position;
 
     let length_offset = reference.v - 1;
     assert(length_offset >= sizeof(Arena));
@@ -416,16 +446,80 @@ static inline TypeReference type_reference_from_pointer(CompileUnit* restrict un
     };
 }
 
-static inline TypeReference type_reference_from_index(CompileUnit* restrict unit, u32 type_index)
+static inline TypeReference type_reference_from_index(CompileUnit* restrict unit, u32 index)
 {
     let type_arena = unit_arena(unit, UNIT_ARENA_TYPE);
-    let byte_offset = type_index * sizeof(Type);
-    let arena_byte_pointer = (u8*)type_arena;
+    let byte_offset = index * sizeof(Type);
     let arena_position = type_arena->position;
-    assert(sizeof(Arena) + byte_offset + sizeof(Type) < arena_position);
+    assert(sizeof(Arena) + byte_offset + sizeof(Type) <= arena_position);
     return (TypeReference) {
-        .v = type_index + 1,
+        .v = index + 1,
     };
+}
+
+static inline Type* type_pointer_from_reference(CompileUnit* restrict unit, TypeReference reference)
+{
+    assert(is_ref_valid(reference));
+    let arena = unit_arena(unit, UNIT_ARENA_TYPE);
+    let index = reference.v - 1;
+    let byte_offset = index * sizeof(Type);
+    let arena_position = arena->position;
+    assert(sizeof(Arena) + byte_offset + sizeof(Type) <= arena_position);
+    let type = (Type*)((u8*)arena + sizeof(Arena) + byte_offset);
+    return type;
+}
+
+static inline ValueReference value_reference_from_pointer(CompileUnit* restrict unit, Value* value)
+{
+    let value_arena = unit_arena(unit, UNIT_ARENA_VALUE);
+    let arena_byte_pointer = (u8*)value_arena;
+    let arena_position = value_arena->position;
+    let arena_bottom = arena_byte_pointer;
+    let arena_top = arena_byte_pointer + arena_position;
+    let value_byte_pointer = (u8*)value;
+    assert(value_byte_pointer > arena_bottom && value_byte_pointer < arena_top);
+    let diff = value_byte_pointer - (arena_bottom + sizeof(Arena));
+    assert(diff % sizeof(Value) == 0);
+    assert(diff < UINT32_MAX);
+    diff /= sizeof(Value);
+    return (ValueReference) {
+        .v = diff + 1,
+    };
+}
+
+static inline ValueReference value_reference_from_index(CompileUnit* restrict unit, u32 index)
+{
+    let value_arena = unit_arena(unit, UNIT_ARENA_VALUE);
+    let byte_offset = index * sizeof(Value);
+    let arena_position = value_arena->position;
+    assert(sizeof(Arena) + byte_offset + sizeof(Value) < arena_position);
+    return (ValueReference) {
+        .v = index + 1,
+    };
+}
+
+static inline Type* new_types(CompileUnit* unit, u32 type_count)
+{
+    let arena = unit_arena(unit, UNIT_ARENA_TYPE);
+    let types = arena_allocate(arena, Type, type_count);
+    return types;
+}
+
+static inline Type* new_type(CompileUnit* unit)
+{
+    return new_types(unit, 1);
+}
+
+static inline Value* new_values(CompileUnit* unit, u32 value_count)
+{
+    let arena = unit_arena(unit, UNIT_ARENA_VALUE);
+    let values = arena_allocate(arena, Value, value_count);
+    return values;
+}
+
+static inline Value* new_value(CompileUnit* unit)
+{
+    return new_values(unit, 1);
 }
 
 // static FileReference file_offset_from_pointer(CompileUnit* restrict unit, File* restrict file)
@@ -449,7 +543,9 @@ bool compiler_main(int argc, const char* argv[], char** envp);
 
 StringReference allocate_string(CompileUnit* restrict unit, str s);
 StringReference allocate_string_if_needed(CompileUnit* restrict unit, str s);
+StringReference allocate_and_join_string(CompileUnit* restrict unit, StringSlice slice);
 
 TypeReference get_void_type(CompileUnit* restrict unit);
 TypeReference get_noreturn_type(CompileUnit* restrict unit);
 TypeReference get_integer_type(CompileUnit* restrict unit, u64 bit_count, bool is_signed);
+TypeReference get_pointer_type(CompileUnit* restrict unit, TypeReference element_type_reference);

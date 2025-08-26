@@ -3,7 +3,6 @@
 #include <lexer.h>
 #include <parser.h>
 #include <stdatomic.h>
-//#include <time.h>
 #include <stdio.h>
 #ifdef __linux__
 #include <unistd.h>
@@ -73,7 +72,6 @@ STRUCT(CompilationResult)
 // static_assert(sizeof(CompileUnit) % CACHE_LINE_GUESS == 0);
 
 static bool is_single_threaded = true;
-static Arena* global_arena;
 static CompileUnitSlice global_compile_units;
 static _Atomic(u64) global_completed_compile_unit_count = 0;
 
@@ -116,8 +114,6 @@ bool compiler_is_single_threaded()
 {
     return is_single_threaded;
 }
-
-static char buffer[1024 * 1024 * 1024 * 2ULL];
 
 // static void write_random_token(u64* out_file_i, bool is_comment)
 // {
@@ -1176,15 +1172,6 @@ static str file_paths[] = {
     S("build/file99"),
 };
 
-static int fds[array_length(file_paths)];
-#ifdef __linux__
-static struct statx statxs[array_length(file_paths)];
-#endif
-static str file_contents[array_length(file_paths)];
-
-TokenList io_uring_tl[array_length(file_paths)];
-TokenList sync_tl[array_length(file_paths)];
-
 typedef enum IoUringTask
 {
     IO_URING_TASK_OPEN,
@@ -1194,158 +1181,158 @@ typedef enum IoUringTask
 } IoUringTask;
 
 #ifdef __linux__
-static u64 io_uring_task(Arena* file_arena, Arena* else_arena, struct io_uring* restrict ring, StringSlice file_paths, int* restrict fd_array, struct statx* restrict statx_array, str* restrict file_array, TokenList* restrict list_array)
-{
-    SPALL_FUNCTION_BEGIN();
-    let file_count = file_paths.length;
-    if (file_count > UINT32_MAX)
-    {
-        fail();
-    }
-
-    u64 pending = file_count;
-    for (u64 i = 0; i < pending; i += 1)
-    {
-        struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
-        io_uring_prep_openat(sqe, AT_FDCWD, file_paths.pointer[i].pointer, O_RDONLY, 0);
-        sqe->user_data = ((u64)(IO_URING_TASK_OPEN) << 32) | i;
-    }
-
-    int ret = io_uring_submit(ring);
-    if (ret < 0)
-    {
-        fail();
-    }
-
-    struct io_uring_cqe* open_cqes;
-
-    for (u64 cqe_i = 0; cqe_i < file_count; cqe_i += 1)
-    {
-        struct io_uring_cqe* cqe;
-        ret = io_uring_wait_cqe(ring, &cqe);
-        if (ret < 0)
-        {
-            fail();
-        }
-
-        let user_data = cqe->user_data;
-        let result = cqe->res;
-        let i = (u32)user_data;
-        let task = (IoUringTask)(user_data >> 32);
-
-        assert(task == IO_URING_TASK_OPEN);
-        io_uring_cqe_seen(ring, cqe);
-
-        let fd = result;
-        if (fd < 0)
-        {
-            fail();
-        }
-        fd_array[i] = fd;
-
-        struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
-        int flags = AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_STATX_DONT_SYNC;
-        int mask = STATX_SIZE;
-        io_uring_prep_statx(sqe, fd, "", flags, mask, &statx_array[i]);
-        sqe->user_data = ((u64)(IO_URING_TASK_STAT) << 32) | i;
-    }
-
-    ret = io_uring_submit(ring);
-    if (ret < 0)
-    {
-        fail();
-    }
-
-    pending = file_count;
-
-    while (pending)
-    {
-        struct io_uring_cqe* cqe;
-        let ret = io_uring_wait_cqe(ring, &cqe);
-
-        if (ret < 0)
-        {
-            fail();
-        }
-
-        let user_data = cqe->user_data;
-        let result = cqe->res;
-        let i = (u32)user_data;
-        let task = (IoUringTask)(user_data >> 32);
-
-        io_uring_cqe_seen(ring, cqe);
-
-        switch (task)
-        {
-            break; case IO_URING_TASK_OPEN:
-            {
-                UNREACHABLE();
-            }
-            break; case IO_URING_TASK_STAT:
-            {
-                pending -= 1;
-                let fd = fd_array[i];
-                if (result != 0)
-                {
-                    let er = strerror(result);
-                    printf("Error in stat task: %s\n", er);
-                    fflush(stdout);
-                    fail();
-                }
-                let statx_struct = &statx_array[i];
-                let file_size = statx_struct->stx_size;
-                let file_pointer = arena_allocate_bytes(file_arena, file_size, 1);
-                let file = (str) { file_pointer, file_size };
-                file_array[i] = file;
-
-                u64 read_byte_count = 0;
-
-                while (read_byte_count != file.length)
-                {
-                    struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
-                    u32 to_be_read = file.length > 0x7ffff000 ? 0x7ffff000 : (u32)file.length;
-                    sqe->flags |= IOSQE_IO_LINK;
-                    u64 user_data = ((u64)(IO_URING_TASK_READ) << 32) | i;
-                    sqe->user_data = user_data;
-                    io_uring_prep_read(sqe, fd, file.pointer, to_be_read, read_byte_count);
-                    read_byte_count += to_be_read;
-                }
-
-                struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
-                io_uring_prep_close(sqe, fd);
-                u64 user_data = ((u64)(IO_URING_TASK_CLOSE) << 32) | i;
-                sqe->user_data = user_data;
-
-                ret = io_uring_submit(ring);
-                if (ret < 0)
-                {
-                    fail();
-                }
-            }
-            break; case IO_URING_TASK_READ:
-            {
-            }
-            break; case IO_URING_TASK_CLOSE:
-            {
-                printf("file first: %c\n", file_array[i].pointer[0]);
-            }
-        }
-    }
-
-    // for (u64 i = 0; i < file_count; i += 1)
-    // {
-    //     LexerError error = {};
-    //     let token_list = lex(file_arena, else_arena, file_array[i], &error);
-    //     if (error.id != LEXER_ERROR_ID_NONE)
-    //     {
-    //         fail();
-    //     }
-    //     list_array[i] = token_list;
-    // }
-
-    SPALL_FUNCTION_END();
-    return file_count;
-}
+// static u64 io_uring_task(Arena* file_arena, Arena* else_arena, struct io_uring* restrict ring, StringSlice file_paths, int* restrict fd_array, struct statx* restrict statx_array, str* restrict file_array, TokenList* restrict list_array)
+// {
+//     SPALL_FUNCTION_BEGIN();
+//     let file_count = file_paths.length;
+//     if (file_count > UINT32_MAX)
+//     {
+//         fail();
+//     }
+//
+//     u64 pending = file_count;
+//     for (u64 i = 0; i < pending; i += 1)
+//     {
+//         struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
+//         io_uring_prep_openat(sqe, AT_FDCWD, file_paths.pointer[i].pointer, O_RDONLY, 0);
+//         sqe->user_data = ((u64)(IO_URING_TASK_OPEN) << 32) | i;
+//     }
+//
+//     int ret = io_uring_submit(ring);
+//     if (ret < 0)
+//     {
+//         fail();
+//     }
+//
+//     struct io_uring_cqe* open_cqes;
+//
+//     for (u64 cqe_i = 0; cqe_i < file_count; cqe_i += 1)
+//     {
+//         struct io_uring_cqe* cqe;
+//         ret = io_uring_wait_cqe(ring, &cqe);
+//         if (ret < 0)
+//         {
+//             fail();
+//         }
+//
+//         let user_data = cqe->user_data;
+//         let result = cqe->res;
+//         let i = (u32)user_data;
+//         let task = (IoUringTask)(user_data >> 32);
+//
+//         assert(task == IO_URING_TASK_OPEN);
+//         io_uring_cqe_seen(ring, cqe);
+//
+//         let fd = result;
+//         if (fd < 0)
+//         {
+//             fail();
+//         }
+//         fd_array[i] = fd;
+//
+//         struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
+//         int flags = AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_STATX_DONT_SYNC;
+//         int mask = STATX_SIZE;
+//         io_uring_prep_statx(sqe, fd, "", flags, mask, &statx_array[i]);
+//         sqe->user_data = ((u64)(IO_URING_TASK_STAT) << 32) | i;
+//     }
+//
+//     ret = io_uring_submit(ring);
+//     if (ret < 0)
+//     {
+//         fail();
+//     }
+//
+//     pending = file_count;
+//
+//     while (pending)
+//     {
+//         struct io_uring_cqe* cqe;
+//         let ret = io_uring_wait_cqe(ring, &cqe);
+//
+//         if (ret < 0)
+//         {
+//             fail();
+//         }
+//
+//         let user_data = cqe->user_data;
+//         let result = cqe->res;
+//         let i = (u32)user_data;
+//         let task = (IoUringTask)(user_data >> 32);
+//
+//         io_uring_cqe_seen(ring, cqe);
+//
+//         switch (task)
+//         {
+//             break; case IO_URING_TASK_OPEN:
+//             {
+//                 UNREACHABLE();
+//             }
+//             break; case IO_URING_TASK_STAT:
+//             {
+//                 pending -= 1;
+//                 let fd = fd_array[i];
+//                 if (result != 0)
+//                 {
+//                     let er = strerror(result);
+//                     printf("Error in stat task: %s\n", er);
+//                     fflush(stdout);
+//                     fail();
+//                 }
+//                 let statx_struct = &statx_array[i];
+//                 let file_size = statx_struct->stx_size;
+//                 let file_pointer = arena_allocate_bytes(file_arena, file_size, 1);
+//                 let file = (str) { file_pointer, file_size };
+//                 file_array[i] = file;
+//
+//                 u64 read_byte_count = 0;
+//
+//                 while (read_byte_count != file.length)
+//                 {
+//                     struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
+//                     u32 to_be_read = file.length > 0x7ffff000 ? 0x7ffff000 : (u32)file.length;
+//                     sqe->flags |= IOSQE_IO_LINK;
+//                     u64 user_data = ((u64)(IO_URING_TASK_READ) << 32) | i;
+//                     sqe->user_data = user_data;
+//                     io_uring_prep_read(sqe, fd, file.pointer, to_be_read, read_byte_count);
+//                     read_byte_count += to_be_read;
+//                 }
+//
+//                 struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
+//                 io_uring_prep_close(sqe, fd);
+//                 u64 user_data = ((u64)(IO_URING_TASK_CLOSE) << 32) | i;
+//                 sqe->user_data = user_data;
+//
+//                 ret = io_uring_submit(ring);
+//                 if (ret < 0)
+//                 {
+//                     fail();
+//                 }
+//             }
+//             break; case IO_URING_TASK_READ:
+//             {
+//             }
+//             break; case IO_URING_TASK_CLOSE:
+//             {
+//                 printf("file first: %c\n", file_array[i].pointer[0]);
+//             }
+//         }
+//     }
+//
+//     // for (u64 i = 0; i < file_count; i += 1)
+//     // {
+//     //     LexerError error = {};
+//     //     let token_list = lex(file_arena, else_arena, file_array[i], &error);
+//     //     if (error.id != LEXER_ERROR_ID_NONE)
+//     //     {
+//     //         fail();
+//     //     }
+//     //     list_array[i] = token_list;
+//     // }
+//
+//     SPALL_FUNCTION_END();
+//     return file_count;
+// }
 #endif
 
 STRUCT(Thread)
@@ -1365,7 +1352,6 @@ static_assert(sizeof(Thread) % 64 == 0);
 #define THREAD_COUNT 5
 static Thread threads[5];
 static u32 thread_count;
-static u32 per_thread_work;
 
 static u64 classic_integer_type_count = 64 * 2;
 static u64 big_integer_type_count = (
@@ -1536,6 +1522,61 @@ TypeReference get_noreturn_type(CompileUnit* restrict unit)
     return void_type;
 }
 
+TypeReference get_integer_type(CompileUnit* restrict unit, u64 bit_count, bool is_signed)
+{
+    assert(bit_count != 0);
+    assert(bit_count <= 64 || bit_count == 128 || bit_count == 256 || bit_count == 512);
+    let type_index = bit_count > 64 ? (1ULL << __builtin_ctzg(bit_count - 128)) * 2 + is_signed : is_signed * 64 + (bit_count - 1);
+    return type_reference_from_index(unit, type_index);
+}
+
+TypeReference get_pointer_type(CompileUnit* restrict unit, TypeReference element_type_reference)
+{
+    Type* element_type = type_pointer_from_reference(unit, element_type_reference);
+    let last_pointer_type = unit->first_pointer_type;
+
+    while (is_ref_valid(last_pointer_type))
+    {
+        let lpt = type_pointer_from_reference(unit, last_pointer_type);
+        assert(lpt->id == TYPE_ID_POINTER);
+        trap();
+    }
+
+    StringReference name = {};
+    if (is_ref_valid(element_type->name))
+    {
+        str name_parts[] = {
+            S("&"),
+            string_from_reference(unit, element_type->name),
+        };
+        name = allocate_and_join_string(unit, string_array_to_slice(name_parts));
+    }
+
+    let pointer = new_type(unit);
+    *pointer = (Type) {
+        .pointer = {
+            .element_type = element_type_reference,
+        },
+        .name = name,
+        .scope = element_type->scope,
+        .id = TYPE_ID_POINTER,
+    };
+
+    let result =  type_reference_from_pointer(unit, pointer);
+
+    if (is_ref_valid(last_pointer_type))
+    {
+        trap();
+    }
+    else
+    {
+        assert(!is_ref_valid(unit->first_pointer_type));
+        unit->first_pointer_type = result;
+    }
+
+    return result;
+}
+
 StringReference allocate_string(CompileUnit* restrict unit, str s)
 {
     let arena = unit_arena(unit, UNIT_ARENA_STRING);
@@ -1550,6 +1591,41 @@ StringReference allocate_string(CompileUnit* restrict unit, str s)
     *(u32*)string = (u32)s.length;
     memcpy(string + sizeof(u32), s.pointer, s.length);
     *(string + sizeof(u32) + s.length) = 0;
+    let big_offset = string - arena_byte_pointer;
+    assert(big_offset + 1 < UINT32_MAX);
+    let offset = (u32)big_offset;
+    let reference = (StringReference) {
+        .v = offset + 1,
+    };
+    return reference;
+}
+
+StringReference allocate_and_join_string(CompileUnit* restrict unit, StringSlice slice)
+{
+    let arena = unit_arena(unit, UNIT_ARENA_STRING);
+    let arena_byte_pointer = (char*)arena;
+    u64 string_length = 0;
+
+    for (u64 i = 0; i < slice.length; i += 1)
+    {
+        let string = slice.pointer[i];
+        string_length += string.length;
+    }
+
+    let string = (char* restrict) arena_allocate_bytes(arena, string_length + sizeof(u32) + 1, alignof(u32));
+    assert(string_length < UINT32_MAX);
+    *(u32*)string = (u32)string_length;
+    let pointer = string + 4;
+
+    for (u64 i = 0; i < slice.length; i += 1)
+    {
+        let string = slice.pointer[i];
+        memcpy(pointer, string.pointer, string.length);
+        pointer += string.length;
+    }
+
+    *pointer = 0;
+
     let big_offset = string - arena_byte_pointer;
     assert(big_offset + 1 < UINT32_MAX);
     let offset = (u32)big_offset;
@@ -1601,6 +1677,7 @@ static void crunch_file(CompileUnit* restrict unit, str path)
         },
     };
     let file_reference = file_reference_from_pointer(unit, file);
+    unused(file_reference);
     let tl = lex(unit_arena(unit, UNIT_ARENA_TOKEN), unit_arena(unit, UNIT_ARENA_STRING), content.pointer, content.length);
     parse_file(unit, file, tl);
     trap();
@@ -1608,18 +1685,7 @@ static void crunch_file(CompileUnit* restrict unit, str path)
 
 void* thread_worker(void* arg)
 {
-    let thread_index = (u64)arg;
     u64 result_code = 0;
-    Thread* thread = &threads[thread_index];
-    let thread_file_count = thread->work.length;
-    Arena* thread_arena = arena_initialize((ArenaInitialization){
-        .reserved_size = GB(32),
-        .initial_size = GB(32),
-    });
-    Arena* else_arena = arena_initialize((ArenaInitialization){
-        .reserved_size = GB(12),
-        .initial_size = GB(12),
-    });
     str path = 
 #if 0
             S("build/file0");
@@ -1659,15 +1725,6 @@ void* thread_worker(void* arg)
 #endif
 
     return (void*)result_code;
-}
-
-TypeReference get_integer_type(CompileUnit* restrict unit, u64 bit_count, bool is_signed)
-{
-    let type_arena = unit_arena(unit, UNIT_ARENA_TYPE);
-    assert(bit_count != 0);
-    assert(bit_count <= 64 || bit_count == 128 || bit_count == 256 || bit_count == 512);
-    let type_index = bit_count > 64 ? (1ULL << __builtin_ctzg(bit_count - 128)) * 2 + is_signed : is_signed * 64 + (bit_count - 1);
-    return type_reference_from_index(unit, type_index);
 }
 
 bool compiler_main(int argc, const char* argv[], char** envp)

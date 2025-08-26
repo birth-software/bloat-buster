@@ -78,6 +78,7 @@ static bool identifier_parsing_valid(IdentifierParsing p)
 static str file_content(CompileUnit* unit, FileReference file_index)
 {
     let file = file_pointer_from_reference(unit, file_index);
+    unused(file);
     parser_error();
 }
 
@@ -139,8 +140,8 @@ static IntegerParsing parse_decimal_vectorized(const char* restrict p)
 
     let digit_mask = _cvtu64_mask64((1ULL << digit_count) - 1);
     let digit2bin = _mm512_maskz_sub_epi8(digit_mask, chunk, zero);
-    let lo0 = _mm512_castsi512_si128(digit2bin);
-    let a = _mm512_cvtepu8_epi64(lo0);
+    // let lo0 = _mm512_castsi512_si128(digit2bin);
+    // let a = _mm512_cvtepu8_epi64(lo0);
     let digit_count_splat = _mm512_set1_epi8((u8)digit_count);
 
     let to_sub = _mm512_set_epi8(
@@ -159,7 +160,7 @@ static IntegerParsing parse_decimal_vectorized(const char* restrict p)
     let a128_1_0 = _mm512_extracti64x2_epi64(asds, 1);
 
     let a128_0_1 = _mm_srli_si128(a128_0_0, 8);
-    let a128_1_1 = _mm_srli_si128(a128_1_0, 8);
+    // let a128_1_1 = _mm_srli_si128(a128_1_0, 8);
 
     let a8_0_0 = _mm512_cvtepu8_epi64(a128_0_0);
     let a8_0_1 = _mm512_cvtepu8_epi64(a128_0_1);
@@ -219,7 +220,7 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
 
             if (expect_token(parser, TOKEN_ID_LEFT_BRACKET))
             {
-                let identifier = expect_identifier(unit, parser);
+                // let identifier = expect_identifier(unit, parser);
                 parser_error();
             }
 
@@ -229,8 +230,8 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
             }
 
             u64 argument_count = 0;
-            let argument_arena = unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
-            let first_argument = arena_current_position(argument_arena, alignof(Argument));
+            // let argument_arena = unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
+            // let first_argument = arena_current_position(argument_arena, alignof(Argument));
 
             while (!expect_token(parser, TOKEN_ID_RIGHT_PARENTHESIS))
             {
@@ -246,6 +247,7 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
                     break;
                 }
 
+#if 0
                 let argument = arena_allocate(argument_arena, Argument, 1);
 
                 let identifier_token = consume_token(parser);
@@ -264,6 +266,7 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
                 {
                     parser_error();
                 }
+#endif
 
                 parser_error();
             }
@@ -277,7 +280,7 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
 
             if (argument_count)
             {
-                let first_argument_index = argument_reference_from_pointer(unit, first_argument);
+                // let first_argument_index = argument_reference_from_pointer(unit, first_argument);
                 trap();
             }
 
@@ -303,8 +306,8 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
         }
         break; case TOKEN_ID_IDENTIFIER_START:
         {
-            IdentifierParsing identifier_parsing = end_identifier(unit, parser, token);
-            let identifier = string_from_reference(unit, identifier_parsing.string);
+            // IdentifierParsing identifier_parsing = end_identifier(unit, parser, token);
+            // let identifier = string_from_reference(unit, identifier_parsing.string);
             todo();
         }
         break; case TOKEN_ID_KEYWORD_TYPE_INTEGER:
@@ -324,6 +327,13 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
             todo();
         }
     }
+}
+
+static Global* global_from_parser(CompileUnit* unit)
+{
+    let global = arena_allocate(unit_arena(unit, UNIT_ARENA_COMPILE_UNIT), Global, 1);
+    *global = (Global) {};
+    return global;
 }
 
 void parse_file(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
@@ -346,6 +356,15 @@ void parse_file(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
         {
             break; case TOKEN_ID_IDENTIFIER_START:
             {
+                ValueReference initial_value = {};
+
+                let global = global_from_parser(unit);
+                let global_reference = global_reference_from_pointer(unit, global);
+                let global_storage_pointer = new_value(unit);
+                *global_storage_pointer = (Value){};
+                let global_storage = value_reference_from_pointer(unit, global_storage_pointer);
+                global->variable.storage = global_storage;
+
                 let identifier_start = global_token;
                 let identifier_end = expect_token(parser, TOKEN_ID_IDENTIFIER_END);
 
@@ -364,6 +383,11 @@ void parse_file(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
                 let assign = expect_token(parser, TOKEN_ID_ASSIGN);
                 if (unlikely(!assign))
                 {
+                    let token = get_token(parser);
+                    if (token->id == TOKEN_ID_KEYWORD_TYPE_FN)
+                    {
+                        unit->current_function = global_reference;
+                    }
                     global_type = parse_type(unit, parser, scope, 0);
                     assign = expect_token(parser, TOKEN_ID_ASSIGN);
                 }
@@ -373,6 +397,20 @@ void parse_file(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
                     parser_error();
                 }
 
+                if (is_ref_valid(global_type))
+                {
+                    let pointer_type = get_pointer_type(unit, global_type);
+                    global_storage_pointer->type = pointer_type;
+
+                    let global_type_p = type_pointer_from_reference(unit, global_type);
+                    if (global_type_p->id == TYPE_ID_FUNCTION)
+                    {
+                        global_storage_pointer->id = VALUE_ID_FUNCTION;
+                        global_storage_pointer->function = (ValueFunction) {
+                        };
+                        trap();
+                    }
+                }
                 parser_error();
             }
             break; case TOKEN_ID_KEYWORD_TYPE:
