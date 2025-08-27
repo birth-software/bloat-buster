@@ -3,6 +3,8 @@
 #include <immintrin.h>
 #include <stdio.h>
 
+#define SCALAR 1
+
 static bool is_space(char ch)
 {
     return ((ch == ' ') | (ch == '\t')) | ((ch == '\r') | (ch == '\n'));
@@ -438,9 +440,11 @@ static bool is_good_finishing_decimal_character(u8 ch)
 TokenList lex(Arena* token_arena, Arena* string_arena, const char* restrict p, u64 l)
 {
 #define MEASURE_LEXING 1
+
 #if MEASURE_LEXING
     let lexing_start = take_timestamp();
 #endif
+
     Token* tokens = (Token*)((u8*)token_arena + align_forward(token_arena->position, alignof(Token)));
     u64 token_count = 0;
     u64 i = 0;
@@ -452,6 +456,12 @@ TokenList lex(Arena* token_arena, Arena* string_arena, const char* restrict p, u
     {
         // Skipping whitespace
         {
+#if SCALAR
+            let ch0 = (p + i)[0];
+            let ch1 = (p + i)[1];
+            let ch2 = (p + i)[2];
+            let ch3 = (p + i)[3];
+#else
             let chunk64 = _mm512_loadu_epi8(&p[i]);
             let chunk32 = _mm512_extracti32x8_epi32(chunk64, 0);
             let chunk16 = _mm256_extracti128_si256(chunk32, 0);
@@ -461,9 +471,44 @@ TokenList lex(Arena* token_arena, Arena* string_arena, const char* restrict p, u
             let ch1 = ((u8*)&chunk4)[1];
             let ch2 = ((u8*)&chunk4)[2];
             let ch3 = ((u8*)&chunk4)[3];
+#endif
 
             if (is_space(ch0) | ((ch0 == '/') & (ch1 == '/')))
             {
+#if SCALAR
+                bool skip_space = 1;
+
+                while (skip_space)
+                {
+                    let iteration_offset = i;
+                    bool space = 1;
+                    while ((i < l) & space)
+                    {
+                        let ch = p[i];
+                        let is_line_feed = ch == '\n';
+                        space = is_space(ch);
+                        i += space;
+
+                        line_offset += is_line_feed;
+                        line_character_offset = is_line_feed ? i : line_character_offset;
+                    }
+                    let is_comment = (i + 1 < l) & (p[i] == '/') & (p[i + 1] == '/');
+
+                    if (is_comment)
+                    {
+                        while ((i < l) & (p[i] != '\n'))
+                        {
+                            i += 1;
+                        }
+
+                        i += 1;
+                        line_offset += 1;
+                        line_character_offset = i;
+                    }
+
+                    skip_space = (i - iteration_offset) != 0;
+                }
+#else
 #define OPTIMIZE_FOR_COMMON_CASE 1
 #if OPTIMIZE_FOR_COMMON_CASE
                 if (!is_space(ch1) & !((ch1 == '/') & (ch2 == '/')))
@@ -475,15 +520,6 @@ TokenList lex(Arena* token_arena, Arena* string_arena, const char* restrict p, u
                 else
 #endif
                 {
-#define CHECK 0
-#define SCALAR 0
-#if CHECK
-                    let original_i = i;
-                    let original_line_offset = line_offset;
-                    let original_line_character_offset = line_character_offset;
-#endif
-
-#if SCALAR == 0 || CHECK == 1
                     u64 skipped_ws_count = 1;
 
                     let line_feed = _mm512_set1_epi8('\n');
@@ -523,7 +559,7 @@ TokenList lex(Arena* token_arena, Arena* string_arena, const char* restrict p, u
                         line_character_offset = traditional_line_counts ? (original_i + character_after_line_offset) : line_character_offset;
 
                         let is_first_slash = _mm512_mask_cmpeq_epu8_mask(_cvtu64_mask64(3), _mm512_loadu_epi8(&p[i]), slash);
-                        
+
                         let is_comment_int = _cvtmask64_u64(is_first_slash);
                         assert((is_comment_int & 3) == is_comment_int);
                         let is_next_comment = is_comment_int == 3;
@@ -545,59 +581,8 @@ TokenList lex(Arena* token_arena, Arena* string_arena, const char* restrict p, u
                         line_offset += is_next_comment ? 1 : 0;
                         line_character_offset = is_next_comment ? i : line_character_offset;
                     }
-#endif
-                    
-#if CHECK
-                    let vector_i = i;
-                    let vector_line_offset = line_offset;
-                    let vector_line_character_offset = line_character_offset;
-
-                    i = original_i;
-                    line_offset = original_line_offset;
-                    line_character_offset = original_line_character_offset;
-#endif
-
-#if SCALAR
-                    bool skip_space = 1;
-
-                    while (skip_space)
-                    {
-                        let iteration_offset = i;
-                        bool space = 1;
-                        while ((i < l) & space)
-                        {
-                            let ch = p[i];
-                            let is_line_feed = ch == '\n';
-                            space = is_space(ch);
-                            i += space;
-
-                            line_offset += is_line_feed;
-                            line_character_offset = is_line_feed ? i : line_character_offset;
-                        }
-                        let is_comment = (i + 1 < l) & (p[i] == '/') & (p[i + 1] == '/');
-
-                        if (is_comment)
-                        {
-                            while ((i < l) & (p[i] != '\n'))
-                            {
-                                i += 1;
-                            }
-
-                            i += 1;
-                            line_offset += 1;
-                            line_character_offset = i;
-                        }
-
-                        skip_space = (i - iteration_offset) != 0;
-                    }
-#endif
-
-#if CHECK
-                    assert(vector_i == i);
-                    assert(vector_line_offset == line_offset);
-                    assert(vector_line_character_offset == line_character_offset);
-#endif
                 }
+#endif
             }
         }
 
@@ -626,6 +611,16 @@ TokenList lex(Arena* token_arena, Arena* string_arena, const char* restrict p, u
             };
         }
 
+#if SCALAR
+        let ch0 = (p + i)[0];
+        let ch1 = (p + i)[1];
+        let ch2 = (p + i)[2];
+        let ch3 = (p + i)[3];
+        let ch4 = (p + i)[4];
+        let ch5 = (p + i)[5];
+        let ch6 = (p + i)[6];
+        let ch7 = (p + i)[7];
+#else
         let chunk64 = _mm512_loadu_epi8(&p[start_index]);
         let chunk32 = _mm512_extracti32x8_epi32(chunk64, 0);
         let chunk16 = _mm256_extracti128_si256(chunk32, 0);
@@ -642,6 +637,7 @@ TokenList lex(Arena* token_arena, Arena* string_arena, const char* restrict p, u
         let ch5 = ((u8*)&chunk4_1)[1];
         let ch6 = ((u8*)&chunk4_1)[2];
         let ch7 = ((u8*)&chunk4_1)[3];
+#endif
 
         Token* token = arena_allocate(token_arena, Token, 1);
         *token = (Token) {
@@ -1018,23 +1014,21 @@ TokenList lex(Arena* token_arena, Arena* string_arena, const char* restrict p, u
             IntegerParsing r;
 
             let number_start = &p[i];
-#define VECTORIZED_PARSING 1
 
             switch (token_id)
             {
-#if VECTORIZED_PARSING
+#if SCALAR
+                break; case TOKEN_ID_INTEGER_START_HEXADECIMAL_PREFIXED: r = parse_hexadecimal(number_start);
+                break; case TOKEN_ID_INTEGER_START_DECIMAL_PREFIXED: case TOKEN_ID_INTEGER_START_DECIMAL_INFERRED: r = parse_decimal(number_start);
+                break; case TOKEN_ID_INTEGER_START_OCTAL_PREFIXED: r = parse_octal(number_start);
+                break; case TOKEN_ID_INTEGER_START_BINARY_PREFIXED: r = parse_binary(number_start);
+#else
                 break; case TOKEN_ID_INTEGER_START_HEXADECIMAL_PREFIXED: r = parse_hexadecimal_vectorized(number_start);
                 break; case TOKEN_ID_INTEGER_START_DECIMAL_PREFIXED: case TOKEN_ID_INTEGER_START_DECIMAL_INFERRED: r = parse_decimal_vectorized(number_start);
                 break; case TOKEN_ID_INTEGER_START_OCTAL_PREFIXED: r = parse_octal_vectorized(number_start);
                 break; case TOKEN_ID_INTEGER_START_BINARY_PREFIXED: r = parse_binary_vectorized(number_start);
-#else
-                break; case INTEGER_FORMAT_HEXADECIMAL: r = parse_hexadecimal(number_start);
-                break; case INTEGER_FORMAT_DECIMAL: r = parse_decimal(number_start);
-                break; case INTEGER_FORMAT_OCTAL: r = parse_octal(number_start);
-                break; case INTEGER_FORMAT_BINARY: r = parse_binary(number_start);
 #endif
-                break; default:
-                    UNREACHABLE();
+                break; default: UNREACHABLE();
             }
 
             value = r.value;
@@ -1050,16 +1044,15 @@ TokenList lex(Arena* token_arena, Arena* string_arena, const char* restrict p, u
             {
                 i += 1;
 
-#if VECTORIZED_PARSING
-                let r = parse_decimal_vectorized(&p[i]);
-#else
+#if SCALAR
                 let r = parse_decimal(&p[i]);
+#else
+                let r = parse_decimal_vectorized(&p[i]);
 #endif
                 let mantissa = r.value;
                 i += r.i;
 
                 let float_string_literal = str_from_ptr_start_end((char*)p, start_index, i);
-
             }
 
             token->id = is_float ? TOKEN_ID_FLOAT_START : token_id;
@@ -1080,7 +1073,7 @@ TokenList lex(Arena* token_arena, Arena* string_arena, const char* restrict p, u
 
             u64 escape_character_count = 0;
 
-#if 0
+#if SCALAR
             while (i < l)
             {
                 let ch = p[i];

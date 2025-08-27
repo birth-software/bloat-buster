@@ -666,20 +666,23 @@ void parse_file(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
     };
     Parser* restrict parser = &p;
 
-    let arena = unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
     let scope = scope_reference_from_pointer(unit, &file_pointer->scope);
 
+    TopLevelDeclarationReference previous_tld = {};
+
     Token* global_token;
+
     while ((global_token = consume_token(parser))->id != TOKEN_ID_EOF)
     {
-        let top_level_declaration = arena_allocate(arena, TopLevelDeclaration, 1);
+        let top_level_declaration = arena_allocate(unit_arena(unit, UNIT_ARENA_COMPILE_UNIT), TopLevelDeclaration, 1);
+        let top_level_declaration_reference = top_level_declaration_reference_from_pointer(unit, top_level_declaration);
 
         switch (global_token->id)
         {
             break; case TOKEN_ID_IDENTIFIER_START:
             {
-                ValueReference initial_value = {};
                 FunctionAttributes function_attributes = {};
+                Linkage linkage = {};
 
                 let global = global_from_parser(unit);
                 let global_reference = global_reference_from_pointer(unit, global);
@@ -689,6 +692,7 @@ void parse_file(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
                 global->variable.storage = global_storage;
 
                 let global_identifier = end_identifier(unit, parser, global_token);
+                let global_name = global_identifier.string;
 
                 if (unlikely(!expect_token(parser, TOKEN_ID_COLON)))
                 {
@@ -724,6 +728,8 @@ void parse_file(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
                     is_function = global_type_p->id == TYPE_ID_FUNCTION;
                 }
 
+                ValueReference initial_value = {};
+
                 if (is_function)
                 {
                     global_storage_pointer->function = (ValueFunction) {
@@ -733,6 +739,11 @@ void parse_file(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
                             .attributes = function_attributes,
                     };
                     global_storage_pointer->id = VALUE_ID_FUNCTION;
+                    global->scope = (Scope) {
+                        .parent = scope,
+                        .location = get_source_location(parser, global_token),
+                        .id = SCOPE_ID_FUNCTION,
+                    };
 
                     let block = parse_block(unit, parser, scope_reference_from_pointer(unit, &global->scope), expect_token(parser, TOKEN_ID_LEFT_BRACE));
                     global_storage_pointer->function.block = block;
@@ -742,19 +753,39 @@ void parse_file(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
                     todo();
                 }
 
+                let old_scope = global->scope;
+
+                *global = (Global) {
+                    .variable = {
+                        .name = global_name,
+                        .storage = global_storage,
+                        .type = {},
+                        .scope = scope,
+                        .location = get_source_location(parser, global_token),
+                    },
+                    .scope = old_scope,
+                    .initial_value = initial_value,
+                    .linkage = linkage,
+                };
+
+                *top_level_declaration = (TopLevelDeclaration) {
+                    .global = global_reference,
+                    .id = TOP_LEVEL_DECLARATION_GLOBAL,
+                };
+
+                if (is_ref_valid(previous_tld))
+                {
+                    let p_tld = top_level_declaration_pointer_from_reference(unit, previous_tld);
+                    p_tld->next = top_level_declaration_reference;
+                }
+
                 unit->current_function = (GlobalReference){};
-                todo();
             }
             break; case TOKEN_ID_KEYWORD_TYPE:
             {
                 parser_error();
             }
-            break; default: UNREACHABLE();
+            break; default: todo();
         }
-
-        parser_error();
-        *top_level_declaration = (TopLevelDeclaration) {
-        };
-        parser_error();
     }
 }

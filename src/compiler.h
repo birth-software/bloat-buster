@@ -47,6 +47,7 @@ typedef enum TypeId : u8
 
 typedef enum ScopeId : u8
 {
+    SCOPE_ID_NONE,
     SCOPE_ID_GLOBAL,
     SCOPE_ID_FILE,
     SCOPE_ID_FUNCTION,
@@ -426,6 +427,7 @@ reference_offset_functions(Argument, argument, UNIT_ARENA_COMPILE_UNIT)
 reference_offset_functions(Global, global, UNIT_ARENA_COMPILE_UNIT)
 reference_offset_functions(Statement, statement, UNIT_ARENA_COMPILE_UNIT)
 reference_offset_functions(Block, block, UNIT_ARENA_COMPILE_UNIT)
+reference_offset_functions(TopLevelDeclaration, top_level_declaration, UNIT_ARENA_COMPILE_UNIT)
 
 static inline StringReference string_reference_from_string(CompileUnit* restrict unit, str s)
 {
