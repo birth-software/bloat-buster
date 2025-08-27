@@ -996,24 +996,16 @@ TokenList lex(Arena* token_arena, Arena* string_arena, const char* restrict p, u
 
             i += 1 + is_valid_prefix + (-!is_valid_prefix);
 
-            typedef enum IntegerFormat
-            {
-                INTEGER_FORMAT_BINARY,
-                INTEGER_FORMAT_OCTAL,
-                INTEGER_FORMAT_DECIMAL,
-                INTEGER_FORMAT_HEXADECIMAL,
-            } IntegerFormat;
-
-            IntegerFormat format = INTEGER_FORMAT_DECIMAL;
+            TokenId token_id = TOKEN_ID_INTEGER_START_DECIMAL_INFERRED;
 
             if (is_valid_prefix)
             {
                 switch (prefix_ch)
                 {
-                    break; case 'x': format = INTEGER_FORMAT_HEXADECIMAL;
-                    break; case 'd': format = INTEGER_FORMAT_DECIMAL;
-                    break; case 'o': format = INTEGER_FORMAT_OCTAL;
-                    break; case 'b': format = INTEGER_FORMAT_BINARY;
+                    break; case 'x': token_id = TOKEN_ID_INTEGER_START_HEXADECIMAL_PREFIXED;
+                    break; case 'd': token_id = TOKEN_ID_INTEGER_START_DECIMAL_PREFIXED;
+                    break; case 'o': token_id = TOKEN_ID_INTEGER_START_OCTAL_PREFIXED;
+                    break; case 'b': token_id = TOKEN_ID_INTEGER_START_BINARY_PREFIXED;
                     break; default:
                         UNREACHABLE();
                 }
@@ -1028,13 +1020,13 @@ TokenList lex(Arena* token_arena, Arena* string_arena, const char* restrict p, u
             let number_start = &p[i];
 #define VECTORIZED_PARSING 1
 
-            switch (format)
+            switch (token_id)
             {
 #if VECTORIZED_PARSING
-                break; case INTEGER_FORMAT_HEXADECIMAL: r = parse_hexadecimal_vectorized(number_start);
-                break; case INTEGER_FORMAT_DECIMAL: r = parse_decimal_vectorized(number_start);
-                break; case INTEGER_FORMAT_OCTAL: r = parse_octal_vectorized(number_start);
-                break; case INTEGER_FORMAT_BINARY: r = parse_binary_vectorized(number_start);
+                break; case TOKEN_ID_INTEGER_START_HEXADECIMAL_PREFIXED: r = parse_hexadecimal_vectorized(number_start);
+                break; case TOKEN_ID_INTEGER_START_DECIMAL_PREFIXED: case TOKEN_ID_INTEGER_START_DECIMAL_INFERRED: r = parse_decimal_vectorized(number_start);
+                break; case TOKEN_ID_INTEGER_START_OCTAL_PREFIXED: r = parse_octal_vectorized(number_start);
+                break; case TOKEN_ID_INTEGER_START_BINARY_PREFIXED: r = parse_binary_vectorized(number_start);
 #else
                 break; case INTEGER_FORMAT_HEXADECIMAL: r = parse_hexadecimal(number_start);
                 break; case INTEGER_FORMAT_DECIMAL: r = parse_decimal(number_start);
@@ -1070,7 +1062,7 @@ TokenList lex(Arena* token_arena, Arena* string_arena, const char* restrict p, u
 
             }
 
-            token->id = is_float ? TOKEN_ID_FLOAT_START : TOKEN_ID_INTEGER_START;
+            token->id = is_float ? TOKEN_ID_FLOAT_START : token_id;
 
             let end = arena_allocate(token_arena, Token, 1);
             token_count += 1;

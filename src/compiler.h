@@ -5,6 +5,13 @@
 typedef u32 RawReference;
 #define is_ref_valid(x) !!((x).v)
 
+STRUCT(SourceLocation)
+{
+    u32 line_number_offset;
+    u32 line_byte_offset;
+    u32 column_offset;
+};
+
 typedef enum CallingConvention : u8
 {
     CALLING_CONVENTION_C,
@@ -14,6 +21,7 @@ typedef enum CallingConvention : u8
 typedef enum ValueId : u8
 {
     VALUE_ID_DISCARD,
+    VALUE_ID_CONSTANT_INTEGER,
     VALUE_ID_FUNCTION,
 } ValueId;
 
@@ -53,15 +61,18 @@ declare_ref(Scope);
 declare_ref(File);
 declare_ref(Type);
 declare_ref(Value);
-declare_ref(Global);
 declare_ref(TopLevelDeclaration);
+declare_ref(Global);
 declare_ref(Variable);
 declare_ref(Argument);
+declare_ref(Local);
 declare_ref(Block);
+declare_ref(Statement);
 
 STRUCT(Scope)
 {
     ScopeReference parent;
+    SourceLocation location;
     ScopeId id;
 };
 
@@ -84,7 +95,6 @@ STRUCT(ValueFunction)
     struct
     {
     } llvm;
-    Scope scope;
     ArgumentReference arguments;
     BlockReference block;
     FunctionAttributes attributes;
@@ -94,6 +104,7 @@ STRUCT(Value)
 {
     union
     {
+        u64 constant_integer;
         ValueFunction function;
     };
     TypeReference type;
@@ -240,6 +251,31 @@ static inline AbiInformation* restrict get_argument_abi_information(TypeFunction
     return &get_abi_informations(function)[semantic_argument_index + 1];
 }
 
+STRUCT(Block)
+{
+    Scope scope;
+    LocalReference first_local;
+    LocalReference last_local;
+    StatementReference first_statement;
+};
+
+typedef enum StatementId : u8
+{
+    STATEMENT_ID_RETURN,
+    STATEMENT_ID_LOCAL,
+} StatementId;
+
+STRUCT(Statement)
+{
+    union
+    {
+        ValueReference return_st;
+    };
+    StatementReference next;
+    SourceLocation location;
+    StatementId id;
+};
+
 STRUCT(Type)
 {
     union
@@ -261,8 +297,7 @@ STRUCT(Variable)
     ValueReference storage;
     TypeReference type;
     ScopeReference scope;
-    u32 line;
-    u32 column;
+    SourceLocation location;
 };
 
 STRUCT(Argument)
@@ -287,6 +322,7 @@ typedef enum Linkage : u8
 STRUCT(Global)
 {
     Variable variable;
+    Scope scope;
     ValueReference initial_value;
     Linkage linkage;
 };
@@ -388,6 +424,8 @@ reference_offset_functions(Scope, scope, UNIT_ARENA_COMPILE_UNIT)
 reference_offset_functions(File, file, UNIT_ARENA_COMPILE_UNIT)
 reference_offset_functions(Argument, argument, UNIT_ARENA_COMPILE_UNIT)
 reference_offset_functions(Global, global, UNIT_ARENA_COMPILE_UNIT)
+reference_offset_functions(Statement, statement, UNIT_ARENA_COMPILE_UNIT)
+reference_offset_functions(Block, block, UNIT_ARENA_COMPILE_UNIT)
 
 static inline StringReference string_reference_from_string(CompileUnit* restrict unit, str s)
 {
