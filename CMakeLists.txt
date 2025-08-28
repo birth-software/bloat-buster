@@ -12,6 +12,7 @@ add_executable(bb
     src/lib.c
     src/lexer.c
     src/parser.c
+    src/analysis.c
     src/compiler.c
     src/main.c
 )

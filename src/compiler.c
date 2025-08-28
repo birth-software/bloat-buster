@@ -2,6 +2,7 @@
 #include <compiler.h>
 #include <lexer.h>
 #include <parser.h>
+#include <analysis.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #ifdef __linux__
@@ -1539,7 +1540,18 @@ TypeReference get_pointer_type(CompileUnit* restrict unit, TypeReference element
     {
         let lpt = type_pointer_from_reference(unit, last_pointer_type);
         assert(lpt->id == TYPE_ID_POINTER);
-        trap();
+        if (ref_eq(lpt->pointer.element_type, element_type_reference))
+        {
+            return last_pointer_type;
+        }
+
+        let next = lpt->pointer.next;
+        if (!is_ref_valid(next))
+        {
+            break;
+        }
+
+        last_pointer_type = next;
     }
 
     StringReference name = {};
@@ -1566,7 +1578,9 @@ TypeReference get_pointer_type(CompileUnit* restrict unit, TypeReference element
 
     if (is_ref_valid(last_pointer_type))
     {
-        trap();
+        assert(is_ref_valid(unit->first_pointer_type));
+        let lpt = type_pointer_from_reference(unit, last_pointer_type);
+        lpt->pointer.next = result;
     }
     else
     {
@@ -1679,7 +1693,8 @@ static void crunch_file(CompileUnit* restrict unit, str path)
     let file_reference = file_reference_from_pointer(unit, file);
     unused(file_reference);
     let tl = lex(unit_arena(unit, UNIT_ARENA_TOKEN), unit_arena(unit, UNIT_ARENA_STRING), content.pointer, content.length);
-    parse_file(unit, file, tl);
+    parse(unit, file, tl);
+    analyze(unit);
     trap();
 }
 

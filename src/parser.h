@@ -4,4 +4,4 @@
 #include <compiler.h>
 #include <lexer.h>
 
-void parse_file(CompileUnit* restrict unit, File* file, TokenList tl);
+void parse(CompileUnit* restrict unit, File* file, TokenList tl);

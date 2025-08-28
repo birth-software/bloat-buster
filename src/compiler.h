@@ -4,6 +4,7 @@
 
 typedef u32 RawReference;
 #define is_ref_valid(x) !!((x).v)
+#define ref_eq(a, b) (((typeof(a))a).v == ((typeof(a))b).v)
 
 STRUCT(SourceLocation)
 {
@@ -23,7 +24,50 @@ typedef enum ValueId : u8
     VALUE_ID_DISCARD,
     VALUE_ID_CONSTANT_INTEGER,
     VALUE_ID_FUNCTION,
+    VALUE_ID_UNRESOLVED_IDENTIFIER,
+
+    VALUE_ID_UNARY_MINUS,
+    VALUE_ID_UNARY_ADDRESS_OF,
+    VALUE_ID_UNARY_BOOLEAN_NOT,
+    VALUE_ID_UNARY_BITWISE_NOT,
+
+    VALUE_ID_INTRINSIC_VALUE,
+    VALUE_ID_INTRINSIC_TYPE,
+    VALUE_ID_INTRINSIC_UNRESOLVED,
+
+    VALUE_ID_CALL,
+
+    VALUE_ID_BINARY_ADD,
+    VALUE_ID_BINARY_SUB,
+    VALUE_ID_BINARY_MULTIPLY,
+    VALUE_ID_BINARY_DIVIDE,
+    VALUE_ID_BINARY_REMAINDER,
+
+    VALUE_ID_BINARY_BITWISE_AND,
+    VALUE_ID_BINARY_BITWISE_OR,
+    VALUE_ID_BINARY_BITWISE_XOR,
+
+    VALUE_ID_BINARY_BITWISE_SHIFT_LEFT,
+    VALUE_ID_BINARY_BITWISE_SHIFT_RIGHT,
+
+    VALUE_ID_INTRINSIC_TRAP,
+    VALUE_ID_INTRINSIC_EXTEND,
+    VALUE_ID_INTRINSIC_INTEGER_MAX,
+    VALUE_ID_INTRINSIC_TRUNCATE,
 } ValueId;
+
+static inline bool value_id_is_intrinsic(ValueId id)
+{
+    switch (id)
+    {
+        case VALUE_ID_INTRINSIC_VALUE:
+        case VALUE_ID_INTRINSIC_TYPE:
+        case VALUE_ID_INTRINSIC_UNRESOLVED:
+            return 1;
+        default:
+            return 0;
+    }
+}
 
 typedef enum TypeId : u8
 {
@@ -62,6 +106,7 @@ declare_ref(Scope);
 declare_ref(File);
 declare_ref(Type);
 declare_ref(Value);
+declare_ref(ValueNode);
 declare_ref(TopLevelDeclaration);
 declare_ref(Global);
 declare_ref(Variable);
@@ -101,12 +146,42 @@ STRUCT(ValueFunction)
     FunctionAttributes attributes;
 };
 
+STRUCT(UnresolvedIdentifier)
+{
+    StringReference string;
+    ScopeReference scope;
+};
+
+STRUCT(ValueNode)
+{
+    ValueReference item;
+    ValueNodeReference next;
+};
+
+STRUCT(ValueList)
+{
+    ValueNodeReference first;
+    u32 count;
+};
+
+STRUCT(ValueCall)
+{
+    ValueReference callable;
+    ValueList arguments;
+    TypeReference function_type;
+};
+
 STRUCT(Value)
 {
     union
     {
-        u64 constant_integer;
+        u64 integer;
+        UnresolvedIdentifier unresolved_identifier;
         ValueFunction function;
+        ValueReference unary;
+        TypeReference unary_type;
+        ValueReference binary[2];
+        ValueCall call;
     };
     TypeReference type;
     ValueReference next;
@@ -132,6 +207,7 @@ typedef enum TypeFloat : u8
 STRUCT(TypePointer)
 {
     TypeReference element_type;
+    TypeReference next;
 };
 
 UNION(AbiRegisterCount)
@@ -264,13 +340,50 @@ typedef enum StatementId : u8
 {
     STATEMENT_ID_RETURN,
     STATEMENT_ID_LOCAL,
+    STATEMENT_ID_BLOCK,
+    STATEMENT_ID_IF,
+    STATEMENT_ID_WHEN,
+    STATEMENT_ID_SWITCH,
+    STATEMENT_ID_WHILE,
+    STATEMENT_ID_FOR,
+    STATEMENT_ID_EXPRESSION,
 } StatementId;
+
+static inline bool statement_is_block_like(StatementId id)
+{
+    switch (id)
+    {
+        break;
+        case STATEMENT_ID_BLOCK:
+        case STATEMENT_ID_IF:
+        case STATEMENT_ID_WHEN:
+        case STATEMENT_ID_SWITCH:
+        case STATEMENT_ID_WHILE:
+        case STATEMENT_ID_FOR:
+        {
+            return 1;
+        }
+        break; default:
+        {
+            return 0;
+        }
+    }
+}
+
+STRUCT(Branch)
+{
+    ValueReference condition;
+    StatementReference taken_branch;
+    StatementReference else_branch;
+};
 
 STRUCT(Statement)
 {
     union
     {
-        ValueReference return_st;
+        ValueReference value;
+        Branch branch;
+        BlockReference block;
     };
     StatementReference next;
     SourceLocation location;
@@ -378,6 +491,8 @@ STRUCT(CompileUnit)
     Scope scope;
     FileReference files;
 
+    TopLevelDeclarationReference first_tld;
+
     TypeReference first_pointer_type;
 
     TypeReference free_types;
@@ -428,6 +543,7 @@ reference_offset_functions(Global, global, UNIT_ARENA_COMPILE_UNIT)
 reference_offset_functions(Statement, statement, UNIT_ARENA_COMPILE_UNIT)
 reference_offset_functions(Block, block, UNIT_ARENA_COMPILE_UNIT)
 reference_offset_functions(TopLevelDeclaration, top_level_declaration, UNIT_ARENA_COMPILE_UNIT)
+reference_offset_functions(ValueNode, value_node, UNIT_ARENA_COMPILE_UNIT)
 
 static inline StringReference string_reference_from_string(CompileUnit* restrict unit, str s)
 {
@@ -538,6 +654,18 @@ static inline ValueReference value_reference_from_index(CompileUnit* restrict un
     };
 }
 
+static inline Value* value_pointer_from_reference(CompileUnit* restrict unit, ValueReference reference)
+{
+    assert(is_ref_valid(reference));
+    let arena = unit_arena(unit, UNIT_ARENA_VALUE);
+    let index = reference.v - 1;
+    let byte_offset = index * sizeof(Value);
+    let arena_position = arena->position;
+    assert(sizeof(Arena) + byte_offset + sizeof(Value) <= arena_position);
+    let result = (Value*)((u8*)arena + sizeof(Arena) + byte_offset);
+    return result;
+}
+
 static inline Type* new_types(CompileUnit* unit, u32 type_count)
 {
     let arena = unit_arena(unit, UNIT_ARENA_TYPE);
@@ -561,21 +689,6 @@ static inline Value* new_value(CompileUnit* unit)
 {
     return new_values(unit, 1);
 }
-
-// static FileReference file_offset_from_pointer(CompileUnit* restrict unit, File* restrict file)
-// {
-//     let arena = unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
-//     let file_byte_pointer = (u8*)file;
-//     let arena_byte_pointer = (u8*)arena;
-//     let arena_bottom = arena_byte_pointer;
-//     let arena_top = arena_byte_pointer + arena->position;
-//     assert(file_byte_pointer > arena_bottom && file_byte_pointer < arena_top);
-//     let sub = file_byte_pointer - arena_byte_pointer;
-//     assert(sub < UINT32_MAX);
-//     return (FileReference) {
-//         .v = (u32)(sub + 1),
-//     };
-// }
 
 void compile_unit(StringSlice paths);
 bool compiler_is_single_threaded(void);

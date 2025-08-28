@@ -4,6 +4,11 @@
 #define parser_error() trap();
 #define todo() trap()
 
+static Arena* get_default_arena(CompileUnit* restrict unit)
+{
+    return unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
+}
+
 STRUCT(Parser)
 {
     str content;
@@ -29,13 +34,46 @@ typedef enum Precedence : u8
     PRECEDENCE_POSTFIX,
 } Precedence;
 
-static Precedence get_token_precedence(Token* restrict token)
+static Precedence get_token_precedence(TokenId id)
 {
-    switch (token->id)
+    switch (id)
     {
-        break; case TOKEN_ID_SEMICOLON:
+        break;
+        case TOKEN_ID_SEMICOLON:
+        case TOKEN_ID_RIGHT_PARENTHESIS:
         {
             return PRECEDENCE_NONE;
+        }
+        break;
+        case TOKEN_ID_AMPERSAND:
+        case TOKEN_ID_BAR:
+        case TOKEN_ID_CARET:
+        {
+            return PRECEDENCE_BITWISE;
+        }
+        break;
+        case TOKEN_ID_SHIFT_LEFT:
+        case TOKEN_ID_SHIFT_RIGHT:
+        {
+            return PRECEDENCE_SHIFT;
+        }
+        break;
+        case TOKEN_ID_PLUS:
+        case TOKEN_ID_DASH:
+        {
+            return PRECEDENCE_ADD_LIKE;
+        }
+        break;
+        case TOKEN_ID_ASTERISK:
+        case TOKEN_ID_FORWARD_SLASH:
+        case TOKEN_ID_PERCENTAGE:
+        {
+            return PRECEDENCE_DIV_LIKE;
+        }
+        break;
+        case TOKEN_ID_LEFT_PARENTHESIS:
+        {
+            return PRECEDENCE_POSTFIX;
         }
         break; default:
         {
@@ -68,26 +106,46 @@ static SourceLocation get_source_location(Parser* restrict parser, Token* restri
     };
 }
 
-static Token* get_token_internal(Parser* restrict parser)
+static Token* get_token_internal(Parser* restrict parser, u32 index)
 {
     Token* token = &parser->pointer[parser->offset];
     return token;
 }
 
+static Token* get_current_token(Parser* restrict parser)
+{
+    return get_token_internal(parser, parser->offset);
+}
+
 static Token* restrict get_token(Parser* restrict parser)
 {
-    let t = get_token_internal(parser);
+    let t = get_current_token(parser);
     if (unlikely(t->id == TOKEN_ID_LINE_BYTE_OFFSET))
     {
         let line_byte_offset = t;
         let line_number_offset = t + 1;
+        assert(line_number_offset->id == TOKEN_ID_LINE_NUMBER_OFFSET);
         parser->line_byte_offset = line_byte_offset->offset;
         parser->line_number_offset = line_number_offset->offset;
         parser->offset += 2;
     }
 
-    t = get_token_internal(parser);
+    t = get_current_token(parser);
     return t;
+}
+
+static void rewind_token(Parser* restrict parser)
+{
+    let previous_index = parser->offset - 1;
+    let previous_token = get_token_internal(parser, previous_index);
+    let is_line_token = previous_token->id == TOKEN_ID_LINE_NUMBER_OFFSET;
+    previous_index -= ((typeof(parser->offset))is_line_token);
+    parser->offset = previous_index;
+    if (is_line_token)
+    {
+        let previous_previous_token = previous_token - 1;
+        assert(previous_token->id == TOKEN_ID_LINE_BYTE_OFFSET);
+    }
 }
 
 static Token* restrict peek_token(Parser* restrict parser)
@@ -364,6 +422,8 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
 {
     let token = consume_token(parser);
 
+    let default_arena = get_default_arena(unit);
+
     switch (token->id)
     {
         break; case TOKEN_ID_KEYWORD_TYPE_FN:
@@ -383,8 +443,6 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
             }
 
             u64 argument_count = 0;
-            // let argument_arena = unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
-            // let first_argument = arena_current_position(argument_arena, alignof(Argument));
 
             while (!expect_token(parser, TOKEN_ID_RIGHT_PARENTHESIS))
             {
@@ -400,8 +458,7 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
                     break;
                 }
 
-#if 0
-                let argument = arena_allocate(argument_arena, Argument, 1);
+                let argument = arena_allocate(default_arena, Argument, 1);
 
                 let identifier_token = consume_token(parser);
                 IdentifierParsing identifier_parsing = {};
@@ -419,15 +476,25 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
                 {
                     parser_error();
                 }
-#endif
 
-                parser_error();
+                let argument_type = parse_type(unit, parser, scope, 0);
+
+                if (!expect_token(parser, TOKEN_ID_COMMA))
+                {
+                    if (!expect_token(parser, TOKEN_ID_RIGHT_PARENTHESIS))
+                    {
+                        parser_error();
+                    }
+                    break;
+                }
+
+                todo();
             }
 
             let return_type = parse_type(unit, parser, scope, 0);
             let allocation_size = (sizeof(TypeReference) * (argument_count + 1)) + (sizeof(AbiInformation) * (argument_count + 1));
             static_assert(alignof(TypeReference) == alignof(AbiInformation));
-            let semantic_type_allocation = arena_allocate_bytes(unit_arena(unit, UNIT_ARENA_COMPILE_UNIT), allocation_size, MAX(alignof(TypeReference), alignof(AbiInformation)));
+            let semantic_type_allocation = arena_allocate_bytes(get_default_arena(unit), allocation_size, MAX(alignof(TypeReference), alignof(AbiInformation)));
             let semantic_types = (TypeReference*)semantic_type_allocation;
             semantic_types[0] = return_type;
 
@@ -463,6 +530,10 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
             // let identifier = string_from_reference(unit, identifier_parsing.string);
             todo();
         }
+        break; case TOKEN_ID_KEYWORD_TYPE_VOID:
+        {
+            return get_void_type(unit);
+        }
         break; case TOKEN_ID_KEYWORD_TYPE_INTEGER:
         {
             let token_start = pointer_from_token_start(parser, token);
@@ -484,9 +555,94 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
 
 static Global* global_from_parser(CompileUnit* restrict unit)
 {
-    let global = arena_allocate(unit_arena(unit, UNIT_ARENA_COMPILE_UNIT), Global, 1);
+    let global = arena_allocate(get_default_arena(unit), Global, 1);
     *global = (Global) {};
     return global;
+}
+
+static ValueReference parse_value(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing);
+static ValueReference parse_precedence(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing);
+static BlockReference parse_block(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference parent_scope, Token* restrict left_brace);
+
+static ValueList parse_value_list(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, TokenId end_token)
+{
+    ValueNodeReference previous = {};
+    ValueNodeReference first = {};
+    u32 count = 0;
+
+    let default_arena = get_default_arena(unit);
+
+    if (!expect_token(parser, end_token))
+    {
+        let first_node = arena_allocate(default_arena, ValueNode, 1);
+        *first_node = (ValueNode) {
+            .item = parse_value(unit, parser, scope, (ValueParsing){}),
+        };
+        count += 1;
+
+        first = value_node_reference_from_pointer(unit, first_node);
+        previous = first;
+
+        while (!expect_token(parser, end_token))
+        {
+            let node = arena_allocate(default_arena, ValueNode, 1);
+            *node = (ValueNode) {
+                .item = parse_value(unit, parser, scope, (ValueParsing){}),
+            };
+            count += 1;
+
+            let node_reference = value_node_reference_from_pointer(unit, node);
+            let previous_pointer = value_node_pointer_from_reference(unit, previous);
+            previous_pointer->next = node_reference;
+
+            previous = node_reference;
+
+            todo();
+        }
+    }
+
+    return (ValueList) {
+        .first = first,
+        .count = count,
+    };
+}
+
+static void parse_argument_start(Parser* restrict parser)
+{
+    if (!expect_token(parser, TOKEN_ID_LEFT_PARENTHESIS))
+    {
+        parser_error();
+    }
+}
+
+static void parse_argument_end(Parser* restrict parser)
+{
+    if (!expect_token(parser, TOKEN_ID_RIGHT_PARENTHESIS))
+    {
+        parser_error();
+    }
+}
+
+static void parse_zero_arguments(Parser* restrict parser)
+{
+    parse_argument_start(parser);
+    parse_argument_end(parser);
+}
+
+static ValueReference parse_one_argument(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
+{
+    parse_argument_start(parser);
+    let value = parse_value(unit, parser, scope, parsing);
+    parse_argument_end(parser);
+    return value;
+}
+
+static TypeReference parse_argument_type(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope)
+{
+    parse_argument_start(parser);
+    let type = parse_type(unit, parser, scope, 0);
+    parse_argument_end(parser);
+    return type;
 }
 
 static ValueReference parse_left(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
@@ -494,7 +650,9 @@ static ValueReference parse_left(CompileUnit* restrict unit, Parser* restrict pa
     let first_token = consume_token(parser);
     ValueReference result = {};
 
-    switch (first_token->id)
+    let first_id = first_token->id;
+
+    switch (first_id)
     {
         break;
         case TOKEN_ID_INTEGER_START_HEXADECIMAL_PREFIXED:
@@ -510,10 +668,152 @@ static ValueReference parse_left(CompileUnit* restrict unit, Parser* restrict pa
             }
             let value = new_value(unit);
             *value = (Value) {
-                .constant_integer = integer_parsing.value,
+                .integer = integer_parsing.value,
                 .type = 0,
                 .id = VALUE_ID_CONSTANT_INTEGER,
             };
+            result = value_reference_from_pointer(unit, value);
+        }
+        break;
+        case TOKEN_ID_EXCLAMATION_DOWN:
+        case TOKEN_ID_DASH:
+        case TOKEN_ID_AMPERSAND:
+        case TOKEN_ID_TILDE:
+        {
+            assert(!is_ref_valid(parsing.left));
+
+            ValueId id;
+
+            switch (first_id)
+            {
+                break; case TOKEN_ID_EXCLAMATION_DOWN: id = VALUE_ID_UNARY_BOOLEAN_NOT;
+                break; case TOKEN_ID_DASH: id = VALUE_ID_UNARY_MINUS;
+                break; case TOKEN_ID_AMPERSAND: id = VALUE_ID_UNARY_ADDRESS_OF;
+                break; case TOKEN_ID_TILDE: id = VALUE_ID_UNARY_BITWISE_NOT;
+                break; default: UNREACHABLE();
+            }
+
+            let value = new_value(unit);
+
+            parsing.precedence = PRECEDENCE_PREFIX;
+            parsing.token = 0;
+            parsing.kind = id == VALUE_ID_UNARY_ADDRESS_OF ? VALUE_KIND_LEFT : parsing.kind;
+
+            let unary_value = parse_precedence(unit, parser, scope, parsing);
+
+            *value = (Value) {
+                .unary = unary_value,
+                .id = id,
+            };
+
+            result = value_reference_from_pointer(unit, value);
+        }
+        break; case TOKEN_ID_IDENTIFIER_START:
+        {
+            let identifier_p = end_identifier(unit, parser, first_token);
+            let identifier = identifier_p.string;
+
+            let value = new_value(unit);
+
+            *value = (Value) {
+                .unresolved_identifier = {
+                    .string = identifier,
+                    .scope = scope,
+                },
+                .type = {},
+                .next = {},
+                .id = VALUE_ID_UNRESOLVED_IDENTIFIER,
+            };
+
+            result = value_reference_from_pointer(unit, value);
+        }
+        break; case TOKEN_ID_AT:
+        {
+            let identifier = expect_identifier(unit, parser);
+
+            if (!is_ref_valid(identifier.string))
+            {
+                parser_error();
+            }
+
+            let name = string_from_reference(unit, identifier.string);
+
+            ValueId intrinsics_ids[] = {
+                VALUE_ID_INTRINSIC_TRAP,
+                VALUE_ID_INTRINSIC_EXTEND,
+                VALUE_ID_INTRINSIC_INTEGER_MAX,
+                VALUE_ID_INTRINSIC_TRUNCATE,
+            };
+
+            str intrinsic_names[] = {
+                S("trap"),
+                S("extend"),
+                S("integer_max"),
+                S("truncate"),
+            };
+
+            static_assert(array_length(intrinsic_names) == array_length(intrinsics_ids));
+
+            u64 i;
+            for (i = 0; i < array_length(intrinsic_names); i += 1)
+            {
+                str intrinsic_name = intrinsic_names[i];
+                if (str_equal(name, intrinsic_name))
+                {
+                    break;
+                }
+            }
+
+            let value = new_value(unit);
+
+            if (i == array_length(intrinsic_names))
+            {
+                if (!expect_token(parser, TOKEN_ID_LEFT_PARENTHESIS))
+                {
+                    parser_error();
+                }
+
+                let arguments = parse_value_list(unit, parser, scope, TOKEN_ID_RIGHT_PARENTHESIS);
+                todo();
+            }
+            else
+            {
+                let intrinsic_id = intrinsics_ids[i];
+
+                switch (intrinsic_id)
+                {
+                    break; case VALUE_ID_INTRINSIC_TRAP:
+                    {
+                        parse_zero_arguments(parser);
+
+                        *value = (Value) {
+                            .id = intrinsic_id,
+                        };
+                    }
+                    break;
+                    case VALUE_ID_INTRINSIC_EXTEND:
+                    case VALUE_ID_INTRINSIC_TRUNCATE:
+                    {
+                        let argument = parse_one_argument(unit, parser, scope, (ValueParsing){});
+
+                        *value = (Value) {
+                            .unary = argument,
+                            .id = intrinsic_id,
+                        };
+                    }
+                    break; case VALUE_ID_INTRINSIC_INTEGER_MAX:
+                    {
+                        let type = parse_argument_type(unit, parser, scope);
+
+                        *value = (Value) {
+                            .unary_type = type,
+                            .id = intrinsic_id,
+                        };
+                    }
+                    break; default: UNREACHABLE();
+                }
+            }
+
             result = value_reference_from_pointer(unit, value);
         }
         break; default:
@@ -526,16 +826,109 @@ static ValueReference parse_left(CompileUnit* restrict unit, Parser* restrict pa
     return result;
 }
 
+static ValueReference parse_right_internal(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
+{
+    let left = parsing.left;
+    assert(is_ref_valid(left));
+
+    let right_token = parsing.token;
+
+    let right_token_id = right_token->id;
+
+    ValueReference result = {};
+
+    switch (right_token_id)
+    {
+        break; case TOKEN_ID_LEFT_PARENTHESIS:
+        {
+            let arguments = parse_value_list(unit, parser, scope, TOKEN_ID_RIGHT_PARENTHESIS);
+            let left_node = value_pointer_from_reference(unit, left);
+
+            let value = new_value(unit);
+
+            if (value_id_is_intrinsic(left_node->id))
+            {
+                todo();
+            }
+            else
+            {
+                *value = (Value) {
+                    .call = {
+                        .callable = left,
+                        .arguments = arguments,
+                        .function_type = {},
+                    },
+                    .id = VALUE_ID_CALL,
+                };
+            }
+
+            result = value_reference_from_pointer(unit, value);
+        }
+        break;
+        case TOKEN_ID_PLUS:
+        case TOKEN_ID_DASH:
+        case TOKEN_ID_ASTERISK:
+        case TOKEN_ID_FORWARD_SLASH:
+        case TOKEN_ID_PERCENTAGE:
+        case TOKEN_ID_AMPERSAND:
+        case TOKEN_ID_BAR:
+        case TOKEN_ID_CARET:
+        case TOKEN_ID_SHIFT_LEFT:
+        case TOKEN_ID_SHIFT_RIGHT:
+        {
+            let precedence = get_token_precedence(right_token_id);
+            assert(precedence != PRECEDENCE_ASSIGNMENT);
+
+            ValueId id;
+
+            switch (right_token_id)
+            {
+                break; case TOKEN_ID_PLUS: id = VALUE_ID_BINARY_ADD;
+                break; case TOKEN_ID_DASH: id = VALUE_ID_BINARY_SUB;
+                break; case TOKEN_ID_ASTERISK: id = VALUE_ID_BINARY_MULTIPLY;
+                break; case TOKEN_ID_FORWARD_SLASH: id = VALUE_ID_BINARY_DIVIDE;
+                break; case TOKEN_ID_PERCENTAGE: id = VALUE_ID_BINARY_REMAINDER;
+                break; case TOKEN_ID_AMPERSAND: id = VALUE_ID_BINARY_BITWISE_AND;
+                break; case TOKEN_ID_BAR: id = VALUE_ID_BINARY_BITWISE_OR;
+                break; case TOKEN_ID_CARET: id = VALUE_ID_BINARY_BITWISE_XOR;
+                break; case TOKEN_ID_SHIFT_LEFT: id = VALUE_ID_BINARY_BITWISE_SHIFT_LEFT;
+                break; case TOKEN_ID_SHIFT_RIGHT: id = VALUE_ID_BINARY_BITWISE_SHIFT_RIGHT;
+                break; default: UNREACHABLE();
+            }
+
+            let right_parsing = parsing;
+            right_parsing.precedence = precedence + 1;
+            right_parsing.token = 0;
+            right_parsing.left = (ValueReference){};
+
+            let right = parse_precedence(unit, parser, scope, right_parsing);
+
+            let value = new_value(unit);
+            *value = (Value) {
+                .binary = { left, right },
+                .id = id,
+            };
+
+            result = value_reference_from_pointer(unit, value);
+        }
+        break; default: todo();
+    }
+
+    assert(is_ref_valid(result));
+
+    return result;
+}
+
 static ValueReference parse_right(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
 {
-    ValueReference final_result = parsing.left;
-    assert(is_ref_valid(final_result));
+    ValueReference result = parsing.left;
+    assert(is_ref_valid(result));
     Precedence precedence = parsing.precedence;
 
     while (1)
     {
         let loop_token = peek_token(parser);
-        let loop_token_precedence = get_token_precedence(loop_token);
+        let loop_token_precedence = get_token_precedence(loop_token->id);
 
         if (loop_token_precedence == PRECEDENCE_ASSIGNMENT)
         {
@@ -547,11 +940,22 @@ static ValueReference parse_right(CompileUnit* restrict unit, Parser* restrict p
             break;
         }
 
-        todo();
+        let t = consume_token(parser);
+        assert(loop_token == t);
+
+        let left = result;
+
+        let right_parsing = parsing;
+        right_parsing.token = loop_token;
+        right_parsing.precedence = PRECEDENCE_NONE;
+        right_parsing.left = left;
+
+        let right = parse_right_internal(unit, parser, scope, right_parsing);
+        result = right;
     }
 
-    assert(is_ref_valid(final_result));
-    return final_result;
+    assert(is_ref_valid(result));
+    return result;
 }
 
 static ValueReference parse_precedence(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
@@ -576,13 +980,15 @@ static StatementReference parse_statement(CompileUnit* restrict unit, Parser* re
 {
     bool require_semicolon = 1;
     let first_token = consume_token(parser);
-    let statement = arena_allocate(unit_arena(unit, UNIT_ARENA_COMPILE_UNIT), Statement, 1);
+    let statement = arena_allocate(get_default_arena(unit), Statement, 1);
     *statement = (Statement)
     {
         .location = get_source_location(parser, first_token),
     };
 
-    switch (first_token->id)
+    let first_id = first_token->id;
+
+    switch (first_id)
     {
         break; case TOKEN_ID_KEYWORD_STATEMENT_RETURN:
         {
@@ -593,8 +999,119 @@ static StatementReference parse_statement(CompileUnit* restrict unit, Parser* re
                 return_value = parse_value(unit, parser, scope, (ValueParsing){});
             }
 
-            statement->return_st = return_value;
+            statement->value = return_value;
             statement->id = STATEMENT_ID_RETURN;
+        }
+        break; case TOKEN_ID_KEYWORD_STATEMENT_IF: case TOKEN_ID_KEYWORD_STATEMENT_WHEN:
+        {
+            require_semicolon = 0;
+
+            let is_runtime = first_id == TOKEN_ID_KEYWORD_STATEMENT_IF;
+
+            if (!expect_token(parser, TOKEN_ID_LEFT_PARENTHESIS))
+            {
+                parser_error();
+            }
+
+            let condition = parse_value(unit, parser, scope, (ValueParsing){});
+
+            if (!expect_token(parser, TOKEN_ID_RIGHT_PARENTHESIS))
+            {
+                parser_error();
+            }
+
+            let taken_branch = parse_statement(unit, parser, scope);
+            if (!statement_is_block_like(statement_pointer_from_reference(unit, taken_branch)->id))
+            {
+                parser_error();
+            }
+
+            StatementReference else_branch = {};
+            if (expect_token(parser, TOKEN_ID_KEYWORD_STATEMENT_ELSE))
+            {
+                else_branch = parse_statement(unit, parser, scope);
+                if (!statement_is_block_like(statement_pointer_from_reference(unit, else_branch)->id))
+                {
+                    parser_error();
+                }
+            }
+
+            statement->branch = (Branch) {
+                .condition = condition,
+                .taken_branch = taken_branch,
+                .else_branch = else_branch,
+            };
+            statement->id = is_runtime ? STATEMENT_ID_IF : STATEMENT_ID_WHEN;
+        }
+        break;
+        case TOKEN_ID_IDENTIFIER_START:
+        case TOKEN_ID_AT:
+        {
+            StatementId id;
+
+            bool is_local_declaration = false;
+            IdentifierParsing i = {};
+
+            if (first_id == TOKEN_ID_IDENTIFIER_START)
+            {
+                i = end_identifier(unit, parser, first_token);
+
+                is_local_declaration = !!expect_token(parser, TOKEN_ID_COLON);
+            }
+
+            if (is_local_declaration)
+            {
+                id = STATEMENT_ID_LOCAL;
+
+                TypeReference local_type = {};
+
+                if (get_token(parser)->id != TOKEN_ID_ASSIGN)
+                {
+                    local_type = parse_type(unit, parser, scope, 0);
+                }
+
+                if (!expect_token(parser, TOKEN_ID_ASSIGN))
+                {
+                    parser_error();
+                }
+
+                let initial_value = parse_value(unit, parser, scope, (ValueParsing){});
+            }
+            else
+            {
+                rewind_token(parser);
+                let value = parse_value(unit, parser, scope, (ValueParsing){});
+
+                let next_token = peek_token(parser);
+
+                switch (next_token->id)
+                {
+                    break;
+                    case TOKEN_ID_SEMICOLON:
+                    {
+                        id = STATEMENT_ID_EXPRESSION;
+                    }
+                    break; default: UNREACHABLE();
+                }
+
+                if (id == STATEMENT_ID_EXPRESSION)
+                {
+                    statement->value = value;
+                }
+                else
+                {
+                    todo();
+                }
+            }
+
+            statement->id = id;
+        }
+        break; case TOKEN_ID_LEFT_BRACE:
+        {
+            require_semicolon = 0;
+            let block = parse_block(unit, parser, scope, first_token);
+            statement->block = block;
+            statement->id = STATEMENT_ID_BLOCK;
         }
         break; default:
         {
@@ -622,7 +1139,7 @@ static BlockReference parse_block(CompileUnit* restrict unit, Parser* restrict p
 
     assert(left_brace->id == TOKEN_ID_LEFT_BRACE);
 
-    Block* restrict block = arena_allocate(unit_arena(unit, UNIT_ARENA_COMPILE_UNIT), Block, 1);
+    Block* restrict block = arena_allocate(get_default_arena(unit), Block, 1);
     *block = (Block)
     {
         .scope = {
@@ -658,7 +1175,7 @@ static BlockReference parse_block(CompileUnit* restrict unit, Parser* restrict p
     return block_reference_from_pointer(unit, block);
 }
 
-void parse_file(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
+void parse(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
 {
     Parser p = {
         .content = file_pointer->content,
@@ -674,7 +1191,7 @@ void parse_file(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
 
     while ((global_token = consume_token(parser))->id != TOKEN_ID_EOF)
     {
-        let top_level_declaration = arena_allocate(unit_arena(unit, UNIT_ARENA_COMPILE_UNIT), TopLevelDeclaration, 1);
+        let top_level_declaration = arena_allocate(get_default_arena(unit), TopLevelDeclaration, 1);
         let top_level_declaration_reference = top_level_declaration_reference_from_pointer(unit, top_level_declaration);
 
         switch (global_token->id)
@@ -773,11 +1290,17 @@ void parse_file(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
                     .id = TOP_LEVEL_DECLARATION_GLOBAL,
                 };
 
-                if (is_ref_valid(previous_tld))
+                if (likely(is_ref_valid(previous_tld)))
                 {
                     let p_tld = top_level_declaration_pointer_from_reference(unit, previous_tld);
                     p_tld->next = top_level_declaration_reference;
                 }
+                else
+                {
+                    unit->first_tld = top_level_declaration_reference;
+                }
+
+                previous_tld = top_level_declaration_reference;
 
                 unit->current_function = (GlobalReference){};
             }
