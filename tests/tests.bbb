@@ -8024,12 +8024,13 @@ return_constant: fn () s32 = // This is a comment
 //    require(u.s.b == 2);
 //    require(u.s.c == 3);
 //}
-//
-//main [export]: fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32 = 
-//{
-//    rc := return_constant();
-//    require(rc == 0);
-//
+
+main [export]: fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32 = 
+{
+    rc := return_constant();
+    return rc;
+    //require(rc == 0);
+
 //    const_add := constant_add();
 //    require(const_add == 0);
 //
@@ -8304,5 +8305,5 @@ return_constant: fn () s32 = // This is a comment
 //
 //    union_alignment();
 //
-//    return 0;
-//}
+    return 0;
+}

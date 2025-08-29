@@ -9,10 +9,13 @@
 #include <unistd.h>
 #include <pthread.h>
 
-#include <liburing.h>
 #define USE_IO_URING 0
 #else
 #define USE_IO_URING 0
+#endif
+
+#if USE_IO_URING
+#include <liburing.h>
 #endif
 
 #define SPALL_USE 0
@@ -1173,169 +1176,6 @@ static str file_paths[] = {
     S("build/file99"),
 };
 
-typedef enum IoUringTask
-{
-    IO_URING_TASK_OPEN,
-    IO_URING_TASK_STAT,
-    IO_URING_TASK_READ,
-    IO_URING_TASK_CLOSE,
-} IoUringTask;
-
-#ifdef __linux__
-// static u64 io_uring_task(Arena* file_arena, Arena* else_arena, struct io_uring* restrict ring, StringSlice file_paths, int* restrict fd_array, struct statx* restrict statx_array, str* restrict file_array, TokenList* restrict list_array)
-// {
-//     SPALL_FUNCTION_BEGIN();
-//     let file_count = file_paths.length;
-//     if (file_count > UINT32_MAX)
-//     {
-//         fail();
-//     }
-//
-//     u64 pending = file_count;
-//     for (u64 i = 0; i < pending; i += 1)
-//     {
-//         struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
-//         io_uring_prep_openat(sqe, AT_FDCWD, file_paths.pointer[i].pointer, O_RDONLY, 0);
-//         sqe->user_data = ((u64)(IO_URING_TASK_OPEN) << 32) | i;
-//     }
-//
-//     int ret = io_uring_submit(ring);
-//     if (ret < 0)
-//     {
-//         fail();
-//     }
-//
-//     struct io_uring_cqe* open_cqes;
-//
-//     for (u64 cqe_i = 0; cqe_i < file_count; cqe_i += 1)
-//     {
-//         struct io_uring_cqe* cqe;
-//         ret = io_uring_wait_cqe(ring, &cqe);
-//         if (ret < 0)
-//         {
-//             fail();
-//         }
-//
-//         let user_data = cqe->user_data;
-//         let result = cqe->res;
-//         let i = (u32)user_data;
-//         let task = (IoUringTask)(user_data >> 32);
-//
-//         assert(task == IO_URING_TASK_OPEN);
-//         io_uring_cqe_seen(ring, cqe);
-//
-//         let fd = result;
-//         if (fd < 0)
-//         {
-//             fail();
-//         }
-//         fd_array[i] = fd;
-//
-//         struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
-//         int flags = AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_STATX_DONT_SYNC;
-//         int mask = STATX_SIZE;
-//         io_uring_prep_statx(sqe, fd, "", flags, mask, &statx_array[i]);
-//         sqe->user_data = ((u64)(IO_URING_TASK_STAT) << 32) | i;
-//     }
-//
-//     ret = io_uring_submit(ring);
-//     if (ret < 0)
-//     {
-//         fail();
-//     }
-//
-//     pending = file_count;
-//
-//     while (pending)
-//     {
-//         struct io_uring_cqe* cqe;
-//         let ret = io_uring_wait_cqe(ring, &cqe);
-//
-//         if (ret < 0)
-//         {
-//             fail();
-//         }
-//
-//         let user_data = cqe->user_data;
-//         let result = cqe->res;
-//         let i = (u32)user_data;
-//         let task = (IoUringTask)(user_data >> 32);
-//
-//         io_uring_cqe_seen(ring, cqe);
-//
-//         switch (task)
-//         {
-//             break; case IO_URING_TASK_OPEN:
-//             {
-//                 UNREACHABLE();
-//             }
-//             break; case IO_URING_TASK_STAT:
-//             {
-//                 pending -= 1;
-//                 let fd = fd_array[i];
-//                 if (result != 0)
-//                 {
-//                     let er = strerror(result);
-//                     printf("Error in stat task: %s\n", er);
-//                     fflush(stdout);
-//                     fail();
-//                 }
-//                 let statx_struct = &statx_array[i];
-//                 let file_size = statx_struct->stx_size;
-//                 let file_pointer = arena_allocate_bytes(file_arena, file_size, 1);
-//                 let file = (str) { file_pointer, file_size };
-//                 file_array[i] = file;
-//
-//                 u64 read_byte_count = 0;
-//
-//                 while (read_byte_count != file.length)
-//                 {
-//                     struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
-//                     u32 to_be_read = file.length > 0x7ffff000 ? 0x7ffff000 : (u32)file.length;
-//                     sqe->flags |= IOSQE_IO_LINK;
-//                     u64 user_data = ((u64)(IO_URING_TASK_READ) << 32) | i;
-//                     sqe->user_data = user_data;
-//                     io_uring_prep_read(sqe, fd, file.pointer, to_be_read, read_byte_count);
-//                     read_byte_count += to_be_read;
-//                 }
-//
-//                 struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
-//                 io_uring_prep_close(sqe, fd);
-//                 u64 user_data = ((u64)(IO_URING_TASK_CLOSE) << 32) | i;
-//                 sqe->user_data = user_data;
-//
-//                 ret = io_uring_submit(ring);
-//                 if (ret < 0)
-//                 {
-//                     fail();
-//                 }
-//             }
-//             break; case IO_URING_TASK_READ:
-//             {
-//             }
-//             break; case IO_URING_TASK_CLOSE:
-//             {
-//                 printf("file first: %c\n", file_array[i].pointer[0]);
-//             }
-//         }
-//     }
-//
-//     // for (u64 i = 0; i < file_count; i += 1)
-//     // {
-//     //     LexerError error = {};
-//     //     let token_list = lex(file_arena, else_arena, file_array[i], &error);
-//     //     if (error.id != LEXER_ERROR_ID_NONE)
-//     //     {
-//     //         fail();
-//     //     }
-//     //     list_array[i] = token_list;
-//     // }
-//
-//     SPALL_FUNCTION_END();
-//     return file_count;
-// }
-#endif
-
 STRUCT(Thread)
 {
 #ifdef __linux__
@@ -1370,7 +1210,7 @@ static CompileUnit* compile_unit_create()
 
     let unit = arena_allocate(arena, CompileUnit, 1);
     *unit = (CompileUnit) {};
-    let global_scope = scope_reference_from_pointer(unit, &unit->scope);
+    let global_scope = unit->scope;
     let type_arena = unit_arena(unit, UNIT_ARENA_TYPE);
     assert(type_arena->position == sizeof(Arena));
 
@@ -1533,6 +1373,8 @@ TypeReference get_integer_type(CompileUnit* restrict unit, u64 bit_count, bool i
 
 TypeReference get_pointer_type(CompileUnit* restrict unit, TypeReference element_type_reference)
 {
+    assert(unit->phase >= COMPILE_PHASE_ANALYSIS);
+
     Type* element_type = type_pointer_from_reference(unit, element_type_reference);
     let last_pointer_type = unit->first_pointer_type;
 
@@ -1593,60 +1435,90 @@ TypeReference get_pointer_type(CompileUnit* restrict unit, TypeReference element
 
 StringReference allocate_string(CompileUnit* restrict unit, str s)
 {
-    let arena = unit_arena(unit, UNIT_ARENA_STRING);
-    let arena_byte_pointer = (char*)arena;
-    let arena_bottom = arena_byte_pointer;
-    let arena_top = arena_byte_pointer + arena->position;
-
-    assert(!((s.pointer > arena_bottom) & (s.pointer < arena_top))); // Repeated string
-    assert(s.length <= UINT32_MAX);
-
-    let string = (char* restrict) arena_allocate_bytes(arena, s.length + sizeof(u32) + 1, alignof(u32));
-    *(u32*)string = (u32)s.length;
-    memcpy(string + sizeof(u32), s.pointer, s.length);
-    *(string + sizeof(u32) + s.length) = 0;
-    let big_offset = string - arena_byte_pointer;
-    assert(big_offset + 1 < UINT32_MAX);
-    let offset = (u32)big_offset;
-    let reference = (StringReference) {
-        .v = offset + 1,
-    };
-    return reference;
+    str slices[] = { s };
+    return allocate_and_join_string(unit, string_array_to_slice(slices));
 }
 
 StringReference allocate_and_join_string(CompileUnit* restrict unit, StringSlice slice)
 {
     let arena = unit_arena(unit, UNIT_ARENA_STRING);
     let arena_byte_pointer = (char*)arena;
+    let arena_bottom = arena_byte_pointer;
+    let arena_position = arena->position;
+    let arena_top = arena_byte_pointer + arena_position;
+
     u64 string_length = 0;
 
     for (u64 i = 0; i < slice.length; i += 1)
     {
         let string = slice.pointer[i];
+        assert((!((string.pointer > arena_bottom) & (string.pointer < arena_top))) || slice.length != 1); // Repeated string
+        assert(string.length <= UINT32_MAX);
         string_length += string.length;
     }
 
-    let string = (char* restrict) arena_allocate_bytes(arena, string_length + sizeof(u32) + 1, alignof(u32));
-    assert(string_length < UINT32_MAX);
-    *(u32*)string = (u32)string_length;
-    let pointer = string + 4;
+    StringReference result = {};
 
-    for (u64 i = 0; i < slice.length; i += 1)
+    u64 i = sizeof(Arena);
+    static_assert(alignof(Arena) >= alignof(u32));
+    while (i < arena_position)
     {
-        let string = slice.pointer[i];
-        memcpy(pointer, string.pointer, string.length);
-        pointer += string.length;
+        let byte_pointer = arena_byte_pointer + i;
+        let length = *(u32*)byte_pointer;
+
+        if (length == string_length)
+        {
+            u64 offset = sizeof(u32);
+            bool is_equal = true;
+            for (u64 string_i = 0; string_i < slice.length; string_i += 1)
+            {
+                let string = slice.pointer[string_i];
+                is_equal = memcmp(string.pointer, byte_pointer + offset, string.length) == 0;
+                offset += string.length;
+                if (!is_equal)
+                {
+                    break;
+                }
+            }
+
+            if (is_equal)
+            {
+                result = (StringReference) {
+                    .v = (u32)(i + 1),
+                };
+                break;
+            }
+        }
+
+        i += align_forward(length + 1 + sizeof(u32), alignof(u32));
     }
 
-    *pointer = 0;
+    if (!is_ref_valid(result))
+    {
+        let allocation_size = string_length + sizeof(u32) + 1;
+        let string = (char* restrict) arena_allocate_bytes(arena, allocation_size, alignof(u32));
+        assert(string_length < UINT32_MAX);
+        *(u32*)string = (u32)string_length;
+        let pointer = string + 4;
 
-    let big_offset = string - arena_byte_pointer;
-    assert(big_offset + 1 < UINT32_MAX);
-    let offset = (u32)big_offset;
-    let reference = (StringReference) {
-        .v = offset + 1,
-    };
-    return reference;
+        for (u64 i = 0; i < slice.length; i += 1)
+        {
+            let string = slice.pointer[i];
+            memcpy(pointer, string.pointer, string.length);
+            pointer += string.length;
+        }
+
+        *pointer = 0;
+
+        let big_offset = string - arena_byte_pointer;
+        assert(big_offset + 1 < UINT32_MAX);
+        let offset = (u32)big_offset;
+        result = (StringReference) {
+            .v = offset + 1,
+        };
+    }
+
+    return result;
 }
 
 StringReference allocate_string_if_needed(CompileUnit* restrict unit, str s)
@@ -1678,24 +1550,39 @@ static void crunch_file(CompileUnit* restrict unit, str path)
 
     let path_reference = allocate_string_if_needed(unit, path);
 
-    let global_scope = scope_reference_from_pointer(unit, &unit->scope);
-
     let arena = unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
+    let scope = new_scope(unit);
     let file = arena_allocate(arena, File, 1);
+    let file_reference = file_reference_from_pointer(unit, file);
+
+    if (is_ref_valid(unit->last_file))
+    {
+        todo();
+    }
+    else
+    {
+        assert(!is_ref_valid(unit->first_file));
+        unit->first_file = file_reference;
+    }
+
+    unit->last_file = file_reference;
+
+    *scope = (Scope)
+    {
+        .parent = unit->scope,
+        .id = SCOPE_ID_FILE,
+        .file = file_reference,
+    };
+
     *file = (File) {
         .content = content,
         .path = path_reference,
-        .scope = {
-            .parent = global_scope,
-            .id = SCOPE_ID_FILE,
-        },
+        .scope = scope_reference_from_pointer(unit, scope),
     };
-    let file_reference = file_reference_from_pointer(unit, file);
-    unused(file_reference);
+
     let tl = lex(unit_arena(unit, UNIT_ARENA_TOKEN), unit_arena(unit, UNIT_ARENA_STRING), content.pointer, content.length);
-    parse(unit, file, tl);
-    analyze(unit);
-    trap();
+    let first_tld = parse(unit, file, tl);
+    analyze(unit, first_tld);
 }
 
 void* thread_worker(void* arg)
@@ -1722,22 +1609,6 @@ void* thread_worker(void* arg)
     //
     //     parse_file(unit, path, content, tl);
     // }
-
-    trap();
-#if USE_IO_URING
-    struct io_uring ring;
-    let ret = io_uring_queue_init(thread_file_count * 2, &ring, 0);
-    if (ret == 0)
-    {
-        fail();
-    }
-    else
-    {
-        let er = strerror(-ret);
-        printf("io_uring_queue_init failed: %s\n", er);
-        result_code = 1;
-    }
-#endif
 
     return (void*)result_code;
 }
@@ -1791,112 +1662,6 @@ bool compiler_main(int argc, const char* argv[], char** envp)
 #endif
         }
     }
-
-//     assert(sr == 0);
-//
-//     Arena* random_arena = arena_initialize((ArenaInitialization){
-//         .reserved_size = GB(8) - sizeof(Arena),
-//         .initial_size = GB(8) - sizeof(Arena),
-//     });
-//
-// #if SPALL_USE
-//     if (!spall_init_file("build/profile.spall", 1, &spall_profile))
-//     {
-//         return 0;
-//     }
-// #endif
-//
-// #if 0
-//     for (u64 i = 0; i < file_path_slice.length; i += 1)
-//     {
-//         write_random_file(file_path_slice.pointer[i]);
-//     }
-// #else
-//
-//     // TODO: parse command-line arguments
-//     // SliceOfStringSlice paths_array = { &string_array_to_slice(files), 1 };
-//     // u64 compile_unit_count = paths_array.length;
-//     // global_compile_units = (CompileUnitSlice){ arena_allocate(global_arena, CompileUnit, compile_unit_count), compile_unit_count };
-//     struct io_uring ring;
-//     let queue_init = io_uring_queue_init(file_path_slice.length * 2, &ring, 0);
-//     if (queue_init < 0)
-//     {
-//         let er = strerror(-queue_init);
-//         printf("io_uring_queue_init failed: %s\n", er);
-//         return false;
-//     }
-//
-//     int iteration_times = 10;
-//
-//     u64 io_uring_max_ns = 0;
-//     u64 io_uring_min_ns = UINT64_MAX;
-//     u64 io_uring_accumulator = 0;
-//     
-// #if SPALL_USE
-//     let spall_buffer_size = MB(100);
-//     let spall_buffer_pointer = arena_allocate_bytes(global_arena, spall_buffer_size, 1);
-//     spall_buffer = (SpallBuffer) {
-//         .pid = 0,
-//         .tid = 0,
-//         .length = spall_buffer_size,
-//         .data = spall_buffer_pointer,
-//     };
-//     spall_buffer_init(&spall_profile, &spall_buffer);
-// #endif
-//
-//     let previous_timestamp = take_timestamp();
-//
-//     for (int i = 0; i < iteration_times; i += 1)
-//     {
-//         let start_timestamp = previous_timestamp;
-//
-//         arena_reset_to_start(global_arena);
-//         arena_reset_to_start(random_arena);
-//
-//         let completed_file_count = io_uring_task(global_arena, random_arena, &ring, file_path_slice, fds, statxs, file_contents, io_uring_tl);
-//         if (completed_file_count != file_path_slice.length)
-//         {
-//             fail();
-//         }
-//
-//         let end_timestamp = take_timestamp();
-//         let iteration_ns = ns_between(start_timestamp, end_timestamp);
-//
-//         io_uring_max_ns = iteration_ns > io_uring_max_ns ? iteration_ns : io_uring_max_ns;
-//         io_uring_min_ns = iteration_ns < io_uring_min_ns ? iteration_ns : io_uring_min_ns;
-//         io_uring_accumulator += iteration_ns;
-//
-//         previous_timestamp = end_timestamp;
-//     }
-
-// #if SPALL_USE
-//     spall_buffer_quit(&spall_profile, &spall_buffer);
-// #endif
-//
-//     let io_uring_average = (f64)io_uring_accumulator / iteration_times;
-//     printf("io_uring:\n\taverage: %f ns\n\tmin: %lu ns\n\tmax: %lu ns\n", io_uring_average, io_uring_min_ns, io_uring_max_ns);
-// #endif
-
-    //u64 sync_max_ns = 0;
-    //u64 sync_min_ns = UINT64_MAX;
-    //u64 sync_accumulator = 0;
-
-    //for (int i = 0; i < iteration_times; i += 1)
-    //{
-    //}
-
-    // if (is_single_threaded)
-    // {
-    //     llvm_compile_unit(string_array_to_slice(paths));
-    // }
-    // else
-    // {
-    //     fail();
-    // }
-    
-#if SPALL_USE
-    spall_quit(&spall_profile);
-#endif
 
     return result;
 }

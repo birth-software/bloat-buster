@@ -10789,14 +10789,6 @@ abi_system_v_get_direct = fn (module: &Module, direct: AbiSystemVDirect) AbiInfo
         zero,
     };
 
-//    resolve_type_in_place(module, direct.semantic_type);
-//    resolve_type_in_place(module, direct.type);
-//
-//    if (direct.padding)
-//    {
-//        resolve_type_in_place(module, direct.padding);
-//    }
-
     abi_set_coerce_to_type(&result, direct.type);
     abi_set_padding_type(&result, direct.padding);
     abi_set_direct_offset(&result, direct.offset);

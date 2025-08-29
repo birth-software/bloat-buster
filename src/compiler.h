@@ -4,7 +4,8 @@
 
 typedef u32 RawReference;
 #define is_ref_valid(x) !!((x).v)
-#define ref_eq(a, b) (((typeof(a))a).v == ((typeof(a))b).v)
+#define ref_eq(a, b) (((typeof(a))(a)).v == ((typeof(a))(b)).v)
+#define todo() trap()
 
 STRUCT(SourceLocation)
 {
@@ -16,14 +17,41 @@ STRUCT(SourceLocation)
 typedef enum CallingConvention : u8
 {
     CALLING_CONVENTION_C,
-    CALLING_CONVENTION_COUNT,
+    // CALLING_CONVENTION_COUNT,
 } CallingConvention;
+
+typedef enum ResolvedCallingConvention : u8
+{
+    CALLING_CONVENTION_SYSTEM_V,
+} ResolvedCallingConvention;
+
+static ResolvedCallingConvention resolve_calling_convention(CallingConvention cc)
+{
+    switch (cc)
+    {
+        break; case CALLING_CONVENTION_C:
+        {
+            // TODO:
+            return CALLING_CONVENTION_SYSTEM_V;
+        }
+        break; default: UNREACHABLE();
+    }
+}
+
+typedef enum ValueKind : u8
+{
+    VALUE_KIND_RIGHT,
+    VALUE_KIND_LEFT,
+} ValueKind;
+
 
 typedef enum ValueId : u8
 {
     VALUE_ID_DISCARD,
     VALUE_ID_CONSTANT_INTEGER,
     VALUE_ID_FUNCTION,
+    VALUE_ID_GLOBAL,
+    VALUE_ID_LOCAL,
     VALUE_ID_UNRESOLVED_IDENTIFIER,
 
     VALUE_ID_UNARY_MINUS,
@@ -50,10 +78,19 @@ typedef enum ValueId : u8
     VALUE_ID_BINARY_BITWISE_SHIFT_LEFT,
     VALUE_ID_BINARY_BITWISE_SHIFT_RIGHT,
 
+    VALUE_ID_BINARY_COMPARE_EQUAL,
+    VALUE_ID_BINARY_COMPARE_NOT_EQUAL,
+    VALUE_ID_BINARY_COMPARE_LESS,
+    VALUE_ID_BINARY_COMPARE_LESS_EQUAL,
+    VALUE_ID_BINARY_COMPARE_GREATER,
+    VALUE_ID_BINARY_COMPARE_GREATER_EQUAL,
+
     VALUE_ID_INTRINSIC_TRAP,
     VALUE_ID_INTRINSIC_EXTEND,
     VALUE_ID_INTRINSIC_INTEGER_MAX,
     VALUE_ID_INTRINSIC_TRUNCATE,
+
+    VALUE_ID_REFERENCED_VARIABLE,
 } ValueId;
 
 static inline bool value_id_is_intrinsic(ValueId id)
@@ -107,6 +144,7 @@ declare_ref(File);
 declare_ref(Type);
 declare_ref(Value);
 declare_ref(ValueNode);
+declare_ref(TypeNode);
 declare_ref(TopLevelDeclaration);
 declare_ref(Global);
 declare_ref(Variable);
@@ -115,9 +153,21 @@ declare_ref(Local);
 declare_ref(Block);
 declare_ref(Statement);
 
+STRUCT(TypeList)
+{
+    TypeNodeReference first;
+};
+
 STRUCT(Scope)
 {
+    union
+    {
+        BlockReference block;
+        GlobalReference function;
+        FileReference file;
+    };
     ScopeReference parent;
+    TypeList types;
     SourceLocation location;
     ScopeId id;
 };
@@ -141,6 +191,7 @@ STRUCT(ValueFunction)
     struct
     {
     } llvm;
+    ScopeReference scope;
     ArgumentReference arguments;
     BlockReference block;
     FunctionAttributes attributes;
@@ -156,6 +207,12 @@ STRUCT(ValueNode)
 {
     ValueReference item;
     ValueNodeReference next;
+};
+
+STRUCT(TypeNode)
+{
+    TypeReference item;
+    TypeNodeReference next;
 };
 
 STRUCT(ValueList)
@@ -182,10 +239,13 @@ STRUCT(Value)
         TypeReference unary_type;
         ValueReference binary[2];
         ValueCall call;
+        VariableReference variable;
     };
     TypeReference type;
     ValueReference next;
     ValueId id;
+    ValueKind kind;
+    bool analyzed;
 };
 
 STRUCT(TypeInteger)
@@ -277,13 +337,34 @@ STRUCT(AbiInformation)
     u16 abi_count;
 };
 
+STRUCT(AbiSystemVClassifyArgumentTypeOptions)
+{
+    u32 available_gpr;
+    bool is_named_argument;
+    bool is_register_call;
+};
+
+STRUCT(AbiSystemVClassifyArgumentTypeResult)
+{
+    AbiInformation abi;
+    AbiRegisterCount needed_registers;
+};
+
+STRUCT(AbiSystemVClassifyArgumentOptions)
+{
+    TypeReference type;
+    u16 abi_start;
+    bool is_named_argument;
+    bool is_register_call;
+};
+
 static_assert(alignof(AbiInformation) == alignof(TypeReference));
 
 STRUCT(TypeFunction)
 {
     TypeReference* semantic_types; // This hides inside the same allocation AbiInformation* abi_informations;
     TypeReference* abi_types;
-    AbiRegisterCount register_count;
+    AbiRegisterCount available_registers;
     u16 semantic_argument_count;
     u16 abi_argument_count;
     CallingConvention calling_convention;
@@ -330,10 +411,11 @@ static inline AbiInformation* restrict get_argument_abi_information(TypeFunction
 
 STRUCT(Block)
 {
-    Scope scope;
+    ScopeReference scope;
     LocalReference first_local;
     LocalReference last_local;
     StatementReference first_statement;
+    bool analyzed;
 };
 
 typedef enum StatementId : u8
@@ -384,10 +466,12 @@ STRUCT(Statement)
         ValueReference value;
         Branch branch;
         BlockReference block;
+        LocalReference local;
     };
     StatementReference next;
     SourceLocation location;
     StatementId id;
+    bool analyzed;
 };
 
 STRUCT(Type)
@@ -425,6 +509,7 @@ STRUCT(Local)
 {
     Variable variable;
     ValueReference initial_value;
+    LocalReference next;
 };
 
 typedef enum Linkage : u8
@@ -436,16 +521,19 @@ typedef enum Linkage : u8
 STRUCT(Global)
 {
     Variable variable;
-    Scope scope;
     ValueReference initial_value;
+    GlobalReference next;
     Linkage linkage;
+    bool analyzed;
 };
 
 STRUCT(File)
 {
     str content;
     StringReference path;
-    Scope scope;
+    ScopeReference scope;
+    GlobalReference first_global;
+    GlobalReference last_global;
     FileReference next;
 };
 
@@ -486,12 +574,22 @@ typedef enum UnitArenaKind
     UNIT_ARENA_COUNT,
 } UnitArenaKind;
 
+typedef enum CompilePhase : u8
+{
+    COMPILE_PHASE_LEXER,
+    COMPILE_PHASE_PARSER,
+    COMPILE_PHASE_ANALYSIS,
+    COMPILE_PHASE_LLVM_IR_GENERATION,
+    COMPILE_PHASE_LLVM_IR_OPTIMIZATION,
+    COMPILE_PHASE_LLVM_CODE_GENERATION,
+    COMPILE_PHASE_LLVM_LINKER,
+} CompilePhase;
+
 STRUCT(CompileUnit)
 {
-    Scope scope;
-    FileReference files;
-
-    TopLevelDeclarationReference first_tld;
+    FileReference first_file;
+    FileReference last_file;
+    ScopeReference scope;
 
     TypeReference first_pointer_type;
 
@@ -499,6 +597,8 @@ STRUCT(CompileUnit)
     ValueReference free_values;
 
     GlobalReference current_function;
+
+    CompilePhase phase;
 };
 
 static inline Arena* unit_arena(CompileUnit* unit, UnitArenaKind kind)
@@ -506,6 +606,11 @@ static inline Arena* unit_arena(CompileUnit* unit, UnitArenaKind kind)
     Arena* arena = (Arena*)unit - 1;
     let result = (Arena*)((u8*)arena + ((s64)kind * arena->reserved_size));
     return result;
+}
+
+static Arena* get_default_arena(CompileUnit* restrict unit)
+{
+    return unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
 }
 
 #define reference_offset_functions(O, o, AU) \
@@ -539,11 +644,13 @@ static inline O* restrict o ## _pointer_from_reference(CompileUnit* restrict uni
 reference_offset_functions(Scope, scope, UNIT_ARENA_COMPILE_UNIT)
 reference_offset_functions(File, file, UNIT_ARENA_COMPILE_UNIT)
 reference_offset_functions(Argument, argument, UNIT_ARENA_COMPILE_UNIT)
+reference_offset_functions(Local, local, UNIT_ARENA_COMPILE_UNIT)
 reference_offset_functions(Global, global, UNIT_ARENA_COMPILE_UNIT)
 reference_offset_functions(Statement, statement, UNIT_ARENA_COMPILE_UNIT)
 reference_offset_functions(Block, block, UNIT_ARENA_COMPILE_UNIT)
 reference_offset_functions(TopLevelDeclaration, top_level_declaration, UNIT_ARENA_COMPILE_UNIT)
 reference_offset_functions(ValueNode, value_node, UNIT_ARENA_COMPILE_UNIT)
+reference_offset_functions(Variable, variable, UNIT_ARENA_COMPILE_UNIT)
 
 static inline StringReference string_reference_from_string(CompileUnit* restrict unit, str s)
 {
@@ -666,28 +773,70 @@ static inline Value* value_pointer_from_reference(CompileUnit* restrict unit, Va
     return result;
 }
 
-static inline Type* new_types(CompileUnit* unit, u32 type_count)
+static inline Type* new_types(CompileUnit* restrict unit, u32 type_count)
 {
     let arena = unit_arena(unit, UNIT_ARENA_TYPE);
     let types = arena_allocate(arena, Type, type_count);
     return types;
 }
 
-static inline Type* new_type(CompileUnit* unit)
+static inline Type* new_type(CompileUnit* restrict unit)
 {
     return new_types(unit, 1);
 }
 
-static inline Value* new_values(CompileUnit* unit, u32 value_count)
+static inline Value* new_values(CompileUnit* restrict unit, u32 value_count)
 {
     let arena = unit_arena(unit, UNIT_ARENA_VALUE);
     let values = arena_allocate(arena, Value, value_count);
     return values;
 }
 
-static inline Value* new_value(CompileUnit* unit)
+static inline Value* new_value(CompileUnit* restrict unit)
 {
     return new_values(unit, 1);
+}
+
+static inline Scope* restrict new_scope(CompileUnit* restrict unit)
+{
+    let arena = get_default_arena(unit);
+    let scope = arena_allocate(arena, Scope, 1);
+    return scope;
+}
+
+static u64 align_bit_count(u64 bit_count)
+{
+    let aligned_bit_count = MAX(next_power_of_two(bit_count), 8);
+    assert((aligned_bit_count & (aligned_bit_count - 1)) == 0);
+    return aligned_bit_count;
+}
+
+static u64 aligned_byte_count_from_bit_count(u64 bit_count)
+{
+    let aligned_bit_count = align_bit_count(bit_count);
+    assert(aligned_bit_count % 8 == 0);
+    return aligned_bit_count / 8;
+}
+
+static u64 get_byte_size(CompileUnit* restrict unit, TypeReference type_reference)
+{
+    assert(unit->phase >= COMPILE_PHASE_ANALYSIS);
+
+    let type_pointer = type_pointer_from_reference(unit, type_reference);
+
+    switch (type_pointer->id)
+    {
+        break; case TYPE_ID_INTEGER:
+        {
+            let bit_count = type_pointer->integer.bit_count;
+            let byte_count = aligned_byte_count_from_bit_count(bit_count);
+            return byte_count;
+        }
+        break; default:
+        {
+            todo();
+        }
+    }
 }
 
 void compile_unit(StringSlice paths);
@@ -702,3 +851,7 @@ TypeReference get_void_type(CompileUnit* restrict unit);
 TypeReference get_noreturn_type(CompileUnit* restrict unit);
 TypeReference get_integer_type(CompileUnit* restrict unit, u64 bit_count, bool is_signed);
 TypeReference get_pointer_type(CompileUnit* restrict unit, TypeReference element_type_reference);
+
+AbiInformation abi_system_v_classify_return_type(CompileUnit* restrict unit, TypeReference type);
+AbiSystemVClassifyArgumentTypeResult abi_system_v_classify_argument_type(CompileUnit* restrict unit, TypeReference type, AbiSystemVClassifyArgumentTypeOptions options);
+AbiInformation abi_system_v_classify_argument(CompileUnit* restrict unit, AbiRegisterCount* restrict available_registers, TypeReference* abi_argument_type_buffer, AbiSystemVClassifyArgumentOptions options);

@@ -2,6 +2,8 @@
 
 #define array_length(x) (sizeof(x) / sizeof((x)[0]))
 
+#define field_parent_pointer(type, field, pointer) ((type *)((char *)(pointer) - __builtin_offsetof(type, field)))
+
 #define let __auto_type
 #define STRUCT(n) typedef struct n n; struct n
 #define UNION(n) typedef union n n; union n
@@ -19,7 +21,6 @@
 #else
 #define CACHE_LINE_GUESS (64)
 #endif
-
 
 #ifdef NDEBUG
 #define UNREACHABLE() __builtin_unreachable()
@@ -52,6 +53,22 @@ typedef __float128 f128;
 #define GB(x) 1024ull * MB(x)
 #define MB(x) 1024ull * KB(x)
 #define KB(x) 1024ull * (x)
+
+static inline u64 next_power_of_two(u64 n)
+{
+    n -= 1;
+
+    n |= n >> 1;
+    n |= n >> 2;
+    n |= n >> 4;
+    n |= n >> 8;
+    n |= n >> 16;
+    n |= n >> 32;
+
+    n += 1;
+
+    return n;
+}
 
 STRUCT(str)
 {
