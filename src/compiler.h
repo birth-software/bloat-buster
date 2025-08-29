@@ -5,6 +5,7 @@
 typedef u32 RawReference;
 #define is_ref_valid(x) !!((x).v)
 #define ref_eq(a, b) (((typeof(a))a).v == ((typeof(a))b).v)
+#define todo() trap()
 
 STRUCT(SourceLocation)
 {
@@ -16,14 +17,33 @@ STRUCT(SourceLocation)
 typedef enum CallingConvention : u8
 {
     CALLING_CONVENTION_C,
-    CALLING_CONVENTION_COUNT,
+    // CALLING_CONVENTION_COUNT,
 } CallingConvention;
+
+typedef enum ResolvedCallingConvention : u8
+{
+    CALLING_CONVENTION_SYSTEM_V,
+} ResolvedCallingConvention;
+
+static ResolvedCallingConvention resolve_calling_convention(CallingConvention cc)
+{
+    switch (cc)
+    {
+        break; case CALLING_CONVENTION_C:
+        {
+            // TODO:
+            return CALLING_CONVENTION_SYSTEM_V;
+        }
+        break; default: UNREACHABLE();
+    }
+}
 
 typedef enum ValueId : u8
 {
     VALUE_ID_DISCARD,
     VALUE_ID_CONSTANT_INTEGER,
     VALUE_ID_FUNCTION,
+    VALUE_ID_GLOBAL,
     VALUE_ID_UNRESOLVED_IDENTIFIER,
 
     VALUE_ID_UNARY_MINUS,
@@ -277,13 +297,34 @@ STRUCT(AbiInformation)
     u16 abi_count;
 };
 
+STRUCT(AbiSystemVClassifyArgumentTypeOptions)
+{
+    u32 available_gpr;
+    bool is_named_argument;
+    bool is_register_call;
+};
+
+STRUCT(AbiSystemVClassifyArgumentTypeResult)
+{
+    AbiInformation abi;
+    AbiRegisterCount needed_registers;
+};
+
+STRUCT(AbiSystemVClassifyArgumentOptions)
+{
+    TypeReference type;
+    u16 abi_start;
+    bool is_named_argument;
+    bool is_register_call;
+};
+
 static_assert(alignof(AbiInformation) == alignof(TypeReference));
 
 STRUCT(TypeFunction)
 {
     TypeReference* semantic_types; // This hides inside the same allocation AbiInformation* abi_informations;
     TypeReference* abi_types;
-    AbiRegisterCount register_count;
+    AbiRegisterCount available_registers;
     u16 semantic_argument_count;
     u16 abi_argument_count;
     CallingConvention calling_convention;
@@ -438,7 +479,9 @@ STRUCT(Global)
     Variable variable;
     Scope scope;
     ValueReference initial_value;
+    GlobalReference next;
     Linkage linkage;
+    bool analyzed;
 };
 
 STRUCT(File)
@@ -486,12 +529,24 @@ typedef enum UnitArenaKind
     UNIT_ARENA_COUNT,
 } UnitArenaKind;
 
+typedef enum CompilePhase : u8
+{
+    COMPILE_PHASE_LEXER,
+    COMPILE_PHASE_PARSER,
+    COMPILE_PHASE_ANALYSIS,
+    COMPILE_PHASE_LLVM_IR_GENERATION,
+    COMPILE_PHASE_LLVM_IR_OPTIMIZATION,
+    COMPILE_PHASE_LLVM_CODE_GENERATION,
+    COMPILE_PHASE_LLVM_LINKER,
+} CompilePhase;
+
 STRUCT(CompileUnit)
 {
     Scope scope;
     FileReference files;
 
-    TopLevelDeclarationReference first_tld;
+    GlobalReference first_global;
+    GlobalReference last_global;
 
     TypeReference first_pointer_type;
 
@@ -499,6 +554,8 @@ STRUCT(CompileUnit)
     ValueReference free_values;
 
     GlobalReference current_function;
+
+    CompilePhase phase;
 };
 
 static inline Arena* unit_arena(CompileUnit* unit, UnitArenaKind kind)
@@ -666,28 +723,63 @@ static inline Value* value_pointer_from_reference(CompileUnit* restrict unit, Va
     return result;
 }
 
-static inline Type* new_types(CompileUnit* unit, u32 type_count)
+static inline Type* new_types(CompileUnit* restrict unit, u32 type_count)
 {
     let arena = unit_arena(unit, UNIT_ARENA_TYPE);
     let types = arena_allocate(arena, Type, type_count);
     return types;
 }
 
-static inline Type* new_type(CompileUnit* unit)
+static inline Type* new_type(CompileUnit* restrict unit)
 {
     return new_types(unit, 1);
 }
 
-static inline Value* new_values(CompileUnit* unit, u32 value_count)
+static inline Value* new_values(CompileUnit* restrict unit, u32 value_count)
 {
     let arena = unit_arena(unit, UNIT_ARENA_VALUE);
     let values = arena_allocate(arena, Value, value_count);
     return values;
 }
 
-static inline Value* new_value(CompileUnit* unit)
+static inline Value* new_value(CompileUnit* restrict unit)
 {
     return new_values(unit, 1);
+}
+
+static u64 align_bit_count(u64 bit_count)
+{
+    let aligned_bit_count = MAX(next_power_of_two(bit_count), 8);
+    assert((aligned_bit_count & (aligned_bit_count - 1)) == 0);
+    return aligned_bit_count;
+}
+
+static u64 aligned_byte_count_from_bit_count(u64 bit_count)
+{
+    let aligned_bit_count = align_bit_count(bit_count);
+    assert(aligned_bit_count % 8 == 0);
+    return aligned_bit_count / 8;
+}
+
+static u64 get_byte_size(CompileUnit* restrict unit, TypeReference type_reference)
+{
+    assert(unit->phase >= COMPILE_PHASE_ANALYSIS);
+
+    let type_pointer = type_pointer_from_reference(unit, type_reference);
+
+    switch (type_pointer->id)
+    {
+        break; case TYPE_ID_INTEGER:
+        {
+            let bit_count = type_pointer->integer.bit_count;
+            let byte_count = aligned_byte_count_from_bit_count(bit_count);
+            return byte_count;
+        }
+        break; default:
+        {
+            todo();
+        }
+    }
 }
 
 void compile_unit(StringSlice paths);
@@ -702,3 +794,7 @@ TypeReference get_void_type(CompileUnit* restrict unit);
 TypeReference get_noreturn_type(CompileUnit* restrict unit);
 TypeReference get_integer_type(CompileUnit* restrict unit, u64 bit_count, bool is_signed);
 TypeReference get_pointer_type(CompileUnit* restrict unit, TypeReference element_type_reference);
+
+AbiInformation abi_system_v_classify_return_type(CompileUnit* restrict unit, TypeReference type);
+AbiSystemVClassifyArgumentTypeResult abi_system_v_classify_argument_type(CompileUnit* restrict unit, TypeReference type, AbiSystemVClassifyArgumentTypeOptions options);
+AbiInformation abi_system_v_classify_argument(CompileUnit* restrict unit, AbiRegisterCount* restrict available_registers, TypeReference* abi_argument_type_buffer, AbiSystemVClassifyArgumentOptions options);

@@ -2,7 +2,6 @@
 #include <immintrin.h>
 
 #define parser_error() trap();
-#define todo() trap()
 
 static Arena* get_default_arena(CompileUnit* restrict unit)
 {
@@ -509,7 +508,7 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
                 .function = {
                     .semantic_types = semantic_types,
                     .abi_types = 0,
-                    .register_count = {},
+                    .available_registers = {},
                     .semantic_argument_count = argument_count,
                     .abi_argument_count = 0,
                     .calling_convention = calling_convention,
@@ -1175,8 +1174,10 @@ static BlockReference parse_block(CompileUnit* restrict unit, Parser* restrict p
     return block_reference_from_pointer(unit, block);
 }
 
-void parse(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
+TopLevelDeclarationReference parse(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
 {
+    unit->phase = COMPILE_PHASE_PARSER;
+
     Parser p = {
         .content = file_pointer->content,
         .pointer = tl.pointer,
@@ -1186,6 +1187,7 @@ void parse(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
     let scope = scope_reference_from_pointer(unit, &file_pointer->scope);
 
     TopLevelDeclarationReference previous_tld = {};
+    TopLevelDeclarationReference first_tld = {};
 
     Token* global_token;
 
@@ -1239,8 +1241,8 @@ void parse(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
                 bool is_function = 0;
                 if (is_ref_valid(global_type))
                 {
-                    let pointer_type = get_pointer_type(unit, global_type);
-                    global_storage_pointer->type = pointer_type;
+                    // let pointer_type = get_pointer_type(unit, global_type);
+                    // global_storage_pointer->type = pointer_type;
                     let global_type_p = type_pointer_from_reference(unit, global_type);
                     is_function = global_type_p->id == TYPE_ID_FUNCTION;
                 }
@@ -1276,7 +1278,7 @@ void parse(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
                     .variable = {
                         .name = global_name,
                         .storage = global_storage,
-                        .type = {},
+                        .type = global_type,
                         .scope = scope,
                         .location = get_source_location(parser, global_token),
                     },
@@ -1297,7 +1299,7 @@ void parse(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
                 }
                 else
                 {
-                    unit->first_tld = top_level_declaration_reference;
+                    first_tld = top_level_declaration_reference;
                 }
 
                 previous_tld = top_level_declaration_reference;
@@ -1311,4 +1313,6 @@ void parse(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
             break; default: todo();
         }
     }
+
+    return first_tld;
 }

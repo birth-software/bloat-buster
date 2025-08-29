@@ -1533,6 +1533,8 @@ TypeReference get_integer_type(CompileUnit* restrict unit, u64 bit_count, bool i
 
 TypeReference get_pointer_type(CompileUnit* restrict unit, TypeReference element_type_reference)
 {
+    assert(unit->phase >= COMPILE_PHASE_ANALYSIS);
+
     Type* element_type = type_pointer_from_reference(unit, element_type_reference);
     let last_pointer_type = unit->first_pointer_type;
 
@@ -1693,8 +1695,8 @@ static void crunch_file(CompileUnit* restrict unit, str path)
     let file_reference = file_reference_from_pointer(unit, file);
     unused(file_reference);
     let tl = lex(unit_arena(unit, UNIT_ARENA_TOKEN), unit_arena(unit, UNIT_ARENA_STRING), content.pointer, content.length);
-    parse(unit, file, tl);
-    analyze(unit);
+    let first_tld = parse(unit, file, tl);
+    analyze(unit, first_tld);
     trap();
 }
 
