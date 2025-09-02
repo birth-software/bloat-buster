@@ -6,19 +6,11 @@ return_constant: fn () s32 = // This is a comment
 }// This is a comment
 // This is a comment
 
-//require: fn (ok: u1) void = 
-//{
-//    if (!ok)
-//    {
-//        @trap();
-//    }
-//}
-//
-//constant_add: fn () s32 =
-//{
-//    return -1 + 1;
-//}
-//
+constant_add: fn () s32 =
+{
+    return -1 + 1;
+}
+
 //constant_and: fn () s32 = 
 //{
 //    return 1 & 2;
@@ -182,7 +174,15 @@ return_constant: fn () s32 = // This is a comment
 //
 //    return a_int - (b_int + c_int);
 //}
-//
+
+//require: fn (ok: u1) void = 
+//{
+//    if (!ok)
+//    {
+//        @trap();
+//    }
+//}
+
 //basic_slice_receiver: fn (slice: []u8) void =
 //{
 //    require(slice.length == 3);
@@ -8305,5 +8305,5 @@ main [export]: fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32 =
 //
 //    union_alignment();
 //
-    return 0;
+//    return 0;
 }

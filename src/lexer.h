@@ -1,6 +1,6 @@
 #pragma once
 
-#include <lib.h>
+#include <compiler.h>
 
 #ifdef _WIN32
 typedef f64 FloatLiteral;
@@ -133,12 +133,11 @@ typedef enum TokenId : u8
     TOKEN_ID_LINE_BYTE_OFFSET,
     TOKEN_ID_LINE_NUMBER_OFFSET,
 
-    TOKEN_ID_ERROR_START,
     TOKEN_ID_ERROR_LINE_NUMBER_TOO_HIGH,
     TOKEN_ID_ERROR_COLUMN_NUMBER_TOO_HIGH,
     TOKEN_ID_ERROR_PRIMITIVE_TYPE_0_BIT_COUNT,
     TOKEN_ID_ERROR_PRIMITIVE_TYPE_UNKNOWN_BIT_COUNT,
-    TOKEN_ID_ERROR_STRING_LITERAL_NO_DOUBLE_QUOTE_EOF,
+    TOKEN_ID_ERROR_STRING_LITERAL_EOF_NO_DOUBLE_QUOTE,
     TOKEN_ID_ERROR_CHARACTER_LITERAL_EMPTY,
     TOKEN_ID_ERROR_CHARACTER_LITERAL_BADLY_TERMINATED,
     TOKEN_ID_ERROR_NOT_SUPPORTED_X_ASCII_OR_UNICODE,
@@ -182,4 +181,9 @@ STRUCT(IntegerParsing)
     u64 i;
 };
 
-TokenList lex(Arena* stable_arena, Arena* else_arena, const char* restrict p, u64 l);
+TokenList lex(CompileUnit* unit, File* file);
+
+#if BB_INCLUDE_TESTS
+bool lexer_tests(TestArguments* restrict arguments);
+str token_list_to_string(Arena* arena, TokenList list);
+#endif

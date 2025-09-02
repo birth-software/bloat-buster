@@ -1,10 +1,18 @@
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include <compiler.h>
 #include <lexer.h>
 #include <parser.h>
 #include <analysis.h>
+#include <llvm_common.h>
+#include <llvm_generate.h>
+#include <llvm_optimize.h>
+#include <llvm_emit.h>
+#include <llvm_link.h>
+#include <llvm-c/Core.h>
+
 #include <stdatomic.h>
-#include <stdio.h>
 #ifdef __linux__
 #include <unistd.h>
 #include <pthread.h>
@@ -16,25 +24,6 @@
 
 #if USE_IO_URING
 #include <liburing.h>
-#endif
-
-#define SPALL_USE 0
-#if SPALL_USE
-#include <spall.h>
-
-static SpallProfile spall_profile;
-static SpallBuffer spall_buffer;
-#endif
-#if SPALL_USE
-#define SPALL_FUNCTION_BEGIN() do { \
-	spall_buffer_begin(&spall_profile, &spall_buffer, __FUNCTION__, sizeof(__FUNCTION__) - 1, __rdtsc()); \
-} while(0)
-#define SPALL_FUNCTION_END() do { \
-	spall_buffer_end(&spall_profile, &spall_buffer, __rdtsc()); \
-} while(0)
-#else
-#define SPALL_FUNCTION_BEGIN()
-#define SPALL_FUNCTION_END()
 #endif
 
 STRUCT(CompileUnitSlice)
@@ -79,6 +68,39 @@ static bool is_single_threaded = true;
 static CompileUnitSlice global_compile_units;
 static _Atomic(u64) global_completed_compile_unit_count = 0;
 
+static str generate_path_internal(Arena* arena, str directory, str name, str extension)
+{
+    assert(name.pointer);
+    str strings[] = {
+        directory.pointer ? directory : S("./"),
+        name,
+        extension.pointer ? extension : S(""),
+    };
+    str file_path = arena_join_string(arena, string_array_to_slice(strings), true);
+    return file_path;
+}
+
+static str generate_artifact_path(CompileUnit* unit, str extension)
+{
+    let original_directory_artifact_path = unit->artifact_directory_path;
+    let artifact_path = original_directory_artifact_path.pointer ? original_directory_artifact_path : S("build/");
+    let first_file = file_pointer_from_reference(unit, unit->first_file);
+    str result = generate_path_internal(get_default_arena(unit), artifact_path, first_file->name, extension);
+    return result;
+}
+
+static str generate_object_path(CompileUnit* unit)
+{
+    return generate_artifact_path(unit, S(".o"));
+}
+
+static str generate_executable_path(CompileUnit* unit)
+{
+    let result = generate_artifact_path(unit, (str){});
+    unit->artifact_path = result;
+    return result;
+}
+
 static CompilationResult llvm_compile_file(CompileUnit* unit, str path)
 {
     return (CompilationResult){};
@@ -87,7 +109,7 @@ static CompilationResult llvm_compile_file(CompileUnit* unit, str path)
 static void llvm_compile_unit(StringSlice paths)
 {
     //let arena_init_start = take_timestamp();
-    let arena = arena_initialize((ArenaInitialization){});
+    let arena = arena_create((ArenaInitialization){});
     //let arena_init_end = take_timestamp();
     //let arena_init_ns = ns_between(arena_init_start, arena_init_end);
     //printf("Arena initialization time: %lu ns\n", arena_init_ns);
@@ -1200,11 +1222,23 @@ static u64 big_integer_type_count = (
         1 +  // 256
         1    // 512
         ) * 2;
+static u64 float_type_count = 5;
 static u64 void_noreturn_type_count = 2;
+
+u64 get_base_type_count()
+{
+    return classic_integer_type_count + big_integer_type_count + float_type_count + void_noreturn_type_count;
+}
+
+static void default_show_callback(void* context, str message)
+{
+    unused(context);
+    os_file_write((FileDescriptor*)1, message);
+}
 
 static CompileUnit* compile_unit_create()
 {
-    let arena = arena_initialize((ArenaInitialization) {
+    let arena = arena_create((ArenaInitialization) {
         .count = UNIT_ARENA_COUNT,
     });
 
@@ -1214,7 +1248,7 @@ static CompileUnit* compile_unit_create()
     let type_arena = unit_arena(unit, UNIT_ARENA_TYPE);
     assert(type_arena->position == sizeof(Arena));
 
-    let base_type_count = classic_integer_type_count + big_integer_type_count + void_noreturn_type_count;
+    let base_type_count = get_base_type_count();
     let base_type_allocation = arena_allocate(type_arena, Type, base_type_count);
 
     let type = base_type_allocation;
@@ -1262,6 +1296,7 @@ static CompileUnit* compile_unit_create()
                 .id = TYPE_ID_INTEGER,
                 .analyzed = 1,
             };
+            type += 1;
         }
     }
 
@@ -1285,6 +1320,8 @@ static CompileUnit* compile_unit_create()
 
     let noreturn_type = type;
     type += 1;
+
+    assert(type == base_type_allocation + base_type_count);
 
     *f16_type = (Type) {
         .fp = TYPE_FLOAT_F16,
@@ -1346,6 +1383,10 @@ static CompileUnit* compile_unit_create()
         .id = VALUE_ID_DISCARD,
     };
 
+    unit->has_debug_info = 1;
+    unit->show_callback = &default_show_callback;
+    unit->verbose = 0;
+
     return unit;
 }
 
@@ -1369,68 +1410,6 @@ TypeReference get_integer_type(CompileUnit* restrict unit, u64 bit_count, bool i
     assert(bit_count <= 64 || bit_count == 128 || bit_count == 256 || bit_count == 512);
     let type_index = bit_count > 64 ? (1ULL << __builtin_ctzg(bit_count - 128)) * 2 + is_signed : is_signed * 64 + (bit_count - 1);
     return type_reference_from_index(unit, type_index);
-}
-
-TypeReference get_pointer_type(CompileUnit* restrict unit, TypeReference element_type_reference)
-{
-    assert(unit->phase >= COMPILE_PHASE_ANALYSIS);
-
-    Type* element_type = type_pointer_from_reference(unit, element_type_reference);
-    let last_pointer_type = unit->first_pointer_type;
-
-    while (is_ref_valid(last_pointer_type))
-    {
-        let lpt = type_pointer_from_reference(unit, last_pointer_type);
-        assert(lpt->id == TYPE_ID_POINTER);
-        if (ref_eq(lpt->pointer.element_type, element_type_reference))
-        {
-            return last_pointer_type;
-        }
-
-        let next = lpt->pointer.next;
-        if (!is_ref_valid(next))
-        {
-            break;
-        }
-
-        last_pointer_type = next;
-    }
-
-    StringReference name = {};
-    if (is_ref_valid(element_type->name))
-    {
-        str name_parts[] = {
-            S("&"),
-            string_from_reference(unit, element_type->name),
-        };
-        name = allocate_and_join_string(unit, string_array_to_slice(name_parts));
-    }
-
-    let pointer = new_type(unit);
-    *pointer = (Type) {
-        .pointer = {
-            .element_type = element_type_reference,
-        },
-        .name = name,
-        .scope = element_type->scope,
-        .id = TYPE_ID_POINTER,
-    };
-
-    let result =  type_reference_from_pointer(unit, pointer);
-
-    if (is_ref_valid(last_pointer_type))
-    {
-        assert(is_ref_valid(unit->first_pointer_type));
-        let lpt = type_pointer_from_reference(unit, last_pointer_type);
-        lpt->pointer.next = result;
-    }
-    else
-    {
-        assert(!is_ref_valid(unit->first_pointer_type));
-        unit->first_pointer_type = result;
-    }
-
-    return result;
 }
 
 StringReference allocate_string(CompileUnit* restrict unit, str s)
@@ -1541,18 +1520,24 @@ StringReference allocate_string_if_needed(CompileUnit* restrict unit, str s)
 
 static void crunch_file(CompileUnit* restrict unit, str path)
 {
-    str content = file_read(unit_arena(unit, UNIT_ARENA_FILE_CONTENT), path, (FileReadOptions){
+    let default_arena = get_default_arena(unit);
+    let absolute_path = path_absolute(default_arena, path.pointer);
+    str content = file_read(unit_arena(unit, UNIT_ARENA_FILE_CONTENT), absolute_path, (FileReadOptions){
         .start_padding = sizeof(u32),
         .start_alignment = alignof(u32),
     });
     assert(content.length < UINT32_MAX);
     *((u32*)content.pointer - 1) = content.length;
 
-    let path_reference = allocate_string_if_needed(unit, path);
+    let last_slash_index = str_last_ch(absolute_path, '/');
+    assert(last_slash_index != string_no_match);
+    let directory_path = (str){ absolute_path.pointer, last_slash_index };
+    let file_name = (str){ absolute_path.pointer + last_slash_index + 1, absolute_path.length - last_slash_index - 1 };
+    let name_nz = (str) { file_name.pointer, file_name.length - strlen(".bbb") };
+    let name = arena_duplicate_string(default_arena, name_nz, true);
 
-    let arena = unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
     let scope = new_scope(unit);
-    let file = arena_allocate(arena, File, 1);
+    let file = arena_allocate(default_arena, File, 1);
     let file_reference = file_reference_from_pointer(unit, file);
 
     if (is_ref_valid(unit->last_file))
@@ -1576,92 +1561,238 @@ static void crunch_file(CompileUnit* restrict unit, str path)
 
     *file = (File) {
         .content = content,
-        .path = path_reference,
+        .path = absolute_path,
+        .directory = directory_path,
+        .file_name = file_name,
+        .name = name,
         .scope = scope_reference_from_pointer(unit, scope),
     };
 
-    let tl = lex(unit_arena(unit, UNIT_ARENA_TOKEN), unit_arena(unit, UNIT_ARENA_STRING), content.pointer, content.length);
-    let first_tld = parse(unit, file, tl);
-    analyze(unit, first_tld);
+    let tl = lex(unit, file);
+    parse(unit, file, tl);
 }
 
-void* thread_worker(void* arg)
+static void print_llvm_message(CompileUnit* restrict unit, str message)
 {
-    u64 result_code = 0;
-    str path = 
-#if 0
-            S("build/file0");
-#else
-            S("tests/tests.bbb");
-#endif
+    assert(message.pointer);
+    unit_show(unit, message);
+    LLVMDisposeMessage(message.pointer);
+}
 
-    let unit = compile_unit_create();
-
+static bool compile_unit_internal(CompileUnit* unit, str path)
+{
+    bool result_code = 1;
     crunch_file(unit, path);
+    analyze(unit);
+    let generate = llvm_generate_ir(unit, true);
 
-    // if (tl.length)
-    // {
-    //     let last_token = tl.pointer[tl.length - 1];
-    //     if (last_token.id != TOKEN_ID_EOF)
-    //     {
-    //         trap();
-    //     }
-    //
-    //     parse_file(unit, path, content, tl);
-    // }
+    if (unit->verbose & !!generate.module)
+    {
+        char* s = LLVMPrintModuleToString(generate.module);
+        str module_str = { s, strlen(s) };
+        print_llvm_message(unit, module_str);
+    }
 
-    return (void*)result_code;
+    if (generate.error_message.pointer)
+    {
+        print_llvm_message(unit, generate.error_message);
+        result_code = 0;
+    }
+    else
+    {
+        LLVMOptimizationLevel llvm_optimization_level;
+        switch (unit->build_mode)
+        {
+            break; case BUILD_MODE_DEBUG: llvm_optimization_level = LLVM_OPTIMIZATION_LEVEL_O0;
+            break; case BUILD_MODE_SIZE: llvm_optimization_level = LLVM_OPTIMIZATION_LEVEL_Oz;
+            break; case BUILD_MODE_SPEED: llvm_optimization_level = LLVM_OPTIMIZATION_LEVEL_O3;
+            break; default: UNREACHABLE();
+        }
+
+        bool verify_each_pass = true;
+        bool debug_logging = false;
+
+        let error_message = llvm_optimize(generate.module, generate.target_machine, llvm_optimization_level, verify_each_pass, debug_logging);
+        if (error_message)
+        {
+            todo();
+        }
+        else
+        {
+            let object_path = generate_object_path(unit);
+            unit->object_path = object_path;
+            LLVMCodeGenFileType type = LLVMObjectFile;
+            let error_message = llvm_emit(generate.module, generate.target_machine, object_path, type);
+            if (error_message.pointer)
+            {
+                todo();
+            }
+        }
+    }
+
+    return result_code;
+}
+
+static bool compile_unit(str path)
+{
+    let unit = compile_unit_create();
+    return compile_unit_internal(unit, path);
+}
+
+static bool compile_and_link_single_unit_internal(CompileUnit* unit, str path)
+{
+    bool result = compile_unit_internal(unit, path);
+    if (result)
+    {
+        CompileUnit* units[] = {
+            unit,
+        };
+        let first_file = file_pointer_from_reference(unit, unit->first_file);
+
+        str output_artifact_path = generate_executable_path(unit);
+        str result_string = llvm_link_machine_code(get_default_arena(unit), unit_arena(unit, UNIT_ARENA_STRING), units, array_length(units), (LinkOptions) {
+            .output_artifact_path = output_artifact_path,
+        });
+
+        result = result_string.pointer == 0;
+        if (!result)
+        {
+            unit_show(unit, result_string);
+        }
+    }
+
+    return result;
+}
+
+static CompileUnit* compile_and_link_single_unit(str path)
+{
+    let unit = compile_unit_create();
+    if (compile_and_link_single_unit_internal(unit, path))
+    {
+        return unit;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+static let test_source_path = S("tests/tests.bbb");
+
+static CompileUnit* compile_tests()
+{
+    let result = compile_and_link_single_unit(test_source_path);
+    return result;
+}
+
+static void* thread_worker(void* arg)
+{
+    return (void*)(u64)!compile_tests();
+}
+
+static void* llvm_initialization_thread(void*)
+{
+    llvm_initialize();
+    return 0;
+}
+
+typedef enum CompilerCommand : u8
+{
+    COMPILER_COMMAND_TEST,
+} CompilerCommand;
+
+static CompilerCommand default_command = COMPILER_COMMAND_TEST;
+
+static void compiler_test_log(void* context, str string)
+{
+}
+
+static bool compiler_tests()
+{
+    let arena_init = (ArenaInitialization){};
+    TestArguments test_arguments = {
+        .arena = arena_create(arena_init),
+        .show = &compiler_test_log,
+    };
+    let result = 
+        lib_tests(&test_arguments) &
+        parser_tests(&test_arguments) &
+        analysis_tests(&test_arguments) &
+        llvm_generation_tests(&test_arguments) &
+        arena_destroy(test_arguments.arena, arena_init.count);
+    return result;
+}
+
+static bool unit_run(CompileUnit* restrict unit, StringSlice slice, char** envp)
+{
+    char* arg_buffer[64];
+    
+    char** arguments = {};
+    if (slice.length)
+    {
+        todo();
+    }
+    else
+    {
+        arguments = arg_buffer;
+        arguments[0] = unit->artifact_path.pointer;
+        arguments[1] = 0;
+    }
+    let result = os_execute(get_default_arena(unit), arguments, envp, (ExecutionOptions) {});
+    return (result.termination_kind == TERMINATION_KIND_EXIT) & (result.termination_code == 0);
+}
+
+static bool process_command_line(int argc, const char* argv[], char** envp)
+{
+    assert(is_single_threaded);
+
+    bool result = 1;
+    let command = default_command;
+
+    if ((argc != 0) & (argc != 1))
+    {
+        todo();
+    }
+
+    switch (command)
+    {
+        break; case COMPILER_COMMAND_TEST:
+        {
+#if BB_INCLUDE_TESTS
+            result = compiler_tests();
+#endif
+            if (result)
+            {
+                pthread_t handle;
+                let create_result = pthread_create(&handle, 0, &llvm_initialization_thread, 0);
+                result = create_result == 0;
+
+                if (result)
+                {
+                    let unit = compile_tests();
+                    bool run_result = 0;
+                    if (unit)
+                    {
+                        run_result = unit_run(unit, (StringSlice){}, envp);
+                    }
+                    void* return_value = 0;
+                    let join_result = pthread_join(handle, &return_value);
+                    result = (unit != 0) & (join_result == 0) & (return_value == 0) & (run_result);
+                }
+            }
+        }
+        break; default:
+        {
+            result = 0;
+        }
+    }
+
+    return result;
 }
 
 bool compiler_main(int argc, const char* argv[], char** envp)
 {
     os_init();
-    bool result = 1;
-    StringSlice file_path_slice = { file_paths, array_length(file_paths) };
-    bool is_single_threaded = 1;
-    u64 thread_file_count = is_single_threaded ? file_path_slice.length : file_path_slice.length / 5;
-    thread_count = is_single_threaded ? 1 : THREAD_COUNT;
 
-    if (is_single_threaded)
-    {
-        Thread* restrict thread = &threads[0];
-        thread->work = file_path_slice;
-#if 0
-        write_random_file(file_paths[0]);
-#else
-        void* thread_result = thread_worker((void*)0);
-        result = (u64)thread_result == 0;
-#endif
-    }
-    else
-    {
-        for (u64 i = 0; i < thread_count; i += 1)
-        {
-            Thread* restrict thread = &threads[i];
-            thread->work = (StringSlice){ file_path_slice.pointer + thread_file_count * i, thread_file_count };
-#ifdef __linux__
-            let result = pthread_create(&thread->handle, 0, &thread_worker, (void*)i);
-            if (result != 0)
-            {
-                fail();
-            }
-#else
-#endif
-        }
-
-        for (u64 i = 0; i < thread_count; i += 1)
-        {
-            Thread* restrict thread = &threads[i];
-#ifdef __linux__
-            let result = pthread_join(thread->handle, &thread->return_value);
-            if (result != 0)
-            {
-                fail();
-            }
-#else
-#endif
-        }
-    }
-
-    return result;
+    return process_command_line(argc, argv, envp);
 }

@@ -437,13 +437,17 @@ static bool is_good_finishing_decimal_character(u8 ch)
     return is_space(ch) | ((ch >= '!') & (ch <= '/')) | ((ch >= ':') & (ch <= '@')) | ((ch >= left_bracket) & (ch <= '`')) | ((ch >= left_brace) & (ch <= '~'));
 }
 
-TokenList lex(Arena* token_arena, Arena* string_arena, const char* restrict p, u64 l)
+TokenList lex(CompileUnit* unit, File* file)
 {
 #define MEASURE_LEXING 1
 
 #if MEASURE_LEXING
     let lexing_start = take_timestamp();
 #endif
+    char* restrict p = file->content.pointer;
+    let l = file->content.length;
+    let token_arena = unit_arena(unit, UNIT_ARENA_TOKEN);
+    let string_arena = unit_arena(unit, UNIT_ARENA_STRING);
 
     Token* tokens = (Token*)((u8*)token_arena + align_forward(token_arena->position, alignof(Token)));
     u64 token_count = 0;
@@ -1120,7 +1124,7 @@ TokenList lex(Arena* token_arena, Arena* string_arena, const char* restrict p, u
             let is_properly_finished = p[i] == '"';
             if (!is_properly_finished)
             {
-                token->id = TOKEN_ID_ERROR_STRING_LITERAL_NO_DOUBLE_QUOTE_EOF;
+                token->id = TOKEN_ID_ERROR_STRING_LITERAL_EOF_NO_DOUBLE_QUOTE;
                 return (TokenList){ tokens, token_count };
             }
 
@@ -1529,5 +1533,159 @@ TokenList lex(Arena* token_arena, Arena* string_arena, const char* restrict p, u
     printf("Lexing: %lu ns. %f GB/s. %f MLOCs/s\n", lexing_ns, gbytes_per_s, millions_lines_s);
 #endif
 
-    return (TokenList) { .pointer = tokens, .length = token_count };
+    let result = (TokenList) { .pointer = tokens, .length = token_count };
+
+    if (unit->verbose)
+    {
+        unit_show(unit, token_list_to_string(get_default_arena(unit), result));
+    }
+
+    return result;
+}
+
+#if BB_INCLUDE_TESTS
+bool lexer_tests(TestArguments* restrict arguments)
+{
+    return 1;
+}
+#endif
+
+static str token_id_to_string(TokenId id)
+{
+    switch (id)
+    {
+        case TOKEN_ID_NONE: return S("NONE");
+        case TOKEN_ID_EOF: return S("EOF");
+        case TOKEN_ID_IDENTIFIER_START: return S("id_start");
+        case TOKEN_ID_IDENTIFIER_END: return S("id_end");
+        case TOKEN_ID_INTEGER_START_HEXADECIMAL_PREFIXED: return S("hex_start");
+        case TOKEN_ID_INTEGER_START_DECIMAL_PREFIXED: return S("decimal_start");
+        case TOKEN_ID_INTEGER_START_OCTAL_PREFIXED: return S("octal_start");
+        case TOKEN_ID_INTEGER_START_BINARY_PREFIXED: return S("binary_start");
+        case TOKEN_ID_INTEGER_START_DECIMAL_INFERRED: return S("inf_decimal_start");
+        case TOKEN_ID_INTEGER_END: return S("integer_end");
+        case TOKEN_ID_FLOAT_START: return S("float_start");
+        case TOKEN_ID_FLOAT_END: return S("float_end");
+        case TOKEN_ID_STRING_LITERAL_START: return S("string_literal_start");
+        case TOKEN_ID_STRING_LITERAL_END: return S("string_literal_end");
+        case TOKEN_ID_CHARACTER_LITERAL: return S("char_literal");
+        case TOKEN_ID_KEYWORD_TYPE_INTEGER: return S("type_integer");
+        case TOKEN_ID_KEYWORD_TYPE_FLOAT: return S("type_float");
+        case TOKEN_ID_KEYWORD_TYPE: return S("type");
+        case TOKEN_ID_KEYWORD_TYPE_VOID: return S("type_void");
+        case TOKEN_ID_KEYWORD_TYPE_NORETURN: return S("type_noreturn");
+        case TOKEN_ID_KEYWORD_TYPE_ENUM: return S("type_enum");
+        case TOKEN_ID_KEYWORD_TYPE_STRUCT: return S("type_struct");
+        case TOKEN_ID_KEYWORD_TYPE_BITS: return S("type_bits");
+        case TOKEN_ID_KEYWORD_TYPE_UNION: return S("type_union");
+        case TOKEN_ID_KEYWORD_TYPE_FN: return S("type_fn");
+        case TOKEN_ID_KEYWORD_TYPE_ALIAS: return S("type_alias");
+        case TOKEN_ID_KEYWORD_TYPE_VECTOR: return S("type_vector");
+        case TOKEN_ID_KEYWORD_TYPE_ENUM_ARRAY: return S("type_enum_array");
+        case TOKEN_ID_KEYWORD_TYPE_OPAQUE: return S("type_opaque");
+        case TOKEN_ID_KEYWORD_STATEMENT_UNDERSCORE: return S("st_underscore");
+        case TOKEN_ID_KEYWORD_STATEMENT_RETURN: return S("st_return");
+        case TOKEN_ID_KEYWORD_STATEMENT_IF: return S("st_if");
+        case TOKEN_ID_KEYWORD_STATEMENT_WHEN: return S("st_when");
+        case TOKEN_ID_KEYWORD_STATEMENT_FOR: return S("st_for");
+        case TOKEN_ID_KEYWORD_STATEMENT_WHILE: return S("st_while");
+        case TOKEN_ID_KEYWORD_STATEMENT_SWITCH: return S("st_switch");
+        case TOKEN_ID_KEYWORD_STATEMENT_BREAK: return S("st_break");
+        case TOKEN_ID_KEYWORD_STATEMENT_CONTINUE: return S("st_continue");
+        case TOKEN_ID_KEYWORD_STATEMENT_UNREACHABLE: return S("st_unreachable");
+        case TOKEN_ID_KEYWORD_STATEMENT_ELSE: return S("st_else");
+        case TOKEN_ID_KEYWORD_VALUE_UNDEFINED: return S("undefined");
+        case TOKEN_ID_KEYWORD_VALUE_ZERO: return S("zero");
+        case TOKEN_ID_KEYWORD_OPERATOR_AND: return S("and");
+        case TOKEN_ID_KEYWORD_OPERATOR_OR: return S("or");
+        case TOKEN_ID_KEYWORD_OPERATOR_AND_SHORTCIRCUIT: return S("and?");
+        case TOKEN_ID_KEYWORD_OPERATOR_OR_SHORTCIRCUIT: return S("or?");
+        case TOKEN_ID_ASSIGN: return S("'='");
+        case TOKEN_ID_COMPARE_EQUAL: return S("'=='");
+        case TOKEN_ID_SWITCH_CASE: return S("'=>'");
+        case TOKEN_ID_EXCLAMATION_DOWN: return S("'!'");
+        case TOKEN_ID_COMPARE_NOT_EQUAL: return S("'!='");
+        case TOKEN_ID_COMPARE_LESS: return S("'<'");
+        case TOKEN_ID_COMPARE_LESS_EQUAL: return S("'<='");
+        case TOKEN_ID_SHIFT_LEFT: return S("'<<'");
+        case TOKEN_ID_SHIFT_LEFT_ASSIGN: return S("'<<='");
+        case TOKEN_ID_COMPARE_GREATER: return S("'>'");
+        case TOKEN_ID_COMPARE_GREATER_EQUAL: return S("'>='");
+        case TOKEN_ID_SHIFT_RIGHT: return S("'>>'");
+        case TOKEN_ID_SHIFT_RIGHT_ASSIGN: return S("'>>='");
+        case TOKEN_ID_PLUS: return S("'+'");
+        case TOKEN_ID_ADD_ASSIGN: return S("'+='");
+        case TOKEN_ID_DASH: return S("'-'");
+        case TOKEN_ID_SUB_ASSIGN: return S("'-='");
+        case TOKEN_ID_ASTERISK: return S("'*'");
+        case TOKEN_ID_MUL_ASSIGN: return S("'*='");
+        case TOKEN_ID_FORWARD_SLASH: return S("'/'");
+        case TOKEN_ID_DIV_ASSIGN: return S("'/='");
+        case TOKEN_ID_PERCENTAGE: return S("'%'");
+        case TOKEN_ID_REM_ASSIGN: return S("'%='");
+        case TOKEN_ID_AMPERSAND: return S("'&'");
+        case TOKEN_ID_BITWISE_AND_ASSIGN: return S("'&='");
+        case TOKEN_ID_BAR: return S("'|'");
+        case TOKEN_ID_BITWISE_OR_ASSIGN: return S("'|='");
+        case TOKEN_ID_CARET: return S("'^'");
+        case TOKEN_ID_BITWISE_XOR_ASSIGN: return S("'^='");
+        case TOKEN_ID_DOT: return S("'.'");
+        case TOKEN_ID_POINTER_DEREFERENCE: return S("'.&'");
+        case TOKEN_ID_OPTIONAL_DEREFERENCE: return S("'.?'");
+        case TOKEN_ID_DOUBLE_DOT: return S("'..'");
+        case TOKEN_ID_TRIPLE_DOT: return S("'...'");
+        case TOKEN_ID_LEFT_PARENTHESIS: return S("'('");
+        case TOKEN_ID_RIGHT_PARENTHESIS: return S("')'");
+        case TOKEN_ID_LEFT_BRACE: return S("'{'");
+        case TOKEN_ID_RIGHT_BRACE: return S("'}'");
+        case TOKEN_ID_LEFT_BRACKET: return S("'['");
+        case TOKEN_ID_RIGHT_BRACKET: return S("']'");
+        case TOKEN_ID_COMMA: return S("','");
+        case TOKEN_ID_SEMICOLON: return S("';'");
+        case TOKEN_ID_COLON: return S("':'");
+        case TOKEN_ID_QUESTION: return S("'?'");
+        case TOKEN_ID_AT: return S("'@'");
+        case TOKEN_ID_BACKTICK: return S("'`'");
+        case TOKEN_ID_BACKSLASH: return S("'\\'");
+        case TOKEN_ID_HASH: return S("'#'");
+        case TOKEN_ID_DOLLAR: return S("'$'");
+        case TOKEN_ID_TILDE: return S("'~'");
+        case TOKEN_ID_LINE_BYTE_OFFSET: return S("line_byte");
+        case TOKEN_ID_LINE_NUMBER_OFFSET: return S("line_number");
+        case TOKEN_ID_ERROR_LINE_NUMBER_TOO_HIGH: return S("error_line_number_too_high");
+        case TOKEN_ID_ERROR_COLUMN_NUMBER_TOO_HIGH: return S("error_column_number_too_high");
+        case TOKEN_ID_ERROR_PRIMITIVE_TYPE_0_BIT_COUNT: return S("error_primitive_type_0_bit_count");
+        case TOKEN_ID_ERROR_PRIMITIVE_TYPE_UNKNOWN_BIT_COUNT: return S("error_primitive_type_unknown_bit_count");
+        case TOKEN_ID_ERROR_STRING_LITERAL_EOF_NO_DOUBLE_QUOTE: return S("error_string_literal_eof_no_double_quote");
+        case TOKEN_ID_ERROR_CHARACTER_LITERAL_EMPTY: return S("error_character_literal_empty");
+        case TOKEN_ID_ERROR_CHARACTER_LITERAL_BADLY_TERMINATED: return S("error_character_literal_badly_terminated");
+        case TOKEN_ID_ERROR_NOT_SUPPORTED_X_ASCII_OR_UNICODE: return S("error_extended_ascii_or_unicode");
+        case TOKEN_ID_ERROR_NON_PRINTABLE_ASCII: return S("error_non_printable_ascii");
+        case TOKEN_ID_ERROR_FOUND_DEL: return S("error_del");
+        case TOKEN_ID_ERROR_IDENTIFIER_TOO_LONG: return S("error_identifier_too_long1");
+        default: UNREACHABLE();
+    }
+}
+
+str token_list_to_string(Arena* arena, TokenList list)
+{
+    let start = arena->position;
+    Token* restrict p = list.pointer;
+
+    for (u64 i = 0; i < list.length; i += 1)
+    {
+        let token = p[i];
+        u32 offset = token.offset;
+        TokenId id = token.id;
+        arena_duplicate_string(arena, S("#"), false);
+        format_integer(arena, (FormatIntegerOptions){ .value = i }, false);
+        arena_duplicate_string(arena, S(" "), false);
+        arena_duplicate_string(arena, token_id_to_string(id), false);
+        arena_duplicate_string(arena, S(", n: "), false);
+        format_integer(arena, (FormatIntegerOptions){ .value = offset }, false);
+        arena_duplicate_string(arena, S(",\n"), false);
+    }
+
+    let result = (str){(char*)arena + start, arena->position - start };
+    return result;
 }

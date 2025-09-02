@@ -1,6 +1,9 @@
 #pragma once
 
 #include <lib.h>
+#include <llvm-c/Types.h>
+#include <llvm-c/Error.h>
+#include <llvm-c/TargetMachine.h>
 
 typedef u32 RawReference;
 #define is_ref_valid(x) !!((x).v)
@@ -13,6 +16,16 @@ STRUCT(SourceLocation)
     u32 line_byte_offset;
     u32 column_offset;
 };
+
+static u32 location_get_line(SourceLocation location)
+{
+    return location.line_number_offset + 1;
+}
+
+static u32 location_get_column(SourceLocation location)
+{
+    return location.column_offset + 1;
+}
 
 typedef enum CallingConvention : u8
 {
@@ -55,6 +68,7 @@ typedef enum ValueId : u8
     VALUE_ID_UNRESOLVED_IDENTIFIER,
 
     VALUE_ID_UNARY_MINUS,
+    VALUE_ID_UNARY_MINUS_INTEGER,
     VALUE_ID_UNARY_ADDRESS_OF,
     VALUE_ID_UNARY_BOOLEAN_NOT,
     VALUE_ID_UNARY_BITWISE_NOT,
@@ -70,6 +84,8 @@ typedef enum ValueId : u8
     VALUE_ID_BINARY_MULTIPLY,
     VALUE_ID_BINARY_DIVIDE,
     VALUE_ID_BINARY_REMAINDER,
+
+    VALUE_ID_BINARY_ADD_INTEGER,
 
     VALUE_ID_BINARY_BITWISE_AND,
     VALUE_ID_BINARY_BITWISE_OR,
@@ -170,6 +186,7 @@ STRUCT(Scope)
     TypeList types;
     SourceLocation location;
     ScopeId id;
+    LLVMMetadataRef llvm;
 };
 
 typedef enum InlineBehavior : u8
@@ -188,9 +205,6 @@ STRUCT(FunctionAttributes)
 
 STRUCT(ValueFunction)
 {
-    struct
-    {
-    } llvm;
     ScopeReference scope;
     ArgumentReference arguments;
     BlockReference block;
@@ -246,6 +260,7 @@ STRUCT(Value)
     ValueId id;
     ValueKind kind;
     bool analyzed;
+    LLVMValueRef llvm;
 };
 
 STRUCT(TypeInteger)
@@ -337,6 +352,55 @@ STRUCT(AbiInformation)
     u16 abi_count;
 };
 
+static bool abi_can_have_coerce_to_type(AbiInformation* restrict abi)
+{
+    AbiKind kind = abi->flags.kind;
+    return (kind == ABI_KIND_DIRECT) | (kind == ABI_KIND_EXTEND) | (kind == ABI_KIND_COERCE_AND_EXPAND);
+}
+
+static void abi_set_coerce_to_type(AbiInformation* restrict abi, TypeReference type_reference)
+{
+    assert(abi_can_have_coerce_to_type(abi));
+    abi->coerce_to_type = type_reference;
+}
+
+static bool abi_can_have_padding_type(AbiInformation* restrict abi)
+{
+    AbiKind kind = abi->flags.kind;
+    return ((kind == ABI_KIND_DIRECT) | (kind == ABI_KIND_EXTEND)) | ((kind == ABI_KIND_INDIRECT) | (kind == ABI_KIND_INDIRECT_ALIASED)) | (kind == ABI_KIND_EXPAND);
+}
+
+static void abi_set_padding_type(AbiInformation* restrict abi, TypeReference type_reference)
+{
+    assert(abi_can_have_padding_type(abi));
+    abi->padding.type = type_reference;
+}
+
+static void abi_set_direct_offset(AbiInformation* restrict abi, u32 offset)
+{
+    assert((abi->flags.kind == ABI_KIND_DIRECT) || (abi->flags.kind == ABI_KIND_EXTEND));
+    abi->attributes.direct.offset = offset;
+}
+
+static void abi_set_direct_alignment(AbiInformation* restrict abi, u32 alignment)
+{
+    assert((abi->flags.kind == ABI_KIND_DIRECT) || (abi->flags.kind == ABI_KIND_EXTEND));
+    abi->attributes.direct.alignment = alignment;
+}
+
+static void abi_set_can_be_flattened(AbiInformation* restrict abi, bool value)
+{
+    assert(abi->flags.kind == ABI_KIND_DIRECT);
+    abi->flags.can_be_flattened = value;
+}
+
+
+static inline TypeReference abi_get_coerce_to_type(AbiInformation* restrict abi)
+{
+    assert(abi_can_have_coerce_to_type(abi));
+    return abi->coerce_to_type;
+}
+
 STRUCT(AbiSystemVClassifyArgumentTypeOptions)
 {
     u32 available_gpr;
@@ -365,10 +429,12 @@ STRUCT(TypeFunction)
     TypeReference* semantic_types; // This hides inside the same allocation AbiInformation* abi_informations;
     TypeReference* abi_types;
     AbiRegisterCount available_registers;
+    FileReference file;
     u16 semantic_argument_count;
     u16 abi_argument_count;
     CallingConvention calling_convention;
     bool is_variable_argument;
+    TypeReference next;
 };
 
 static inline TypeReference get_semantic_return_type(TypeFunction* restrict function)
@@ -393,20 +459,20 @@ static inline TypeReference get_abi_argument_type(TypeFunction* restrict functio
     return function->abi_types[abi_argument_index + 1];
 }
 
-static inline AbiInformation* restrict get_abi_informations(TypeFunction* restrict function)
+static inline AbiInformation* restrict get_abis(TypeFunction* restrict function)
 {
     return (AbiInformation*)(function->semantic_types + function->semantic_argument_count);
 }
 
-static inline AbiInformation* restrict get_return_abi_information(TypeFunction* restrict function)
+static inline AbiInformation* restrict get_return_abi(TypeFunction* restrict function)
 {
-    return &get_abi_informations(function)[0];
+    return &get_abis(function)[0];
 }
 
-static inline AbiInformation* restrict get_argument_abi_information(TypeFunction* restrict function, u16 semantic_argument_index)
+static inline AbiInformation* restrict get_argument_abi(TypeFunction* restrict function, u16 semantic_argument_index)
 {
     assert(semantic_argument_index < function->semantic_argument_count);
-    return &get_abi_informations(function)[semantic_argument_index + 1];
+    return &get_abis(function)[semantic_argument_index + 1];
 }
 
 STRUCT(Block)
@@ -474,6 +540,20 @@ STRUCT(Statement)
     bool analyzed;
 };
 
+STRUCT(TypeVector)
+{
+    TypeReference element_type;
+    u32 element_count;
+    TypeReference next;
+    bool is_scalable;
+};
+
+typedef enum TypeKind : u8
+{
+    TYPE_KIND_ABI,
+    TYPE_KIND_MEMORY,
+} TypeKind;
+
 STRUCT(Type)
 {
     union
@@ -482,12 +562,33 @@ STRUCT(Type)
         TypeFloat fp;
         TypeFunction function;
         TypePointer pointer;
+        TypeVector vector;
     };
     StringReference name;
     ScopeReference scope;
+    TypeReference next;
     TypeId id;
     bool analyzed;
+    struct
+    {
+        LLVMTypeRef abi;
+        LLVMTypeRef memory;
+        LLVMMetadataRef debug;
+    } llvm;
 };
+
+static bool type_is_signed(Type* type)
+{
+    switch (type->id)
+    {
+        break; case TYPE_ID_INTEGER:
+        {
+            let is_signed = type->integer.is_signed;
+            return is_signed;
+        }
+        break; default: todo();
+    }
+}
 
 STRUCT(Variable)
 {
@@ -525,16 +626,23 @@ STRUCT(Global)
     GlobalReference next;
     Linkage linkage;
     bool analyzed;
+    bool generated;
 };
 
 STRUCT(File)
 {
     str content;
-    StringReference path;
+    str path;
+    str directory;
+    str file_name;
+    str name;
     ScopeReference scope;
     GlobalReference first_global;
     GlobalReference last_global;
+    TopLevelDeclarationReference first_tld;
     FileReference next;
+    LLVMMetadataRef handle;
+    LLVMMetadataRef compile_unit;
 };
 
 STRUCT(TopLevelWhen)
@@ -585,6 +693,13 @@ typedef enum CompilePhase : u8
     COMPILE_PHASE_LLVM_LINKER,
 } CompilePhase;
 
+typedef enum BuildMode : u8
+{
+    BUILD_MODE_DEBUG,
+    BUILD_MODE_SIZE,
+    BUILD_MODE_SPEED,
+} BuildMode;
+
 STRUCT(CompileUnit)
 {
     FileReference first_file;
@@ -592,6 +707,7 @@ STRUCT(CompileUnit)
     ScopeReference scope;
 
     TypeReference first_pointer_type;
+    TypeReference first_function_type;
 
     TypeReference free_types;
     ValueReference free_values;
@@ -599,7 +715,25 @@ STRUCT(CompileUnit)
     GlobalReference current_function;
 
     CompilePhase phase;
+
+    str artifact_directory_path;
+    str object_path;
+    str artifact_path;
+    ShowCallback* show_callback;
+    const char* target_triple;
+    BuildMode build_mode;
+    bool has_debug_info;
+    bool verbose;
 };
+
+static void unit_show(CompileUnit* restrict unit, str message)
+{
+    let show = unit->show_callback;
+    if (likely(show))
+    {
+        show(unit, message);
+    }
+}
 
 static inline Arena* unit_arena(CompileUnit* unit, UnitArenaKind kind)
 {
@@ -780,9 +914,18 @@ static inline Type* new_types(CompileUnit* restrict unit, u32 type_count)
     return types;
 }
 
+static Type* allocate_free_type(CompileUnit* restrict unit)
+{
+    let type_ref = unit->free_types;
+    assert(is_ref_valid(type_ref));
+    let type = type_pointer_from_reference(unit, type_ref);
+    type->next = (TypeReference){};
+    return type;
+}
+
 static inline Type* new_type(CompileUnit* restrict unit)
 {
-    return new_types(unit, 1);
+    return is_ref_valid(unit->free_types) ? allocate_free_type(unit) : new_types(unit, 1);
 }
 
 static inline Value* new_values(CompileUnit* restrict unit, u32 value_count)
@@ -818,11 +961,9 @@ static u64 aligned_byte_count_from_bit_count(u64 bit_count)
     return aligned_bit_count / 8;
 }
 
-static u64 get_byte_size(CompileUnit* restrict unit, TypeReference type_reference)
+static u64 get_byte_size(CompileUnit* restrict unit, Type* type_pointer)
 {
     assert(unit->phase >= COMPILE_PHASE_ANALYSIS);
-
-    let type_pointer = type_pointer_from_reference(unit, type_reference);
 
     switch (type_pointer->id)
     {
@@ -839,9 +980,33 @@ static u64 get_byte_size(CompileUnit* restrict unit, TypeReference type_referenc
     }
 }
 
-void compile_unit(StringSlice paths);
+static u32 get_alignment(CompileUnit* restrict unit, Type* type)
+{
+    switch (type->id)
+    {
+        break; case TYPE_ID_INTEGER:
+        {
+            let bit_count = type->integer.bit_count;
+            let result = aligned_byte_count_from_bit_count(bit_count);
+            assert(result == 1 || result == 2 || result == 4 || result == 8 || result == 16);
+            return result;
+        }
+        break; default: todo();
+    }
+}
+
+STRUCT(Address)
+{
+    LLVMValueRef pointer;
+    Type* element_type;
+    u32 alignment;
+    LLVMValueRef offset;
+};
+
 bool compiler_is_single_threaded(void);
 bool compiler_main(int argc, const char* argv[], char** envp);
+
+u64 get_base_type_count();
 
 StringReference allocate_string(CompileUnit* restrict unit, str s);
 StringReference allocate_string_if_needed(CompileUnit* restrict unit, str s);
@@ -850,8 +1015,60 @@ StringReference allocate_and_join_string(CompileUnit* restrict unit, StringSlice
 TypeReference get_void_type(CompileUnit* restrict unit);
 TypeReference get_noreturn_type(CompileUnit* restrict unit);
 TypeReference get_integer_type(CompileUnit* restrict unit, u64 bit_count, bool is_signed);
-TypeReference get_pointer_type(CompileUnit* restrict unit, TypeReference element_type_reference);
 
 AbiInformation abi_system_v_classify_return_type(CompileUnit* restrict unit, TypeReference type);
 AbiSystemVClassifyArgumentTypeResult abi_system_v_classify_argument_type(CompileUnit* restrict unit, TypeReference type, AbiSystemVClassifyArgumentTypeOptions options);
 AbiInformation abi_system_v_classify_argument(CompileUnit* restrict unit, AbiRegisterCount* restrict available_registers, TypeReference* abi_argument_type_buffer, AbiSystemVClassifyArgumentOptions options);
+
+static TypeReference get_u1(CompileUnit* restrict unit)
+{
+    return get_integer_type(unit, 1, 0);
+}
+
+static TypeReference get_u8(CompileUnit* restrict unit)
+{
+    return get_integer_type(unit, 8, 0);
+}
+
+static TypeReference get_u16(CompileUnit* restrict unit)
+{
+    return get_integer_type(unit, 16, 0);
+}
+
+static TypeReference get_u32(CompileUnit* restrict unit)
+{
+    return get_integer_type(unit, 32, 0);
+}
+
+static TypeReference get_u64(CompileUnit* restrict unit)
+{
+    return get_integer_type(unit, 64, 0);
+}
+
+static Global* get_current_function(CompileUnit* restrict unit)
+{
+    let current_function_ref = unit->current_function;
+    if (!is_ref_valid(current_function_ref))
+    {
+        trap();
+    }
+
+    let current_function = global_pointer_from_reference(unit, current_function_ref);
+    return current_function;
+}
+
+static Type* get_function_type_from_storage(CompileUnit* restrict unit, Global* function)
+{
+    let function_storage_ref = function->variable.storage;
+    let function_storage = value_pointer_from_reference(unit, function_storage_ref);
+    let function_pointer_type_ref = function_storage->type;
+    assert(is_ref_valid(function_pointer_type_ref));
+    let function_pointer_type = type_pointer_from_reference(unit, function_pointer_type_ref);
+    assert(function_pointer_type->id == TYPE_ID_POINTER);
+    let function_type_ref = function_pointer_type->pointer.element_type;
+    assert(is_ref_valid(function_type_ref));
+    let function_type = type_pointer_from_reference(unit, function_type_ref);
+    assert(function_type->id == TYPE_ID_FUNCTION);
+
+    return function_type;
+}

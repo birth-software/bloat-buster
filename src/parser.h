@@ -4,4 +4,8 @@
 #include <compiler.h>
 #include <lexer.h>
 
-TopLevelDeclarationReference parse(CompileUnit* restrict unit, File* file, TokenList tl);
+void parse(CompileUnit* restrict unit, File* file, TokenList tl);
+
+#if BB_INCLUDE_TESTS
+bool parser_tests(TestArguments* restrict arguments);
+#endif

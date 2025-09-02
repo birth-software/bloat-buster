@@ -10,6 +10,7 @@ STRUCT(Parser)
     u32 offset;
     u32 line_byte_offset;
     u32 line_number_offset;
+    FileReference file;
 };
 
 typedef enum Precedence : u8
@@ -567,6 +568,7 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
                     .semantic_types = semantic_types,
                     .abi_types = 0,
                     .available_registers = {},
+                    .file = parser->file,
                     .semantic_argument_count = argument_count,
                     .abi_argument_count = 0,
                     .calling_convention = calling_convention,
@@ -912,6 +914,8 @@ static ValueReference parse_right_internal(CompileUnit* restrict unit, Parser* r
     {
         break; case TOKEN_ID_LEFT_PARENTHESIS:
         {
+            let l = value_pointer_from_reference(unit, left);
+            l->kind = VALUE_KIND_LEFT;
             let arguments = parse_value_list(unit, parser, scope, TOKEN_ID_RIGHT_PARENTHESIS);
             let left_node = value_pointer_from_reference(unit, left);
 
@@ -1306,13 +1310,14 @@ static BlockReference parse_block(CompileUnit* restrict unit, Parser* restrict p
     return block_ref;
 }
 
-TopLevelDeclarationReference parse(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
+void parse(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
 {
     unit->phase = COMPILE_PHASE_PARSER;
 
     Parser p = {
         .content = file_pointer->content,
         .pointer = tl.pointer,
+        .file = file_reference_from_pointer(unit, file_pointer),
     };
     Parser* restrict parser = &p;
 
@@ -1322,18 +1327,19 @@ TopLevelDeclarationReference parse(CompileUnit* restrict unit, File* file_pointe
     TopLevelDeclarationReference first_tld = {};
 
     Token* global_token;
-
     while ((global_token = consume_token(parser))->id != TOKEN_ID_EOF)
     {
         let top_level_declaration = arena_allocate(get_default_arena(unit), TopLevelDeclaration, 1);
         let top_level_declaration_reference = top_level_declaration_reference_from_pointer(unit, top_level_declaration);
 
+        let global_location = get_source_location(parser, global_token);
         switch (global_token->id)
         {
             break; case TOKEN_ID_IDENTIFIER_START:
             {
                 FunctionAttributes function_attributes = {};
                 Linkage linkage = {};
+                bool linkage_set = false;
                 bool is_export = false;
                 bool is_extern = false;
 
@@ -1378,6 +1384,23 @@ TopLevelDeclarationReference parse(CompileUnit* restrict unit, File* file_pointe
                     }
                 }
 
+                if (is_export | is_extern)
+                {
+                    if (linkage_set)
+                    {
+                        if (linkage == LINKAGE_INTERNAL)
+                        {
+                            parser_error();
+                        }
+                    }
+                    else
+                    {
+                        // TODO
+                    }
+
+                    linkage = LINKAGE_EXTERNAL;
+                }
+
                 if (unlikely(!expect_token(parser, TOKEN_ID_COLON)))
                 {
                     parser_error();
@@ -1419,13 +1442,11 @@ TopLevelDeclarationReference parse(CompileUnit* restrict unit, File* file_pointe
                     let function_scope = new_scope(unit);
                     *function_scope = (Scope) {
                         .parent = scope,
-                        .location = get_source_location(parser, global_token),
                         .id = SCOPE_ID_FUNCTION,
                         .function = global_reference,
                     };
                     let function_scope_ref = scope_reference_from_pointer(unit, function_scope);
                     global_storage_pointer->function = (ValueFunction) {
-                        .llvm = {},
                         .scope = function_scope_ref,
                         .arguments = argument_list,
                         .block = {},
@@ -1433,8 +1454,11 @@ TopLevelDeclarationReference parse(CompileUnit* restrict unit, File* file_pointe
                     };
                     global_storage_pointer->id = VALUE_ID_FUNCTION;
 
-                    let block = parse_block(unit, parser, function_scope_ref, expect_token(parser, TOKEN_ID_LEFT_BRACE));
-                    global_storage_pointer->function.block = block;
+                    let block_ref = parse_block(unit, parser, function_scope_ref, expect_token(parser, TOKEN_ID_LEFT_BRACE));
+                    let block = block_pointer_from_reference(unit, block_ref);
+                    let block_scope = scope_pointer_from_reference(unit, block->scope);
+                    function_scope->location = block_scope->location;
+                    global_storage_pointer->function.block = block_ref;
                 }
                 else
                 {
@@ -1447,7 +1471,7 @@ TopLevelDeclarationReference parse(CompileUnit* restrict unit, File* file_pointe
                         .storage = global_storage,
                         .type = global_type,
                         .scope = scope,
-                        .location = get_source_location(parser, global_token),
+                        .location = global_location,
                     },
                     .initial_value = initial_value,
                     .linkage = linkage,
@@ -1480,5 +1504,12 @@ TopLevelDeclarationReference parse(CompileUnit* restrict unit, File* file_pointe
         }
     }
 
-    return first_tld;
+    file_pointer->first_tld = first_tld;
 }
+
+#if BB_INCLUDE_TESTS
+bool parser_tests(TestArguments* restrict arguments)
+{
+    return 1;
+}
+#endif

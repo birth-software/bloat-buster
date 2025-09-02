@@ -1,5 +1,7 @@
 #pragma once
 
+#define BB_INCLUDE_TESTS 1
+
 #define array_length(x) (sizeof(x) / sizeof((x)[0]))
 
 #define field_parent_pointer(type, field, pointer) ((type *)((char *)(pointer) - __builtin_offsetof(type, field)))
@@ -27,6 +29,16 @@
 #else
 #define UNREACHABLE() __builtin_trap()
 #endif
+
+#define test(a, b) do\
+{\
+    let _b = b;\
+    if (unlikely(!_b))\
+    {\
+        test_error(S(#b), __LINE__, S(__FUNCTION__), S(__FILE__));\
+    }\
+    result = result & _b;\
+} while (0)
 
 #include <stdint.h>
 #include <string.h>
@@ -76,6 +88,18 @@ STRUCT(str)
     u64 length;
 };
 
+typedef void ShowCallback(void*,str);
+
+typedef struct Arena Arena;
+#if BB_INCLUDE_TESTS
+STRUCT(TestArguments)
+{
+    Arena* arena;
+    ShowCallback* show;
+};
+#endif
+
+
 STRUCT(StringSlice)
 {
     str* pointer;
@@ -90,6 +114,13 @@ STRUCT(SliceOfStringSlice)
 
 #define S(strlit) (str) { (char*)strlit, strlen(strlit) }
 #define string_array_to_slice(arr) (StringSlice) { arr, array_length(arr) }
+
+static u64 string_no_match = UINT64_MAX;
+
+static inline bool str_is_zero_terminated(str s)
+{
+    return s.pointer[s.length] == 0;
+}
 
 static str str_from_pointers(char* start, char* end)
 {
@@ -117,6 +148,7 @@ static str str_slice_start(str s, u64 start)
 
 static bool memory_compare(void* a, void* b, u64 i)
 {
+    assert(a != b);
     bool result = 1;
 
     let p1 = (u8*)a;
@@ -154,6 +186,25 @@ static bool str_equal(str s1, str s2)
     }
 
     return is_equal;
+}
+
+static u64 str_last_ch(str s, u8 ch)
+{
+    let result = string_no_match;
+
+    let pointer = s.pointer + s.length;
+
+    do
+    {
+        pointer -= 1;
+        if (*pointer == ch)
+        {
+            result = pointer - s.pointer;
+            break;
+        }
+    } while (pointer - s.pointer);
+
+    return result;
 }
 
 static u64 align_forward(u64 n, u64 a)
@@ -205,6 +256,22 @@ STRUCT(FileReadOptions)
     u32 end_alignment;
 };
 
+typedef enum IntegerFormat
+{
+    INTEGER_FORMAT_DECIMAL,
+    INTEGER_FORMAT_HEXADECIMAL,
+    INTEGER_FORMAT_OCTAL,
+    INTEGER_FORMAT_BINARY,
+} IntegerFormat;
+
+STRUCT(FormatIntegerOptions)
+{
+    u64 value;
+    IntegerFormat format;
+    bool treat_as_signed;
+    bool prefix;
+};
+
 typedef struct FileDescriptor FileDescriptor;
 
 typedef 
@@ -215,13 +282,45 @@ u128
 #endif
 TimeDataType;
 
+typedef enum TerminationKind : u8
+{
+    TERMINATION_KIND_UNKNOWN,
+    TERMINATION_KIND_EXIT,
+    TERMINATION_KIND_SIGNAL,
+    TERMINATION_KIND_STOP,
+} TerminationKind;
+
+#define STREAM_COUNT (2)
+
+STRUCT(ExecutionResult)
+{
+    str streams[STREAM_COUNT];
+    u32 termination_code;
+    TerminationKind termination_kind;
+};
+
+typedef enum StreamPolicy : u8
+{
+    STREAM_POLICY_INHERIT,
+    STREAM_POLICY_PIPE,
+    STREAM_POLICY_IGNORE,
+} StreamPolicy;
+
+STRUCT(ExecutionOptions)
+{
+    StreamPolicy policies[STREAM_COUNT];
+    FileDescriptor* null_file_descriptor;
+};
+
 void os_init();
-Arena* arena_initialize(ArenaInitialization initialization);
+Arena* arena_create(ArenaInitialization initialization);
+bool arena_destroy(Arena* arena, u64 count);
 void arena_set_position(Arena* arena, u64 position);
 void arena_reset_to_start(Arena* arena);
 void* arena_allocate_bytes(Arena* arena, u64 size, u64 alignment);
-str arena_join_string(Arena* arena, StringSlice strings);
-void* arena_current_position(Arena* arena, u64 alignment);
+str arena_duplicate_string(Arena* arena, str str, bool zero_terminate);
+str arena_join_string(Arena* arena, StringSlice strings, bool zero_terminate);
+void* arena_current_pointer(Arena* arena, u64 alignment);
 
 FileDescriptor* os_file_open(str path, OpenFlags flags, OpenPermissions permissions);
 u64 os_file_get_size(FileDescriptor* file_descriptor);
@@ -235,4 +334,14 @@ str file_read(Arena* arena, str path, FileReadOptions options);
 TimeDataType take_timestamp();
 u64 ns_between(TimeDataType start, TimeDataType end);
 
+str path_absolute(Arena* arena, const char* restrict relative_file_path);
+
+str format_integer_stack(str buffer, FormatIntegerOptions options);
+str format_integer(Arena* arena, FormatIntegerOptions options, bool zero_terminate);
+ExecutionResult os_execute(Arena* arena, char** arguments, char** environment, ExecutionOptions options);
+
 [[noreturn]] void fail();
+
+#if BB_INCLUDE_TESTS
+bool lib_tests(TestArguments* restrict arguments);
+#endif

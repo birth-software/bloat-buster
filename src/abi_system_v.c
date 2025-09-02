@@ -64,9 +64,9 @@ static Classification abi_system_v_classify_type(CompileUnit* restrict unit, Typ
     return result;
 }
 
-static bool contains_no_user_data(CompileUnit* restrict unit, TypeReference type_reference, u64 start, u64 end)
+static bool contains_no_user_data(CompileUnit* restrict unit, Type* type, u64 start, u64 end)
 {
-    let byte_size = get_byte_size(unit, type_reference);
+    let byte_size = get_byte_size(unit, type);
     let result = byte_size <= start;
 
     if (!result)
@@ -96,10 +96,10 @@ static TypeReference abi_system_v_get_integer_type_at_offset(CompileUnit* restri
 
                 if ((bit_count == 32) | (bit_count == 16) | (bit_count == 8))
                 {
-                    let start = source_offset + get_byte_size(unit, type_reference);
+                    let start = source_offset + get_byte_size(unit, type_pointer);
                     let end = source_offset + 8;
 
-                    if (contains_no_user_data(unit, source_type_reference, start, end))
+                    if (contains_no_user_data(unit, type_pointer_from_reference(unit, source_type_reference), start, end))
                     {
                         return type_reference;
                     }
@@ -149,48 +149,6 @@ static bool is_promotable_integer_type_for_abi(CompileUnit* restrict unit, TypeR
             todo();
         }
     }
-}
-
-static bool abi_can_have_coerce_to_type(AbiInformation* restrict abi)
-{
-    AbiKind kind = abi->flags.kind;
-    return (kind == ABI_KIND_DIRECT) | (kind == ABI_KIND_EXTEND) | (kind == ABI_KIND_COERCE_AND_EXPAND);
-}
-
-static void abi_set_coerce_to_type(AbiInformation* restrict abi, TypeReference type_reference)
-{
-    assert(abi_can_have_coerce_to_type(abi));
-    abi->coerce_to_type = type_reference;
-}
-
-static bool abi_can_have_padding_type(AbiInformation* restrict abi)
-{
-    AbiKind kind = abi->flags.kind;
-    return ((kind == ABI_KIND_DIRECT) | (kind == ABI_KIND_EXTEND)) | ((kind == ABI_KIND_INDIRECT) | (kind == ABI_KIND_INDIRECT_ALIASED)) | (kind == ABI_KIND_EXPAND);
-}
-
-static void abi_set_padding_type(AbiInformation* restrict abi, TypeReference type_reference)
-{
-    assert(abi_can_have_padding_type(abi));
-    abi->padding.type = type_reference;
-}
-
-static void abi_set_direct_offset(AbiInformation* restrict abi, u32 offset)
-{
-    assert((abi->flags.kind == ABI_KIND_DIRECT) || (abi->flags.kind == ABI_KIND_EXTEND));
-    abi->attributes.direct.offset = offset;
-}
-
-static void abi_set_direct_alignment(AbiInformation* restrict abi, u32 alignment)
-{
-    assert((abi->flags.kind == ABI_KIND_DIRECT) || (abi->flags.kind == ABI_KIND_EXTEND));
-    abi->attributes.direct.alignment = alignment;
-}
-
-static void abi_set_can_be_flattened(AbiInformation* restrict abi, bool value)
-{
-    assert(abi->flags.kind == ABI_KIND_DIRECT);
-    abi->flags.can_be_flattened = value;
 }
 
 STRUCT(AbiSystemVDirectOptions)
