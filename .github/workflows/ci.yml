@@ -1,14 +1,19 @@
 name: CI
 
 on:
-  pull_request:
+  push:
+    tags:
+      - "**"
+    branches:
+      - main
 
 env:
   BB_CI: 1
   CLANG_PATH: clang-19
   CLANGXX_PATH: clang++-19
-  LLVM_VERSION: 20.1.7
-  BB_CACHE_DIR: bb-cache
+  LLVM_VERSION: 21.1.1
+  BB_BUILD_DEBUG: 1
+  BB_BUILD_NATIVE: 0
 
 jobs:
   ci:
@@ -16,7 +21,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ self-hosted ]
-        BIRTH_CMAKE_BUILD_TYPE: [ Release-assertions, Release ]
+        BIRTH_CMAKE_BUILD_TYPE: [ Debug, Release ]
+        LLVM_CMAKE_BUILD_TYPE: [ Release, Release-assertions ]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -24,8 +30,9 @@ jobs:
         shell: bash
         env:
           CMAKE_BUILD_TYPE: ${{matrix.BIRTH_CMAKE_BUILD_TYPE}}
+          LLVM_CMAKE_BUILD_TYPE: ${{matrix.LLVM_CMAKE_BUILD_TYPE}}
         run: |
           set -eux
           ./generate.sh
-          CMAKE_PREFIX_PATH=$HOME/dev/llvm/install/llvm_${LLVM_VERSION}_x86_64-linux-${CMAKE_BUILD_TYPE} $HOME/bloat-buster-artifacts/releases/main/compiler_generic_debug compile src/compiler.bbb debug true true
-          bb-cache/x86_64_linux_debug_di_native/compiler reproduce 
+          ./build.sh
+          ./build/bb
