@@ -1,4 +1,5 @@
 #pragma once
+#define _CRT_SECURE_NO_WARNINGS
 
 #define BB_INCLUDE_TESTS 1
 
@@ -43,6 +44,8 @@
 #include <stdint.h>
 #include <string.h>
 #include <assert.h>
+#include <stdlib.h>
+#include <stdbool.h>
 
 typedef uint8_t  u8;
 typedef uint16_t u16;
@@ -58,7 +61,7 @@ typedef signed __int128 s128;
 
 typedef float f32;
 typedef double f64;
-#ifndef _WIN32
+#if defined (__SIZEOF_FLOAT128__)
 typedef __float128 f128;
 #endif
 
@@ -129,9 +132,9 @@ static str str_from_pointers(char* start, char* end)
     return (str) { start, len };
 }
 
-static str str_from_ptr_len(char* ptr, u64 len)
+static str str_from_ptr_len(const char* ptr, u64 len)
 {
-    return (str) { ptr, len };
+    return (str) { (char*)ptr, len };
 }
 
 static str str_from_ptr_start_end(char* ptr, u64 start, u64 end)
@@ -214,6 +217,56 @@ static u64 align_forward(u64 n, u64 a)
     return result;
 }
 
+static bool is_space(char ch)
+{
+    return ((ch == ' ') | (ch == '\t')) | ((ch == '\r') | (ch == '\n'));
+}
+
+static bool is_decimal(char ch)
+{
+    return (ch >= '0') & (ch <= '9');
+}
+
+static bool is_octal(char ch)
+{
+    return (ch >= '0') & (ch <= '7');
+}
+
+static bool is_binary(char ch)
+{
+    return (ch == '0') | (ch == '1');
+}
+
+static bool is_hexadecimal_alpha_lower(char ch)
+{
+    return (ch >= 'a') & (ch <= 'f');
+}
+
+static bool is_hexadecimal_alpha_upper(char ch)
+{
+    return (ch >= 'A') & (ch <= 'F');
+}
+
+static bool is_hexadecimal_alpha(char ch)
+{
+    return is_hexadecimal_alpha_upper(ch) | is_hexadecimal_alpha_lower(ch);
+}
+
+static bool is_hexadecimal(char ch)
+{
+    return is_decimal(ch) | is_hexadecimal_alpha(ch);
+}
+
+static bool is_identifier_start(char ch)
+{
+    return (((ch >= 'a') & (ch <= 'z')) | ((ch >= 'A') & (ch <= 'Z'))) | (ch == '_');
+}
+
+static bool is_identifier(char ch)
+{
+    return is_identifier_start(ch) | is_decimal(ch);
+}
+
 STRUCT(OpenFlags)
 {
     u64 truncate:1;
@@ -273,6 +326,21 @@ STRUCT(FormatIntegerOptions)
 };
 
 typedef struct FileDescriptor FileDescriptor;
+typedef struct ThreadHandle ThreadHandle;
+
+STRUCT(ThreadCreateOptions)
+{
+};
+
+typedef
+#if defined(__linux__) || defined(__APPLE__)
+void*
+#elif defined(_WIN32)
+unsigned long
+#endif
+ThreadReturnType;
+
+typedef ThreadReturnType ThreadCallback(void*);
 
 typedef 
 #ifdef _WIN32
@@ -312,6 +380,12 @@ STRUCT(ExecutionOptions)
     FileDescriptor* null_file_descriptor;
 };
 
+STRUCT(IntegerParsing)
+{
+    u64 value;
+    u64 i;
+};
+
 void os_init();
 Arena* arena_create(ArenaInitialization initialization);
 bool arena_destroy(Arena* arena, u64 count);
@@ -336,10 +410,27 @@ u64 ns_between(TimeDataType start, TimeDataType end);
 
 str path_absolute(Arena* arena, const char* restrict relative_file_path);
 
-str format_integer_stack(str buffer, FormatIntegerOptions options);
-str format_integer(Arena* arena, FormatIntegerOptions options, bool zero_terminate);
 ExecutionResult os_execute(Arena* arena, char** arguments, char** environment, ExecutionOptions options);
 
+str format_integer_stack(str buffer, FormatIntegerOptions options);
+str format_integer(Arena* arena, FormatIntegerOptions options, bool zero_terminate);
+
+u64 parse_integer_decimal_assume_valid(str string);
+IntegerParsing parse_hexadecimal_scalar(const char* restrict p);
+IntegerParsing parse_decimal_scalar(const char* restrict p);
+IntegerParsing parse_octal_scalar(const char* restrict p);
+IntegerParsing parse_binary_scalar(const char* restrict p);
+#ifdef __AVX512F__
+IntegerParsing parse_hexadecimal_vectorized(const char* restrict p);
+IntegerParsing parse_decimal_vectorized(const char* restrict p);
+IntegerParsing parse_octal_vectorized(const char* restrict p);
+IntegerParsing parse_binary_vectorized(const char* restrict p);
+#endif
+
+FileDescriptor* os_get_stdout();
+
+ThreadHandle* os_thread_create(ThreadCallback* callback, ThreadCreateOptions options);
+u32 os_thread_join(ThreadHandle* handle);
 [[noreturn]] void fail();
 
 #if BB_INCLUDE_TESTS

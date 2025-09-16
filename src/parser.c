@@ -1,7 +1,6 @@
 #include <parser.h>
-#include <immintrin.h>
 
-#define parser_error() trap();
+#define parser_error() todo();
 
 STRUCT(Parser)
 {
@@ -29,7 +28,7 @@ typedef enum Precedence : u8
     PRECEDENCE_POSTFIX,
 } Precedence;
 
-static Precedence get_token_precedence(TokenId id)
+static Precedence get_token_precedence(CompileUnit* unit, TokenId id)
 {
     switch (id)
     {
@@ -184,7 +183,7 @@ static Token* restrict expect_token_of_many(Parser* restrict parser, TokenId* id
 {
     Token* result = 0;
     let token = get_token(parser);
-    let tid = token->id;
+    TokenId tid = token->id;
 
     u32 match = 0;
 
@@ -266,86 +265,6 @@ static IdentifierParsing expect_identifier(CompileUnit* restrict unit, Parser* r
     return result;
 }
 
-static IntegerParsing parse_decimal_vectorized(const char* restrict p)
-{
-    let zero = _mm512_set1_epi8('0');
-    let nine = _mm512_set1_epi8('9');
-    let chunk = _mm512_loadu_epi8(&p[0]);
-    let lower_limit = _mm512_cmpge_epu8_mask(chunk, zero);
-    let upper_limit = _mm512_cmple_epu8_mask(chunk, nine);
-    let is = _kand_mask64(lower_limit, upper_limit);
-
-    let digit_count = _tzcnt_u64(~_cvtmask64_u64(is));
-
-    let digit_mask = _cvtu64_mask64((1ULL << digit_count) - 1);
-    let digit2bin = _mm512_maskz_sub_epi8(digit_mask, chunk, zero);
-    // let lo0 = _mm512_castsi512_si128(digit2bin);
-    // let a = _mm512_cvtepu8_epi64(lo0);
-    let digit_count_splat = _mm512_set1_epi8((u8)digit_count);
-
-    let to_sub = _mm512_set_epi8(
-            64, 63, 62, 61, 60, 59, 58, 57,
-            56, 55, 54, 53, 52, 51, 50, 49,
-            48, 47, 46, 45, 44, 43, 42, 41,
-            40, 39, 38, 37, 36, 35, 34, 33,
-            32, 31, 30, 29, 28, 27, 26, 25,
-            24, 23, 22, 21, 20, 19, 18, 17,
-            16, 15, 14, 13, 12, 11, 10, 9,
-            8, 7, 6, 5, 4, 3, 2, 1);
-    let ib = _mm512_maskz_sub_epi8(digit_mask, digit_count_splat, to_sub);
-    let asds = _mm512_maskz_permutexvar_epi8(digit_mask, ib, digit2bin);
-
-    let a128_0_0 = _mm512_extracti64x2_epi64(asds, 0);
-    let a128_1_0 = _mm512_extracti64x2_epi64(asds, 1);
-
-    let a128_0_1 = _mm_srli_si128(a128_0_0, 8);
-    // let a128_1_1 = _mm_srli_si128(a128_1_0, 8);
-
-    let a8_0_0 = _mm512_cvtepu8_epi64(a128_0_0);
-    let a8_0_1 = _mm512_cvtepu8_epi64(a128_0_1);
-    let a8_1_0 = _mm512_cvtepu8_epi64(a128_1_0);
-
-    let powers_of_ten_0_0 = _mm512_set_epi64(
-            10000000,
-            1000000,
-            100000,
-            10000,
-            1000,
-            100,
-            10,
-            1);
-    let powers_of_ten_0_1 = _mm512_set_epi64(
-            1000000000000000,
-            100000000000000,
-            10000000000000,
-            1000000000000,
-            100000000000,
-            10000000000,
-            1000000000,
-            100000000
-            );
-    let powers_of_ten_1_0 = _mm512_set_epi64(
-            0,
-            0,
-            0,
-            0,
-            10000000000000000000ULL,
-            1000000000000000000,
-            100000000000000000,
-            10000000000000000
-            );
-
-    let a0_0 = _mm512_mullo_epi64(a8_0_0, powers_of_ten_0_0);
-    let a0_1 = _mm512_mullo_epi64(a8_0_1, powers_of_ten_0_1);
-    let a1_0 = _mm512_mullo_epi64(a8_1_0, powers_of_ten_1_0);
-
-    let add = _mm512_add_epi64(_mm512_add_epi64(a0_0, a0_1), a1_0);
-    let reduce_add = _mm512_reduce_add_epi64(add);
-    let value = reduce_add;
-
-    return (IntegerParsing){ .value = value, .i = digit_count };
-}
-
 STRUCT(ParseInteger)
 {
     u64 value;
@@ -363,7 +282,7 @@ static ParseInteger end_integer(CompileUnit* restrict unit, Parser* restrict par
 
     if (end)
     {
-        let start_id = start->id;
+        TokenId start_id = start->id;
         bool is_prefixed = start_id != TOKEN_ID_INTEGER_START_DECIMAL_INFERRED;
         let original_start_pointer = pointer_from_token_start(parser, start);
         let start_pointer = original_start_pointer + ((u64)is_prefixed << 1);
@@ -386,7 +305,7 @@ static ParseInteger end_integer(CompileUnit* restrict unit, Parser* restrict par
             }
             break; case TOKEN_ID_INTEGER_START_DECIMAL_INFERRED:
             {
-                p = parse_decimal_vectorized(start_pointer);
+                p = parse_decimal_scalar(start_pointer);
             }
             break; default:
             {
@@ -559,7 +478,7 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
             if (argument_count)
             {
                 // let first_argument_index = argument_reference_from_pointer(unit, first_argument);
-                trap();
+                todo();
             }
 
             let function_type = arena_allocate(unit_arena(unit, UNIT_ARENA_TYPE), Type, 1);
@@ -597,7 +516,7 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
         {
             let token_start = pointer_from_token_start(parser, token);
             assert(*token_start == 's' || *token_start == 'u');
-            let parsing_result = parse_decimal_vectorized(token_start + 1);
+            let parsing_result = parse_decimal_scalar(token_start + 1);
             assert(parsing_result.i);
             let bit_count = parsing_result.value;
             let is_signed = *token_start == 's';
@@ -680,7 +599,7 @@ static ValueList parse_value_list(CompileUnit* restrict unit, Parser* restrict p
     };
 }
 
-static void parse_argument_start(Parser* restrict parser)
+static void parse_argument_start(CompileUnit* restrict unit, Parser* restrict parser)
 {
     if (!expect_token(parser, TOKEN_ID_LEFT_PARENTHESIS))
     {
@@ -688,7 +607,7 @@ static void parse_argument_start(Parser* restrict parser)
     }
 }
 
-static void parse_argument_end(Parser* restrict parser)
+static void parse_argument_end(CompileUnit* restrict unit, Parser* restrict parser)
 {
     if (!expect_token(parser, TOKEN_ID_RIGHT_PARENTHESIS))
     {
@@ -696,25 +615,25 @@ static void parse_argument_end(Parser* restrict parser)
     }
 }
 
-static void parse_zero_arguments(Parser* restrict parser)
+static void parse_zero_arguments(CompileUnit* restrict unit, Parser* restrict parser)
 {
-    parse_argument_start(parser);
-    parse_argument_end(parser);
+    parse_argument_start(unit, parser);
+    parse_argument_end(unit, parser);
 }
 
 static ValueReference parse_one_argument(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
 {
-    parse_argument_start(parser);
+    parse_argument_start(unit, parser);
     let value = parse_value(unit, parser, scope, parsing);
-    parse_argument_end(parser);
+    parse_argument_end(unit, parser);
     return value;
 }
 
 static TypeReference parse_argument_type(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope)
 {
-    parse_argument_start(parser);
+    parse_argument_start(unit, parser);
     let type = parse_type(unit, parser, scope, 0);
-    parse_argument_end(parser);
+    parse_argument_end(unit, parser);
     return type;
 }
 
@@ -723,7 +642,7 @@ static ValueReference parse_left(CompileUnit* restrict unit, Parser* restrict pa
     let first_token = consume_token(parser);
     ValueReference result = {};
 
-    let first_id = first_token->id;
+    TokenId first_id = first_token->id;
 
     switch (first_id)
     {
@@ -857,7 +776,7 @@ static ValueReference parse_left(CompileUnit* restrict unit, Parser* restrict pa
                 {
                     break; case VALUE_ID_INTRINSIC_TRAP:
                     {
-                        parse_zero_arguments(parser);
+                        parse_zero_arguments(unit, parser);
 
                         *value = (Value) {
                             .id = intrinsic_id,
@@ -906,7 +825,7 @@ static ValueReference parse_right_internal(CompileUnit* restrict unit, Parser* r
 
     let right_token = parsing.token;
 
-    let right_token_id = right_token->id;
+    TokenId right_token_id = right_token->id;
 
     ValueReference result = {};
 
@@ -957,7 +876,7 @@ static ValueReference parse_right_internal(CompileUnit* restrict unit, Parser* r
         case TOKEN_ID_COMPARE_GREATER:
         case TOKEN_ID_COMPARE_GREATER_EQUAL:
         {
-            let precedence = get_token_precedence(right_token_id);
+            let precedence = get_token_precedence(unit, right_token_id);
             assert(precedence != PRECEDENCE_ASSIGNMENT);
 
             ValueId id;
@@ -1015,7 +934,7 @@ static ValueReference parse_right(CompileUnit* restrict unit, Parser* restrict p
     while (1)
     {
         let loop_token = peek_token(parser);
-        let loop_token_precedence = get_token_precedence(loop_token->id);
+        let loop_token_precedence = get_token_precedence(unit, loop_token->id);
 
         if (loop_token_precedence == PRECEDENCE_ASSIGNMENT)
         {
@@ -1073,7 +992,7 @@ static StatementReference parse_statement(CompileUnit* restrict unit, Parser* re
         .location = get_source_location(parser, first_token),
     };
 
-    let first_id = first_token->id;
+    TokenId first_id = first_token->id;
 
     switch (first_id)
     {

@@ -1,6 +1,6 @@
 #include <analysis.h>
 
-#define analysis_error() trap()
+#define analysis_error() todo()
 
 STRUCT(TypeAnalysis)
 {
@@ -445,7 +445,7 @@ static bool value_is_constant(CompileUnit* restrict unit, Value* restrict value)
             let unary_value = value_pointer_from_reference(unit, value->unary);
             result = value_is_constant(unit, unary_value);
         }
-        break; default: trap();
+        break; default: todo();
     }
 
     return result;
@@ -467,7 +467,7 @@ static bool value_receives_type(CompileUnit* restrict unit, Value* restrict valu
             let unary_value = value_pointer_from_reference(unit, value->unary);
             result = value_receives_type(unit, unary_value);
         }
-        break; default: trap();
+        break; default: todo();
     }
 
     return result;

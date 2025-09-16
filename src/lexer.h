@@ -2,12 +2,6 @@
 
 #include <compiler.h>
 
-#ifdef _WIN32
-typedef f64 FloatLiteral;
-#else
-typedef f128 FloatLiteral;
-#endif
-
 typedef enum TokenId : u8
 {
     TOKEN_ID_NONE,
@@ -146,24 +140,10 @@ typedef enum TokenId : u8
     TOKEN_ID_ERROR_IDENTIFIER_TOO_LONG,
 } TokenId;
 
-STRUCT(TokenIntegerType)
-{
-    u64 bit_count;
-    bool is_signed;
-};
-
-UNION(TokenContent)
-{
-    str string;
-    u128 integer;
-    FloatLiteral float_literal;
-    TokenIntegerType integer_type;
-};
-
 STRUCT(Token)
 {
     u32 offset:24;
-    TokenId id;
+    u32 id:8;
 };
 static_assert(sizeof(Token) == sizeof(u32));
 
@@ -173,12 +153,6 @@ STRUCT(TokenList)
 {
     Token* pointer;
     u64 length;
-};
-
-STRUCT(IntegerParsing)
-{
-    u64 value;
-    u64 i;
 };
 
 TokenList lex(CompileUnit* unit, File* file);
