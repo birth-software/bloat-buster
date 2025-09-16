@@ -5,7 +5,7 @@
 #include <llvm-c/Analysis.h>
 #include <llvm_common.h>
 
-#define llvm_error() trap()
+#define llvm_error() todo()
 
 static void llvm_module_set_flag(LLVMContextRef context, LLVMModuleRef module, LLVMModuleFlagBehavior behavior, str flag, u32 value)
 {
@@ -570,7 +570,7 @@ static LLVMValueRef create_store(CompileUnit* restrict unit, Generate* restrict 
 
     if (store_type->llvm.abi != memory_type)
     {
-        source_value = LLVMBuildIntCast2(generate->builder, source_value, memory_type, type_is_signed(store_type), "");
+        source_value = LLVMBuildIntCast2(generate->builder, source_value, memory_type, type_is_signed(unit, store_type), "");
     }
 
     let alignment = options.alignment;
@@ -1345,7 +1345,7 @@ static LLVMValueRef llvm_find_return_value_dominating_store(LLVMBuilderRef build
     LLVMValueRef result = 0;
     if (!value_has_single_use(return_alloca))
     {
-        todo();
+        trap();
     }
 
     let store = llvm_get_store_if_valid(llvm_get_last_user(return_alloca), return_alloca, element_type);
@@ -1388,7 +1388,7 @@ static LLVMValueRef llvm_find_return_value_dominating_store(LLVMBuilderRef build
             {
                 for (u64 i = 0; i < 64; i += 1)
                 {
-                    todo();
+                    trap();
                 }
 
                 element_count += 1;
@@ -1471,13 +1471,57 @@ GenerateIRResult llvm_generate_ir(CompileUnit* restrict unit, bool verify)
 
     LLVMTargetMachineOptionsSetCodeGenOptLevel(target_machine_options, code_generation_optimization_level);
 
+    str cpu = S("");
+
+    switch (unit->target.cpu)
+    {
+        break; case CPU_ARCH_UNKNOWN: UNREACHABLE();
+        break; case CPU_ARCH_X86_64:
+        {
+            cpu = S("x86_64");
+        }
+        break; case CPU_ARCH_AARCH64:
+        {
+            cpu = S("aarch64");
+        }
+    }
+
+    str os = S("");
+    str vendor = S("unknown");
+
+    switch (unit->target.os)
+    {
+        break; case OPERATING_SYSTEM_UNKNOWN: UNREACHABLE();
+        break; case OPERATING_SYSTEM_LINUX:
+        {
+            os = S("linux");
+            vendor = S("pc");
+        }
+        break; case OPERATING_SYSTEM_MACOS:
+        {
+            os = S("macos");
+            vendor = S("apple");
+        }
+        break; case OPERATING_SYSTEM_WINDOWS:
+        {
+            os = S("windows");
+            vendor = S("pc");
+        }
+    }
+
+    str target_triple_parts[] = {
+        cpu,
+        S("-"),
+        vendor,
+        S("-"),
+        os,
+    };
+    str llvm_target_triple = arena_join_string(default_arena, string_array_to_slice(target_triple_parts), true);
+    unit->target_triple = llvm_target_triple;
+
     LLVMTargetRef target = {};
     char* error_message = {};
-    const char* target_triple = unit->target_triple;
-    // TODO: change
-    target_triple = "x86_64-unknown-linux";
-
-    let result = LLVMGetTargetFromTriple(target_triple, &target, &error_message);
+    let result = LLVMGetTargetFromTriple(llvm_target_triple.pointer, &target, &error_message);
 
     if (result)
     {
@@ -1486,11 +1530,11 @@ GenerateIRResult llvm_generate_ir(CompileUnit* restrict unit, bool verify)
 
     assert(!error_message);
 
-    let target_machine = LLVMCreateTargetMachineWithOptions(target, target_triple, target_machine_options);
+    let target_machine = LLVMCreateTargetMachineWithOptions(target, llvm_target_triple.pointer, target_machine_options);
 
     let target_data_layout = LLVMCreateTargetDataLayout(target_machine);
     LLVMSetModuleDataLayout(module, target_data_layout);
-    LLVMSetTarget(module, target_triple);
+    LLVMSetTarget(module, llvm_target_triple.pointer);
 
     Generate g = {
         .context = context,

@@ -1,357 +1,11 @@
 #include <lexer.h>
 
+#ifdef __x86_64__
 #include <immintrin.h>
+#endif
 #include <stdio.h>
 
 #define SCALAR 1
-
-static bool is_space(char ch)
-{
-    return ((ch == ' ') | (ch == '\t')) | ((ch == '\r') | (ch == '\n'));
-}
-
-static bool is_decimal(char ch)
-{
-    return (ch >= '0') & (ch <= '9');
-}
-
-static bool is_octal(char ch)
-{
-    return (ch >= '0') & (ch <= '7');
-}
-
-static bool is_binary(char ch)
-{
-    return (ch == '0') | (ch == '1');
-}
-
-static bool is_hexadecimal_alpha_lower(char ch)
-{
-    return (ch >= 'a') & (ch <= 'f');
-}
-
-static bool is_hexadecimal_alpha_upper(char ch)
-{
-    return (ch >= 'A') & (ch <= 'F');
-}
-
-static bool is_hexadecimal_alpha(char ch)
-{
-    return is_hexadecimal_alpha_upper(ch) | is_hexadecimal_alpha_lower(ch);
-}
-
-static bool is_hexadecimal(char ch)
-{
-    return is_decimal(ch) | is_hexadecimal_alpha(ch);
-}
-
-static bool is_identifier_start(char ch)
-{
-    return (((ch >= 'a') & (ch <= 'z')) | ((ch >= 'A') & (ch <= 'Z'))) | (ch == '_');
-}
-
-static bool is_identifier(char ch)
-{
-    return is_identifier_start(ch) | is_decimal(ch);
-}
-
-static u128 accumulate_hexadecimal(u128 accumulator, u8 ch)
-{
-    u8 value;
-
-    if (is_decimal(ch))
-    {
-        value = ch - '0';
-    }
-    else if (is_hexadecimal_alpha_upper(ch))
-    {
-        value = ch - 'A' + 10;
-    }
-    else if (is_hexadecimal_alpha_lower(ch))
-    {
-        value = ch - 'a' + 10;
-    }
-    else
-    {
-        UNREACHABLE();
-    }
-
-    return (accumulator * 16) + value;
-}
-
-static u128 accumulate_decimal(u128 accumulator, u8 ch)
-{
-    assert(is_decimal(ch));
-    return (accumulator * 10) + (ch - '0');
-}
-
-static u128 accumulate_octal(u128 accumulator, u8 ch)
-{
-    assert(is_octal(ch));
-
-    return (accumulator * 8) + (ch - '0');
-}
-
-static u128 accumulate_binary(u128 accumulator, u8 ch)
-{
-    assert(is_binary(ch));
-
-    return (accumulator * 2) + (ch - '0');
-}
-
-static u128 parse_integer_decimal_assume_valid(str string)
-{
-    u128 value = 0;
-
-    for (u64 i = 0; i < string.length; i += 1)
-    {
-        let ch = string.pointer[i];
-        value = accumulate_decimal(value, ch);
-    }
-
-    return value;
-}
-
-static IntegerParsing parse_hexadecimal(const char* restrict p)
-{
-    u64 value = 0;
-    u64 i = 0;
-
-    while (1)
-    {
-        let ch = p[i];
-
-        if (!is_hexadecimal(ch))
-        {
-            break;
-        }
-
-        i += 1;
-        value = accumulate_hexadecimal(value, ch);
-    }
-
-    return (IntegerParsing){ .value = value, .i = i };
-}
-
-static IntegerParsing parse_hexadecimal_vectorized(const char* restrict p)
-{
-    u64 value = 0;
-    u64 i = 0;
-
-    while (1)
-    {
-        // let ch = p[i];
-        //
-        // if (!is_hexadecimal(ch))
-        // {
-        //     break;
-        // }
-        //
-        // i += 1;
-        // value = accumulate_hexadecimal(value, ch);
-        trap();
-    }
-
-    return (IntegerParsing){ .value = value, .i = i };
-}
-
-static IntegerParsing parse_decimal(const char* restrict p)
-{
-    u64 value = 0;
-    u64 i = 0;
-
-    while (1)
-    {
-        let ch = p[i];
-
-        if (!is_decimal(ch))
-        {
-            break;
-        }
-
-        i += 1;
-        value = accumulate_decimal(value, ch);
-    }
-
-    return (IntegerParsing){ .value = value, .i = i };
-}
-
-static IntegerParsing parse_decimal_vectorized(const char* restrict p)
-{
-    let zero = _mm512_set1_epi8('0');
-    let nine = _mm512_set1_epi8('9');
-    let chunk = _mm512_loadu_epi8(&p[0]);
-    let lower_limit = _mm512_cmpge_epu8_mask(chunk, zero);
-    let upper_limit = _mm512_cmple_epu8_mask(chunk, nine);
-    let is = _kand_mask64(lower_limit, upper_limit);
-
-    let digit_count = _tzcnt_u64(~_cvtmask64_u64(is));
-
-    let digit_mask = _cvtu64_mask64((1ULL << digit_count) - 1);
-    let digit2bin = _mm512_maskz_sub_epi8(digit_mask, chunk, zero);
-    let lo0 = _mm512_castsi512_si128(digit2bin);
-    let a = _mm512_cvtepu8_epi64(lo0);
-    let digit_count_splat = _mm512_set1_epi8((u8)digit_count);
-
-    let to_sub = _mm512_set_epi8(
-            64, 63, 62, 61, 60, 59, 58, 57,
-            56, 55, 54, 53, 52, 51, 50, 49,
-            48, 47, 46, 45, 44, 43, 42, 41,
-            40, 39, 38, 37, 36, 35, 34, 33,
-            32, 31, 30, 29, 28, 27, 26, 25,
-            24, 23, 22, 21, 20, 19, 18, 17,
-            16, 15, 14, 13, 12, 11, 10, 9,
-            8, 7, 6, 5, 4, 3, 2, 1);
-    let ib = _mm512_maskz_sub_epi8(digit_mask, digit_count_splat, to_sub);
-    let asds = _mm512_maskz_permutexvar_epi8(digit_mask, ib, digit2bin);
-
-    let a128_0_0 = _mm512_extracti64x2_epi64(asds, 0);
-    let a128_1_0 = _mm512_extracti64x2_epi64(asds, 1);
-
-    let a128_0_1 = _mm_srli_si128(a128_0_0, 8);
-    let a128_1_1 = _mm_srli_si128(a128_1_0, 8);
-
-    let a8_0_0 = _mm512_cvtepu8_epi64(a128_0_0);
-    let a8_0_1 = _mm512_cvtepu8_epi64(a128_0_1);
-    let a8_1_0 = _mm512_cvtepu8_epi64(a128_1_0);
-
-    let powers_of_ten_0_0 = _mm512_set_epi64(
-            10000000,
-            1000000,
-            100000,
-            10000,
-            1000,
-            100,
-            10,
-            1);
-    let powers_of_ten_0_1 = _mm512_set_epi64(
-            1000000000000000,
-            100000000000000,
-            10000000000000,
-            1000000000000,
-            100000000000,
-            10000000000,
-            1000000000,
-            100000000
-            );
-    let powers_of_ten_1_0 = _mm512_set_epi64(
-            0,
-            0,
-            0,
-            0,
-            10000000000000000000ULL,
-            1000000000000000000,
-            100000000000000000,
-            10000000000000000
-            );
-
-    let a0_0 = _mm512_mullo_epi64(a8_0_0, powers_of_ten_0_0);
-    let a0_1 = _mm512_mullo_epi64(a8_0_1, powers_of_ten_0_1);
-    let a1_0 = _mm512_mullo_epi64(a8_1_0, powers_of_ten_1_0);
-
-    let add = _mm512_add_epi64(_mm512_add_epi64(a0_0, a0_1), a1_0);
-    let reduce_add = _mm512_reduce_add_epi64(add);
-    let value = reduce_add;
-
-    return (IntegerParsing){ .value = value, .i = digit_count };
-}
-
-static IntegerParsing parse_octal(const char* restrict p)
-{
-    u64 value = 0;
-    u64 i = 0;
-
-    while (1)
-    {
-        let ch = p[i];
-
-        if (!is_octal(ch))
-        {
-            break;
-        }
-
-        i += 1;
-        value = accumulate_octal(value, ch);
-    }
-
-    return (IntegerParsing) { .value = value, .i = i };
-}
-
-static IntegerParsing parse_octal_vectorized(const char* restrict p)
-{
-    u64 value = 0;
-    u64 i = 0;
-
-    while (1)
-    {
-        let chunk = _mm512_loadu_epi8(&p[i]);
-        let lower_limit = _mm512_cmpge_epu8_mask(chunk, _mm512_set1_epi8('0'));
-        let upper_limit = _mm512_cmple_epu8_mask(chunk, _mm512_set1_epi8('7'));
-        let is_octal = _kand_mask64(lower_limit, upper_limit);
-        let octal_mask = _cvtu64_mask64(_tzcnt_u64(~_cvtmask64_u64(is_octal)));
-
-        trap();
-
-        // if (!is_octal(ch))
-        // {
-        //     break;
-        // }
-        //
-        // i += 1;
-        // value = accumulate_octal(value, ch);
-    }
-
-    return (IntegerParsing) { .value = value, .i = i };
-}
-
-static IntegerParsing parse_binary(const char* restrict p)
-{
-    u64 value = 0;
-    u64 i = 0;
-
-    while (1)
-    {
-        let ch = p[i];
-
-        if (!is_binary(ch))
-        {
-            break;
-        }
-
-        i += 1;
-        value = accumulate_binary(value, ch);
-    }
-
-    return (IntegerParsing){ .value = value, .i = i };
-}
-
-static inline IntegerParsing parse_binary_vectorized(const char* restrict f)
-{
-    u64 value = 0;
-
-    let chunk = _mm512_loadu_epi8(f);
-    let zero = _mm512_set1_epi8('0');
-    let is0 = _mm512_cmpeq_epu8_mask(chunk, zero);
-    let is1 = _mm512_cmpeq_epu8_mask(chunk, _mm512_set1_epi8('1'));
-    let is_binary_chunk = _kor_mask64(is0, is1);
-    u64 i = _tzcnt_u64(~_cvtmask64_u64(is_binary_chunk));
-    let digit2bin = _mm512_maskz_sub_epi8(is_binary_chunk, chunk, zero);
-    let rotated = _mm512_permutexvar_epi8(digit2bin,
-            _mm512_set_epi8(
-                0, 1, 2, 3, 4, 5, 6, 7,
-                8, 9, 10, 11, 12, 13, 14, 15,
-                16, 17, 18, 19, 20, 21, 22, 23,
-                24, 25, 26, 27, 28, 29, 30, 31,
-                32, 33, 34, 35, 36, 37, 38, 39,
-                40, 41, 42, 43, 44, 45, 46, 47,
-                48, 49, 50, 51, 52, 53, 54, 55,
-                56, 57, 58, 59, 60, 61, 62, 63
-                ));
-    let mask = _mm512_test_epi8_mask(rotated, rotated);
-    let mask_int = _cvtmask64_u64(mask);
-
-    return (IntegerParsing) { .value = value, .i = i };
-}
 
 static u8 escape_character(u8 ch)
 {
@@ -399,6 +53,7 @@ static inline u64 str8(str str)
     return value;
 }
 
+#ifdef __AVX512F__
 static inline u64 identifier_character_count(__m512i chunk)
 {
     let a = _mm512_set1_epi8('a');
@@ -426,6 +81,7 @@ static inline u64 identifier_character_count(__m512i chunk)
     let result = _tzcnt_u64(~is_identifier_int);
     return result;
 }
+#endif
 
 #define left_bracket '['
 #define right_bracket ']'
@@ -439,7 +95,7 @@ static bool is_good_finishing_decimal_character(u8 ch)
 
 TokenList lex(CompileUnit* unit, File* file)
 {
-#define MEASURE_LEXING 1
+#define MEASURE_LEXING 0
 
 #if MEASURE_LEXING
     let lexing_start = take_timestamp();
@@ -652,6 +308,7 @@ TokenList lex(CompileUnit* unit, File* file)
 
         if (is_identifier_start(ch0))
         {
+#ifdef __AVX512F__
             u64 count = 64;
 
             while (count == 64)
@@ -660,6 +317,18 @@ TokenList lex(CompileUnit* unit, File* file)
                 count = identifier_character_count(chunk);
                 i += count;
             }
+#else
+            while (1)
+            {
+                let ch = p[i];
+                let is_id_ch = is_identifier(ch);
+                if (!is_id_ch)
+                {
+                    break;
+                }
+                i += 1;
+            }
+#endif
 
             let candidate_identifier = str_from_ptr_start_end((char*)p, start_index, i);
             if (candidate_identifier.length == 0) UNREACHABLE();
@@ -1012,7 +681,7 @@ TokenList lex(CompileUnit* unit, File* file)
             }
 
             let inferred_decimal = !is_valid_prefix;
-            u128 value = 0;
+            u64 value = 0;
             let before_i = i;
 
             IntegerParsing r;
@@ -1022,10 +691,10 @@ TokenList lex(CompileUnit* unit, File* file)
             switch (token_id)
             {
 #if SCALAR
-                break; case TOKEN_ID_INTEGER_START_HEXADECIMAL_PREFIXED: r = parse_hexadecimal(number_start);
-                break; case TOKEN_ID_INTEGER_START_DECIMAL_PREFIXED: case TOKEN_ID_INTEGER_START_DECIMAL_INFERRED: r = parse_decimal(number_start);
-                break; case TOKEN_ID_INTEGER_START_OCTAL_PREFIXED: r = parse_octal(number_start);
-                break; case TOKEN_ID_INTEGER_START_BINARY_PREFIXED: r = parse_binary(number_start);
+                break; case TOKEN_ID_INTEGER_START_HEXADECIMAL_PREFIXED: r = parse_hexadecimal_scalar(number_start);
+                break; case TOKEN_ID_INTEGER_START_DECIMAL_PREFIXED: case TOKEN_ID_INTEGER_START_DECIMAL_INFERRED: r = parse_decimal_scalar(number_start);
+                break; case TOKEN_ID_INTEGER_START_OCTAL_PREFIXED: r = parse_octal_scalar(number_start);
+                break; case TOKEN_ID_INTEGER_START_BINARY_PREFIXED: r = parse_binary_scalar(number_start);
 #else
                 break; case TOKEN_ID_INTEGER_START_HEXADECIMAL_PREFIXED: r = parse_hexadecimal_vectorized(number_start);
                 break; case TOKEN_ID_INTEGER_START_DECIMAL_PREFIXED: case TOKEN_ID_INTEGER_START_DECIMAL_INFERRED: r = parse_decimal_vectorized(number_start);
@@ -1049,7 +718,7 @@ TokenList lex(CompileUnit* unit, File* file)
                 i += 1;
 
 #if SCALAR
-                let r = parse_decimal(&p[i]);
+                let r = parse_decimal_scalar(&p[i]);
 #else
                 let r = parse_decimal_vectorized(&p[i]);
 #endif

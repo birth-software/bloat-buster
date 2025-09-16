@@ -1,5 +1,6 @@
 #include <compiler.h>
 
+
 int main(int argc, const char* argv[], char** envp)
 {
     bool result = compiler_main(argc, argv, envp);

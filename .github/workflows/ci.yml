@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  pull_request:
   push:
     tags:
       - "**"
@@ -9,9 +10,6 @@ on:
 
 env:
   BB_CI: 1
-  CLANG_PATH: clang-19
-  CLANGXX_PATH: clang++-19
-  LLVM_VERSION: 21.1.1
   BB_BUILD_DEBUG: 1
   BB_BUILD_NATIVE: 0
 
@@ -20,19 +18,37 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ self-hosted ]
+        os: [ self-hosted, ubuntu-24.04, ubuntu-24.04-arm, macos-26, macos-13, windows-2025, windows-11-arm ]
         BIRTH_CMAKE_BUILD_TYPE: [ Debug, Release ]
         LLVM_CMAKE_BUILD_TYPE: [ Release, Release-assertions ]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Build and test (Packaged LLVM)
+      - name: Install dependencies
+        if: ${{matrix.os == 'ubuntu-24.04'}}
         shell: bash
+        run: |
+          sudo apt-get install -y clang-20 mold
+      - name: Install dependencies
+        if: ${{matrix.os == 'ubuntu-24.04-arm'}}
+        shell: bash
+        run: |
+          sudo apt-get install -y clang-19 mold gdb
+      - name: Install dependencies
+        if: ${{matrix.os == 'macos-26' || matrix.os == 'macos-13'}}
+        shell: bash
+        run: |
+          brew install llvm
+      - name: Build and test (Packaged LLVM)
         env:
           CMAKE_BUILD_TYPE: ${{matrix.BIRTH_CMAKE_BUILD_TYPE}}
           LLVM_CMAKE_BUILD_TYPE: ${{matrix.LLVM_CMAKE_BUILD_TYPE}}
+        shell: bash
         run: |
-          set -eux
-          ./generate.sh
-          ./build.sh
-          ./build/bb
+          echo "int main() { return 0; }" > foo.c
+          clang -v foo.c
+          ./generate.py
+          ./build.py
+          echo "Build suceeded!"
+          ./run.py
+          echo "Program suceeded!"
