@@ -5,6 +5,7 @@
 #endif
 
 #include <stdio.h>
+
 #ifdef __linux__
 #include <unistd.h>
 #include <fcntl.h>
@@ -13,9 +14,21 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/ptrace.h>
+#include <pthread.h>
+#elif defined(__APPLE__)
+#include <unistd.h>
+#include <fcntl.h>
+#include <time.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <pthread.h>
 #elif _WIN32
 #define WIN32_LEAN_AND_MEAN 1
+#include <winsock2.h>
 #include <windows.h>
+#include <mswsock.h>
+static RIO_EXTENSION_FUNCTION_TABLE w32_rio_functions = {};
 #endif
 
 STRUCT(ProtectionFlags)
@@ -33,8 +46,8 @@ STRUCT(MapFlags)
     u64 populate:1;
 };
 
-#ifdef __linux__
-static int os_linux_protection_flags(ProtectionFlags flags)
+#if defined (__linux__) || defined(__APPLE__)
+static int os_posix_protection_flags(ProtectionFlags flags)
 {
     int result = 
         PROT_READ * flags.read |
@@ -45,17 +58,63 @@ static int os_linux_protection_flags(ProtectionFlags flags)
     return result;
 }
 
-static int os_linux_map_flags(MapFlags flags)
+static int os_posix_map_flags(MapFlags flags)
 {
     int result = 
+#ifdef __linux__
+        MAP_POPULATE * flags.populate |
+#endif
         MAP_PRIVATE * flags.private |
         MAP_ANON * flags.anonymous |
-        MAP_NORESERVE * flags.no_reserve |
-        MAP_POPULATE * flags.populate;
+        MAP_NORESERVE * flags.no_reserve;
 
     return result;
 }
 #elif _WIN32
+static DWORD os_windows_protection_flags(ProtectionFlags flags)
+{
+    DWORD result = 0;
+
+    if (flags.read & flags.write & flags.execute)
+    {
+        result = PAGE_EXECUTE_READWRITE;
+    }
+    else if (flags.read & flags.write)
+    {
+        result = PAGE_READWRITE;
+    }
+    else if (flags.read & flags.execute)
+    {
+        result = PAGE_EXECUTE_READ;
+    }
+    else if (flags.read)
+    {
+        result = PAGE_READONLY;
+    }
+    else if (flags.execute)
+    {
+        result = PAGE_EXECUTE;
+    }
+    else
+    {
+        UNREACHABLE();
+    }
+
+    return result;
+}
+
+static DWORD os_windows_allocation_flags(MapFlags flags)
+{
+    DWORD result = 0;
+    result |= MEM_RESERVE;
+
+    if (!flags.no_reserve)
+    {
+        result |= MEM_COMMIT;
+    }
+
+    return result;
+}
 #endif
 
 static bool os_lock_and_unlock(void* address, u64 size)
@@ -70,8 +129,13 @@ static bool os_lock_and_unlock(void* address, u64 size)
         os_result = munlock(address, size);
     }
     result = os_result == 0;
-#elif defined(__APPLE__)
 #elif defined(_WIN32)
+    RIO_BUFFERID buffer_id = w32_rio_functions.RIORegisterBuffer(address, size);
+    result = buffer_id != RIO_INVALID_BUFFERID;
+    if (result)
+    {
+        w32_rio_functions.RIODeregisterBuffer(buffer_id);
+    }
 #endif
     return result;
 }
@@ -80,9 +144,9 @@ static void* os_reserve(void* base, u64 size, ProtectionFlags protection, MapFla
 {
     void* address = 0;
 
-#ifdef __linux__
-    let protection_flags = os_linux_protection_flags(protection);
-    let map_flags = os_linux_map_flags(map);
+#if defined(__linux__) || defined(__APPLE__)
+    let protection_flags = os_posix_protection_flags(protection);
+    let map_flags = os_posix_map_flags(map);
 
     address = mmap(base, size, protection_flags, map_flags, -1, 0);
     if (address == MAP_FAILED)
@@ -90,23 +154,43 @@ static void* os_reserve(void* base, u64 size, ProtectionFlags protection, MapFla
         address = 0;
     }
 #elif _WIN32
-    let result = VirtualAlloc(base, size, MEM_RESERVE, PAGE_READWRITE);
-    return result;
+    let allocation_flags = os_windows_allocation_flags(map);
+    let protection_flags = os_windows_protection_flags(protection);
+    address = VirtualAlloc(base, size, allocation_flags, protection_flags);
 #endif
     return address;
+}
+
+static bool os_unreserve(void* address, u64 size)
+{
+    bool result = 1;
+#if defined(__linux__) || defined(__APPLE__)
+    let unmap_result = munmap(address, size);
+    result = unmap_result == 0;
+#elif _WIN32
+    let virtual_free_result = VirtualFree(address, size, MEM_DECOMMIT);
+    result = virtual_free_result != 0;
+    if (result)
+    {
+        virtual_free_result = VirtualFree(address, 0, MEM_RELEASE);
+        result = virtual_free_result != 0;
+    }
+#endif
+    return result;
 }
 
 static bool os_commit(void* address, u64 size, ProtectionFlags protection, bool lock)
 {
     bool result = 1;
 
-#ifdef __linux__
-    let protection_flags = os_linux_protection_flags(protection);
+#if defined(__linux__) || defined(__APPLE__)
+    let protection_flags = os_posix_protection_flags(protection);
     let os_result = mprotect(address, size, protection_flags);
     result = os_result == 0;
 #elif _WIN32
-    let result = VirtualAlloc(address, size, MEM_COMMIT, PAGE_READWRITE);
-    assert(result != 0);
+    let protection_flags = os_windows_protection_flags(protection);
+    let os_result = VirtualAlloc(address, size, MEM_COMMIT, protection_flags);
+    result = os_result != 0;
 #endif
 
     if (result & lock)
@@ -121,8 +205,7 @@ FileDescriptor* os_file_open(str path, OpenFlags flags, OpenPermissions permissi
 {
     assert(!path.pointer[path.length]);
     FileDescriptor* result = 0;
-#if defined (__linux__)
-
+#if defined (__linux__) || defined(__APPLE__)
     int o = 0;
     if (flags.read & flags.write)
     {
@@ -243,7 +326,7 @@ static void* generic_fd_to_windows(FileDescriptor* fd)
 
 u64 os_file_get_size(FileDescriptor* file_descriptor)
 {
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     int fd = generic_fd_to_posix(file_descriptor);
     struct stat sb;
     let fstat_result = fstat(fd, &sb);
@@ -261,7 +344,7 @@ u64 os_file_get_size(FileDescriptor* file_descriptor)
 
 static u64 os_file_read_partially(FileDescriptor* file_descriptor, void* buffer, u64 byte_count)
 {
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     let fd = generic_fd_to_posix(file_descriptor);
     let read_byte_count = read(fd, buffer, byte_count);
     assert(read_byte_count > 0);
@@ -289,18 +372,29 @@ static void os_file_read(FileDescriptor* file_descriptor, str buffer, u64 byte_c
 
 static u64 os_file_write_partially(FileDescriptor* file_descriptor, void* pointer, u64 length)
 {
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     let fd = generic_fd_to_posix(file_descriptor);
     let result = write(fd, pointer, length);
     assert(result > 0);
     return result;
-#elif _WIN32
+#elif defined(_WIN32)
     let fd = generic_fd_to_windows(file_descriptor);
     DWORD written_byte_count = 0;
     BOOL result = WriteFile(fd, pointer, (u32)length, &written_byte_count, 0);
     assert(result);
     return written_byte_count;
 #endif
+}
+
+FileDescriptor* os_get_stdout()
+{
+    FileDescriptor* result = {};
+#if defined(__linux__) || defined(__APPLE__)
+    result = posix_fd_to_generic_fd(1);
+#elif defined(_WIN32)
+    result = (FileDescriptor*)GetStdHandle(STD_OUTPUT_HANDLE);
+#endif
+    return result;
 }
 
 void os_file_write(FileDescriptor* file_descriptor, str buffer)
@@ -316,7 +410,7 @@ void os_file_write(FileDescriptor* file_descriptor, str buffer)
 
 void os_file_close(FileDescriptor* file_descriptor)
 {
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     let fd = generic_fd_to_posix(file_descriptor);
     let close_result = close(fd);
     assert(close_result == 0);
@@ -387,8 +481,7 @@ bool arena_destroy(Arena* arena, u64 count)
     count = count == 0 ? 1 : count;
     let reserved_size = arena->reserved_size;
     let size = reserved_size * count;
-    let unmap_result = munmap(arena, size);
-    return unmap_result == 0;
+    return os_unreserve(arena, size);
 }
 
 void arena_set_position(Arena* arena, u64 position)
@@ -473,7 +566,7 @@ str arena_duplicate_string(Arena* arena, str str, bool zero_terminate)
 
 TimeDataType take_timestamp()
 {
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     struct timespec ts;
     let result = clock_gettime(CLOCK_MONOTONIC, &ts);
     assert(result == 0);
@@ -490,7 +583,7 @@ static TimeDataType frequency;
 
 u64 ns_between(TimeDataType start, TimeDataType end)
 {
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     let start_ts = *(struct timespec*)&start;
     let end_ts = *(struct timespec*)&end;
     let second_diff = end_ts.tv_sec - start_ts.tv_sec;
@@ -538,6 +631,7 @@ str file_read(Arena* arena, str path, FileReadOptions options)
 static str os_path_absolute_stack(str buffer, const char* restrict relative_file_path)
 {
     str result = {};
+#if defined(__linux__) || defined(__APPLE__)
     let syscall_result = realpath(relative_file_path, buffer.pointer);
 
     if (syscall_result)
@@ -546,6 +640,13 @@ static str os_path_absolute_stack(str buffer, const char* restrict relative_file
         assert(result.length < buffer.length);
     }
 
+#elif defined(_WIN32)
+    DWORD length = GetFullPathNameA(relative_file_path, buffer.length, buffer.pointer, 0);
+    if (length <= buffer.length)
+    {
+        result = (str){buffer.pointer, length};
+    }
+#endif
     return result;
 }
 
@@ -562,6 +663,14 @@ void os_init()
 #ifdef _WIN32
     BOOL result = QueryPerformanceFrequency((LARGE_INTEGER*)&frequency);
     assert(result);
+
+    WSADATA WinSockData;
+    WSAStartup(MAKEWORD(2, 2), &WinSockData);
+    GUID guid = WSAID_MULTIPLE_RIO;
+    DWORD rio_byte = 0;
+    SOCKET Sock = socket(AF_UNSPEC, SOCK_STREAM, IPPROTO_TCP);
+    WSAIoctl(Sock, SIO_GET_MULTIPLE_EXTENSION_FUNCTION_POINTER, &guid, sizeof(guid), (void**)&w32_rio_functions, sizeof(w32_rio_functions), &rio_byte, 0, 0);
+    closesocket(Sock);
 #else
 #endif
 }
@@ -573,9 +682,17 @@ static bool is_debugger_present()
 {
     if (unlikely(!is_debugger_present_called))
     {
-        let result = ptrace(PTRACE_TRACEME, 0, 0, 0) == -1;
-        _is_debugger_present = result != 0;
         is_debugger_present_called = true;
+#if defined(__linux__)
+        let os_result = ptrace(PTRACE_TRACEME, 0, 0, 0) == -1;
+        _is_debugger_present = os_result != 0;
+#elif defined(__APPLE__)
+#elif defined(_WIN32)
+        let os_result = IsDebuggerPresent();
+        _is_debugger_present = os_result != 0;
+#else
+    trap();
+#endif
     }
 
     return _is_debugger_present;
@@ -807,7 +924,7 @@ ExecutionResult os_execute(Arena* arena, char** arguments, char** environment, E
 {
     ExecutionResult result = {};
 
-#ifdef __linux__
+#if defined (__linux__) || defined(__APPLE__)
     FileDescriptor* null_file_descriptor = 0;
 
     if (options.null_file_descriptor)
@@ -929,9 +1046,523 @@ ExecutionResult os_execute(Arena* arena, char** arguments, char** environment, E
             }
         }
     }
+#elif _WIN32
+    {
+        HANDLE hStdInRead  = NULL, hStdInWrite  = NULL;
+        HANDLE hStdOutRead = NULL, hStdOutWrite = NULL;
+        HANDLE hStdErrRead = NULL, hStdErrWrite = NULL;
+
+        SECURITY_ATTRIBUTES sa = { sizeof(sa) };
+        sa.bInheritHandle = TRUE;
+        sa.lpSecurityDescriptor = NULL;
+
+        if (options.policies[0] == STREAM_POLICY_PIPE)
+        {
+            if (!CreatePipe(&hStdOutRead, &hStdOutWrite, &sa, 0))
+            {
+                fail();
+            }
+            if (!SetHandleInformation(hStdOutRead, HANDLE_FLAG_INHERIT, 0))
+            {
+                fail();
+            }
+        }
+
+        if (options.policies[1] == STREAM_POLICY_PIPE)
+        {
+            if (!CreatePipe(&hStdErrRead, &hStdErrWrite, &sa, 0))
+            {
+                fail();
+            }
+            if (!SetHandleInformation(hStdErrRead, HANDLE_FLAG_INHERIT, 0))
+            {
+                fail();
+            }
+        }
+
+        STARTUPINFO si;
+        ZeroMemory(&si, sizeof(si));
+        si.cb = sizeof(si);
+        si.dwFlags |= STARTF_USESTDHANDLES;
+
+        si.hStdInput  = GetStdHandle(STD_INPUT_HANDLE);
+        si.hStdOutput = (options.policies[0] == STREAM_POLICY_PIPE) ? hStdOutWrite : GetStdHandle(STD_OUTPUT_HANDLE);
+        si.hStdError  = (options.policies[1] == STREAM_POLICY_PIPE) ? hStdErrWrite : GetStdHandle(STD_ERROR_HANDLE);
+
+        PROCESS_INFORMATION pi;
+        ZeroMemory(&pi, sizeof(pi));
+
+        size_t cmd_len = 0;
+        for (int i = 0; arguments[i]; i += 1)
+        {
+            cmd_len += strlen(arguments[i]) + 1;
+        }
+        char* cmdline = (char*)malloc(cmd_len + 1);
+        if (!cmdline)
+        {
+            fail();
+        }
+        cmdline[0] = '\0';
+        for (int i = 0; arguments[i]; i += 1)
+        {
+            strcat(cmdline, arguments[i]);
+            if (arguments[i+1]) strcat(cmdline, " ");
+        }
+
+        LPVOID env_block = NULL;
+        if (environment)
+        {
+            size_t total_len = 1;
+            for (char** e = environment; *e; ++e)
+            {
+                total_len += strlen(*e) + 1;
+            }
+
+            env_block = malloc(total_len);
+
+            if (!env_block)
+            {
+                fail();
+            }
+
+            char* dst = (char*)env_block;
+            for (char** e = environment; *e; ++e)
+            {
+                size_t len = strlen(*e);
+                memcpy(dst, *e, len);
+                dst[len] = '\0';
+                dst += len + 1;
+            }
+            *dst = '\0';
+        }
+
+        BOOL success = CreateProcessA(
+            NULL,
+            cmdline,
+            NULL,
+            NULL,
+            TRUE,
+            0,
+            env_block,
+            NULL,
+            &si,
+            &pi
+        );
+
+        free(cmdline);
+
+        if (!success)
+        {
+            fail();
+        }
+
+        if (hStdInRead)
+        {
+            CloseHandle(hStdInRead);
+        }
+        if (hStdOutWrite)
+        {
+            CloseHandle(hStdOutWrite);
+        }
+        if (hStdErrWrite)
+        {
+            CloseHandle(hStdErrWrite);
+        }
+
+        WaitForSingleObject(pi.hProcess, INFINITE);
+
+        DWORD exit_code = 0;
+        if (!GetExitCodeProcess(pi.hProcess, &exit_code))
+        {
+            fail();
+        }
+
+        result.termination_code = (int)exit_code;
+        result.termination_kind = TERMINATION_KIND_EXIT;
+
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+
+        if (env_block)
+        {
+            free(env_block);
+        }
+    }
 #endif
 
     return result;
+}
+#if defined(__AVX512F__)
+IntegerParsing parse_hexadecimal_vectorized(const char* restrict p)
+{
+    u64 value = 0;
+    u64 i = 0;
+
+    while (1)
+    {
+        // let ch = p[i];
+        //
+        // if (!is_hexadecimal(ch))
+        // {
+        //     break;
+        // }
+        //
+        // i += 1;
+        // value = accumulate_hexadecimal(value, ch);
+        trap();
+    }
+
+    return (IntegerParsing){ .value = value, .i = i };
+}
+
+IntegerParsing parse_decimal_vectorized(const char* restrict p)
+{
+    let zero = _mm512_set1_epi8('0');
+    let nine = _mm512_set1_epi8('9');
+    let chunk = _mm512_loadu_epi8(&p[0]);
+    let lower_limit = _mm512_cmpge_epu8_mask(chunk, zero);
+    let upper_limit = _mm512_cmple_epu8_mask(chunk, nine);
+    let is = _kand_mask64(lower_limit, upper_limit);
+
+    let digit_count = _tzcnt_u64(~_cvtmask64_u64(is));
+
+    let digit_mask = _cvtu64_mask64((1ULL << digit_count) - 1);
+    let digit2bin = _mm512_maskz_sub_epi8(digit_mask, chunk, zero);
+    let lo0 = _mm512_castsi512_si128(digit2bin);
+    let a = _mm512_cvtepu8_epi64(lo0);
+    let digit_count_splat = _mm512_set1_epi8((u8)digit_count);
+
+    let to_sub = _mm512_set_epi8(
+            64, 63, 62, 61, 60, 59, 58, 57,
+            56, 55, 54, 53, 52, 51, 50, 49,
+            48, 47, 46, 45, 44, 43, 42, 41,
+            40, 39, 38, 37, 36, 35, 34, 33,
+            32, 31, 30, 29, 28, 27, 26, 25,
+            24, 23, 22, 21, 20, 19, 18, 17,
+            16, 15, 14, 13, 12, 11, 10, 9,
+            8, 7, 6, 5, 4, 3, 2, 1);
+    let ib = _mm512_maskz_sub_epi8(digit_mask, digit_count_splat, to_sub);
+    let asds = _mm512_maskz_permutexvar_epi8(digit_mask, ib, digit2bin);
+
+    let a128_0_0 = _mm512_extracti64x2_epi64(asds, 0);
+    let a128_1_0 = _mm512_extracti64x2_epi64(asds, 1);
+
+    let a128_0_1 = _mm_srli_si128(a128_0_0, 8);
+    let a128_1_1 = _mm_srli_si128(a128_1_0, 8);
+
+    let a8_0_0 = _mm512_cvtepu8_epi64(a128_0_0);
+    let a8_0_1 = _mm512_cvtepu8_epi64(a128_0_1);
+    let a8_1_0 = _mm512_cvtepu8_epi64(a128_1_0);
+
+    let powers_of_ten_0_0 = _mm512_set_epi64(
+            10000000,
+            1000000,
+            100000,
+            10000,
+            1000,
+            100,
+            10,
+            1);
+    let powers_of_ten_0_1 = _mm512_set_epi64(
+            1000000000000000,
+            100000000000000,
+            10000000000000,
+            1000000000000,
+            100000000000,
+            10000000000,
+            1000000000,
+            100000000
+            );
+    let powers_of_ten_1_0 = _mm512_set_epi64(
+            0,
+            0,
+            0,
+            0,
+            10000000000000000000ULL,
+            1000000000000000000,
+            100000000000000000,
+            10000000000000000
+            );
+
+    let a0_0 = _mm512_mullo_epi64(a8_0_0, powers_of_ten_0_0);
+    let a0_1 = _mm512_mullo_epi64(a8_0_1, powers_of_ten_0_1);
+    let a1_0 = _mm512_mullo_epi64(a8_1_0, powers_of_ten_1_0);
+
+    let add = _mm512_add_epi64(_mm512_add_epi64(a0_0, a0_1), a1_0);
+    let reduce_add = _mm512_reduce_add_epi64(add);
+    let value = reduce_add;
+
+    return (IntegerParsing){ .value = value, .i = digit_count };
+}
+
+IntegerParsing parse_octal_vectorized(const char* restrict p)
+{
+    u64 value = 0;
+    u64 i = 0;
+
+    while (1)
+    {
+        let chunk = _mm512_loadu_epi8(&p[i]);
+        let lower_limit = _mm512_cmpge_epu8_mask(chunk, _mm512_set1_epi8('0'));
+        let upper_limit = _mm512_cmple_epu8_mask(chunk, _mm512_set1_epi8('7'));
+        let is_octal = _kand_mask64(lower_limit, upper_limit);
+        let octal_mask = _cvtu64_mask64(_tzcnt_u64(~_cvtmask64_u64(is_octal)));
+
+        trap();
+
+        // if (!is_octal(ch))
+        // {
+        //     break;
+        // }
+        //
+        // i += 1;
+        // value = accumulate_octal(value, ch);
+    }
+
+    return (IntegerParsing) { .value = value, .i = i };
+}
+
+IntegerParsing parse_binary_vectorized(const char* restrict f)
+{
+    u64 value = 0;
+
+    let chunk = _mm512_loadu_epi8(f);
+    let zero = _mm512_set1_epi8('0');
+    let is0 = _mm512_cmpeq_epu8_mask(chunk, zero);
+    let is1 = _mm512_cmpeq_epu8_mask(chunk, _mm512_set1_epi8('1'));
+    let is_binary_chunk = _kor_mask64(is0, is1);
+    u64 i = _tzcnt_u64(~_cvtmask64_u64(is_binary_chunk));
+    let digit2bin = _mm512_maskz_sub_epi8(is_binary_chunk, chunk, zero);
+    let rotated = _mm512_permutexvar_epi8(digit2bin,
+            _mm512_set_epi8(
+                0, 1, 2, 3, 4, 5, 6, 7,
+                8, 9, 10, 11, 12, 13, 14, 15,
+                16, 17, 18, 19, 20, 21, 22, 23,
+                24, 25, 26, 27, 28, 29, 30, 31,
+                32, 33, 34, 35, 36, 37, 38, 39,
+                40, 41, 42, 43, 44, 45, 46, 47,
+                48, 49, 50, 51, 52, 53, 54, 55,
+                56, 57, 58, 59, 60, 61, 62, 63
+                ));
+    let mask = _mm512_test_epi8_mask(rotated, rotated);
+    let mask_int = _cvtmask64_u64(mask);
+
+    return (IntegerParsing) { .value = value, .i = i };
+}
+#endif
+
+static u64 accumulate_hexadecimal(u64 accumulator, u8 ch)
+{
+    u8 value;
+
+    if (is_decimal(ch))
+    {
+        value = ch - '0';
+    }
+    else if (is_hexadecimal_alpha_upper(ch))
+    {
+        value = ch - 'A' + 10;
+    }
+    else if (is_hexadecimal_alpha_lower(ch))
+    {
+        value = ch - 'a' + 10;
+    }
+    else
+    {
+        UNREACHABLE();
+    }
+
+    return (accumulator * 16) + value;
+}
+
+static u64 accumulate_decimal(u64 accumulator, u8 ch)
+{
+    assert(is_decimal(ch));
+    return (accumulator * 10) + (ch - '0');
+}
+
+static u64 accumulate_octal(u64 accumulator, u8 ch)
+{
+    assert(is_octal(ch));
+
+    return (accumulator * 8) + (ch - '0');
+}
+
+static u64 accumulate_binary(u64 accumulator, u8 ch)
+{
+    assert(is_binary(ch));
+
+    return (accumulator * 2) + (ch - '0');
+}
+
+u64 parse_integer_decimal_assume_valid(str string)
+{
+    u64 value = 0;
+
+    for (u64 i = 0; i < string.length; i += 1)
+    {
+        let ch = string.pointer[i];
+        value = accumulate_decimal(value, ch);
+    }
+
+    return value;
+}
+
+IntegerParsing parse_hexadecimal_scalar(const char* restrict p)
+{
+    u64 value = 0;
+    u64 i = 0;
+
+    while (1)
+    {
+        let ch = p[i];
+
+        if (!is_hexadecimal(ch))
+        {
+            break;
+        }
+
+        i += 1;
+        value = accumulate_hexadecimal(value, ch);
+    }
+
+    return (IntegerParsing){ .value = value, .i = i };
+}
+
+IntegerParsing parse_decimal_scalar(const char* restrict p)
+{
+    u64 value = 0;
+    u64 i = 0;
+
+    while (1)
+    {
+        let ch = p[i];
+
+        if (!is_decimal(ch))
+        {
+            break;
+        }
+
+        i += 1;
+        value = accumulate_decimal(value, ch);
+    }
+
+    return (IntegerParsing){ .value = value, .i = i };
+}
+
+IntegerParsing parse_octal_scalar(const char* restrict p)
+{
+    u64 value = 0;
+    u64 i = 0;
+
+    while (1)
+    {
+        let ch = p[i];
+
+        if (!is_octal(ch))
+        {
+            break;
+        }
+
+        i += 1;
+        value = accumulate_octal(value, ch);
+    }
+
+    return (IntegerParsing) { .value = value, .i = i };
+}
+
+IntegerParsing parse_binary_scalar(const char* restrict p)
+{
+    u64 value = 0;
+    u64 i = 0;
+
+    while (1)
+    {
+        let ch = p[i];
+
+        if (!is_binary(ch))
+        {
+            break;
+        }
+
+        i += 1;
+        value = accumulate_binary(value, ch);
+    }
+
+    return (IntegerParsing){ .value = value, .i = i };
+}
+
+#if defined(_WIN32)
+static ThreadHandle* os_windows_thread_to_generic(HANDLE handle)
+{
+    assert(handle != 0);
+    return (ThreadHandle*)handle;
+}
+
+static HANDLE os_windows_thread_from_generic(ThreadHandle* handle)
+{
+    assert(handle != 0);
+    return (HANDLE)handle;
+}
+#endif
+
+#if defined(__linux__) || defined(__APPLE__)
+static ThreadHandle* os_posix_thread_to_generic(pthread_t handle)
+{
+    assert(handle != 0);
+    return (ThreadHandle*)handle;
+}
+
+static pthread_t os_posix_thread_from_generic(ThreadHandle* handle)
+{
+    assert(handle != 0);
+    return (pthread_t)handle;
+}
+#endif
+
+ThreadHandle* os_thread_create(ThreadCallback* callback, ThreadCreateOptions options)
+{
+    ThreadHandle* result = 0;
+#if defined (__linux__) || defined(__APPLE__)
+    pthread_t handle;
+    let create_result = pthread_create(&handle, 0, callback, 0);
+    bool os_result = create_result == 0;
+    handle = os_result ? handle : 0;
+    result = os_posix_thread_to_generic(handle);
+#elif defined (_WIN32)
+    HANDLE handle = CreateThread(0, 0, callback, 0, 0, 0);
+    result = os_windows_thread_to_generic(handle);
+#endif
+    return result;
+}
+
+u32 os_thread_join(ThreadHandle* handle)
+{
+    u32 return_code = 1;
+
+#if defined(__linux__) || defined(__APPLE__)
+    let pthread = os_posix_thread_from_generic(handle);
+    void* void_return_value = 0;
+    let join_result = pthread_join(pthread, &void_return_value);
+    if (join_result == 0)
+    {
+        return_code = (u32)(u64)void_return_value;
+    }
+#elif defined(_WIN32)
+    let thread_handle = os_windows_thread_from_generic(handle);
+    WaitForSingleObject(thread_handle, INFINITE);
+
+    DWORD exit_code;
+    let result = GetExitCodeThread(thread_handle, &exit_code) != 0;
+    if (result)
+    {
+        return_code = (u32)exit_code;
+    }
+
+    CloseHandle(thread_handle);
+#endif
+
+    return return_code;
 }
 
 void test_error(str check_text, u32 line, str function, str file_path)

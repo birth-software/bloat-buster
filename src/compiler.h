@@ -8,7 +8,6 @@
 typedef u32 RawReference;
 #define is_ref_valid(x) !!((x).v)
 #define ref_eq(a, b) (((typeof(a))(a)).v == ((typeof(a))(b)).v)
-#define todo() trap()
 
 STRUCT(SourceLocation)
 {
@@ -577,19 +576,6 @@ STRUCT(Type)
     } llvm;
 };
 
-static bool type_is_signed(Type* type)
-{
-    switch (type->id)
-    {
-        break; case TYPE_ID_INTEGER:
-        {
-            let is_signed = type->integer.is_signed;
-            return is_signed;
-        }
-        break; default: todo();
-    }
-}
-
 STRUCT(Variable)
 {
     StringReference name;
@@ -700,6 +686,27 @@ typedef enum BuildMode : u8
     BUILD_MODE_SPEED,
 } BuildMode;
 
+typedef enum CpuArch : u8
+{
+    CPU_ARCH_UNKNOWN,
+    CPU_ARCH_X86_64,
+    CPU_ARCH_AARCH64,
+} CpuArch;
+
+typedef enum OperatingSystem : u8
+{
+    OPERATING_SYSTEM_UNKNOWN,
+    OPERATING_SYSTEM_LINUX,
+    OPERATING_SYSTEM_MACOS,
+    OPERATING_SYSTEM_WINDOWS,
+} OperatingSystem;
+
+STRUCT(Target)
+{
+    CpuArch cpu;
+    OperatingSystem os;
+};
+
 STRUCT(CompileUnit)
 {
     FileReference first_file;
@@ -720,7 +727,8 @@ STRUCT(CompileUnit)
     str object_path;
     str artifact_path;
     ShowCallback* show_callback;
-    const char* target_triple;
+    str target_triple;
+    Target target;
     BuildMode build_mode;
     bool has_debug_info;
     bool verbose;
@@ -732,6 +740,7 @@ static void unit_show(CompileUnit* restrict unit, str message)
     if (likely(show))
     {
         show(unit, message);
+        show(unit, S("\n"));
     }
 }
 
@@ -961,40 +970,6 @@ static u64 aligned_byte_count_from_bit_count(u64 bit_count)
     return aligned_bit_count / 8;
 }
 
-static u64 get_byte_size(CompileUnit* restrict unit, Type* type_pointer)
-{
-    assert(unit->phase >= COMPILE_PHASE_ANALYSIS);
-
-    switch (type_pointer->id)
-    {
-        break; case TYPE_ID_INTEGER:
-        {
-            let bit_count = type_pointer->integer.bit_count;
-            let byte_count = aligned_byte_count_from_bit_count(bit_count);
-            return byte_count;
-        }
-        break; default:
-        {
-            todo();
-        }
-    }
-}
-
-static u32 get_alignment(CompileUnit* restrict unit, Type* type)
-{
-    switch (type->id)
-    {
-        break; case TYPE_ID_INTEGER:
-        {
-            let bit_count = type->integer.bit_count;
-            let result = aligned_byte_count_from_bit_count(bit_count);
-            assert(result == 1 || result == 2 || result == 4 || result == 8 || result == 16);
-            return result;
-        }
-        break; default: todo();
-    }
-}
-
 STRUCT(Address)
 {
     LLVMValueRef pointer;
@@ -1045,18 +1020,6 @@ static TypeReference get_u64(CompileUnit* restrict unit)
     return get_integer_type(unit, 64, 0);
 }
 
-static Global* get_current_function(CompileUnit* restrict unit)
-{
-    let current_function_ref = unit->current_function;
-    if (!is_ref_valid(current_function_ref))
-    {
-        trap();
-    }
-
-    let current_function = global_pointer_from_reference(unit, current_function_ref);
-    return current_function;
-}
-
 static Type* get_function_type_from_storage(CompileUnit* restrict unit, Global* function)
 {
     let function_storage_ref = function->variable.storage;
@@ -1071,4 +1034,83 @@ static Type* get_function_type_from_storage(CompileUnit* restrict unit, Global* 
     assert(function_type->id == TYPE_ID_FUNCTION);
 
     return function_type;
+}
+
+[[noreturn]] static void todo_internal(CompileUnit* unit, u32 line, str function_name, str file_path)
+{
+    let arena = get_default_arena(unit);
+    str parts[] = {\
+        S("TODO at: "),
+        file_path,
+        S(":"),
+        function_name,
+        S(":"),
+        format_integer(arena, (FormatIntegerOptions) {
+            .format = INTEGER_FORMAT_DECIMAL,
+            .value = line,
+        }, false)
+    };\
+    unit_show(unit, arena_join_string(arena, string_array_to_slice(parts), true));
+    fail();
+}
+
+#define todo() todo_internal(unit, __LINE__, S(__FUNCTION__), S(__FILE__))
+
+static Global* get_current_function(CompileUnit* restrict unit)
+{
+    let current_function_ref = unit->current_function;
+    if (!is_ref_valid(current_function_ref))
+    {
+        todo();
+    }
+
+    let current_function = global_pointer_from_reference(unit, current_function_ref);
+    return current_function;
+}
+
+static u64 get_byte_size(CompileUnit* restrict unit, Type* type_pointer)
+{
+    assert(unit->phase >= COMPILE_PHASE_ANALYSIS);
+
+    switch (type_pointer->id)
+    {
+        break; case TYPE_ID_INTEGER:
+        {
+            let bit_count = type_pointer->integer.bit_count;
+            let byte_count = aligned_byte_count_from_bit_count(bit_count);
+            return byte_count;
+        }
+        break; default:
+        {
+            todo();
+        }
+    }
+}
+
+static bool type_is_signed(CompileUnit* restrict unit, Type* type)
+{
+    switch (type->id)
+    {
+        break; case TYPE_ID_INTEGER:
+        {
+            let is_signed = type->integer.is_signed;
+            return is_signed;
+        }
+        break; default: todo();
+    }
+}
+
+static u32 get_alignment(CompileUnit* restrict unit, Type* type)
+{
+    switch (type->id)
+    {
+        break; case TYPE_ID_INTEGER:
+        {
+            let bit_count = type->integer.bit_count;
+            let result = aligned_byte_count_from_bit_count(bit_count);
+            assert(result == 1 || result == 2 || result == 4 || result == 8 || result == 16);
+            return result;
+        }
+        break; default: todo();
+    }
 }

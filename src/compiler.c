@@ -13,7 +13,7 @@
 #include <llvm-c/Core.h>
 
 #include <stdatomic.h>
-#ifdef __linux__
+#if defined (__linux__) || defined(__APPLE__)
 #include <unistd.h>
 #include <pthread.h>
 
@@ -91,12 +91,14 @@ static str generate_artifact_path(CompileUnit* unit, str extension)
 
 static str generate_object_path(CompileUnit* unit)
 {
-    return generate_artifact_path(unit, S(".o"));
+    let extension = unit->target.os == OPERATING_SYSTEM_WINDOWS ? S(".obj") : S(".o");
+    return generate_artifact_path(unit, extension);
 }
 
 static str generate_executable_path(CompileUnit* unit)
 {
-    let result = generate_artifact_path(unit, (str){});
+    let extension = unit->target.os == OPERATING_SYSTEM_WINDOWS ? S(".exe") : (str){};
+    let result = generate_artifact_path(unit, extension);
     unit->artifact_path = result;
     return result;
 }
@@ -1200,7 +1202,7 @@ static str file_paths[] = {
 
 STRUCT(Thread)
 {
-#ifdef __linux__
+#if defined (__linux__) || defined(__APPLE__)
     pthread_t handle;
 #elif _WIN32
     void* handle;
@@ -1233,7 +1235,7 @@ u64 get_base_type_count()
 static void default_show_callback(void* context, str message)
 {
     unused(context);
-    os_file_write((FileDescriptor*)1, message);
+    os_file_write(os_get_stdout(), message);
 }
 
 static CompileUnit* compile_unit_create()
@@ -1386,6 +1388,57 @@ static CompileUnit* compile_unit_create()
     unit->has_debug_info = 1;
     unit->show_callback = &default_show_callback;
     unit->verbose = 0;
+    unit->target = (Target) {
+#ifdef __x86_64__
+        .cpu = CPU_ARCH_X86_64,
+#endif
+#ifdef __aarch64__
+        .cpu = CPU_ARCH_AARCH64,
+#endif
+#ifdef __linux__
+        .os = OPERATING_SYSTEM_LINUX,
+#endif
+#ifdef __APPLE__
+        .os = OPERATING_SYSTEM_MACOS,
+#endif
+#ifdef _WIN32
+        .os = OPERATING_SYSTEM_WINDOWS,
+#endif
+    };
+
+    if (unit->target.cpu == CPU_ARCH_UNKNOWN)
+    {
+        str parts[] = {\
+            S("TODO at: "),
+            S(__FILE__),
+            S(":"),
+            S(__FUNCTION__),
+            S(":"),
+            format_integer(arena, (FormatIntegerOptions) {
+                    .format = INTEGER_FORMAT_DECIMAL,
+                    .value = __LINE__,
+                    }, false)
+        };\
+        unit_show(unit, arena_join_string(arena, string_array_to_slice(parts), true));
+        fail();
+    }
+
+    if (unit->target.os == OPERATING_SYSTEM_UNKNOWN)
+    {
+        str parts[] = {\
+            S("TODO at: "),
+            S(__FILE__),
+            S(":"),
+            S(__FUNCTION__),
+            S(":"),
+            format_integer(arena, (FormatIntegerOptions) {
+                    .format = INTEGER_FORMAT_DECIMAL,
+                    .value = __LINE__,
+                    }, false)
+        };\
+        unit_show(unit, arena_join_string(arena, string_array_to_slice(parts), true));
+        fail();
+    }
 
     return unit;
 }
@@ -1510,7 +1563,7 @@ StringReference allocate_string_if_needed(CompileUnit* restrict unit, str s)
     if ((s.pointer > arena_bottom) & (s.pointer < arena_top))
     {
         // let string_reference = string_reference_from_string(unit, s);
-        trap();
+        todo();
     }
     else
     {
@@ -1529,7 +1582,15 @@ static void crunch_file(CompileUnit* restrict unit, str path)
     assert(content.length < UINT32_MAX);
     *((u32*)content.pointer - 1) = content.length;
 
-    let last_slash_index = str_last_ch(absolute_path, '/');
+    u8 path_separator;
+#if defined(_WIN32)
+    path_separator = '\\';
+#else
+    path_separator = '/';
+#endif
+
+    let last_slash_index = str_last_ch(absolute_path, path_separator);
+
     assert(last_slash_index != string_no_match);
     let directory_path = (str){ absolute_path.pointer, last_slash_index };
     let file_name = (str){ absolute_path.pointer + last_slash_index + 1, absolute_path.length - last_slash_index - 1 };
@@ -1569,7 +1630,9 @@ static void crunch_file(CompileUnit* restrict unit, str path)
     };
 
     let tl = lex(unit, file);
+    unit_show(unit, S("Lexing done!"));
     parse(unit, file, tl);
+    unit_show(unit, S("Parsing done!"));
 }
 
 static void print_llvm_message(CompileUnit* restrict unit, str message)
@@ -1584,7 +1647,9 @@ static bool compile_unit_internal(CompileUnit* unit, str path)
     bool result_code = 1;
     crunch_file(unit, path);
     analyze(unit);
+    unit_show(unit, S("Analysis done!"));
     let generate = llvm_generate_ir(unit, true);
+    unit_show(unit, S("LLVM generation done!"));
 
     if (unit->verbose & !!generate.module)
     {
@@ -1619,6 +1684,7 @@ static bool compile_unit_internal(CompileUnit* unit, str path)
         }
         else
         {
+            unit_show(unit, S("LLVM optimization done!"));
             let object_path = generate_object_path(unit);
             unit->object_path = object_path;
             LLVMCodeGenFileType type = LLVMObjectFile;
@@ -1627,6 +1693,7 @@ static bool compile_unit_internal(CompileUnit* unit, str path)
             {
                 todo();
             }
+            unit_show(unit, S("LLVM object done!"));
         }
     }
 
@@ -1654,11 +1721,12 @@ static bool compile_and_link_single_unit_internal(CompileUnit* unit, str path)
             .output_artifact_path = output_artifact_path,
         });
 
-        result = result_string.pointer == 0;
+        result = !result_string.pointer;
         if (!result)
         {
             unit_show(unit, result_string);
         }
+        unit_show(unit, S("Linking done!"));
     }
 
     return result;
@@ -1690,10 +1758,10 @@ static void* thread_worker(void* arg)
     return (void*)(u64)!compile_tests();
 }
 
-static void* llvm_initialization_thread(void*)
+static ThreadReturnType llvm_initialization_thread(void*)
 {
     llvm_initialize();
-    return 0;
+    return (ThreadReturnType)0;
 }
 
 typedef enum CompilerCommand : u8
@@ -1751,7 +1819,7 @@ static bool process_command_line(int argc, const char* argv[], char** envp)
 
     if ((argc != 0) & (argc != 1))
     {
-        todo();
+        exit(1);
     }
 
     switch (command)
@@ -1760,12 +1828,15 @@ static bool process_command_line(int argc, const char* argv[], char** envp)
         {
 #if BB_INCLUDE_TESTS
             result = compiler_tests();
+            if (!result)
+            {
+                os_file_write(os_get_stdout(), S("Compiler unit tests failed to run!"));
+                fail();
+            }
 #endif
             if (result)
             {
-                pthread_t handle;
-                let create_result = pthread_create(&handle, 0, &llvm_initialization_thread, 0);
-                result = create_result == 0;
+                let llvm_thread = os_thread_create(&llvm_initialization_thread, (ThreadCreateOptions){});
 
                 if (result)
                 {
@@ -1775,9 +1846,16 @@ static bool process_command_line(int argc, const char* argv[], char** envp)
                     {
                         run_result = unit_run(unit, (StringSlice){}, envp);
                     }
-                    void* return_value = 0;
-                    let join_result = pthread_join(handle, &return_value);
-                    result = (unit != 0) & (join_result == 0) & (return_value == 0) & (run_result);
+                    if (!run_result)
+                    {
+                        unit_show(unit, S("Test executable did not exit properly!"));
+                    }
+                    let return_value = os_thread_join(llvm_thread);
+                    if (return_value != 0)
+                    {
+                        unit_show(unit, S("LLVM initialization thread failed!"));
+                    }
+                    result = (unit != 0) & (return_value == 0) & (run_result);
                 }
             }
         }
