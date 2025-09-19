@@ -162,10 +162,10 @@ def main():
         return 1
 
     # --- CMAKE_LINKER_TYPE ---
-    if BIRTH_OS == "linux":
+    if BIRTH_OS == "linux" and BB_CI == "0":
         CMAKE_LINKER_TYPE = "MOLD"
     else:
-        CMAKE_LINKER_TYPE = "DEFAULT"
+        CMAKE_LINKER_TYPE = "LLD"
 
     if BIRTH_OS == "macos":
         xc_sdk_path_result = subprocess.run([
@@ -175,15 +175,15 @@ def main():
         XC_SDK_PATH= xc_sdk_path_result.stdout.strip()
     else:
         XC_SDK_PATH=""
+    
+    if BIRTH_OS == "windows":
+        EXE_EXTENSION=".exe"
+    else:
+        EXE_EXTENSION=""
 
     # --- compilers ---
-    CLANG_PATH = "clang"
-    CLANGXX_PATH = "clang++"
-
-    if BB_CI == "1":
-        clang_paths = get_compiler_paths()
-        CLANG_PATH = clang_paths[0]
-        CLANGXX_PATH = clang_paths[1]
+    CLANG_PATH = f"{CMAKE_PREFIX_PATH}/bin/clang{EXE_EXTENSION}"
+    CLANGXX_PATH = f"{CMAKE_PREFIX_PATH}/bin/clang++{EXE_EXTENSION}"
 
     # --- cache dir ---
     BB_CACHE_DIR = os.environ.get("BB_CACHE_DIR", "bb-cache")
@@ -196,20 +196,22 @@ def main():
     build_dir.mkdir()
 
     # --- run cmake ---
+    env = os.environ.copy()
+    env["PATH"] = f"{CMAKE_PREFIX_PATH}/bin:" + env["PATH"]
     result = subprocess.run([
         "cmake",
         "--log-level=VERBOSE",
         "..",
         "-G", "Ninja",
+        f"-DCMAKE_PREFIX_PATH={CMAKE_PREFIX_PATH}",
         f"-DCMAKE_BUILD_TYPE={CMAKE_BUILD_TYPE}",
         f"-DCMAKE_CXX_COMPILER={CLANGXX_PATH}",
         f"-DCMAKE_C_COMPILER={CLANG_PATH}",
         f"-DCMAKE_LINKER_TYPE={CMAKE_LINKER_TYPE}",
         "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
         "-DCMAKE_COLOR_DIAGNOSTICS=ON",
-        f"-DCMAKE_PREFIX_PATH={CMAKE_PREFIX_PATH}",
         f"-DXC_SDK_PATH={XC_SDK_PATH}",
-    ], cwd="build")
+    ], cwd="build", env=env)
 
     return_code = result.returncode
 
