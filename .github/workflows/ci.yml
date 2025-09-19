@@ -24,29 +24,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install dependencies
-        if: ${{matrix.os == 'ubuntu-24.04'}}
-        shell: bash
-        run: |
-          sudo apt-get install -y clang-20 mold
-      - name: Install dependencies
-        if: ${{matrix.os == 'ubuntu-24.04-arm'}}
-        shell: bash
-        run: |
-          sudo apt-get install -y clang-19 mold gdb
-      - name: Install dependencies
-        if: ${{matrix.os == 'macos-26' || matrix.os == 'macos-13'}}
-        shell: bash
-        run: |
-          brew install llvm
       - name: Build and test (Packaged LLVM)
         env:
           CMAKE_BUILD_TYPE: ${{matrix.BIRTH_CMAKE_BUILD_TYPE}}
           LLVM_CMAKE_BUILD_TYPE: ${{matrix.LLVM_CMAKE_BUILD_TYPE}}
         shell: bash
         run: |
-          echo "int main() { return 0; }" > foo.c
-          clang -v foo.c
           ./generate.py
           ./build.py
           echo "Build suceeded!"
