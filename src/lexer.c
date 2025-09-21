@@ -22,35 +22,35 @@ LOCAL u8 escape_character(u8 ch)
     }
 }
 
-LOCAL inline u32 str4(str str)
+LOCAL inline u32 str4(str string)
 {
-    assert(str.length <= 4);
-    assert(str.length > 0);
+    check(string.length <= 4);
+    check(string.length > 0);
 
     u32 value = 0;
 
-    value |= str.pointer[0] << 0;
-    value |= str.length >= 2 ? str.pointer[1] << 8 : 0;
-    value |= str.length >= 3 ? str.pointer[2] << 16 : 0;
-    value |= str.length >= 4 ? str.pointer[3] << 24 : 0;
+    value |= string.pointer[0] << 0;
+    value |= string.length >= 2 ? string.pointer[1] << 8 : 0;
+    value |= string.length >= 3 ? string.pointer[2] << 16 : 0;
+    value |= string.length >= 4 ? string.pointer[3] << 24 : 0;
 
     return value;
 }
 
-LOCAL inline u64 str8(str str)
+LOCAL inline u64 str8(str string)
 {
-    assert(str.length <= 8);
+    check(string.length <= 8);
 
     u64 value = 0;
 
-    value |= str.pointer[0] << 0;
-    value |= str.length >= 2 ? str.pointer[1] << 8 : 0;
-    value |= str.length >= 3 ? str.pointer[2] << 16 : 0;
-    value |= str.length >= 4 ? str.pointer[3] << 24 : 0;
-    value |= str.length >= 5 ? (u64)str.pointer[4] << 32 : 0;
-    value |= str.length >= 6 ? (u64)str.pointer[5] << 40 : 0;
-    value |= str.length >= 7 ? (u64)str.pointer[6] << 48 : 0;
-    value |= str.length >= 8 ? (u64)str.pointer[7] << 56 : 0;
+    value |= string.pointer[0] << 0;
+    value |= string.length >= 2 ? string.pointer[1] << 8 : 0;
+    value |= string.length >= 3 ? string.pointer[2] << 16 : 0;
+    value |= string.length >= 4 ? string.pointer[3] << 24 : 0;
+    value |= string.length >= 5 ? (u64)string.pointer[4] << 32 : 0;
+    value |= string.length >= 6 ? (u64)string.pointer[5] << 40 : 0;
+    value |= string.length >= 7 ? (u64)string.pointer[6] << 48 : 0;
+    value |= string.length >= 8 ? (u64)string.pointer[7] << 56 : 0;
 
     return value;
 }
@@ -223,7 +223,7 @@ TokenList lex(CompileUnit* unit, File* file)
                         let is_first_slash = _mm512_mask_cmpeq_epu8_mask(_cvtu64_mask64(3), _mm512_loadu_epi8(&p[i]), slash);
 
                         let is_comment_int = _cvtmask64_u64(is_first_slash);
-                        assert((is_comment_int & 3) == is_comment_int);
+                        check((is_comment_int & 3) == is_comment_int);
                         let is_next_comment = is_comment_int == 3;
                         let offset = i + 2;
 
@@ -359,7 +359,7 @@ TokenList lex(CompileUnit* unit, File* file)
             if (is_integer_type | is_float_type)
             {
                 let bit_count_128 = parse_integer_decimal_assume_valid(str_slice_start(candidate_identifier, 1));
-                assert(bit_count_128 < UINT64_MAX);
+                check(bit_count_128 < UINT64_MAX);
                 let bit_count = (u64)bit_count_128;
 
                 str type_name = is_signed ? S("signed integer") : (is_unsigned ? S("unsigned integer") : S("float"));
@@ -528,7 +528,7 @@ TokenList lex(CompileUnit* unit, File* file)
                 let is_or_sc = ((ch0 == 'o') & (ch1 == 'r')) & ((ch2 == '?') & (candidate_identifier.length == 2));
                 candidate_identifier.length += (is_and_sc | is_or_sc);
 
-                assert(candidate_identifier.length <= UINT16_MAX);
+                check(candidate_identifier.length <= UINT16_MAX);
                 u32 search_index = candidate_identifier.length > max_string_length ? array_length(candidate_ids) : 0;
 #if SCALAR
                 for (; search_index < array_length(candidate_strings); search_index += 1)
@@ -808,7 +808,7 @@ TokenList lex(CompileUnit* unit, File* file)
 
             if (escape_character_count != 0)
             {
-                assert(original_string_bytes.length < string_literal.length);
+                check(original_string_bytes.length < string_literal.length);
 
                 let source_i = start_index;
                 u64 destination_i = 0;
@@ -836,7 +836,7 @@ TokenList lex(CompileUnit* unit, File* file)
                     destination_i += 1;
                 }
 
-                assert(i == source_i);
+                check(i == source_i);
             }
             else
             {
@@ -1184,7 +1184,7 @@ TokenList lex(CompileUnit* unit, File* file)
             }
         }
 
-        assert(token->id != TOKEN_ID_NONE);
+        check(token->id != TOKEN_ID_NONE);
     }
 
     let eof = arena_allocate(token_arena, Token, 1);

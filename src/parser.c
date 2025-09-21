@@ -124,18 +124,18 @@ LOCAL Token* restrict get_token(Parser* restrict parser)
     {
         let line_byte_offset = t;
         let line_number_offset = t + 1;
-        assert(line_number_offset->id == TOKEN_ID_LINE_NUMBER_OFFSET);
+        check(line_number_offset->id == TOKEN_ID_LINE_NUMBER_OFFSET);
         parser->line_byte_offset = line_byte_offset->offset;
         parser->line_number_offset = line_number_offset->offset;
         parser->offset += 2;
         let nt = get_current_token(parser);
-        assert(nt->id != TOKEN_ID_LINE_BYTE_OFFSET);
-        assert(nt->id != TOKEN_ID_LINE_NUMBER_OFFSET);
+        check(nt->id != TOKEN_ID_LINE_BYTE_OFFSET);
+        check(nt->id != TOKEN_ID_LINE_NUMBER_OFFSET);
     }
 
     let nt = get_current_token(parser);
-    assert(nt->id != TOKEN_ID_LINE_BYTE_OFFSET);
-    assert(nt->id != TOKEN_ID_LINE_NUMBER_OFFSET);
+    check(nt->id != TOKEN_ID_LINE_BYTE_OFFSET);
+    check(nt->id != TOKEN_ID_LINE_NUMBER_OFFSET);
     return nt;
 }
 
@@ -148,7 +148,7 @@ LOCAL void rewind_token(Parser* restrict parser)
     if (is_line_token)
     {
         let previous_previous_token = previous_token - 1;
-        assert(previous_previous_token->id == TOKEN_ID_LINE_BYTE_OFFSET);
+        check(previous_previous_token->id == TOKEN_ID_LINE_BYTE_OFFSET);
     }
 }
 
@@ -230,8 +230,8 @@ LOCAL char* restrict pointer_from_token_start(Parser* restrict parser, Token* to
 
 LOCAL IdentifierParsing end_identifier(CompileUnit* restrict unit, Parser* restrict parser, Token* restrict start)
 {
-    assert(start);
-    assert(start->id == TOKEN_ID_IDENTIFIER_START);
+    check(start);
+    check(start->id == TOKEN_ID_IDENTIFIER_START);
 
     IdentifierParsing result = {};
 
@@ -242,7 +242,7 @@ LOCAL IdentifierParsing end_identifier(CompileUnit* restrict unit, Parser* restr
         let pointer = pointer_from_token_start(parser, start);
         u32 start_index = start->offset;
         u32 end_index = end->offset;
-        assert(end_index > start_index);
+        check(end_index > start_index);
         str s = { pointer, end_index - start_index };
         result = (IdentifierParsing) {
             .string = allocate_string(unit, s),
@@ -275,8 +275,8 @@ STRUCT(ParseInteger)
 
 LOCAL ParseInteger end_integer(CompileUnit* restrict unit, Parser* restrict parser, Token* restrict start)
 {
-    assert(start);
-    assert(start->id == TOKEN_ID_INTEGER_START_HEXADECIMAL_PREFIXED || start->id == TOKEN_ID_INTEGER_START_DECIMAL_PREFIXED || start->id == TOKEN_ID_INTEGER_START_DECIMAL_INFERRED || start->id == TOKEN_ID_INTEGER_START_OCTAL_PREFIXED || start->id == TOKEN_ID_INTEGER_START_BINARY_PREFIXED);
+    check(start);
+    check(start->id == TOKEN_ID_INTEGER_START_HEXADECIMAL_PREFIXED || start->id == TOKEN_ID_INTEGER_START_DECIMAL_PREFIXED || start->id == TOKEN_ID_INTEGER_START_DECIMAL_INFERRED || start->id == TOKEN_ID_INTEGER_START_OCTAL_PREFIXED || start->id == TOKEN_ID_INTEGER_START_BINARY_PREFIXED);
 
     ParseInteger result = {};
 
@@ -430,6 +430,7 @@ LOCAL TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict pars
                 let argument_ref = argument_reference_from_pointer(unit, argument);
 
                 let identifier_token = consume_token(parser);
+                let argument_location = get_source_location(parser, identifier_token);
                 IdentifierParsing identifier_parsing = {};
 
                 if (identifier_token->id == TOKEN_ID_IDENTIFIER_START)
@@ -446,16 +447,22 @@ LOCAL TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict pars
                     parser_error();
                 }
 
-                let argument_type = parse_type(unit, parser, scope, 0);
+                let argument_storage = new_value(unit);
+                *argument_storage = (Value) {
+                    .id = VALUE_ID_ARGUMENT,
+                };
 
-                if (!expect_token(parser, TOKEN_ID_COMMA))
-                {
-                    if (!expect_token(parser, TOKEN_ID_RIGHT_PARENTHESIS))
-                    {
-                        parser_error();
-                    }
-                    break;
-                }
+                let argument_type = parse_type(unit, parser, scope, 0);
+                *argument = (Argument) {
+                    .variable = {
+                        .name = identifier_parsing.string,
+                        .storage = value_reference_from_pointer(unit, argument_storage),
+                        .type = argument_type,
+                        .scope = scope,
+                        .location = argument_location,
+                    },
+                    .index = argument_count + 1,
+                };
 
                 if (is_ref_valid(previous_argument))
                 {
@@ -468,10 +475,21 @@ LOCAL TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict pars
                 }
 
                 previous_argument = argument_ref;
+
+                argument_count += 1;
+
+                if (!expect_token(parser, TOKEN_ID_COMMA))
+                {
+                    if (!expect_token(parser, TOKEN_ID_RIGHT_PARENTHESIS))
+                    {
+                        parser_error();
+                    }
+                    break;
+                }
             }
 
             let return_type = parse_type(unit, parser, scope, 0);
-            let allocation_size = (sizeof(TypeReference) * (argument_count + 1)) + (sizeof(AbiInformation) * (argument_count + 1));
+            let allocation_size = align_forward(sizeof(TypeReference) * (argument_count + 1), alignof(AbiInformation)) + (sizeof(AbiInformation) * (argument_count + 1));
             static_assert(alignof(TypeReference) == alignof(AbiInformation));
             let semantic_type_allocation = arena_allocate_bytes(get_default_arena(unit), allocation_size, MAX(alignof(TypeReference), alignof(AbiInformation)));
             let semantic_types = (TypeReference*)semantic_type_allocation;
@@ -479,11 +497,18 @@ LOCAL TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict pars
 
             if (argument_count)
             {
-                // let first_argument_index = argument_reference_from_pointer(unit, first_argument);
-                todo();
+                let it = first_argument;
+                *argument_list = it;
+
+                for (u64 i = 0; i < argument_count; i += 1)
+                {
+                    let argument = argument_pointer_from_reference(unit, it);
+                    semantic_types[i + 1] = argument->variable.type;
+                    it = argument->next;
+                }
             }
 
-            let function_type = arena_allocate(unit_arena(unit, UNIT_ARENA_TYPE), Type, 1);
+            let function_type = new_type(unit);
             *function_type = (Type) {
                 .function = {
                     .semantic_types = semantic_types,
@@ -499,6 +524,7 @@ LOCAL TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict pars
                 .scope = scope,
                 .id = TYPE_ID_FUNCTION,
                 .analyzed = 0,
+                .use_count = 1,
             };
 
             let reference = type_reference_from_pointer(unit, function_type);
@@ -517,9 +543,9 @@ LOCAL TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict pars
         break; case TOKEN_ID_KEYWORD_TYPE_INTEGER:
         {
             let token_start = pointer_from_token_start(parser, token);
-            assert(*token_start == 's' || *token_start == 'u');
+            check(*token_start == 's' || *token_start == 'u');
             let parsing_result = parse_decimal_scalar(token_start + 1);
-            assert(parsing_result.i);
+            check(parsing_result.i);
             let bit_count = parsing_result.value;
             let is_signed = *token_start == 's';
 
@@ -537,6 +563,7 @@ LOCAL TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict pars
                 .name = {},
                 .scope = scope,
                 .id = TYPE_ID_POINTER,
+                .use_count = 1,
             };
             return type_reference_from_pointer(unit, type);
         }
@@ -674,7 +701,7 @@ LOCAL ValueReference parse_left(CompileUnit* restrict unit, Parser* restrict par
         case TOKEN_ID_AMPERSAND:
         case TOKEN_ID_TILDE:
         {
-            assert(!is_ref_valid(parsing.left));
+            check(!is_ref_valid(parsing.left));
 
             ValueId id;
 
@@ -816,14 +843,14 @@ LOCAL ValueReference parse_left(CompileUnit* restrict unit, Parser* restrict par
         }
     }
 
-    assert(is_ref_valid(result));
+    check(is_ref_valid(result));
     return result;
 }
 
 LOCAL ValueReference parse_right_internal(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
 {
     let left = parsing.left;
-    assert(is_ref_valid(left));
+    check(is_ref_valid(left));
 
     let right_token = parsing.token;
 
@@ -879,7 +906,7 @@ LOCAL ValueReference parse_right_internal(CompileUnit* restrict unit, Parser* re
         case TOKEN_ID_COMPARE_GREATER_EQUAL:
         {
             let precedence = get_token_precedence(unit, right_token_id);
-            assert(precedence != PRECEDENCE_ASSIGNMENT);
+            check(precedence != PRECEDENCE_ASSIGNMENT);
 
             ValueId id;
 
@@ -922,7 +949,7 @@ LOCAL ValueReference parse_right_internal(CompileUnit* restrict unit, Parser* re
         break; default: todo();
     }
 
-    assert(is_ref_valid(result));
+    check(is_ref_valid(result));
 
     return result;
 }
@@ -930,7 +957,7 @@ LOCAL ValueReference parse_right_internal(CompileUnit* restrict unit, Parser* re
 LOCAL ValueReference parse_right(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
 {
     ValueReference result = parsing.left;
-    assert(is_ref_valid(result));
+    check(is_ref_valid(result));
     Precedence precedence = parsing.precedence;
 
     while (1)
@@ -949,7 +976,7 @@ LOCAL ValueReference parse_right(CompileUnit* restrict unit, Parser* restrict pa
         }
 
         let t = consume_token(parser);
-        assert(loop_token == t);
+        check(loop_token == t);
 
         let left = result;
 
@@ -962,13 +989,13 @@ LOCAL ValueReference parse_right(CompileUnit* restrict unit, Parser* restrict pa
         result = right;
     }
 
-    assert(is_ref_valid(result));
+    check(is_ref_valid(result));
     return result;
 }
 
 LOCAL ValueReference parse_precedence(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
 {
-    assert(!parsing.token);
+    check(!parsing.token);
     let left = parse_left(unit, parser, scope, parsing);
     parsing.left = left;
     let result = parse_right(unit, parser, scope, parsing);
@@ -977,8 +1004,8 @@ LOCAL ValueReference parse_precedence(CompileUnit* restrict unit, Parser* restri
 
 LOCAL ValueReference parse_value(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
 {
-    assert(parsing.precedence == PRECEDENCE_NONE);
-    assert(!is_ref_valid(parsing.left));
+    check(parsing.precedence == PRECEDENCE_NONE);
+    check(!is_ref_valid(parsing.left));
     parsing.precedence = PRECEDENCE_ASSIGNMENT;
     let value = parse_precedence(unit, parser, scope, parsing);
     return value;
@@ -1107,18 +1134,18 @@ LOCAL StatementReference parse_statement(CompileUnit* restrict unit, Parser* res
                 statement->local = local_ref;
 
                 let scope_p = scope_pointer_from_reference(unit, scope);
-                assert(scope_p->id == SCOPE_ID_BLOCK);
+                check(scope_p->id == SCOPE_ID_BLOCK);
                 let block = block_pointer_from_reference(unit, scope_p->block);
 
                 if (is_ref_valid(block->last_local))
                 {
-                    assert(is_ref_valid(block->first_local));
+                    check(is_ref_valid(block->first_local));
                     let last_local = local_pointer_from_reference(unit, block->last_local);
                     last_local->next = local_ref;
                 }
                 else
                 {
-                    assert(!is_ref_valid(block->first_local));
+                    check(!is_ref_valid(block->first_local));
                     block->first_local = local_ref;
                 }
 
@@ -1188,7 +1215,7 @@ LOCAL BlockReference parse_block(CompileUnit* restrict unit, Parser* restrict pa
         parser_error();
     }
 
-    assert(left_brace->id == TOKEN_ID_LEFT_BRACE);
+    check(left_brace->id == TOKEN_ID_LEFT_BRACE);
 
     let scope = new_scope(unit);
     Block* restrict block = arena_allocate(get_default_arena(unit), Block, 1);
@@ -1212,7 +1239,7 @@ LOCAL BlockReference parse_block(CompileUnit* restrict unit, Parser* restrict pa
     {
         let statement_reference = parse_statement(unit, parser, scope_ref);
         let statement_pointer = statement_pointer_from_reference(unit, statement_reference);
-        assert(!is_ref_valid(statement_pointer->next));
+        check(!is_ref_valid(statement_pointer->next));
         
         if (!is_ref_valid(block->first_statement))
         {
@@ -1350,11 +1377,11 @@ void parse(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
                 bool is_function = 0;
                 if (is_ref_valid(global_type))
                 {
-                    // let pointer_type = get_pointer_type(unit, global_type);
-                    // global_storage_pointer->type = pointer_type;
                     let global_type_p = type_pointer_from_reference(unit, global_type);
                     is_function = global_type_p->id == TYPE_ID_FUNCTION;
                 }
+
+                check(!is_ref_valid(global_storage_pointer->type));
 
                 ValueReference initial_value = {};
 
@@ -1374,6 +1401,16 @@ void parse(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
                         .attributes = function_attributes,
                     };
                     global_storage_pointer->id = VALUE_ID_FUNCTION;
+
+                    // Fix up argument scopes (from file to function)
+                    let argument_ref = argument_list;
+
+                    while (is_ref_valid(argument_ref))
+                    {
+                        let argument = argument_pointer_from_reference(unit, argument_ref);
+                        argument->variable.scope = function_scope_ref;
+                        argument_ref = argument->next;
+                    }
 
                     let block_ref = parse_block(unit, parser, function_scope_ref, expect_token(parser, TOKEN_ID_LEFT_BRACE));
                     let block = block_pointer_from_reference(unit, block_ref);

@@ -10,6 +10,91 @@ STRUCT(TypeAnalysis)
     bool must_be_constant;
 };
 
+LOCAL str type_to_string(CompileUnit* unit, TypeReference type_ref);
+
+LOCAL str calling_convention_to_string(CallingConvention cc)
+{
+    switch (cc)
+    {
+        break; case CALLING_CONVENTION_C: return S("cc(c)");
+        break; default: UNREACHABLE();
+    }
+}
+
+LOCAL str type_content_to_string(CompileUnit* unit, TypeReference type_ref)
+{
+    let type = type_pointer_from_reference(unit, type_ref);
+    let arena = get_default_arena(unit);
+
+    str part_buffer[1024];
+    u64 part_count = 0;
+
+    switch (type->id)
+    {
+        break; case TYPE_ID_FUNCTION:
+        {
+            check(!is_ref_valid(type->name));
+
+            part_buffer[part_count++] = S("fn [");
+            let cc = type->function.calling_convention;
+            let cc_str = calling_convention_to_string(cc);
+            part_buffer[part_count++] = cc_str;
+            part_buffer[part_count++] = S(" ");
+
+            let var_args_str = type->function.is_variable_argument ? S("varags") : S("no_varargs");
+            part_buffer[part_count++] = var_args_str;
+            part_buffer[part_count++] = S("] (");
+
+            let semantic_return_type = get_semantic_return_type(&type->function);
+
+            let semantic_argument_count = type->function.semantic_argument_count;
+
+            for (u64 i = 0; i < semantic_argument_count; i += 1)
+            {
+                let argument_type = get_semantic_argument_type(&type->function, i);
+                part_buffer[part_count++] = type_to_string(unit, argument_type);
+
+                part_buffer[part_count++] = S(", ");
+            }
+
+            part_buffer[part_count] = S(") -> ");
+            part_count += semantic_argument_count == 0;
+
+            part_buffer[part_count++] = type_to_string(unit, semantic_return_type);
+        }
+        break; case TYPE_ID_POINTER:
+        {
+            part_buffer[part_count++] = S("POINTER TO ");
+            part_buffer[part_count++] = type_to_string(unit, type->pointer.element_type);
+        }
+        break; default:
+        {
+            check(is_ref_valid(type->name));
+            part_buffer[part_count++] = string_from_reference(unit, type->name);
+        }
+    }
+
+    part_buffer[part_count++] = S(", analyzed: ");
+    part_buffer[part_count++] = type->analyzed ? S("YES") : S("NO");
+
+    let result = arena_join_string(arena, (StringSlice){ .pointer = part_buffer, .length = part_count }, false);
+    return result;
+}
+
+LOCAL str type_to_string(CompileUnit* unit, TypeReference type_ref)
+{
+    let arena = get_default_arena(unit);
+    str parts[] = {
+        S("Type{"),
+        format_integer(arena, (FormatIntegerOptions) { .value = type_ref.v }, false),
+        S(", "),
+        type_content_to_string(unit, type_ref),
+        S("}"),
+    };
+
+    return arena_join_string(arena, string_array_to_slice(parts), false);
+}
+
 LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* restrict value_reference, TypeReference expected_type, TypeAnalysis analysis);
 
 LOCAL void queue_top_level_declarations(CompileUnit* restrict unit, FileReference file_reference, TopLevelDeclarationReference first_tld)
@@ -34,13 +119,13 @@ LOCAL void queue_top_level_declarations(CompileUnit* restrict unit, FileReferenc
 
                 if (is_ref_valid(file->last_global))
                 {
-                    assert(is_ref_valid(file->first_global));
+                    check(is_ref_valid(file->first_global));
                     let last_global = global_pointer_from_reference(unit, file->last_global);
                     last_global->next = global_ref;
                 }
                 else
                 {
-                    assert(!is_ref_valid(file->first_global));
+                    check(!is_ref_valid(file->first_global));
                     file->first_global = global_ref; 
                 }
 
@@ -60,6 +145,10 @@ LOCAL TypeReference analyze_type(CompileUnit* restrict unit, TypeReference* rest
 
 LOCAL void garbage_collect_type(CompileUnit* unit, TypeReference type_ref)
 {
+    print(S("Deleting type "));
+    print(format_integer(get_default_arena(unit), (FormatIntegerOptions) { .value = type_ref.v }, false));
+    print(S("\n"));
+
     let type = type_pointer_from_reference(unit, type_ref);
     memset(type, 0, sizeof(Type));
 
@@ -68,13 +157,17 @@ LOCAL void garbage_collect_type(CompileUnit* unit, TypeReference type_ref)
     unit->free_types = type_ref;
 }
 
+LOCAL void recycle_type(CompileUnit* unit, TypeReference type_ref)
+{
+}
+
 LOCAL TypeReference get_function_type(CompileUnit* restrict unit, TypeReference* restrict type_reference)
 {
     let original_reference = *type_reference;
     let type = type_pointer_from_reference(unit, original_reference);
-    assert(type->id == TYPE_ID_FUNCTION);
-    assert(!is_ref_valid(type->name));
-    assert(!type->analyzed);
+    check(type->id == TYPE_ID_FUNCTION);
+    check(!is_ref_valid(type->name));
+    check(!type->analyzed);
 
     let semantic_types = type->function.semantic_types;
 
@@ -90,15 +183,19 @@ LOCAL TypeReference get_function_type(CompileUnit* restrict unit, TypeReference*
     let file = type->function.file;
     let has_debug_info = unit->has_debug_info;
 
+    print(S("===\nGetting function type: "));
+    print(type_to_string(unit, original_reference));
+    print(S("\n"));
+
     TypeReference result = {};
     let function_type_ref = unit->first_function_type;
 
     while (is_ref_valid(function_type_ref))
     {
-        assert(!ref_eq(function_type_ref, original_reference));
+        check(!ref_eq(function_type_ref, original_reference));
 
         let function_type = type_pointer_from_reference(unit, function_type_ref);
-        assert(function_type->id == TYPE_ID_FUNCTION);
+        check(function_type->id == TYPE_ID_FUNCTION);
 
         bool is_equal = (((calling_convention == function_type->function.calling_convention) & (is_variable_argument == function_type->function.is_variable_argument)) & ((semantic_argument_count == function_type->function.semantic_argument_count) & (has_debug_info ? ref_eq(file, function_type->function.file) : 1))) && memcmp(semantic_types, function_type->function.semantic_types, sizeof(semantic_types[0]) * (semantic_argument_count + 1)) == 0;
         if (is_equal)
@@ -107,41 +204,54 @@ LOCAL TypeReference get_function_type(CompileUnit* restrict unit, TypeReference*
             break;
         }
 
-        function_type_ref = function_type->function.next;
+        let next = function_type->function.next;
+        if (!is_ref_valid(next))
+        {
+            break;
+        }
+
+        function_type_ref = next;
     }
 
     if (is_ref_valid(result))
     {
-        assert(!ref_eq(result, original_reference));
+        print(S("Found a function type already: "));
+        print(type_to_string(unit, result));
+        print(S("\n"));
+
+        let result_type = type_pointer_from_reference(unit, result);
+        check(result_type->analyzed);
+        result_type->use_count += 1;
+        check(!ref_eq(result, original_reference));
         garbage_collect_type(unit, original_reference);
     }
     else
     {
+        print(S("No function type found. Reusing...\n"));
+
         result = original_reference;
 
         // No match, put this as the one reflecting the function type
         if (is_ref_valid(function_type_ref))
         {
-            assert(is_ref_valid(unit->first_function_type));
+            check(is_ref_valid(unit->first_function_type));
             let function_type = type_pointer_from_reference(unit, function_type_ref);
             function_type->function.next = result;
         }
         else
         {
-            assert(!is_ref_valid(unit->first_function_type));
+            check(!is_ref_valid(unit->first_function_type));
             unit->first_function_type = result;
         }
 
         let semantic_return_type = get_semantic_return_type(&type->function);
 
-        let calling_convention = type->function.calling_convention;
         let target = unit->target;
         let resolved_calling_convention = resolve_calling_convention(target, calling_convention);
 
         TypeReference abi_type_buffer[1024];
         u16 abi_type_count = 0;
 
-        let semantic_argument_count = type->function.semantic_argument_count;
         let return_abi = get_return_abi(&type->function);
 
         switch (resolved_calling_convention)
@@ -228,13 +338,13 @@ LOCAL TypeReference get_function_type(CompileUnit* restrict unit, TypeReference*
             }
         }
 
-        assert(is_ref_valid(abi_return_type));
+        check(is_ref_valid(abi_return_type));
         abi_type_buffer[abi_type_count] = abi_return_type;
         abi_type_count += 1;
 
         if (return_abi_kind == ABI_KIND_INDIRECT)
         {
-            assert(!return_abi->flags.sret_after_this);
+            check(!return_abi->flags.sret_after_this);
             todo();
         }
 
@@ -244,7 +354,18 @@ LOCAL TypeReference get_function_type(CompileUnit* restrict unit, TypeReference*
             {
                 for (u16 i = 0; i < semantic_argument_count; i += 1)
                 {
-                    todo();
+                    let is_named_argument = i < semantic_argument_count;
+                    check(is_named_argument);
+                    let argument_abi = get_argument_abi(&type->function, i);
+                    let semantic_argument_type = get_semantic_argument_type(&type->function, i);
+
+                    let abi = abi_system_v_classify_argument(unit, &type->function.available_registers, abi_type_buffer, (AbiSystemVClassifyArgumentOptions){
+                        .type = semantic_argument_type,
+                        .abi_start = abi_type_count,
+                        .is_named_argument = is_named_argument,
+                    });
+                    *argument_abi = abi;
+                    abi_type_count += abi.abi_count;
                 }
             }
             break; case RESOLVED_CALLING_CONVENTION_WIN64:
@@ -288,16 +409,146 @@ LOCAL TypeReference get_function_type(CompileUnit* restrict unit, TypeReference*
             }
         }
 
-        let abi_types = arena_allocate(unit_arena(unit, UNIT_ARENA_COMPILE_UNIT), TypeReference, abi_type_count);
+        let arena = unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
+        let abi_types = arena_allocate(arena, TypeReference, abi_type_count);
         memcpy(abi_types, abi_type_buffer, sizeof(abi_type_buffer[0]) * abi_type_count);
         type->function.abi_types = abi_types;
         type->function.abi_argument_count = abi_type_count - 1;
-
+        check(type->use_count == 1);
         type->analyzed = 1;
     }
 
+    print(S("===\n"));
     return result;
 }
+
+LOCAL TypeReference get_pointer_type(CompileUnit* restrict unit, TypeReference* pointer_type_reference, TypeReference element_type_reference)
+{
+    check(unit->phase >= COMPILE_PHASE_ANALYSIS);
+
+    Type* element_type = type_pointer_from_reference(unit, element_type_reference);
+    check(element_type->analyzed);
+    let last_pointer_type = unit->first_pointer_type;
+
+    TypeReference result = {};
+
+    print(S("---\nGetting pointer type..."));
+    if (pointer_type_reference)
+    {
+        print(S(" from "));
+        print(type_to_string(unit, *pointer_type_reference));
+        let type = type_pointer_from_reference(unit, *pointer_type_reference);
+        check(!is_ref_valid(type->name));
+        check(!type->analyzed);
+    }
+    print(S(" of element "));
+    print(type_to_string(unit, element_type_reference));
+    print(S("\n"));
+
+    while (is_ref_valid(last_pointer_type))
+    {
+        let lpt = type_pointer_from_reference(unit, last_pointer_type);
+        check(lpt->id == TYPE_ID_POINTER);
+        if (ref_eq(lpt->pointer.element_type, element_type_reference))
+        {
+            result = last_pointer_type;
+            break;
+        }
+
+        let next = lpt->pointer.next;
+        if (!is_ref_valid(next))
+        {
+            break;
+        }
+
+        last_pointer_type = next;
+    }
+
+    if (is_ref_valid(result))
+    {
+        print(S("Found a pointer type already: "));
+        print(type_to_string(unit, result));
+        print(S("\n"));
+
+        let result_type = type_pointer_from_reference(unit, result);
+        check(result_type->use_count);
+        check(result_type->analyzed);
+        result_type->use_count += 1;
+        if (pointer_type_reference)
+        {
+            let garbage_type_ref = *pointer_type_reference;
+            check(!ref_eq(result, garbage_type_ref));
+            let garbage_type = type_pointer_from_reference(unit, garbage_type_ref);
+            let use_count = garbage_type->use_count;
+            check(use_count);
+            use_count -= 1;
+            garbage_type->use_count = use_count;
+
+            if (use_count)
+            {
+                todo();
+            }
+            else
+            {
+                garbage_collect_type(unit, garbage_type_ref);
+            }
+
+            *pointer_type_reference = result;
+        }
+    }
+    else
+    {
+        StringReference name = {};
+        if (is_ref_valid(element_type->name))
+        {
+            str name_parts[] = {
+                S("&"),
+                string_from_reference(unit, element_type->name),
+            };
+            name = allocate_and_join_string(unit, string_array_to_slice(name_parts));
+        }
+
+        let pointer = pointer_type_reference ? type_pointer_from_reference(unit, *pointer_type_reference) : new_type(unit);
+        result = type_reference_from_pointer(unit, pointer);
+
+        print(S("No pointer type found. Reusing "));
+        print(format_integer(get_default_arena(unit), (FormatIntegerOptions){ .value = pointer_type_reference ? pointer_type_reference->v : type_reference_from_pointer(unit, pointer).v }, false));
+        print(S("...\n"));
+
+        if (pointer_type_reference)
+        {
+            check(pointer->use_count == 1);
+        }
+
+        *pointer = (Type) {
+            .pointer = {
+                .element_type = element_type_reference,
+            },
+            .name = name,
+            .scope = element_type->scope,
+            .id = TYPE_ID_POINTER,
+            .analyzed = 1,
+            .use_count = 1,
+        };
+
+        if (is_ref_valid(last_pointer_type))
+        {
+            check(is_ref_valid(unit->first_pointer_type));
+            let lpt = type_pointer_from_reference(unit, last_pointer_type);
+            lpt->pointer.next = result;
+        }
+        else
+        {
+            check(!is_ref_valid(unit->first_pointer_type));
+            unit->first_pointer_type = result;
+        }
+    }
+
+    print(S("---\n"));
+
+    return result;
+}
+
 
 LOCAL TypeReference analyze_type(CompileUnit* restrict unit, TypeReference* restrict type_reference)
 {
@@ -318,23 +569,28 @@ LOCAL TypeReference analyze_type(CompileUnit* restrict unit, TypeReference* rest
             {
                 result = get_function_type(unit, &original_reference);
             }
+            break; case TYPE_ID_POINTER:
+            {
+                let element_type = analyze_type(unit, &type_pointer->pointer.element_type);
+                result = get_pointer_type(unit, &original_reference, element_type);
+            }
             break; default:
             {
                 todo();
             }
         }
 
-        assert(is_ref_valid(result));
+        check(is_ref_valid(result));
         *type_reference = result;
     }
 
-    assert(is_ref_valid(result));
+    check(is_ref_valid(result));
     return result;
 }
 
 LOCAL u64 integer_max_value(u64 bit_count, bool is_signed)
 {
-    assert(bit_count <= 64);
+    check(bit_count <= 64);
     let result = bit_count == 64 ? ~(u64)0 : ((u64)1 << (bit_count - is_signed)) - 1;
     return result;
 }
@@ -360,7 +616,7 @@ LOCAL IdentifierSearch reference_identifier(CompileUnit* restrict unit, ValueRef
 {
     let original_reference = *value_ref;
     let value = value_pointer_from_reference(unit, original_reference);
-    assert(value->id == VALUE_ID_UNRESOLVED_IDENTIFIER);
+    check(value->id == VALUE_ID_UNRESOLVED_IDENTIFIER);
     let identifier_ref = value->unresolved_identifier.string;
     let current_scope = value->unresolved_identifier.scope;
     Variable* variable = {};
@@ -405,12 +661,19 @@ LOCAL IdentifierSearch reference_identifier(CompileUnit* restrict unit, ValueRef
                 {
                     let global = global_pointer_from_reference(unit, scope->function);
                     let storage = value_pointer_from_reference(unit, global->variable.storage);
-                    assert(storage->id == VALUE_ID_FUNCTION);
+                    check(storage->id == VALUE_ID_FUNCTION);
 
                     let argument_ref = storage->function.arguments;
                     while (is_ref_valid(argument_ref))
                     {
-                        todo();
+                        let argument = argument_pointer_from_reference(unit, argument_ref);
+                        if (ref_eq(identifier_ref, argument->variable.name))
+                        {
+                            variable = &argument->variable;
+                            break;
+                        }
+
+                        argument_ref = argument->next;
                     }
                 }
                 break; case SCOPE_ID_BLOCK:
@@ -474,8 +737,8 @@ LOCAL IdentifierSearch reference_identifier(CompileUnit* restrict unit, ValueRef
 
 LOCAL void check_types(CompileUnit* restrict unit, TypeReference expected, TypeReference source)
 {
-    assert(is_ref_valid(expected));
-    assert(is_ref_valid(expected));
+    check(is_ref_valid(expected));
+    check(is_ref_valid(expected));
 
     if (!ref_eq(expected, source))
     {
@@ -524,6 +787,11 @@ LOCAL bool value_is_constant(CompileUnit* restrict unit, Value* restrict value)
             let unary_value = value_pointer_from_reference(unit, value->unary);
             result = value_is_constant(unit, unary_value);
         }
+        break; case VALUE_ID_UNRESOLVED_IDENTIFIER:
+        {
+            // TODO: this might bring some problems
+            result = false;
+        }
         break; default: todo();
     }
 
@@ -545,6 +813,11 @@ LOCAL bool value_receives_type(CompileUnit* restrict unit, Value* restrict value
         {
             let unary_value = value_pointer_from_reference(unit, value->unary);
             result = value_receives_type(unit, unary_value);
+        }
+        break; case VALUE_ID_UNRESOLVED_IDENTIFIER:
+        {
+            // TODO: change?
+            result = false;
         }
         break; default: todo();
     }
@@ -595,11 +868,13 @@ LOCAL void analyze_binary(CompileUnit* restrict unit, ValueReference* restrict l
     }
     else if (!left_receives_type & right_receives_type)
     {
-        todo();
+        let _left_ref = analyze_value(unit, left_ref, (TypeReference){}, (TypeAnalysis){ .must_be_constant = options.must_be_constant });
+        let _left = value_pointer_from_reference(unit, _left_ref);
+        analyze_value(unit, right_ref, _left->type, (TypeAnalysis){ .must_be_constant = options.must_be_constant });
     }
     else if (!!left_receives_type & !!right_receives_type)
     {
-        assert(is_ref_valid(expected_type));
+        check(is_ref_valid(expected_type));
 
         if (options.is_boolean)
         {
@@ -614,8 +889,8 @@ LOCAL void analyze_binary(CompileUnit* restrict unit, ValueReference* restrict l
         UNREACHABLE();
     }
 
-    assert(ref_eq(*left_ref, original_left_ref));
-    assert(ref_eq(*right_ref, original_right_ref));
+    check(ref_eq(*left_ref, original_left_ref));
+    check(ref_eq(*right_ref, original_right_ref));
 
     if (is_ref_valid(expected_type))
     {
@@ -642,8 +917,8 @@ LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* r
     let original_reference = *value_reference;
     let value = value_pointer_from_reference(unit, original_reference);
 
-    assert(!value->analyzed);
-    assert(!is_ref_valid(value->type));
+    check(!value->analyzed);
+    check(!is_ref_valid(value->type));
 
     if (value->id == VALUE_ID_UNRESOLVED_IDENTIFIER)
     {
@@ -660,7 +935,7 @@ LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* r
             }
             break; case IDENTIFIER_SEARCH_VALUE:
             {
-                assert(ref_eq(original_reference, search.value));
+                check(ref_eq(original_reference, search.value));
             }
             break; case IDENTIFIER_SEARCH_TYPE:
             {
@@ -676,7 +951,9 @@ LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* r
 
     switch (original_id)
     {
-        break; case VALUE_ID_BINARY_ADD:
+        break;
+        case VALUE_ID_BINARY_ADD:
+        case VALUE_ID_BINARY_COMPARE_EQUAL:
         {
             let left_ref = &value->binary[0];
             let right_ref = &value->binary[1];
@@ -703,7 +980,12 @@ LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* r
             }
             else if (is_boolean)
             {
-                todo();
+                value_type_ref = get_u1(unit);
+
+                if (left_type->id == TYPE_ID_VECTOR)
+                {
+                    todo();
+                }
             }
             else
             {
@@ -726,17 +1008,30 @@ LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* r
                         break; default: UNREACHABLE();
                     }
                 }
+                break; case VALUE_ID_BINARY_COMPARE_EQUAL:
+                {
+                    switch (value_type->id)
+                    {
+                        break; case TYPE_ID_INTEGER:
+                        {
+                            value->id = VALUE_ID_BINARY_COMPARE_EQUAL_INTEGER;
+                        }
+                        break; default: UNREACHABLE();
+                    }
+                }
                 break; default: UNREACHABLE();
             }
 
             result = original_reference;
         }
         // Unary-generic case
-        break; case VALUE_ID_UNARY_MINUS:
+        break;
+        case VALUE_ID_UNARY_MINUS:
+        case VALUE_ID_UNARY_BOOLEAN_NOT:
         {
             let unary_expected_type = original_is_boolean ? expected_type : (TypeReference){};
             let unary_value_ref = analyze_value(unit, &value->unary, expected_type, (TypeAnalysis){ .must_be_constant = analysis.must_be_constant });
-            assert(ref_eq(unary_value_ref, value->unary));
+            check(ref_eq(unary_value_ref, value->unary));
             let unary_value = value_pointer_from_reference(unit, unary_value_ref);
             let value_type_ref = original_is_boolean ? get_u1(unit) : unary_value->type;
             typecheck(unit, expected_type, value_type_ref);
@@ -756,6 +1051,8 @@ LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* r
                         break; default: UNREACHABLE();
                     }
                 }
+                break;
+                case VALUE_ID_UNARY_BOOLEAN_NOT: {}
                 break; default: UNREACHABLE();
             }
 
@@ -802,7 +1099,6 @@ LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* r
                 }
                 break; default:
                 {
-                    os_file_write(os_get_stdout(), format_integer(get_default_arena(unit), (FormatIntegerOptions) { .value = type->id }, true));
                     analysis_error();
                 }
             }
@@ -814,7 +1110,7 @@ LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* r
         {
             let callable_ref = analyze_value(unit, &value->call.callable, (TypeReference){}, (TypeAnalysis){});
 
-            assert(!is_ref_valid(value->call.function_type));
+            check(!is_ref_valid(value->call.function_type));
             TypeReference function_type_ref = {};
 
             let callable = value_pointer_from_reference(unit, callable_ref);
@@ -829,16 +1125,16 @@ LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* r
                     {
                         break; case VALUE_KIND_RIGHT:
                         {
-                            assert(callable_type->id == TYPE_ID_FUNCTION);
+                            check(callable_type->id == TYPE_ID_FUNCTION);
                             function_type_ref = callable_type_ref;
                         }
                         break; case VALUE_KIND_LEFT:
                         {
-                            assert(callable_type->id == TYPE_ID_POINTER);
+                            check(callable_type->id == TYPE_ID_POINTER);
 
                             let element_type_ref = callable_type->pointer.element_type;
                             let element_type = type_pointer_from_reference(unit, element_type_ref);
-                            assert(element_type->id == TYPE_ID_FUNCTION);
+                            check(element_type->id == TYPE_ID_FUNCTION);
                             function_type_ref = element_type_ref;
                         }
                     }
@@ -846,9 +1142,9 @@ LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* r
                 break; default: todo();
             }
 
-            assert(is_ref_valid(function_type_ref));
+            check(is_ref_valid(function_type_ref));
             let function_type = type_pointer_from_reference(unit, function_type_ref);
-            assert(function_type->id == TYPE_ID_FUNCTION);
+            check(function_type->id == TYPE_ID_FUNCTION);
             value->call.function_type = function_type_ref;
 
             let arguments = value->call.arguments;
@@ -878,9 +1174,11 @@ LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* r
                 let argument_node = value_node_pointer_from_reference(unit, argument_node_ref);
                 let call_argument = &argument_node->item;
                 analyze_value(unit, call_argument, semantic_argument_type, (TypeAnalysis){});
+
+                argument_node_ref = argument_node->next;
             }
 
-            assert(!is_ref_valid(argument_node_ref) || is_variable_argument);
+            check(!is_ref_valid(argument_node_ref) || is_variable_argument);
 
             for (u16 i = semantic_argument_count; i < arguments.count; i += 1)
             {
@@ -902,100 +1200,28 @@ LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* r
         {
             UNREACHABLE();
         }
+        break; case VALUE_ID_INTRINSIC_TRAP:
+        {
+            result = original_reference;
+            value->type = get_noreturn_type(unit);
+        }
         break; default:
         {
             todo();
         }
     }
 
-    assert(is_ref_valid(result));
-    assert(is_ref_valid(value_pointer_from_reference(unit, result)->type));
+    check(is_ref_valid(result));
+    check(is_ref_valid(value_pointer_from_reference(unit, result)->type));
 
     return result;
 }
 
-LOCAL TypeReference get_pointer_type(CompileUnit* restrict unit, TypeReference* pointer_type_reference, TypeReference element_type_reference)
-{
-    assert(unit->phase >= COMPILE_PHASE_ANALYSIS);
-
-    Type* element_type = type_pointer_from_reference(unit, element_type_reference);
-    assert(element_type->analyzed);
-    let last_pointer_type = unit->first_pointer_type;
-
-    TypeReference result = {};
-
-    while (is_ref_valid(last_pointer_type))
-    {
-        let lpt = type_pointer_from_reference(unit, last_pointer_type);
-        assert(lpt->id == TYPE_ID_POINTER);
-        if (ref_eq(lpt->pointer.element_type, element_type_reference))
-        {
-            result = last_pointer_type;
-            break;
-        }
-
-        let next = lpt->pointer.next;
-        if (!is_ref_valid(next))
-        {
-            break;
-        }
-
-        last_pointer_type = next;
-    }
-
-    if (is_ref_valid(result))
-    {
-        if (pointer_type_reference)
-        {
-            assert(!ref_eq(result, *pointer_type_reference));
-            garbage_collect_type(unit, *pointer_type_reference);
-            *pointer_type_reference = result;
-        }
-    }
-    else
-    {
-        StringReference name = {};
-        if (is_ref_valid(element_type->name))
-        {
-            str name_parts[] = {
-                S("&"),
-                string_from_reference(unit, element_type->name),
-            };
-            name = allocate_and_join_string(unit, string_array_to_slice(name_parts));
-        }
-
-        let pointer = pointer_type_reference ? type_pointer_from_reference(unit, *pointer_type_reference) : new_type(unit);
-        *pointer = (Type) {
-            .pointer = {
-                .element_type = element_type_reference,
-            },
-            .name = name,
-            .scope = element_type->scope,
-            .id = TYPE_ID_POINTER,
-            .analyzed = 1,
-        };
-
-        result = type_reference_from_pointer(unit, pointer);
-
-        if (is_ref_valid(last_pointer_type))
-        {
-            assert(is_ref_valid(unit->first_pointer_type));
-            let lpt = type_pointer_from_reference(unit, last_pointer_type);
-            lpt->pointer.next = result;
-        }
-        else
-        {
-            assert(!is_ref_valid(unit->first_pointer_type));
-            unit->first_pointer_type = result;
-        }
-    }
-
-    return result;
-}
+LOCAL void analyze_block(CompileUnit* restrict unit, BlockReference block_ref);
 
 LOCAL void analyze_statement(CompileUnit* restrict unit, Statement* restrict statement)
 {
-    assert(!statement->analyzed);
+    check(!statement->analyzed);
     let statement_id = statement->id;
 
     let current_function = get_current_function(unit);
@@ -1055,13 +1281,33 @@ LOCAL void analyze_statement(CompileUnit* restrict unit, Statement* restrict sta
 
             local->variable.type = local_type_ref;
             let storage = value_pointer_from_reference(unit, local->variable.storage);
-            assert(!is_ref_valid(storage->type));
+            check(!is_ref_valid(storage->type));
             storage->type = get_pointer_type(unit, 0, local_type_ref);
         }
         break; case STATEMENT_ID_EXPRESSION:
         {
             analyze_value(unit, &statement->value, (TypeReference){}, (TypeAnalysis){});
-            todo();
+        }
+        break; case STATEMENT_ID_IF:
+        {
+            let condition = &statement->branch.condition;
+
+            analyze_value(unit, condition, (TypeReference){}, (TypeAnalysis){});
+
+            let taken_branch = statement_pointer_from_reference(unit, statement->branch.taken_branch);
+            analyze_statement(unit, taken_branch);
+
+            let else_branch_ref = statement->branch.else_branch;
+            if (is_ref_valid(else_branch_ref))
+            {
+                let else_branch = statement_pointer_from_reference(unit, else_branch_ref);
+                analyze_statement(unit, else_branch);
+            }
+        }
+        break; case STATEMENT_ID_BLOCK:
+        {
+            let block_ref = statement->block;
+            analyze_block(unit, block_ref);
         }
         break; default:
         {
@@ -1075,7 +1321,7 @@ LOCAL void analyze_statement(CompileUnit* restrict unit, Statement* restrict sta
 LOCAL void analyze_block(CompileUnit* restrict unit, BlockReference block_ref)
 {
     let block = block_pointer_from_reference(unit, block_ref);
-    assert(!block->analyzed);
+    check(!block->analyzed);
 
     let statement_ref = block->first_statement;
 
@@ -1119,7 +1365,7 @@ PUB_IMPL void analyze(CompileUnit* restrict unit)
 
         while (is_ref_valid(global_ref))
         {
-            assert(!is_ref_valid(unit->current_function));
+            check(!is_ref_valid(unit->current_function));
 
             let global = global_pointer_from_reference(unit, global_ref);
 
@@ -1140,16 +1386,47 @@ PUB_IMPL void analyze(CompileUnit* restrict unit)
 
                         let global_type_ref = analyze_type(unit, &global->variable.type);
                         let global_type = type_pointer_from_reference(unit, global_type_ref);
-                        assert(global_type->analyzed);
+                        check(global_type->analyzed);
                         if (global_type->id != TYPE_ID_FUNCTION)
                         {
                             analysis_error();
                         }
 
-                        assert(!is_ref_valid(global_storage->type));
-                        let global_storage_type = get_pointer_type(unit, 0, global_type_ref);
-                        assert(type_pointer_from_reference(unit, global_storage_type)->analyzed);
-                        global_storage->type = global_storage_type;
+                        check(!is_ref_valid(global_storage->type));
+                        let global_storage_type_ref = get_pointer_type(unit, 0, global_type_ref);
+                        let global_storage_type = type_pointer_from_reference(unit, global_storage_type_ref);
+                        check(global_storage_type->analyzed);
+                        check(global_storage_type->id == TYPE_ID_POINTER);
+                        let global_value_type_ref = global_storage_type->pointer.element_type;
+                        check(ref_eq(global_value_type_ref, global_type_ref));
+                        let global_value_type = type_pointer_from_reference(unit, global_value_type_ref);
+                        check(global_value_type == global_type);
+                        check(global_type->id == TYPE_ID_FUNCTION);
+                        global_storage->type = global_storage_type_ref;
+
+
+                        let semantic_argument_count = global_type->function.semantic_argument_count;
+                        let argument_ref = global_storage->function.arguments;
+
+                        for (u16 i = 0; i < semantic_argument_count; i += 1)
+                        {
+                            check(global_type->id == TYPE_ID_FUNCTION);
+                            let semantic_argument_type = get_semantic_argument_type(&global_type->function, i);
+                            let argument = argument_pointer_from_reference(unit, argument_ref);
+                            argument->variable.type = semantic_argument_type;
+
+                            argument_ref = argument->next;
+                        }
+
+                        check(!is_ref_valid(argument_ref));
+
+                        print(S("'"));
+                        print(string_from_reference(unit, global->variable.name));
+                        print(S("': "));
+                        print(format_integer(get_default_arena(unit), (FormatIntegerOptions){ .value = global_type_ref.v }, false));
+                        print(S(" -> "));
+                        print(format_integer(get_default_arena(unit), (FormatIntegerOptions){ .value = global_storage_type_ref.v }, false));
+                        print(S("\n"));
 
                         unit->current_function = global_ref;
 

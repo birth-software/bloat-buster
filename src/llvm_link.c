@@ -27,7 +27,7 @@ LOCAL const char** add_argument(ArgumentBuilder* restrict builder, const char* a
 
 LOCAL const char** add_argument_string(ArgumentBuilder* restrict builder, str argument)
 {
-    assert(str_is_zero_terminated(argument));
+    check(str_is_zero_terminated(argument));
     return add_argument(builder, argument.pointer);
 }
 
@@ -39,7 +39,7 @@ LOCAL u8* lld_allocate_function(void* context, u64 size, u64 alignment)
 
 PUB_IMPL str llvm_link_machine_code(Arena* arena, Arena* string_arena, CompileUnit** restrict compile_unit_pointer, u64 compile_unit_count, LinkOptions options)
 {
-    assert(arena != string_arena);
+    check(arena != string_arena);
 
     let target = compile_unit_pointer[0]->target;
 
@@ -241,20 +241,20 @@ PUB_IMPL str llvm_link_machine_code(Arena* arena, Arena* string_arena, CompileUn
 
     if (r.stdout_string.pointer)
     {
-        os_file_write(os_get_stdout(), *(str*)&r.stdout_string);
+        print(r.stdout_string);
     }
 
     if (r.stderr_string.pointer)
     {
-        os_file_write(os_get_stdout(), *(str*)&r.stderr_string);
+        print(r.stderr_string);
     }
 
     if (!is_success)
     {
-        assert(r.stdout_string.length == 0);
-        assert(r.stderr_string.length != 0);
+        check(r.stdout_string.length == 0);
+        check(r.stderr_string.length != 0);
 
-        error_message = *(str*)&r.stderr_string;
+        error_message = r.stderr_string;
     }
 
     return error_message;

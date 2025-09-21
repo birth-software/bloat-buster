@@ -18,8 +18,8 @@ LOCAL void llvm_module_set_flag(LLVMContextRef context, LLVMModuleRef module, LL
 
 LOCAL bool type_is_abi_equal(CompileUnit* restrict unit, TypeReference a, TypeReference b)
 {
-    assert(is_ref_valid(a));
-    assert(is_ref_valid(b));
+    check(is_ref_valid(a));
+    check(is_ref_valid(b));
 
     let result = ref_eq(a, b);
 
@@ -166,6 +166,16 @@ STRUCT(Generate)
     LLVMAttributeId attribute_table[LLVM_ATTRIBUTE_COUNT];
 };
 
+LOCAL LLVMValueRef emit_known_intrinsic_call(Generate* restrict generate, LLVMIntrinsicIndexReference index, LLVMTypeRef* argument_type_pointer, u64 argument_type_count, LLVMValueRef* argument_value_pointer, u32 argument_value_count)
+{
+    check(index < LLVM_INTRINSIC_COUNT);
+    let intrinsic_id = generate->intrinsic_table[index];
+    let intrinsic_function = LLVMGetIntrinsicDeclaration(generate->module, intrinsic_id.v, argument_type_pointer, argument_type_count);
+    let intrinsic_function_type = LLVMIntrinsicGetType(generate->context, intrinsic_id.v, argument_type_pointer, argument_type_count);
+    let call = LLVMBuildCall2(generate->builder, intrinsic_function_type, intrinsic_function, argument_value_pointer, argument_value_count, "");
+    return call;
+}
+
 LOCAL void generate_type_abi(CompileUnit* restrict unit, Generate* restrict generate, Type* type);
 LOCAL void generate_type_memory(CompileUnit* restrict unit, Generate* restrict generate, Type* type);
 LOCAL void generate_type_debug(CompileUnit* restrict unit, Generate* restrict generate, Type* type);
@@ -179,7 +189,7 @@ LOCAL void generate_type(CompileUnit* restrict unit, Generate* restrict generate
 
 LOCAL void generate_type_abi(CompileUnit* restrict unit, Generate* restrict generate, Type* type)
 {
-    assert(type->analyzed);
+    check(type->analyzed);
     if (!type->llvm.abi)
     {
         LLVMTypeRef result = {};
@@ -216,7 +226,18 @@ LOCAL void generate_type_abi(CompileUnit* restrict unit, Generate* restrict gene
                 for (u16 i = 0; i < abi_argument_count; i += 1)
                 {
                     let abi_argument_type = type_pointer_from_reference(unit, get_abi_argument_type(&type->function, i));
-                    generate_type(unit, generate, abi_return_type);
+                    generate_type(unit, generate, abi_argument_type);
+                    abi_argument_types[i] = abi_argument_type->llvm.abi;
+                }
+
+                let semantic_argument_count = type->function.semantic_argument_count;
+                let semantic_types = type->function.semantic_types;
+                let semantic_type_count = semantic_argument_count + 1;
+
+                for (u16 i = 0; i < semantic_type_count; i += 1)
+                {
+                    let semantic_type = type_pointer_from_reference(unit, semantic_types[i]);
+                    generate_type(unit, generate, semantic_type);
                 }
 
                 let function_type = LLVMFunctionType(abi_return_type->llvm.abi, abi_argument_types, abi_argument_count, type->function.is_variable_argument);
@@ -238,14 +259,14 @@ LOCAL void generate_type_abi(CompileUnit* restrict unit, Generate* restrict gene
             break; default: todo();
         }
 
-        assert(result);
+        check(result);
         type->llvm.abi = result;
     }
 }
 
 LOCAL void generate_type_memory(CompileUnit* restrict unit, Generate* restrict generate, Type* type)
 {
-    assert(type->analyzed);
+    check(type->analyzed);
 
     if (!type->llvm.memory)
     {
@@ -272,7 +293,7 @@ LOCAL void generate_type_memory(CompileUnit* restrict unit, Generate* restrict g
             break; default: todo();
         }
 
-        assert(result);
+        check(result);
         type->llvm.memory = result;
     }
 }
@@ -326,7 +347,7 @@ typedef enum LLVMDwarfTypeEncoding : unsigned
 
 LOCAL void generate_type_debug(CompileUnit* restrict unit, Generate* restrict generate, Type* type)
 {
-    assert(type->analyzed);
+    check(type->analyzed);
     if (unit->has_debug_info & !type->llvm.debug)
     {
         LLVMMetadataRef result = {};
@@ -401,7 +422,7 @@ LOCAL void generate_type_debug(CompileUnit* restrict unit, Generate* restrict ge
                 let semantic_argument_count = type->function.semantic_argument_count;
                 let is_variable_argument = type->function.is_variable_argument;
                 let type_array_count = semantic_argument_count + is_variable_argument + 1;
-                let type_array = arena_allocate(arena, LLVMMetadataRef, semantic_argument_count);
+                let type_array = arena_allocate(arena, LLVMMetadataRef, type_array_count);
 
                 let semantic_return_type = type_pointer_from_reference(unit, get_semantic_return_type(&type->function));
                 generate_type_debug(unit, generate, semantic_return_type);
@@ -410,13 +431,18 @@ LOCAL void generate_type_debug(CompileUnit* restrict unit, Generate* restrict ge
                 let argument_types = type_array + 1;
                 for (u16 i = 0; i < semantic_argument_count; i += 1)
                 {
-                    todo();
+                    let argument_type_ref = get_semantic_argument_type(&type->function, i);
+                    let argument_type = type_pointer_from_reference(unit, argument_type_ref);
+                    generate_type_debug(unit, generate, argument_type);
+                    check(argument_type->llvm.debug);
+                    argument_types[i] = argument_type->llvm.debug; 
                 }
 
                 if (is_variable_argument)
                 {
-                    let void_type = get_void_type(unit);
-                    todo();
+                    let void_type = type_pointer_from_reference(unit, get_void_type(unit));
+                    check(void_type->llvm.debug);
+                    type_array[semantic_argument_count] = void_type->llvm.debug;
                 }
 
                 let file = file_pointer_from_reference(unit, type->function.file);
@@ -426,14 +452,14 @@ LOCAL void generate_type_debug(CompileUnit* restrict unit, Generate* restrict ge
             break; default: todo();
         }
 
-        assert(result);
+        check(result);
         type->llvm.debug = result;
     }
 }
 
 LOCAL LLVMValueRef llvm_create_function(LLVMModuleRef module, LLVMTypeRef function_type, LLVMLinkage linkage, str name)
 {
-    assert(str_is_zero_terminated(name));
+    check(str_is_zero_terminated(name));
     let function = LLVMAddFunction(module, name.pointer, function_type);
     LLVMSetLinkage(function, linkage);
     return function;
@@ -443,7 +469,7 @@ LOCAL LLVMValueRef llvm_create_alloca(LLVMBuilderRef builder, LLVMTypeRef base_t
 {
     if (name.pointer)
     {
-        assert(str_is_zero_terminated(name));
+        check(str_is_zero_terminated(name));
     }
     else
     {
@@ -469,7 +495,7 @@ LOCAL LLVMValueRef llvm_create_load(LLVMBuilderRef builder, LLVMTypeRef type, LL
 {
     if (name.pointer)
     {
-        assert(str_is_zero_terminated(name));
+        check(str_is_zero_terminated(name));
     }
     else
     {
@@ -509,7 +535,7 @@ LOCAL LLVMTypeRef get_llvm_type(Type* type, TypeKind kind)
         break; case TYPE_KIND_ABI: result = type->llvm.abi;
         break; case TYPE_KIND_MEMORY: result = type->llvm.memory;
     }
-    assert(result);
+    check(result);
     return result;
 }
 
@@ -560,9 +586,9 @@ STRUCT(StoreOptions)
 
 LOCAL LLVMValueRef create_store(CompileUnit* restrict unit, Generate* restrict generate, StoreOptions options)
 {
-    assert(options.source);
-    assert(options.destination);
-    assert(options.type);
+    check(options.source);
+    check(options.destination);
+    check(options.type);
 
     let store_type = options.type;
     generate_type(unit, generate, store_type);
@@ -583,6 +609,18 @@ LOCAL LLVMValueRef create_store(CompileUnit* restrict unit, Generate* restrict g
 
     let store = llvm_create_store(generate->builder, source_value, options.destination, alignment, options.is_volatile, options.ordering);
     return store;
+}
+
+LOCAL LLVMValueRef memory_to_abi(CompileUnit* restrict unit, LLVMBuilderRef builder, LLVMValueRef value, Type* type)
+{
+    let result = value;
+
+    if (type->llvm.abi != type->llvm.memory)
+    {
+        result = LLVMBuildIntCast2(builder, result, type->llvm.abi, type_is_signed(unit, type), "");
+    }
+
+    return result;
 }
 
 STRUCT(LoadOptions)
@@ -612,7 +650,7 @@ LOCAL LLVMValueRef create_load(CompileUnit* restrict unit, Generate* restrict ge
     {
         if (options.kind == TYPE_KIND_ABI)
         {
-            todo();
+            result = memory_to_abi(unit, generate->builder, result, options.type);
         }
     }
 
@@ -654,8 +692,8 @@ STRUCT(LLVMAttributes)
 
 LOCAL void add_value_attribute(Generate* restrict generate, LLVMValueRef value, u32 index, LLVMAttributeCallback* callback, LLVMTypeRef semantic_type, LLVMAttributes attributes)
 {
-    assert(value);
-    assert(semantic_type);
+    check(value);
+    check(semantic_type);
 
     if (attributes.alignment)
     {
@@ -720,8 +758,6 @@ LOCAL void generate_function_attributes(CompileUnit* unit, Generate* restrict ge
     let abi_return_type = options.abi_types[0];
     let semantic_argument_count = options.semantic_argument_count;
     let abi_argument_count = options.abi_argument_count;
-    let argument_abis = return_abi + 1;
-    let abi_argument_types = options.abi_types + 1;
 
     add_value_attribute(generate, value, 0, callback, semantic_return_type->llvm.memory, (LLVMAttributes) {
         .alignment = 0,
@@ -742,9 +778,9 @@ LOCAL void generate_function_attributes(CompileUnit* unit, Generate* restrict ge
         let abi = return_abi;
         u16 abi_index = abi->flags.sret_after_this;
 
-        let abi_type = abi_argument_types[abi_index];
+        let abi_type = options.abi_types[abi_index + 1];
 
-        add_value_attribute(generate, value, abi_index + 1, callback, semantic_return_type->llvm.memory, (LLVMAttributes) {
+        add_value_attribute(generate, value, abi_index, callback, semantic_return_type->llvm.memory, (LLVMAttributes) {
             .alignment = get_alignment(unit, semantic_return_type),
             .sign_extend = 0,
             .zero_extend = 0,
@@ -759,6 +795,8 @@ LOCAL void generate_function_attributes(CompileUnit* unit, Generate* restrict ge
         total_abi_count += 1;
     }
 
+    let argument_abis = return_abi + 1;
+
     for (u16 i = 0; i < abi_argument_count; i += 1)
     {
         let abi = &argument_abis[i];
@@ -767,11 +805,13 @@ LOCAL void generate_function_attributes(CompileUnit* unit, Generate* restrict ge
 
         for (u16 abi_index = abi_start; abi_index < abi_start + abi_count; abi_index += 1)
         {
-            let abi_type = type_pointer_from_reference(unit, abi_argument_types[abi_index]);
+            check(abi_index >= 1);
+            let abi_type = type_pointer_from_reference(unit, options.abi_types[abi_index]);
             let semantic_type = type_pointer_from_reference(unit, abi->semantic_type);
             u32 alignment = abi->flags.kind == ABI_KIND_INDIRECT ? MAX(get_alignment(unit, semantic_type), 8) : 0;
-            assert(alignment == 0 || alignment >= 8);
-            add_value_attribute(generate, value, abi_index + 1, callback, semantic_type->llvm.memory, (LLVMAttributes) {
+            check(alignment == 0 || alignment >= 8);
+            check(semantic_type->llvm.memory);
+            add_value_attribute(generate, value, abi_index, callback, semantic_type->llvm.memory, (LLVMAttributes) {
                 .alignment = alignment,
                 .sign_extend = (abi->flags.kind == ABI_KIND_EXTEND) & abi->flags.sign_extension,
                 .zero_extend = (abi->flags.kind == ABI_KIND_EXTEND) & !abi->flags.sign_extension,
@@ -787,7 +827,7 @@ LOCAL void generate_function_attributes(CompileUnit* unit, Generate* restrict ge
         }
     }
 
-    assert(total_abi_count == abi_argument_count);
+    check(total_abi_count == abi_argument_count);
 
     const let index = ~(u32)0;
 
@@ -841,20 +881,20 @@ LOCAL LLVMValueRef generate_call(CompileUnit* restrict unit, Generate* restrict 
 {
     let is_valid_address_argument = address.pointer != 0;
 
-    assert(value->id == VALUE_ID_CALL);
+    check(value->id == VALUE_ID_CALL);
 
     let function_type_ref = value->call.function_type;
     let function_type = type_pointer_from_reference(unit, function_type_ref);
-    assert(function_type->id == TYPE_ID_FUNCTION);
+    check(function_type->id == TYPE_ID_FUNCTION);
     let callable = value_pointer_from_reference(unit, value->call.callable);
     let call_arguments = value->call.arguments;
-    assert(call_arguments.count < UINT16_MAX);
+    check(call_arguments.count < UINT16_MAX);
 
     // TODO: load function pointer
     generate_value(unit, generate, callable, TYPE_KIND_ABI, 0);
-    assert(callable->kind == VALUE_KIND_LEFT);
+    check(callable->kind == VALUE_KIND_LEFT);
     let callable_type = type_pointer_from_reference(unit, callable->type);
-    assert(callable_type->id == TYPE_ID_POINTER);
+    check(callable_type->id == TYPE_ID_POINTER);
 
     LLVMValueRef llvm_callable = callable->llvm;
     let is_direct_function_call = ref_eq(callable_type->pointer.element_type, function_type_ref);
@@ -869,17 +909,19 @@ LOCAL LLVMValueRef generate_call(CompileUnit* restrict unit, Generate* restrict 
     let declaration_abi_argument_count = function_type->function.abi_argument_count;
 
     LLVMValueRef llvm_abi_argument_buffer[4096];
+    LLVMTypeRef llvm_abi_argument_type_buffer[array_length(llvm_abi_argument_buffer)];
+    TypeReference abi_type_buffer[array_length(llvm_abi_argument_buffer)];
     AbiInformation abi_buffer[512];
-    TypeReference abi_types[array_length(llvm_abi_argument_buffer)];
+    u16 abi_count = 1;
 
-    assert(declaration_semantic_argument_count <= array_length(abi_buffer));
-    assert(declaration_abi_argument_count <= array_length(llvm_abi_argument_buffer));
+    let source_abi_types = function_type->function.abi_types;
+
+    check(declaration_semantic_argument_count <= array_length(abi_buffer));
+    check(declaration_abi_argument_count <= array_length(llvm_abi_argument_buffer));
     memcpy(abi_buffer, get_abis(&function_type->function), (declaration_semantic_argument_count + 1) * sizeof(AbiInformation));
-    memcpy(abi_types, function_type->function.abi_types, (declaration_abi_argument_count + 1) * sizeof(TypeReference));
+    memcpy(abi_type_buffer, source_abi_types, (declaration_abi_argument_count + 1) * sizeof(TypeReference));
     let return_abi = &abi_buffer[0];
     AbiKind return_abi_kind = return_abi->flags.kind;
-
-    u16 abi_argument_count = 0;
 
     switch (return_abi_kind)
     {
@@ -890,26 +932,141 @@ LOCAL LLVMValueRef generate_call(CompileUnit* restrict unit, Generate* restrict 
         break; default: {}
     }
 
+    let semantic_call_argument_node_ref = call_arguments.first;
+
     for (u16 call_argument_index = 0; call_argument_index < (u16)call_arguments.count; call_argument_index += 1)
     {
-        todo();
+        let is_named_argument = call_argument_index < declaration_semantic_argument_count;
+        let semantic_call_argument_node = value_node_pointer_from_reference(unit, semantic_call_argument_node_ref);
+        let semantic_call_argument_value_ref = semantic_call_argument_node->item;
+        let semantic_call_argument_value = value_pointer_from_reference(unit, semantic_call_argument_value_ref);
+
+        AbiInformation argument_abi = {};
+
+        if (is_named_argument)
+        {
+            argument_abi = *get_argument_abi(&function_type->function, call_argument_index);
+        }
+        else
+        {
+            todo();
+        }
+
+        let semantic_argument_type_ref = argument_abi.semantic_type;
+        check(is_ref_valid(semantic_argument_type_ref));
+
+        if (is_named_argument)
+        {
+            let abi_start = argument_abi.abi_start;
+            let abi_count = argument_abi.abi_count;
+
+            for (u16 i = abi_start; i < abi_start + abi_count; i += 1)
+            {
+                let abi_argument_type_ref = source_abi_types[i];
+                let abi_argument_type = type_pointer_from_reference(unit, abi_argument_type_ref);
+                check(abi_argument_type->llvm.abi);
+                abi_type_buffer[i] = abi_argument_type_ref;
+                llvm_abi_argument_type_buffer[i] = abi_argument_type->llvm.abi;
+            }
+        }
+
+        abi_buffer[call_argument_index + 1] = argument_abi;
+
+        if (is_ref_valid(argument_abi.padding.type))
+        {
+            todo();
+        }
+
+        check(abi_count == argument_abi.abi_start);
+
+        switch (argument_abi.flags.kind)
+        {
+            break; case ABI_KIND_IGNORE:
+            {
+                UNREACHABLE();
+            }
+            break; case ABI_KIND_IN_ALLOCA:
+            {
+                todo();
+            }
+            break; case ABI_KIND_DIRECT: case ABI_KIND_EXTEND:
+            {
+                let call_argument_type_ref = semantic_call_argument_value->type;
+                check(ref_eq(call_argument_type_ref, semantic_argument_type_ref));
+                let semantic_argument_type = type_pointer_from_reference(unit, semantic_argument_type_ref);
+                let type_evaluation_kind = get_type_evaluation_kind(unit, semantic_argument_type);
+                let coerce_to_type_ref = abi_get_coerce_to_type(&argument_abi);
+                let coerce_to_type = type_pointer_from_reference(unit, coerce_to_type_ref);
+
+                if ((coerce_to_type->id != TYPE_ID_STRUCT) & (argument_abi.attributes.direct.offset == 0) & type_is_abi_equal(unit, coerce_to_type_ref, semantic_argument_type_ref))
+                {
+                    check(argument_abi.abi_count == 1);
+
+                    generate_value(unit, generate, semantic_call_argument_value, TYPE_KIND_ABI, false);
+                    LLVMValueRef value = {};
+
+                    if (type_evaluation_kind == TYPE_EVALUATION_KIND_AGGREGATE)
+                    {
+                        todo();
+                    }
+                    else
+                    {
+                        value = semantic_call_argument_value->llvm;
+                    }
+
+                    check(value);
+
+                    if (!type_is_abi_equal(unit, coerce_to_type_ref, call_argument_type_ref))
+                    {
+                        todo();
+                    }
+
+                    // TODO: trivial bitcast if types don't match?
+                    
+                    llvm_abi_argument_buffer[abi_count++ - 1] = value;
+                }
+                else
+                {
+                    todo();
+                }
+            }
+            break; case ABI_KIND_INDIRECT: case ABI_KIND_INDIRECT_ALIASED:
+            {
+                todo();
+            }
+            break; case ABI_KIND_COERCE_AND_EXPAND:
+            {
+                todo();
+            }
+            break; case ABI_KIND_EXPAND:
+            {
+                todo();
+            }
+            break; default: todo();
+        }
+
+        check(abi_count == argument_abi.abi_start + argument_abi.abi_count);
+
+        semantic_call_argument_node_ref = semantic_call_argument_node->next;
     }
+
+    check(!is_ref_valid(semantic_call_argument_node_ref));
 
     if (function_type->function.is_variable_argument)
     {
-        assert(declaration_abi_argument_count <= abi_argument_count);
+        check(declaration_abi_argument_count <= abi_count - 1);
     }
     else
     {
-        assert(declaration_abi_argument_count == abi_argument_count);
+        check(declaration_abi_argument_count == abi_count - 1);
     }
 
-    for (u16 i = 0; i < abi_argument_count; i += 1)
+    for (u16 i = 0; i < abi_count - 1; i += 1)
     {
-        assert(llvm_abi_argument_buffer[i]);
+        check(llvm_abi_argument_buffer[i]);
     }
     
-    let llvm_call = LLVMBuildCall2(generate->builder, function_type->llvm.abi, llvm_callable, llvm_abi_argument_buffer, abi_argument_count, "");
+    let llvm_call = LLVMBuildCall2(generate->builder, function_type->llvm.abi, llvm_callable, llvm_abi_argument_buffer, abi_count - 1, "");
     LLVMCallConv calling_convention;
 
     switch (function_type->function.calling_convention)
@@ -922,9 +1079,9 @@ LOCAL LLVMValueRef generate_call(CompileUnit* restrict unit, Generate* restrict 
 
     generate_function_attributes(unit, generate, llvm_call, &LLVMAddCallSiteAttribute, (FunctionAttributeBuildOptions) {
         .abis = abi_buffer,
-        .abi_types = abi_types,
+        .abi_types = abi_type_buffer,
         .semantic_argument_count = call_arguments.count,
-        .abi_argument_count = abi_argument_count,
+        .abi_argument_count = abi_count - 1,
         .attributes = {},
     });
 
@@ -964,7 +1121,7 @@ LOCAL LLVMValueRef generate_call(CompileUnit* restrict unit, Generate* restrict 
 
 LOCAL void generate_value(CompileUnit* restrict unit, Generate* restrict generate, Value* restrict value, TypeKind type_kind, bool expect_constant)
 {
-    assert(unit->phase == COMPILE_PHASE_LLVM_IR_GENERATION);
+    check(unit->phase == COMPILE_PHASE_LLVM_IR_GENERATION);
 
     let must_be_constant = expect_constant | !is_ref_valid(unit->current_function);
 
@@ -972,7 +1129,7 @@ LOCAL void generate_value(CompileUnit* restrict unit, Generate* restrict generat
     let current_function_type = get_function_type_from_storage(unit, current_function);
 
     let value_type_ref = value->type;
-    assert(is_ref_valid(value_type_ref));
+    check(is_ref_valid(value_type_ref));
     let value_type = type_pointer_from_reference(unit, value_type_ref);
 
     LLVMValueRef llvm_value = 0;
@@ -998,20 +1155,20 @@ LOCAL void generate_value(CompileUnit* restrict unit, Generate* restrict generat
             {
                 break; case VALUE_KIND_LEFT:
                 {
-                    assert(ref_eq(value_type_ref, storage->type));
+                    check(ref_eq(value_type_ref, storage->type));
                     llvm_value = llvm_storage;
                 }
                 break; case VALUE_KIND_RIGHT:
                 {
-                    assert(ref_eq(value_type_ref, variable->type));
+                    check(ref_eq(value_type_ref, variable->type));
                     if (must_be_constant)
                     {
                         todo();
                     }
                     else
                     {
-                        // TODO: more fine-grained assertion
-                        assert(get_byte_size(unit, value_type) <= 16);
+                        // TODO: more fine-grained checkion
+                        check(get_byte_size(unit, value_type) <= 16);
                         let evaluation_kind = get_type_evaluation_kind(unit, value_type);
 
                         llvm_value = create_load(unit, generate, (LoadOptions) {
@@ -1030,6 +1187,13 @@ LOCAL void generate_value(CompileUnit* restrict unit, Generate* restrict generat
             let llvm_operand = operand->llvm;
             llvm_value = LLVMBuildNeg(generate->builder, llvm_operand, "");
         }
+        break; case VALUE_ID_UNARY_BOOLEAN_NOT:
+        {
+            let operand = value_pointer_from_reference(unit, value->unary);
+            generate_value(unit, generate, operand, TYPE_KIND_ABI, must_be_constant);
+            let llvm_operand = operand->llvm;
+            llvm_value = LLVMBuildNot(generate->builder, llvm_operand, "");
+        }
         break; case VALUE_ID_BINARY_ADD_INTEGER:
         {
             LLVMValueRef operands[2];
@@ -1042,21 +1206,40 @@ LOCAL void generate_value(CompileUnit* restrict unit, Generate* restrict generat
 
             llvm_value = LLVMBuildAdd(generate->builder, operands[0], operands[1], "");
         }
+        break; case VALUE_ID_BINARY_COMPARE_EQUAL_INTEGER:
+        {
+            LLVMValueRef operands[2];
+            for (u64 i = 0; i < array_length(operands); i += 1)
+            {
+                let operand = value_pointer_from_reference(unit, value->binary[i]);
+                generate_value(unit, generate, operand, TYPE_KIND_ABI, must_be_constant);
+                operands[i] = operand->llvm;
+            }
+
+            llvm_value = LLVMBuildICmp(generate->builder, LLVMIntEQ, operands[0], operands[1], "");
+        }
+        break; case VALUE_ID_INTRINSIC_TRAP:
+        {
+            let trap_call = emit_known_intrinsic_call(generate, LLVM_INTRINSIC_TRAP, 0, 0, 0, 0);
+            LLVMBuildUnreachable(generate->builder);
+            LLVMClearInsertionPosition(generate->builder);
+            llvm_value = trap_call;
+        }
         break; default: todo();
     }
 
-    assert(llvm_value);
+    check(llvm_value);
     value->llvm = llvm_value;
 }
 
 LOCAL void generate_assignment(CompileUnit* restrict unit, Generate* restrict generate, Value* right, Address address)
 {
-    assert(unit->phase == COMPILE_PHASE_LLVM_IR_GENERATION);
+    check(unit->phase == COMPILE_PHASE_LLVM_IR_GENERATION);
 
     let current_function = get_current_function(unit);
     let current_function_type = get_function_type_from_storage(unit, current_function);
 
-    assert(!right->llvm);
+    check(!right->llvm);
     let value_type = type_pointer_from_reference(unit, right->type);
     generate_type(unit, generate, value_type);
 
@@ -1107,7 +1290,7 @@ LOCAL void end_debug_local(CompileUnit* restrict unit, Generate* restrict genera
     let debug_location = LLVMDIBuilderCreateDebugLocation(generate->context, location_get_line(variable->location), location_get_column(variable->location), scope->llvm, generate->current_function.inlined_at);
     LLVMSetCurrentDebugLocation2(generate->builder, debug_location);
     let basic_block = LLVMGetInsertBlock(generate->builder);
-    assert(basic_block);
+    check(basic_block);
     let storage = value_pointer_from_reference(unit, variable->storage);
     LLVMDIBuilderInsertDeclareRecordAtEnd(generate->di_builder, storage->llvm, llvm_local, null_expression(generate), debug_location, basic_block);
 }
@@ -1132,12 +1315,38 @@ LOCAL void generate_local_declaration(CompileUnit* restrict unit, Generate* rest
     }
 }
 
+LOCAL LLVMValueRef generate_condition_out_of_value(CompileUnit* restrict unit, Generate* restrict generate, Value* value)
+{
+    let llvm_condition = value->llvm;
+    let condition_type = type_pointer_from_reference(unit, value->type);
+    check(llvm_condition);
+    check((condition_type->id == TYPE_ID_INTEGER) | (condition_type->id == TYPE_ID_POINTER));
+
+    if (!((condition_type->id == TYPE_ID_INTEGER) & (condition_type->integer.bit_count == 1)))
+    {
+        llvm_condition = LLVMBuildICmp(generate->builder, LLVMIntNE, llvm_condition, LLVMConstNull(condition_type->llvm.abi), "");
+    }
+
+    check(llvm_condition);
+
+    return llvm_condition;
+}
+
+LOCAL LLVMValueRef generate_condition(CompileUnit* unit, Generate* restrict generate, Value* value)
+{
+    generate_value(unit, generate, value, TYPE_KIND_ABI, false);
+    return generate_condition_out_of_value(unit, generate, value);
+}
+
+LOCAL void generate_block(CompileUnit* restrict unit, Generate* restrict generate, File* file, Block* restrict block);
+
 LOCAL void generate_statement(CompileUnit* restrict unit, Generate* restrict generate, File* file, Scope* restrict scope, Statement* statement)
 {
-    assert(unit->phase == COMPILE_PHASE_LLVM_IR_GENERATION);
+    check(unit->phase == COMPILE_PHASE_LLVM_IR_GENERATION);
 
     let current_function = get_current_function(unit);
     let current_function_type = get_function_type_from_storage(unit, current_function);
+    let llvm_function = value_pointer_from_reference(unit, current_function->variable.storage)->llvm;
 
     LLVMMetadataRef statement_location = 0;
     if (unit->has_debug_info)
@@ -1187,13 +1396,59 @@ LOCAL void generate_statement(CompileUnit* restrict unit, Generate* restrict gen
             let initial_value = value_pointer_from_reference(unit, local->initial_value);
             generate_assignment(unit, generate, initial_value, address);
         }
+        break; case STATEMENT_ID_IF:
+        {
+            let branch = statement->branch;
+
+            let condition = value_pointer_from_reference(unit, branch.condition);
+            let taken_branch = statement_pointer_from_reference(unit, branch.taken_branch);
+            let else_branch = is_ref_valid(branch.else_branch) ? statement_pointer_from_reference(unit, branch.else_branch) : 0;
+
+            let taken_block = LLVMAppendBasicBlockInContext(generate->context, llvm_function, "if.if");
+            let else_block = LLVMAppendBasicBlockInContext(generate->context, llvm_function, "if.else");
+            let exit_block = LLVMAppendBasicBlockInContext(generate->context, llvm_function, "if.exit");
+
+            let llvm_condition = generate_condition(unit, generate, condition);
+
+            LLVMBuildCondBr(generate->builder, llvm_condition, taken_block, else_block);
+            LLVMPositionBuilderAtEnd(generate->builder, taken_block);
+
+            generate_statement(unit, generate, file, scope, taken_branch);
+
+            if (LLVMGetInsertBlock(generate->builder))
+            {
+                LLVMBuildBr(generate->builder, exit_block);
+            }
+
+            LLVMPositionBuilderAtEnd(generate->builder, else_block);
+
+            if (else_branch)
+            {
+                generate_statement(unit, generate, file, scope, else_branch);
+            }
+
+            if (LLVMGetInsertBlock(generate->builder))
+            {
+                LLVMBuildBr(generate->builder, exit_block);
+            }
+
+            LLVMPositionBuilderAtEnd(generate->builder, exit_block);
+        }
+        break; case STATEMENT_ID_BLOCK:
+        {
+            generate_block(unit, generate, file, block_pointer_from_reference(unit, statement->block));
+        }
+        break; case STATEMENT_ID_EXPRESSION:
+        {
+            generate_value(unit, generate, value_pointer_from_reference(unit, statement->value), TYPE_KIND_ABI, false);
+        }
         break; default: todo();
     }
 }
 
 LOCAL void generate_block(CompileUnit* restrict unit, Generate* restrict generate, File* file, Block* restrict block)
 {
-    assert(unit->phase == COMPILE_PHASE_LLVM_IR_GENERATION);
+    check(unit->phase == COMPILE_PHASE_LLVM_IR_GENERATION);
     let block_scope = scope_pointer_from_reference(unit, block->scope);
 
     if (unit->has_debug_info)
@@ -1243,13 +1498,13 @@ LOCAL LLVMUseRef value_has_single_use(LLVMValueRef v)
 
 LOCAL LLVMValueRef store_pointer_operand(LLVMValueRef store)
 {
-    assert(LLVMIsAStoreInst(store));
+    check(LLVMIsAStoreInst(store));
     return LLVMGetOperand(store, 1);
 }
 
 LOCAL LLVMValueRef store_value_operand(LLVMValueRef store)
 {
-    assert(LLVMIsAStoreInst(store));
+    check(LLVMIsAStoreInst(store));
     return LLVMGetOperand(store, 0);
 }
 
@@ -1281,7 +1536,7 @@ LOCAL LLVMValueRef llvm_get_store_if_valid(LLVMValueRef user, LLVMValueRef retur
         return 0;
     }
 
-    assert(!LLVMIsAtomic(user) && !LLVMGetVolatile(user));
+    check(!LLVMIsAtomic(user) && !LLVMGetVolatile(user));
     return user;
 }
 
@@ -1345,7 +1600,7 @@ LOCAL LLVMValueRef llvm_find_return_value_dominating_store(LLVMBuilderRef builde
 
         while (insert_block != store_basic_block)
         {
-            assert(element_count < 64);
+            check(element_count < 64);
             bool seen = 0;
             for (u64 i = 0; i < 64; i += 1)
             {
@@ -1379,6 +1634,158 @@ LOCAL LLVMValueRef llvm_find_return_value_dominating_store(LLVMBuilderRef builde
     }
 
     return result;
+}
+
+LOCAL ParameterValue parameter_direct(LLVMValueRef value)
+{
+    check(value);
+    return (ParameterValue){ .value = value, .is_indirect = false };
+}
+
+LOCAL LLVMValueRef parameter_get_direct(ParameterValue* restrict parameter)
+{
+    check(!parameter->is_indirect);
+    return parameter->value;
+}
+
+LOCAL Address create_memory_temporary(CompileUnit* restrict unit, Generate* restrict generate, Type* restrict type, u32 alignment, str name)
+{
+    let alloca_type = convert_type_for_memory(unit, type);
+    let alloca = create_alloca(unit, generate, (AllocaOptions) {
+        .type = alloca_type,
+        .alignment = alignment,
+        .name = name,
+    });
+
+    return (Address) {
+        .pointer = alloca,
+        .element_type = alloca_type,
+        .alignment = alignment,
+        .offset = 0,
+    };
+}
+
+LOCAL bool type_has_boolean_representation(CompileUnit* restrict unit, Type* type)
+{
+    switch (type->id)
+    {
+        break; case TYPE_ID_INTEGER:
+        {
+            let bit_count = type->integer.bit_count;
+            return bit_count == 1;
+        }
+        break;
+        case TYPE_ID_POINTER:
+        {
+            return false;
+        }
+        break; default: todo();
+    }
+}
+
+LOCAL bool type_is_arbitrary_bit_integer(CompileUnit* restrict unit, Type* type)
+{
+    switch (type->id)
+    {
+        break; case TYPE_ID_INTEGER:
+        {
+            let bit_count = type->integer.bit_count;
+            let is_not_arbitrary_bit_integer = (bit_count == 1) | ((bit_count >= 8 & bit_count <= 128) & ((bit_count & (bit_count - 1)) == 0));
+            return !is_not_arbitrary_bit_integer;
+        }
+        break;
+        case TYPE_ID_POINTER:
+        {
+            return false;
+        }
+        break; default: todo();
+    }
+}
+
+LOCAL Type* convert_type_for_load_store(CompileUnit* restrict unit, Type* type)
+{
+    if (type_is_arbitrary_bit_integer(unit, type) | (type_pointer_from_reference(unit, get_u1(unit)) == type))
+    {
+        return type_pointer_from_reference(unit, get_integer_type(unit, get_byte_size(unit, type) * 8, type_is_signed(unit, type)));
+    }
+
+    if (type_is_vector_bool(unit, type))
+    {
+        todo();
+    }
+
+    return type;
+}
+
+// CodeGenFunction::EmitToMemory
+LOCAL LLVMValueRef emit_to_memory(CompileUnit* restrict unit, Generate* restrict generate, LLVMValueRef value, Type* type)
+{
+    if (type_has_boolean_representation(unit, type) | type_is_arbitrary_bit_integer(unit, type))
+    {
+        let store_type = convert_type_for_load_store(unit, type);
+        let result = LLVMBuildIntCast2(generate->builder, value, store_type->llvm.abi, type_is_signed(unit, type), "storedv");
+        return result;
+    }
+
+    if (type_is_vector_bool(unit, type))
+    {
+        todo();
+    }
+
+    return value;
+}
+
+LOCAL void address_create_store(CompileUnit* restrict unit, Generate* restrict generate, LLVMValueRef value, Address address, bool is_volatile)
+{
+    let ordering = LLVMAtomicOrderingNotAtomic;
+    llvm_create_store(generate->builder, value, address.pointer, address.alignment, is_volatile, ordering);
+}
+
+LOCAL void emit_store_of_scalar(CompileUnit* restrict unit, Generate* restrict generate, LLVMValueRef value, Type* value_type, Address address)
+{
+    // TODO: constant matrix
+    // TODO: if global value
+    let element_type = address.element_type;
+
+    if (element_type->id == TYPE_ID_VECTOR)
+    {
+        todo();
+    }
+
+    value = emit_to_memory(unit, generate, value, value_type);
+
+    // TODO: atomic
+    
+    // TODO:
+    bool is_volatile = false;
+    address_create_store(unit, generate, value, address, is_volatile);
+    // TODO: non-temporal store
+    // TODO: TBAA annotations
+}
+
+LOCAL void emit_debug_argument(CompileUnit* restrict unit, Generate* restrict generate, Argument* argument, File* file, LLVMBasicBlockRef basic_block)
+{
+    check(unit->has_debug_info);
+
+    bool always_preserve = 1;
+    LLVMDIFlags flags = {};
+
+    let scope = scope_pointer_from_reference(unit, argument->variable.scope);
+    let llvm_scope = scope->llvm;
+    check(llvm_scope);
+    let name = string_from_reference(unit, argument->variable.name);
+    let location = argument->variable.location;
+    let line = location_get_line(location);
+    let column = location_get_column(location);
+    let argument_type = type_pointer_from_reference(unit, argument->variable.type);
+    check(argument_type->llvm.debug);
+    let argument_storage = value_pointer_from_reference(unit, argument->variable.storage);
+
+    let parameter_variable = LLVMDIBuilderCreateParameterVariable(generate->di_builder, llvm_scope, name.pointer, name.length, argument->index, file->handle, line, argument_type->llvm.debug, always_preserve, flags);
+
+    let inlined_at = generate->current_function.inlined_at;
+    let debug_location = LLVMDIBuilderCreateDebugLocation(generate->context, line, column, llvm_scope, inlined_at);
+    LLVMDIBuilderInsertDeclareRecordAtEnd(generate->di_builder, argument_storage->llvm, parameter_variable, null_expression(generate), debug_location, basic_block);
 }
 
 PUB_IMPL GenerateIRResult llvm_generate_ir(CompileUnit* restrict unit, bool verify)
@@ -1510,7 +1917,7 @@ PUB_IMPL GenerateIRResult llvm_generate_ir(CompileUnit* restrict unit, bool veri
         llvm_error();
     }
 
-    assert(!error_message);
+    check(!error_message);
 
     let target_machine = LLVMCreateTargetMachineWithOptions(target, llvm_target_triple.pointer, target_machine_options);
 
@@ -1533,7 +1940,7 @@ PUB_IMPL GenerateIRResult llvm_generate_ir(CompileUnit* restrict unit, bool veri
     {
         let name = llvm_intrinsic_names[i];
         let id = LLVMLookupIntrinsicID(name.pointer, name.length);
-        assert(id != 0);
+        check(id != 0);
         generate->intrinsic_table[i] = (LLVMIntrinsicId){
             .v = id,
         };
@@ -1543,7 +1950,7 @@ PUB_IMPL GenerateIRResult llvm_generate_ir(CompileUnit* restrict unit, bool veri
     {
         let name = llvm_attribute_names[i];
         let id = LLVMGetEnumAttributeKindForName(name.pointer, name.length);
-        assert(id != 0);
+        check(id != 0);
         generate->attribute_table[i] = (LLVMAttributeId){
             .v = id,
         };
@@ -1585,8 +1992,13 @@ PUB_IMPL GenerateIRResult llvm_generate_ir(CompileUnit* restrict unit, bool veri
                 let global_storage = value_pointer_from_reference(unit, global_storage_ref);
                 let global_storage_type_ref = global_storage->type;
                 let global_storage_type = type_pointer_from_reference(unit, global_storage_type_ref);
-                assert(global_storage_type->id == TYPE_ID_POINTER);
-                assert(ref_eq(global_storage_type->pointer.element_type, global_type_ref)); 
+                check(global_storage_type->id == TYPE_ID_POINTER);
+                check(ref_eq(global_storage_type->pointer.element_type, global_type_ref)); 
+
+                print(S("===\n"));
+                print(S("'"));
+                print(global_name);
+                print(S("':\n"));
 
                 generate_type(unit, generate, global_type);
                 generate_type(unit, generate, global_storage_type);
@@ -1607,6 +2019,20 @@ PUB_IMPL GenerateIRResult llvm_generate_ir(CompileUnit* restrict unit, bool veri
                         let function = llvm_create_function(generate->module, global_type->llvm.abi, linkage, global_name);
                         global_storage->llvm = function;
 
+                        for (u16 i = 0; i < global_type->function.semantic_argument_count; i += 1)
+                        {
+                            let abi = get_argument_abi(&global_type->function, i);
+                            let arg_type_ref = get_semantic_argument_type(&global_type->function, i);
+                            check(ref_eq(abi->semantic_type, arg_type_ref));
+                            let arg_type = type_pointer_from_reference(unit, arg_type_ref);
+                            check(arg_type->llvm.abi);
+                            check(arg_type->llvm.memory);
+                            if (unit->has_debug_info)
+                            {
+                                check(arg_type->llvm.debug);
+                            }
+                        }
+
                         LLVMCallConv calling_convention;
 
                         switch (global_type->function.calling_convention)
@@ -1624,6 +2050,8 @@ PUB_IMPL GenerateIRResult llvm_generate_ir(CompileUnit* restrict unit, bool veri
                             .abi_argument_count = global_type->function.abi_argument_count,
                             .attributes = global_storage->function.attributes,
                         });
+
+                        print(S("===\n"));
 
                         if (unit->has_debug_info)
                         {
@@ -1676,21 +2104,22 @@ PUB_IMPL GenerateIRResult llvm_generate_ir(CompileUnit* restrict unit, bool veri
         {
             let global = global_pointer_from_reference(unit, global_ref);
             let global_storage = value_pointer_from_reference(unit, global->variable.storage);
+            let global_name = string_from_reference(unit, global->variable.name);
 
             if (global_storage->id == VALUE_ID_FUNCTION)
             {
                 unit->current_function = global_ref;
                 let function_pointer_type = type_pointer_from_reference(unit, global_storage->type);
-                assert(function_pointer_type->id == TYPE_ID_POINTER);
+                check(function_pointer_type->id == TYPE_ID_POINTER);
                 let function_type_ref = function_pointer_type->pointer.element_type;
                 let function_type = type_pointer_from_reference(unit, function_type_ref);
-                assert(function_type->id == TYPE_ID_FUNCTION);
+                check(function_type->id == TYPE_ID_FUNCTION);
 
                 let llvm_function = global_storage->llvm;
                 LLVMValueRef llvm_abi_argument_buffer[256];
                 let semantic_argument_count = function_type->function.semantic_argument_count;
                 let abi_argument_count = function_type->function.abi_argument_count;
-                assert(abi_argument_count <= array_length(llvm_abi_argument_buffer));
+                check(abi_argument_count <= array_length(llvm_abi_argument_buffer));
                 LLVMGetParams(llvm_function, llvm_abi_argument_buffer);
                 let llvm_abi_arguments = llvm_abi_argument_buffer;
 
@@ -1744,22 +2173,128 @@ PUB_IMPL GenerateIRResult llvm_generate_ir(CompileUnit* restrict unit, bool veri
                 for (u16 i = 0; i < semantic_argument_count; i += 1)
                 {
                     let argument = argument_pointer_from_reference(unit, argument_ref);
-                    todo();
+                    let argument_abi = get_argument_abi(&function_type->function, i);
+                    let abi_start = argument_abi->abi_start;
+                    let abi_count = argument_abi->abi_count;
+                    let abi_end = abi_start + abi_count;
+
+                    let llvm_abi_arguments = llvm_abi_argument_buffer + abi_start - 1;
+
+                    LLVMValueRef semantic_argument_storage = {};
+                    let semantic_argument_type = argument_abi->semantic_type;
+
+                    switch (argument_abi->flags.kind)
+                    {
+                        break; case ABI_KIND_IN_ALLOCA:
+                        {
+                            todo();
+                        }
+                        break; case ABI_KIND_INDIRECT: case ABI_KIND_INDIRECT_ALIASED:
+                        {
+                            todo();
+                        }
+                        break; case ABI_KIND_DIRECT: case ABI_KIND_EXTEND:
+                        {
+                            let llvm_first_argument = llvm_abi_arguments[0];
+                            let value = llvm_first_argument;
+                            let coerce_to_type_ref = abi_get_coerce_to_type(argument_abi);
+                            let coerce_to_type = type_pointer_from_reference(unit, coerce_to_type_ref);
+
+                            if ((coerce_to_type->id != TYPE_ID_STRUCT) & (argument_abi->attributes.direct.offset == 0) & type_is_abi_equal(unit, coerce_to_type_ref, semantic_argument_type))
+                            {
+                                check(argument_abi->abi_count == 1);
+
+                                if (coerce_to_type->llvm.abi != LLVMTypeOf(value))
+                                {
+                                    todo();
+                                }
+
+                                check(parameter_value_count < array_length(parameter_value_buffer));
+                                parameter_value_buffer[parameter_value_count++] = parameter_direct(value);
+                            }
+                            else
+                            {
+                                todo();
+                            }
+                        }
+                        break; default:
+                        {
+                            todo();
+                        }
+                    }
+
+                    argument_ref = argument->next;
                 }
 
+                check(!is_ref_valid(argument_ref));
+                check(parameter_value_count < array_length(parameter_value_buffer));
+
                 bool use_indirect_debug_address = 0;
+                argument_ref = global_storage->function.arguments;
 
                 for (u16 i = 0; i < parameter_value_count; i += 1)
                 {
-                    todo();
+                    let parameter_value = &parameter_value_buffer[i];
+                    let argument = argument_pointer_from_reference(unit, argument_ref);
+                    check(function_type->id == TYPE_ID_FUNCTION);
+                    let argument_abi = get_argument_abi(&function_type->function, i);
+                    let type_ref = argument->variable.type;
+                    let type = type_pointer_from_reference(unit, type_ref);
+                    let type_name = string_from_reference(unit, type->name);
+                    let abi_type_name = string_from_reference(unit, type_pointer_from_reference(unit, argument_abi->semantic_type)->name);
+                    check(ref_eq(type_ref, argument_abi->semantic_type));
+
+                    Address declaration_pointer = {};
+                    bool do_store = false;
+                    let type_evaluation_kind = get_type_evaluation_kind(unit, type);
+                    let is_scalar = type_evaluation_kind == TYPE_EVALUATION_KIND_SCALAR;
+
+                    // CodeGenFunction::EmitParmDecl
+                    if (parameter_value->is_indirect)
+                    {
+                        todo();
+                    }
+                    else
+                    {
+                        // TODO: argument alignment
+                        declaration_pointer = create_memory_temporary(unit, generate, type, get_alignment(unit, type), string_from_reference(unit, argument->variable.name));
+                        do_store = 1;
+                    }
+
+                    if (do_store)
+                    {
+                        let argument_value = parameter_get_direct(parameter_value);
+                        emit_store_of_scalar(unit, generate, argument_value, type, declaration_pointer);
+                    }
+
+                    let argument_storage = value_pointer_from_reference(unit, argument->variable.storage);
+                    argument_storage->llvm = declaration_pointer.pointer;
+
+                    if (unit->has_debug_info)
+                    {
+                        emit_debug_argument(unit, generate, argument, file, entry_block);
+                    }
+
+                    argument_ref = argument->next;
                 }
+
+                check(!is_ref_valid(argument_ref));
 
                 generate_block(unit, generate, file, block_pointer_from_reference(unit, global_storage->function.block));
 
                 let current_basic_block = LLVMGetInsertBlock(generate->builder);
                 if (current_basic_block)
                 {
-                    todo();
+                    check(!LLVMGetBasicBlockTerminator(current_basic_block));
+                    if (!LLVMGetFirstInstruction(current_basic_block) | !LLVMGetFirstUse((LLVMValueRef)current_basic_block))
+                    {
+                        LLVMReplaceAllUsesWith((LLVMValueRef)return_block, (LLVMValueRef)current_basic_block);
+                        LLVMDeleteBasicBlock(return_block);
+                    }
+                    else
+                    {
+                        todo();
+                    }
                 }
                 else
                 {
@@ -1775,14 +2310,14 @@ PUB_IMPL GenerateIRResult llvm_generate_ir(CompileUnit* restrict unit, bool veri
 
                     if (has_single_jump_to_return_block)
                     {
-                        assert(LLVMGetBasicBlockParent(return_block) != 0);
+                        check(LLVMGetBasicBlockParent(return_block) != 0);
                         let new_return_block = LLVMGetInstructionParent(user);
                         // Remove unconditional branch instruction to the return block
                         LLVMInstructionEraseFromParent(user);
 
-                        assert(!LLVMGetFirstUse((LLVMValueRef)return_block));
-                        assert(!LLVMGetBasicBlockTerminator(return_block));
-                        assert(LLVMGetBasicBlockParent(return_block) != 0);
+                        check(!LLVMGetFirstUse((LLVMValueRef)return_block));
+                        check(!LLVMGetBasicBlockTerminator(return_block));
+                        check(LLVMGetBasicBlockParent(return_block) != 0);
 
                         LLVMPositionBuilderAtEnd(generate->builder, new_return_block);
                         LLVMDeleteBasicBlock(return_block);
@@ -1823,7 +2358,7 @@ PUB_IMPL GenerateIRResult llvm_generate_ir(CompileUnit* restrict unit, bool veri
                                 {
                                     return_value = store_value_operand(store);
                                     let alloca = store_pointer_operand(store);
-                                    assert(alloca == return_address.pointer);
+                                    check(alloca == return_address.pointer);
 
                                     if (unit->has_debug_info)
                                     {
