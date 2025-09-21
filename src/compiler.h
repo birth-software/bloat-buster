@@ -44,6 +44,7 @@ typedef enum ValueId : u8
     VALUE_ID_FUNCTION,
     VALUE_ID_GLOBAL,
     VALUE_ID_LOCAL,
+    VALUE_ID_ARGUMENT,
     VALUE_ID_UNRESOLVED_IDENTIFIER,
 
     VALUE_ID_UNARY_MINUS,
@@ -79,6 +80,13 @@ typedef enum ValueId : u8
     VALUE_ID_BINARY_COMPARE_LESS_EQUAL,
     VALUE_ID_BINARY_COMPARE_GREATER,
     VALUE_ID_BINARY_COMPARE_GREATER_EQUAL,
+
+    VALUE_ID_BINARY_COMPARE_EQUAL_INTEGER,
+    VALUE_ID_BINARY_COMPARE_NOT_EQUAL_INTEGER,
+    VALUE_ID_BINARY_COMPARE_LESS_INTEGER,
+    VALUE_ID_BINARY_COMPARE_LESS_EQUAL_INTEGER,
+    VALUE_ID_BINARY_COMPARE_GREATER_INTEGER,
+    VALUE_ID_BINARY_COMPARE_GREATER_EQUAL_INTEGER,
 
     VALUE_ID_INTRINSIC_TRAP,
     VALUE_ID_INTRINSIC_EXTEND,
@@ -434,6 +442,7 @@ STRUCT(Type)
     TypeReference next;
     TypeId id;
     bool analyzed;
+    u32 use_count;
     struct
     {
         LLVMTypeRef abi;
@@ -594,6 +603,7 @@ STRUCT(CompileUnit)
     str artifact_path;
     ShowCallback* show_callback;
     str target_triple;
+    u32 pointer_alignment;
     Target target;
     BuildMode build_mode;
     bool has_debug_info;
@@ -691,12 +701,12 @@ PUB_DECL bool type_is_record(Type* restrict type);
 PUB_DECL u32 get_alignment(CompileUnit* restrict unit, Type* type);
 PUB_DECL ResolvedCallingConvention resolve_calling_convention(Target target, CallingConvention cc);
 
-PUB_DECL bool abi_can_have_padding_type(AbiInformation* restrict abi);
 PUB_DECL void abi_set_padding_type(AbiInformation* restrict abi, TypeReference type_reference);
 PUB_DECL void abi_set_direct_offset(AbiInformation* restrict abi, u32 offset);
 PUB_DECL void abi_set_direct_alignment(AbiInformation* restrict abi, u32 alignment);
 PUB_DECL void abi_set_can_be_flattened(AbiInformation* restrict abi, bool value);
 PUB_DECL TypeReference abi_get_coerce_to_type(AbiInformation* restrict abi);
+PUB_DECL TypeReference abi_get_padding_type(AbiInformation* restrict abi);
 
 PUB_DECL bool value_id_is_intrinsic(ValueId id);
 
@@ -741,5 +751,6 @@ PUB_DECL TypeReference get_abi_return_type(TypeFunction* restrict function);
 PUB_DECL TypeReference get_abi_argument_type(TypeFunction* restrict function, u16 abi_argument_index);
 PUB_DECL AbiInformation* restrict get_abis(TypeFunction* restrict function);
 PUB_DECL TypeEvaluationKind get_type_evaluation_kind(CompileUnit* restrict unit, Type* type);
+PUB_DECL AbiInformation* restrict get_argument_abi(TypeFunction* restrict function, u16 semantic_argument_index);
 
 PUB_DECL bool statement_is_block_like(StatementId id);

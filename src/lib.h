@@ -63,7 +63,6 @@
 
 #include <stdint.h>
 #include <string.h>
-#include <assert.h>
 #include <stdlib.h>
 #include <stdbool.h>
 
@@ -85,24 +84,12 @@ typedef double f64;
 typedef __float128 f128;
 #endif
 
-#define GB(x) 1024ull * MB(x)
-#define MB(x) 1024ull * KB(x)
-#define KB(x) 1024ull * (x)
-
+#ifndef BB_STRING
+#define BB_STRING
 STRUCT(str)
 {
     char* pointer;
     u64 length;
-};
-
-typedef void ShowCallback(void*,str);
-
-typedef struct Arena Arena;
-#if BB_INCLUDE_TESTS
-STRUCT(TestArguments)
-{
-    Arena* arena;
-    ShowCallback* show;
 };
 #endif
 
@@ -118,8 +105,30 @@ STRUCT(SliceOfStringSlice)
     u64 length;
 };
 
-#define S(strlit) (str) { (char*)strlit, strlen(strlit) }
+#define S(strlit) ((struct str) { (char*)(strlit), strlen(strlit) })
 #define string_array_to_slice(arr) (StringSlice) { arr, array_length(arr) }
+
+[[noreturn]] [[gnu::cold]] PUB_DECL void _assert_failed(u32 line, str function_name, str file_path);
+#ifdef NDEBUG
+#define check(ok) if (unlikely(!(ok))) UNREACHABLE()
+#else
+#define check(ok) if (unlikely(!(ok))) _assert_failed(__LINE__, S(__FUNCTION__), S(__FILE__))
+#endif
+
+#define GB(x) 1024ull * MB(x)
+#define MB(x) 1024ull * KB(x)
+#define KB(x) 1024ull * (x)
+
+typedef void ShowCallback(void*,str);
+
+typedef struct Arena Arena;
+#if BB_INCLUDE_TESTS
+STRUCT(TestArguments)
+{
+    Arena* arena;
+    ShowCallback* show;
+};
+#endif
 
 STRUCT(OpenFlags)
 {
@@ -310,6 +319,8 @@ PUB_DECL bool is_hexadecimal_alpha(char ch);
 PUB_DECL bool is_hexadecimal(char ch);
 PUB_DECL bool is_identifier_start(char ch);
 PUB_DECL bool is_identifier(char ch);
+
+PUB_DECL void print(str str);
 
 #if BB_INCLUDE_TESTS
 PUB_DECL bool lib_tests(TestArguments* restrict arguments);
