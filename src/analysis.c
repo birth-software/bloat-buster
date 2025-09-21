@@ -133,75 +133,163 @@ static TypeReference get_function_type(CompileUnit* restrict unit, TypeReference
         let semantic_return_type = get_semantic_return_type(&type->function);
 
         let calling_convention = type->function.calling_convention;
-        let resolved_calling_convention = resolve_calling_convention(calling_convention);
+        let target = unit->target;
+        let resolved_calling_convention = resolve_calling_convention(target, calling_convention);
+
+        TypeReference abi_type_buffer[1024];
+        u16 abi_type_count = 0;
+
+        let semantic_argument_count = type->function.semantic_argument_count;
+        let return_abi = get_return_abi(&type->function);
 
         switch (resolved_calling_convention)
         {
-            break; case CALLING_CONVENTION_SYSTEM_V:
+            break; case RESOLVED_CALLING_CONVENTION_SYSTEM_V:
             {
                 bool is_register_call = false;
 
                 type->function.available_registers = (AbiRegisterCount) {
-                    .system_v = {
+                    .x86_64 = {
                         .gpr = is_register_call ? 11 : 6,
                         .sse = is_register_call ? 16 : 8,
                     },
                 };
 
-                let return_abi = get_return_abi(&type->function);
                 *return_abi = abi_system_v_classify_return_type(unit, semantic_return_type);
-                AbiKind return_abi_kind = return_abi->flags.kind;
+            }
+            break; case RESOLVED_CALLING_CONVENTION_WIN64:
+            {
+                bool is_vector_call = false;
+                bool is_register_call = false;
 
-                TypeReference abi_return_type = {};
-
-                switch (return_abi_kind)
+                u32 free_sse_registers;
+                if (is_vector_call)
                 {
-                    break;
-                    case ABI_KIND_DIRECT:
-                    case ABI_KIND_EXTEND:
-                    {
-                        abi_return_type = analyze_type(unit, &return_abi->coerce_to_type);
-                    }
-                    break;
-                    case ABI_KIND_IGNORE:
-                    case ABI_KIND_INDIRECT:
-                    {
-                        abi_return_type = get_void_type(unit);
-                    }
-                    break; default:
-                    {
-                        UNREACHABLE();
-                    }
+                    free_sse_registers = 4;
+                }
+                else if (is_register_call)
+                {
+                    free_sse_registers = 16;
+                }
+                else
+                {
+                    free_sse_registers = 0;
                 }
 
-                TypeReference abi_type_buffer[1024];
-                u16 abi_type_count = 0;
+                type->function.available_registers = (AbiRegisterCount) {
+                    .x86_64 = {
+                        .gpr = 0,
+                        .sse = free_sse_registers,
+                    },
+                };
 
-                assert(is_ref_valid(abi_return_type));
-                abi_type_buffer[abi_type_count] = abi_return_type;
-                abi_type_count += 1;
-
-                if (return_abi_kind == ABI_KIND_INDIRECT)
-                {
-                    assert(!return_abi->flags.sret_after_this);
-                    todo();
-                }
-
-                for (u16 i = 0; i < type->function.semantic_argument_count; i += 1)
-                {
-                    todo();
-                }
-
-                let abi_types = arena_allocate(unit_arena(unit, UNIT_ARENA_COMPILE_UNIT), TypeReference, abi_type_count);
-                memcpy(abi_types, abi_type_buffer, sizeof(abi_type_buffer[0]) * abi_type_count);
-                type->function.abi_types = abi_types;
-                type->function.abi_argument_count = abi_type_count - 1;
+                let return_abi = get_return_abi(&type->function);
+                *return_abi = win64_classify_type(unit, semantic_return_type, (Win64ClassifyOptions){
+                    .free_sse = &type->function.available_registers.x86_64.sse,
+                    .is_return_type = true,
+                    .is_vector_call = is_vector_call,
+                    .is_register_call = is_register_call,
+                });
+            }
+            break; case RESOLVED_CALLING_CONVENTION_AARCH64:
+            {
+                let aarch64_abi = get_aarch64_abi_kind(target.os);
+                *return_abi = aarch64_classify_return_type(unit, semantic_return_type, is_variable_argument, aarch64_abi);
             }
             break; default:
             {
                 UNREACHABLE();
             }
         }
+
+        AbiKind return_abi_kind = return_abi->flags.kind;
+
+        TypeReference abi_return_type = {};
+
+        switch (return_abi_kind)
+        {
+            break;
+            case ABI_KIND_DIRECT:
+            case ABI_KIND_EXTEND:
+            {
+                abi_return_type = analyze_type(unit, &return_abi->coerce_to_type);
+            }
+            break;
+            case ABI_KIND_IGNORE:
+            case ABI_KIND_INDIRECT:
+            {
+                abi_return_type = get_void_type(unit);
+            }
+            break; default:
+            {
+                UNREACHABLE();
+            }
+        }
+
+        assert(is_ref_valid(abi_return_type));
+        abi_type_buffer[abi_type_count] = abi_return_type;
+        abi_type_count += 1;
+
+        if (return_abi_kind == ABI_KIND_INDIRECT)
+        {
+            assert(!return_abi->flags.sret_after_this);
+            todo();
+        }
+
+        switch (resolved_calling_convention)
+        {
+            break; case RESOLVED_CALLING_CONVENTION_SYSTEM_V:
+            {
+                for (u16 i = 0; i < semantic_argument_count; i += 1)
+                {
+                    todo();
+                }
+            }
+            break; case RESOLVED_CALLING_CONVENTION_WIN64:
+            {
+                bool is_vector_call = false;
+                bool is_register_call = false;
+
+                let free_sse_registers = type->function.available_registers.x86_64.sse;
+
+                if (is_vector_call)
+                {
+                    free_sse_registers = 6;
+                }
+                else if (is_register_call)
+                {
+                    free_sse_registers = 16;
+                }
+
+                type->function.available_registers.x86_64.sse = free_sse_registers;
+
+                for (u16 i = 0; i < semantic_argument_count; i += 1)
+                {
+                    todo();
+                }
+
+                if (is_vector_call)
+                {
+                    todo();
+                }
+            }
+            break; case RESOLVED_CALLING_CONVENTION_AARCH64:
+            {
+                for (u16 i = 0; i < semantic_argument_count; i += 1)
+                {
+                    todo();
+                }
+            }
+            break; default:
+            {
+                UNREACHABLE();
+            }
+        }
+
+        let abi_types = arena_allocate(unit_arena(unit, UNIT_ARENA_COMPILE_UNIT), TypeReference, abi_type_count);
+        memcpy(abi_types, abi_type_buffer, sizeof(abi_type_buffer[0]) * abi_type_count);
+        type->function.abi_types = abi_types;
+        type->function.abi_argument_count = abi_type_count - 1;
 
         type->analyzed = 1;
     }
@@ -227,17 +315,6 @@ static TypeReference analyze_type(CompileUnit* restrict unit, TypeReference* res
             break; case TYPE_ID_FUNCTION:
             {
                 result = get_function_type(unit, &original_reference);
-
-                // TypeReference new_reference = {};
-                // new_reference = get_function_type(unit, &new_reference);
-                // if (ref_eq(new_reference, original_reference))
-                // {
-                //
-                //     result = original_reference;
-                // }
-                // else
-                // {
-                // }
             }
             break; default:
             {
@@ -723,6 +800,7 @@ static ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* 
                 }
                 break; default:
                 {
+                    os_file_write(os_get_stdout(), format_integer(get_default_arena(unit), (FormatIntegerOptions) { .value = type->id }, true));
                     analysis_error();
                 }
             }

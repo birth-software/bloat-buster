@@ -833,26 +833,6 @@ static void generate_function_attributes(CompileUnit* unit, Generate* restrict g
     }
 }
 
-typedef enum TypeEvaluationKind : u8
-{
-    TYPE_EVALUATION_KIND_SCALAR,
-    TYPE_EVALUATION_KIND_AGGREGATE,
-    TYPE_EVALUATION_KIND_COMPLEX,
-} TypeEvaluationKind;
-
-static TypeEvaluationKind get_type_evaluation_kind(CompileUnit* restrict unit, Type* type)
-{
-    switch (type->id)
-    {
-        break;
-        case TYPE_ID_INTEGER:
-        {
-            return TYPE_EVALUATION_KIND_SCALAR;
-        }
-        break; default: todo();
-    }
-}
-
 static void generate_value(CompileUnit* restrict unit, Generate* restrict generate, Value* restrict value, TypeKind type_kind, bool expect_constant);
 
 static LLVMValueRef generate_call(CompileUnit* restrict unit, Generate* restrict generate, Value* value, Address address)

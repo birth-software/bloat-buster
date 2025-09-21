@@ -115,70 +115,6 @@ static TypeReference abi_system_v_get_integer_type_at_offset(CompileUnit* restri
     todo();
 }
 
-static bool is_integral_or_enumeration_type(CompileUnit* restrict unit, TypeReference type_reference)
-{
-    let type_pointer = type_pointer_from_reference(unit, type_reference);
-
-    switch (type_pointer->id)
-    {
-        break;
-        case TYPE_ID_INTEGER:
-        {
-            return 1;
-        }
-        break; default:
-        {
-            UNREACHABLE();
-        }
-    }
-}
-
-static bool is_promotable_integer_type_for_abi(CompileUnit* restrict unit, TypeReference type_reference)
-{
-    let type_pointer = type_pointer_from_reference(unit, type_reference);
-
-    switch (type_pointer->id)
-    {
-        break; case TYPE_ID_INTEGER:
-        {
-            let bit_count = type_pointer->integer.bit_count;
-            return bit_count < 32;
-        }
-        break; default:
-        {
-            todo();
-        }
-    }
-}
-
-STRUCT(AbiSystemVDirectOptions)
-{
-    TypeReference semantic_type;
-    TypeReference type;
-    TypeReference padding;
-    u32 offset;
-    u32 alignment;
-    bool cannot_be_flattened;
-};
-
-static AbiInformation abi_system_v_get_direct(CompileUnit* restrict unit, AbiSystemVDirectOptions options)
-{
-    AbiInformation result = {
-        .semantic_type = options.semantic_type,
-        .flags = {
-            .kind = ABI_KIND_DIRECT,
-        },
-    };
-
-    abi_set_coerce_to_type(&result, options.type);
-    abi_set_padding_type(&result, options.padding);
-    abi_set_direct_offset(&result, options.offset);
-    abi_set_direct_alignment(&result, options.alignment);
-    abi_set_can_be_flattened(&result, !options.cannot_be_flattened);
-
-    return result;
-}
-
 AbiInformation abi_system_v_classify_return_type(CompileUnit* restrict unit, TypeReference type_reference)
 {
     let classify = abi_system_v_classify_type(unit, type_reference, (ClassifyOptions){});
@@ -196,9 +132,9 @@ AbiInformation abi_system_v_classify_return_type(CompileUnit* restrict unit, Typ
 
             if ((classify.classes[1] == ABI_SYSTEM_V_CLASS_NONE) & (result_type_pointer->id == TYPE_ID_INTEGER))
             {
-                if (is_integral_or_enumeration_type(unit, type_reference))
+                if (type_is_integral_or_enumeration(unit, type_reference))
                 {
-                    if (is_promotable_integer_type_for_abi(unit, type_reference))
+                    if (type_is_promotable_integer_for_abi(unit, type_pointer_from_reference(unit, type_reference)))
                     {
                         todo();
                     }
@@ -233,7 +169,7 @@ AbiInformation abi_system_v_classify_return_type(CompileUnit* restrict unit, Typ
         todo();
     }
 
-    let result = abi_system_v_get_direct(unit, (AbiSystemVDirectOptions) {
+    let result = abi_get_direct(unit, (AbiDirectOptions) {
         .semantic_type = type_reference,
         .type = result_type,
     });
