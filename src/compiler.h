@@ -34,21 +34,10 @@ typedef enum CallingConvention : u8
 
 typedef enum ResolvedCallingConvention : u8
 {
-    CALLING_CONVENTION_SYSTEM_V,
+    RESOLVED_CALLING_CONVENTION_SYSTEM_V,
+    RESOLVED_CALLING_CONVENTION_WIN64,
+    RESOLVED_CALLING_CONVENTION_AARCH64,
 } ResolvedCallingConvention;
-
-static ResolvedCallingConvention resolve_calling_convention(CallingConvention cc)
-{
-    switch (cc)
-    {
-        break; case CALLING_CONVENTION_C:
-        {
-            // TODO:
-            return CALLING_CONVENTION_SYSTEM_V;
-        }
-        break; default: UNREACHABLE();
-    }
-}
 
 typedef enum ValueKind : u8
 {
@@ -290,7 +279,7 @@ UNION(AbiRegisterCount)
     {
         u32 gpr;
         u32 sse;
-    } system_v;
+    } x86_64;
 };
 
 typedef enum AbiKind : u8
@@ -934,7 +923,8 @@ static Type* allocate_free_type(CompileUnit* restrict unit)
 
 static inline Type* new_type(CompileUnit* restrict unit)
 {
-    return is_ref_valid(unit->free_types) ? allocate_free_type(unit) : new_types(unit, 1);
+    let result = is_ref_valid(unit->free_types) ? allocate_free_type(unit) : new_types(unit, 1);
+    return result;
 }
 
 static inline Value* new_values(CompileUnit* restrict unit, u32 value_count)
@@ -1039,17 +1029,17 @@ static Type* get_function_type_from_storage(CompileUnit* restrict unit, Global* 
 [[noreturn]] static void todo_internal(CompileUnit* unit, u32 line, str function_name, str file_path)
 {
     let arena = get_default_arena(unit);
-    str parts[] = {\
+    str parts[] = {
         S("TODO at: "),
-        file_path,
-        S(":"),
         function_name,
+        S(" in "),
+        file_path,
         S(":"),
         format_integer(arena, (FormatIntegerOptions) {
             .format = INTEGER_FORMAT_DECIMAL,
             .value = line,
-        }, false)
-    };\
+        }, false),
+    };
     unit_show(unit, arena_join_string(arena, string_array_to_slice(parts), true));
     fail();
 }
@@ -1087,6 +1077,25 @@ static u64 get_byte_size(CompileUnit* restrict unit, Type* type_pointer)
     }
 }
 
+static u64 get_bit_size(CompileUnit* restrict unit, Type* restrict type)
+{
+    assert(unit->phase >= COMPILE_PHASE_ANALYSIS);
+
+    switch (type->id)
+    {
+        break; case TYPE_ID_INTEGER:
+        {
+            let bit_count = type->integer.bit_count;
+            let byte_count = aligned_byte_count_from_bit_count(bit_count);
+            return byte_count;
+        }
+        break; default:
+        {
+            todo();
+        }
+    }
+}
+
 static bool type_is_signed(CompileUnit* restrict unit, Type* type)
 {
     switch (type->id)
@@ -1097,6 +1106,30 @@ static bool type_is_signed(CompileUnit* restrict unit, Type* type)
             return is_signed;
         }
         break; default: todo();
+    }
+}
+
+static bool type_is_record(Type* restrict type)
+{
+    switch (type->id)
+    {
+        case TYPE_ID_VOID:
+        case TYPE_ID_NORETURN:
+        case TYPE_ID_INTEGER:
+        case TYPE_ID_FLOAT:
+        case TYPE_ID_FUNCTION:
+        case TYPE_ID_ENUM:
+        case TYPE_ID_POINTER:
+        case TYPE_ID_OPAQUE:
+        case TYPE_ID_ARRAY:
+        case TYPE_ID_BITS:
+        case TYPE_ID_VECTOR:
+        case TYPE_ID_ENUM_ARRAY:
+            return false;
+        case TYPE_ID_STRUCT:
+        case TYPE_ID_UNION:
+            return true;
+        case TYPE_ID_COUNT: UNREACHABLE();
     }
 }
 
@@ -1114,3 +1147,158 @@ static u32 get_alignment(CompileUnit* restrict unit, Type* type)
         break; default: todo();
     }
 }
+
+static ResolvedCallingConvention resolve_calling_convention(Target target, CallingConvention cc)
+{
+    switch (cc)
+    {
+        break; case CALLING_CONVENTION_C:
+        {
+            switch (target.cpu)
+            {
+                break; case CPU_ARCH_UNKNOWN: UNREACHABLE();
+                break; case CPU_ARCH_X86_64:
+                {
+                    switch (target.os)
+                    {
+                        break; case OPERATING_SYSTEM_UNKNOWN: UNREACHABLE();
+                        break; case OPERATING_SYSTEM_LINUX: return RESOLVED_CALLING_CONVENTION_SYSTEM_V;
+                        break; case OPERATING_SYSTEM_MACOS: return RESOLVED_CALLING_CONVENTION_SYSTEM_V;
+                        break; case OPERATING_SYSTEM_WINDOWS: return RESOLVED_CALLING_CONVENTION_WIN64;
+                    }
+                }
+                break; case CPU_ARCH_AARCH64:
+                {
+                    return RESOLVED_CALLING_CONVENTION_AARCH64;
+                }
+                break; default: UNREACHABLE();
+            }
+        }
+        break; default: UNREACHABLE();
+    }
+}
+
+STRUCT(Win64ClassifyOptions)
+{
+    u32* free_sse;
+    bool is_return_type;
+    bool is_vector_call;
+    bool is_register_call;
+};
+
+STRUCT(AbiDirectOptions)
+{
+    TypeReference semantic_type;
+    TypeReference type;
+    TypeReference padding;
+    u32 offset;
+    u32 alignment;
+    bool cannot_be_flattened;
+};
+
+typedef enum Aarch64AbiKind : u8
+{
+    AARCH64_ABI_KIND_AAPCS,
+    AARCH64_ABI_KIND_DARWIN_PCS,
+    AARCH64_ABI_KIND_WIN64,
+    AARCH64_ABI_KIND_AAPCS_SOFT,
+} Aarch64AbiKind;
+
+static Aarch64AbiKind get_aarch64_abi_kind(OperatingSystem os)
+{
+    switch (os)
+    {
+        break; case OPERATING_SYSTEM_UNKNOWN: UNREACHABLE();
+        break; case OPERATING_SYSTEM_LINUX: return AARCH64_ABI_KIND_AAPCS;
+        break; case OPERATING_SYSTEM_MACOS: return AARCH64_ABI_KIND_DARWIN_PCS;
+        break; case OPERATING_SYSTEM_WINDOWS: return AARCH64_ABI_KIND_WIN64;
+    }
+}
+
+typedef enum TypeEvaluationKind : u8
+{
+    TYPE_EVALUATION_KIND_SCALAR,
+    TYPE_EVALUATION_KIND_AGGREGATE,
+    TYPE_EVALUATION_KIND_COMPLEX,
+} TypeEvaluationKind;
+
+static TypeEvaluationKind get_type_evaluation_kind(CompileUnit* restrict unit, Type* type)
+{
+    switch (type->id)
+    {
+        case TYPE_ID_VOID:
+        case TYPE_ID_NORETURN:
+        case TYPE_ID_FUNCTION:
+        case TYPE_ID_OPAQUE:
+            UNREACHABLE();
+        case TYPE_ID_INTEGER:
+        case TYPE_ID_FLOAT:
+        case TYPE_ID_ENUM:
+        case TYPE_ID_POINTER:
+        case TYPE_ID_BITS:
+        case TYPE_ID_VECTOR:
+            return TYPE_EVALUATION_KIND_SCALAR;
+        case TYPE_ID_ARRAY:
+        case TYPE_ID_STRUCT:
+        case TYPE_ID_UNION:
+        case TYPE_ID_ENUM_ARRAY:
+            return TYPE_EVALUATION_KIND_AGGREGATE;
+        case TYPE_ID_COUNT:
+            UNREACHABLE();
+    }
+}
+
+static bool type_is_aggregate_for_abi (CompileUnit* restrict unit, Type* type)
+{
+    let evaluation_kind = get_type_evaluation_kind(unit, type);
+    bool is_member_function_pointer_type = false; // TODO
+    return (evaluation_kind != TYPE_EVALUATION_KIND_SCALAR) | is_member_function_pointer_type;
+}
+
+static bool type_is_promotable_integer_for_abi(CompileUnit* restrict unit, Type* type)
+{
+    if (type->id == TYPE_ID_BITS)
+    {
+        todo();
+    }
+
+    if (type->id == TYPE_ID_ENUM)
+    {
+        todo();
+    }
+
+    return (type->id == TYPE_ID_INTEGER) & (type->integer.bit_count < 32);
+}
+
+static bool type_is_integral_or_enumeration(CompileUnit* restrict unit, TypeReference type_reference)
+{
+    let type_pointer = type_pointer_from_reference(unit, type_reference);
+
+    switch (type_pointer->id)
+    {
+        break;
+        case TYPE_ID_INTEGER:
+        {
+            return 1;
+        }
+        break; default:
+        {
+            UNREACHABLE();
+        }
+    }
+}
+
+STRUCT(AbiExtendOptions)
+{
+    TypeReference semantic_type;
+    TypeReference type;
+    bool is_signed;
+};
+
+
+AbiInformation win64_classify_type(CompileUnit* restrict unit, TypeReference type_reference, Win64ClassifyOptions options);
+AbiInformation aarch64_classify_return_type(CompileUnit* restrict unit, TypeReference type_reference, bool is_variadic_function, Aarch64AbiKind kind);
+
+AbiInformation abi_get_ignore(TypeReference semantic_type);
+AbiInformation abi_get_direct(CompileUnit* restrict unit, AbiDirectOptions options);
+AbiInformation abi_get_extend(CompileUnit* restrict unit, AbiExtendOptions options);

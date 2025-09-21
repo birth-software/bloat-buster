@@ -69,7 +69,10 @@ add_executable(bb
     ${PROJECT_DIR}/lexer.c
     ${PROJECT_DIR}/parser.c
     ${PROJECT_DIR}/analysis.c
+    ${PROJECT_DIR}/abi.c
     ${PROJECT_DIR}/abi_system_v.c
+    ${PROJECT_DIR}/abi_win64.c
+    ${PROJECT_DIR}/abi_aarch64.c
     ${PROJECT_DIR}/llvm_common.c
     ${PROJECT_DIR}/llvm_generate.c
     ${PROJECT_DIR}/llvm_optimize.c
