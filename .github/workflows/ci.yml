@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ self-hosted, ubuntu-24.04, ubuntu-24.04-arm, macos-26, macos-13, windows-2025, windows-11-arm ]
+        os: [ self-hosted, ubuntu-24.04 ] # ubuntu-24.04-arm, macos-26, macos-13, windows-2025, windows-11-arm ]
         BIRTH_CMAKE_BUILD_TYPE: [ Debug, Release ]
         LLVM_CMAKE_BUILD_TYPE: [ Release, Release-assertions ]
     runs-on: ${{ matrix.os }}

@@ -13,9 +13,9 @@ constant_add: fn () s32 =
 
 //constant_and: fn () s32 = 
 //{
-//    return 1 & 2;
+    //return 1 & 2;
 //}
-//
+
 //constant_div: fn () s32 =
 //{
 //    return 0 / 5;
@@ -175,13 +175,13 @@ constant_add: fn () s32 =
 //    return a_int - (b_int + c_int);
 //}
 
-//require: fn (ok: u1) void = 
-//{
-//    if (!ok)
-//    {
-//        @trap();
-//    }
-//}
+require: fn (ok: u1) void = 
+{
+    if (!ok)
+    {
+        @trap();
+    }
+}
 
 //basic_slice_receiver: fn (slice: []u8) void =
 //{
@@ -8028,12 +8028,11 @@ constant_add: fn () s32 =
 main [export]: fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32 = 
 {
     rc := return_constant();
-    return rc;
-    //require(rc == 0);
+    require(rc == 0);
 
-//    const_add := constant_add();
-//    require(const_add == 0);
-//
+    const_add := constant_add();
+    require(const_add == 0);
+
 //    const_and := constant_and();
 //    require(const_and == 0);
 //
@@ -8304,6 +8303,6 @@ main [export]: fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32 =
 //    require(integer_max_128());
 //
 //    union_alignment();
-//
-//    return 0;
+
+    return 0;
 }
