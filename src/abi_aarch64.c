@@ -1,3 +1,5 @@
+#pragma once
+
 #include <compiler.h>
 
 typedef enum Aarch64VectorType
@@ -17,18 +19,18 @@ typedef enum Aarch64VectorType
 } Aarch64VectorType;
 
 // TODO
-static Aarch64VectorType get_vector_kind(Type* type)
+LOCAL Aarch64VectorType get_vector_kind(Type* type)
 {
     return AARCH64_VECTOR_GENERIC;
 }
 
 // TODO
-static bool is_sve_sizeless_builtin_type(Type* type)
+LOCAL bool is_sve_sizeless_builtin_type(Type* type)
 {
     return false;
 }
 
-static bool pass_as_aggregate_type(CompileUnit* restrict unit, Type* type, Aarch64AbiKind kind)
+LOCAL bool pass_as_aggregate_type(CompileUnit* restrict unit, Type* type, Aarch64AbiKind kind)
 {
     if ((kind == AARCH64_ABI_KIND_AAPCS) & is_sve_sizeless_builtin_type(type))
     {
@@ -38,7 +40,7 @@ static bool pass_as_aggregate_type(CompileUnit* restrict unit, Type* type, Aarch
     return type_is_aggregate_for_abi(unit, type);
 }
 
-AbiInformation aarch64_classify_return_type(CompileUnit* restrict unit, TypeReference return_type_reference, bool is_variadic_function, Aarch64AbiKind kind)
+PUB_IMPL AbiInformation aarch64_classify_return_type(CompileUnit* restrict unit, TypeReference return_type_reference, bool is_variadic_function, Aarch64AbiKind kind)
 {
     let return_type = type_pointer_from_reference(unit, return_type_reference);
     let byte_size = get_byte_size(unit, return_type);

@@ -9,22 +9,14 @@ typedef u32 RawReference;
 #define is_ref_valid(x) !!((x).v)
 #define ref_eq(a, b) (((typeof(a))(a)).v == ((typeof(a))(b)).v)
 
+#define todo() todo_internal(unit, __LINE__, S(__FUNCTION__), S(__FILE__))
+
 STRUCT(SourceLocation)
 {
     u32 line_number_offset;
     u32 line_byte_offset;
     u32 column_offset;
 };
-
-static u32 location_get_line(SourceLocation location)
-{
-    return location.line_number_offset + 1;
-}
-
-static u32 location_get_column(SourceLocation location)
-{
-    return location.column_offset + 1;
-}
 
 typedef enum CallingConvention : u8
 {
@@ -44,7 +36,6 @@ typedef enum ValueKind : u8
     VALUE_KIND_RIGHT,
     VALUE_KIND_LEFT,
 } ValueKind;
-
 
 typedef enum ValueId : u8
 {
@@ -96,19 +87,6 @@ typedef enum ValueId : u8
 
     VALUE_ID_REFERENCED_VARIABLE,
 } ValueId;
-
-static inline bool value_id_is_intrinsic(ValueId id)
-{
-    switch (id)
-    {
-        case VALUE_ID_INTRINSIC_VALUE:
-        case VALUE_ID_INTRINSIC_TYPE:
-        case VALUE_ID_INTRINSIC_UNRESOLVED:
-            return 1;
-        default:
-            return 0;
-    }
-}
 
 typedef enum TypeId : u8
 {
@@ -230,6 +208,13 @@ STRUCT(ValueCall)
     TypeReference function_type;
 };
 
+STRUCT(AbiExtendOptions)
+{
+    TypeReference semantic_type;
+    TypeReference type;
+    bool is_signed;
+};
+
 STRUCT(Value)
 {
     union
@@ -340,55 +325,6 @@ STRUCT(AbiInformation)
     u16 abi_count;
 };
 
-static bool abi_can_have_coerce_to_type(AbiInformation* restrict abi)
-{
-    AbiKind kind = abi->flags.kind;
-    return (kind == ABI_KIND_DIRECT) | (kind == ABI_KIND_EXTEND) | (kind == ABI_KIND_COERCE_AND_EXPAND);
-}
-
-static void abi_set_coerce_to_type(AbiInformation* restrict abi, TypeReference type_reference)
-{
-    assert(abi_can_have_coerce_to_type(abi));
-    abi->coerce_to_type = type_reference;
-}
-
-static bool abi_can_have_padding_type(AbiInformation* restrict abi)
-{
-    AbiKind kind = abi->flags.kind;
-    return ((kind == ABI_KIND_DIRECT) | (kind == ABI_KIND_EXTEND)) | ((kind == ABI_KIND_INDIRECT) | (kind == ABI_KIND_INDIRECT_ALIASED)) | (kind == ABI_KIND_EXPAND);
-}
-
-static void abi_set_padding_type(AbiInformation* restrict abi, TypeReference type_reference)
-{
-    assert(abi_can_have_padding_type(abi));
-    abi->padding.type = type_reference;
-}
-
-static void abi_set_direct_offset(AbiInformation* restrict abi, u32 offset)
-{
-    assert((abi->flags.kind == ABI_KIND_DIRECT) || (abi->flags.kind == ABI_KIND_EXTEND));
-    abi->attributes.direct.offset = offset;
-}
-
-static void abi_set_direct_alignment(AbiInformation* restrict abi, u32 alignment)
-{
-    assert((abi->flags.kind == ABI_KIND_DIRECT) || (abi->flags.kind == ABI_KIND_EXTEND));
-    abi->attributes.direct.alignment = alignment;
-}
-
-static void abi_set_can_be_flattened(AbiInformation* restrict abi, bool value)
-{
-    assert(abi->flags.kind == ABI_KIND_DIRECT);
-    abi->flags.can_be_flattened = value;
-}
-
-
-static inline TypeReference abi_get_coerce_to_type(AbiInformation* restrict abi)
-{
-    assert(abi_can_have_coerce_to_type(abi));
-    return abi->coerce_to_type;
-}
-
 STRUCT(AbiSystemVClassifyArgumentTypeOptions)
 {
     u32 available_gpr;
@@ -425,44 +361,6 @@ STRUCT(TypeFunction)
     TypeReference next;
 };
 
-static inline TypeReference get_semantic_return_type(TypeFunction* restrict function)
-{
-    return function->semantic_types[0];
-}
-
-static inline TypeReference get_semantic_argument_type(TypeFunction* restrict function, u16 semantic_argument_index)
-{
-    assert(semantic_argument_index < function->semantic_argument_count);
-    return function->semantic_types[semantic_argument_index + 1];
-}
-
-static inline TypeReference get_abi_return_type(TypeFunction* restrict function)
-{
-    return function->abi_types[0];
-}
-
-static inline TypeReference get_abi_argument_type(TypeFunction* restrict function, u16 abi_argument_index)
-{
-    assert(abi_argument_index < function->abi_argument_count);
-    return function->abi_types[abi_argument_index + 1];
-}
-
-static inline AbiInformation* restrict get_abis(TypeFunction* restrict function)
-{
-    return (AbiInformation*)(function->semantic_types + function->semantic_argument_count);
-}
-
-static inline AbiInformation* restrict get_return_abi(TypeFunction* restrict function)
-{
-    return &get_abis(function)[0];
-}
-
-static inline AbiInformation* restrict get_argument_abi(TypeFunction* restrict function, u16 semantic_argument_index)
-{
-    assert(semantic_argument_index < function->semantic_argument_count);
-    return &get_abis(function)[semantic_argument_index + 1];
-}
-
 STRUCT(Block)
 {
     ScopeReference scope;
@@ -484,27 +382,6 @@ typedef enum StatementId : u8
     STATEMENT_ID_FOR,
     STATEMENT_ID_EXPRESSION,
 } StatementId;
-
-static inline bool statement_is_block_like(StatementId id)
-{
-    switch (id)
-    {
-        break;
-        case STATEMENT_ID_BLOCK:
-        case STATEMENT_ID_IF:
-        case STATEMENT_ID_WHEN:
-        case STATEMENT_ID_SWITCH:
-        case STATEMENT_ID_WHILE:
-        case STATEMENT_ID_FOR:
-        {
-            return 1;
-        }
-        break; default:
-        {
-            return 0;
-        }
-    }
-}
 
 STRUCT(Branch)
 {
@@ -723,243 +600,6 @@ STRUCT(CompileUnit)
     bool verbose;
 };
 
-static void unit_show(CompileUnit* restrict unit, str message)
-{
-    let show = unit->show_callback;
-    if (likely(show))
-    {
-        show(unit, message);
-        show(unit, S("\n"));
-    }
-}
-
-static inline Arena* unit_arena(CompileUnit* unit, UnitArenaKind kind)
-{
-    Arena* arena = (Arena*)unit - 1;
-    let result = (Arena*)((u8*)arena + ((s64)kind * arena->reserved_size));
-    return result;
-}
-
-static Arena* get_default_arena(CompileUnit* restrict unit)
-{
-    return unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
-}
-
-#define reference_offset_functions(O, o, AU) \
-static inline O ## Reference o ## _reference_from_pointer(CompileUnit* restrict unit, O* restrict o) \
-{\
-    let arena = unit_arena(unit, AU);\
-    let o ## _byte_pointer = (u8*)o;\
-    let arena_byte_pointer = (u8*)arena;\
-    let arena_bottom = arena_byte_pointer;\
-    let arena_top = arena_byte_pointer + arena->position;\
-    assert(o ## _byte_pointer > arena_bottom && o ## _byte_pointer < arena_top);\
-    let sub = o ## _byte_pointer - arena_byte_pointer;\
-    assert(sub < UINT32_MAX);\
-    return (O ## Reference) {\
-        .v = (u32)(sub + 1),\
-    };\
-}\
-static inline O* restrict o ## _pointer_from_reference(CompileUnit* restrict unit, O ## Reference o_reference) \
-{\
-    assert(o_reference.v != 0);\
-    let arena = unit_arena(unit, AU);\
-    let arena_byte_pointer = (u8*)arena;\
-    let arena_bottom = arena_byte_pointer;\
-    let arena_top = arena_byte_pointer + arena->position;\
-    let o ## _byte_pointer = arena_byte_pointer + (o_reference.v - 1);\
-    assert(o ## _byte_pointer > arena_bottom && o ## _byte_pointer < arena_top);\
-    let o = (O* restrict)o ## _byte_pointer; \
-    return o;\
-}
-
-reference_offset_functions(Scope, scope, UNIT_ARENA_COMPILE_UNIT)
-reference_offset_functions(File, file, UNIT_ARENA_COMPILE_UNIT)
-reference_offset_functions(Argument, argument, UNIT_ARENA_COMPILE_UNIT)
-reference_offset_functions(Local, local, UNIT_ARENA_COMPILE_UNIT)
-reference_offset_functions(Global, global, UNIT_ARENA_COMPILE_UNIT)
-reference_offset_functions(Statement, statement, UNIT_ARENA_COMPILE_UNIT)
-reference_offset_functions(Block, block, UNIT_ARENA_COMPILE_UNIT)
-reference_offset_functions(TopLevelDeclaration, top_level_declaration, UNIT_ARENA_COMPILE_UNIT)
-reference_offset_functions(ValueNode, value_node, UNIT_ARENA_COMPILE_UNIT)
-reference_offset_functions(Variable, variable, UNIT_ARENA_COMPILE_UNIT)
-
-static inline StringReference string_reference_from_string(CompileUnit* restrict unit, str s)
-{
-    let arena = unit_arena(unit, UNIT_ARENA_STRING);
-    let arena_byte_pointer = (char*)arena;
-    let arena_bottom = arena_byte_pointer;
-    let arena_top = arena_byte_pointer + arena->position;
-    assert((arena_bottom < s.pointer) & (arena_top > s.pointer));
-    let string_top = s.pointer + s.length;
-    assert(string_top <= arena_top);
-    let length_pointer = (u32*)s.pointer - 1;
-    let length = *length_pointer;
-    assert(s.length == length);
-
-    let diff = (char*)length_pointer - arena_bottom;
-    assert(diff < UINT32_MAX);
-    return (StringReference) {
-        .v = diff + 1,
-    };
-}
-
-static inline str string_from_reference(CompileUnit* restrict unit, StringReference reference)
-{
-    assert(is_ref_valid(reference));
-
-    let arena = unit_arena(unit, UNIT_ARENA_STRING);
-    let arena_byte_pointer = (char*)arena;
-    let arena_bottom = arena_byte_pointer;
-    let arena_position = arena->position;
-
-    let length_offset = reference.v - 1;
-    assert(length_offset >= sizeof(Arena));
-    assert(length_offset < arena_position);
-    let length_byte_pointer = arena_bottom + length_offset;
-    let length_pointer = (u32*)length_byte_pointer;
-    let string_pointer = (char* restrict) (length_pointer + 1);
-    u64 string_length = *length_pointer;
-    return (str){ .pointer = string_pointer, .length = string_length };
-}
-
-static inline TypeReference type_reference_from_pointer(CompileUnit* restrict unit, Type* type)
-{
-    let type_arena = unit_arena(unit, UNIT_ARENA_TYPE);
-    let arena_byte_pointer = (u8*)type_arena;
-    let arena_position = type_arena->position;
-    let arena_bottom = arena_byte_pointer;
-    let arena_top = arena_byte_pointer + arena_position;
-    let type_byte_pointer = (u8*)type;
-    assert(type_byte_pointer > arena_bottom && type_byte_pointer < arena_top);
-    let diff = type_byte_pointer - (arena_bottom + sizeof(Arena));
-    assert(diff % sizeof(Type) == 0);
-    assert(diff < UINT32_MAX);
-    diff /= sizeof(Type);
-    return (TypeReference) {
-        .v = diff + 1,
-    };
-}
-
-static inline TypeReference type_reference_from_index(CompileUnit* restrict unit, u32 index)
-{
-    let type_arena = unit_arena(unit, UNIT_ARENA_TYPE);
-    let byte_offset = index * sizeof(Type);
-    let arena_position = type_arena->position;
-    assert(sizeof(Arena) + byte_offset + sizeof(Type) <= arena_position);
-    return (TypeReference) {
-        .v = index + 1,
-    };
-}
-
-static inline Type* type_pointer_from_reference(CompileUnit* restrict unit, TypeReference reference)
-{
-    assert(is_ref_valid(reference));
-    let arena = unit_arena(unit, UNIT_ARENA_TYPE);
-    let index = reference.v - 1;
-    let byte_offset = index * sizeof(Type);
-    let arena_position = arena->position;
-    assert(sizeof(Arena) + byte_offset + sizeof(Type) <= arena_position);
-    let type = (Type*)((u8*)arena + sizeof(Arena) + byte_offset);
-    return type;
-}
-
-static inline ValueReference value_reference_from_pointer(CompileUnit* restrict unit, Value* value)
-{
-    let value_arena = unit_arena(unit, UNIT_ARENA_VALUE);
-    let arena_byte_pointer = (u8*)value_arena;
-    let arena_position = value_arena->position;
-    let arena_bottom = arena_byte_pointer;
-    let arena_top = arena_byte_pointer + arena_position;
-    let value_byte_pointer = (u8*)value;
-    assert(value_byte_pointer > arena_bottom && value_byte_pointer < arena_top);
-    let diff = value_byte_pointer - (arena_bottom + sizeof(Arena));
-    assert(diff % sizeof(Value) == 0);
-    assert(diff < UINT32_MAX);
-    diff /= sizeof(Value);
-    return (ValueReference) {
-        .v = diff + 1,
-    };
-}
-
-static inline ValueReference value_reference_from_index(CompileUnit* restrict unit, u32 index)
-{
-    let value_arena = unit_arena(unit, UNIT_ARENA_VALUE);
-    let byte_offset = index * sizeof(Value);
-    let arena_position = value_arena->position;
-    assert(sizeof(Arena) + byte_offset + sizeof(Value) < arena_position);
-    return (ValueReference) {
-        .v = index + 1,
-    };
-}
-
-static inline Value* value_pointer_from_reference(CompileUnit* restrict unit, ValueReference reference)
-{
-    assert(is_ref_valid(reference));
-    let arena = unit_arena(unit, UNIT_ARENA_VALUE);
-    let index = reference.v - 1;
-    let byte_offset = index * sizeof(Value);
-    let arena_position = arena->position;
-    assert(sizeof(Arena) + byte_offset + sizeof(Value) <= arena_position);
-    let result = (Value*)((u8*)arena + sizeof(Arena) + byte_offset);
-    return result;
-}
-
-static inline Type* new_types(CompileUnit* restrict unit, u32 type_count)
-{
-    let arena = unit_arena(unit, UNIT_ARENA_TYPE);
-    let types = arena_allocate(arena, Type, type_count);
-    return types;
-}
-
-static Type* allocate_free_type(CompileUnit* restrict unit)
-{
-    let type_ref = unit->free_types;
-    assert(is_ref_valid(type_ref));
-    let type = type_pointer_from_reference(unit, type_ref);
-    type->next = (TypeReference){};
-    return type;
-}
-
-static inline Type* new_type(CompileUnit* restrict unit)
-{
-    let result = is_ref_valid(unit->free_types) ? allocate_free_type(unit) : new_types(unit, 1);
-    return result;
-}
-
-static inline Value* new_values(CompileUnit* restrict unit, u32 value_count)
-{
-    let arena = unit_arena(unit, UNIT_ARENA_VALUE);
-    let values = arena_allocate(arena, Value, value_count);
-    return values;
-}
-
-static inline Value* new_value(CompileUnit* restrict unit)
-{
-    return new_values(unit, 1);
-}
-
-static inline Scope* restrict new_scope(CompileUnit* restrict unit)
-{
-    let arena = get_default_arena(unit);
-    let scope = arena_allocate(arena, Scope, 1);
-    return scope;
-}
-
-static u64 align_bit_count(u64 bit_count)
-{
-    let aligned_bit_count = MAX(next_power_of_two(bit_count), 8);
-    assert((aligned_bit_count & (aligned_bit_count - 1)) == 0);
-    return aligned_bit_count;
-}
-
-static u64 aligned_byte_count_from_bit_count(u64 bit_count)
-{
-    let aligned_bit_count = align_bit_count(bit_count);
-    assert(aligned_bit_count % 8 == 0);
-    return aligned_bit_count / 8;
-}
-
 STRUCT(Address)
 {
     LLVMValueRef pointer;
@@ -967,216 +607,6 @@ STRUCT(Address)
     u32 alignment;
     LLVMValueRef offset;
 };
-
-bool compiler_is_single_threaded(void);
-bool compiler_main(int argc, const char* argv[], char** envp);
-
-u64 get_base_type_count();
-
-StringReference allocate_string(CompileUnit* restrict unit, str s);
-StringReference allocate_string_if_needed(CompileUnit* restrict unit, str s);
-StringReference allocate_and_join_string(CompileUnit* restrict unit, StringSlice slice);
-
-TypeReference get_void_type(CompileUnit* restrict unit);
-TypeReference get_noreturn_type(CompileUnit* restrict unit);
-TypeReference get_integer_type(CompileUnit* restrict unit, u64 bit_count, bool is_signed);
-
-AbiInformation abi_system_v_classify_return_type(CompileUnit* restrict unit, TypeReference type);
-AbiSystemVClassifyArgumentTypeResult abi_system_v_classify_argument_type(CompileUnit* restrict unit, TypeReference type, AbiSystemVClassifyArgumentTypeOptions options);
-AbiInformation abi_system_v_classify_argument(CompileUnit* restrict unit, AbiRegisterCount* restrict available_registers, TypeReference* abi_argument_type_buffer, AbiSystemVClassifyArgumentOptions options);
-
-static TypeReference get_u1(CompileUnit* restrict unit)
-{
-    return get_integer_type(unit, 1, 0);
-}
-
-static TypeReference get_u8(CompileUnit* restrict unit)
-{
-    return get_integer_type(unit, 8, 0);
-}
-
-static TypeReference get_u16(CompileUnit* restrict unit)
-{
-    return get_integer_type(unit, 16, 0);
-}
-
-static TypeReference get_u32(CompileUnit* restrict unit)
-{
-    return get_integer_type(unit, 32, 0);
-}
-
-static TypeReference get_u64(CompileUnit* restrict unit)
-{
-    return get_integer_type(unit, 64, 0);
-}
-
-static Type* get_function_type_from_storage(CompileUnit* restrict unit, Global* function)
-{
-    let function_storage_ref = function->variable.storage;
-    let function_storage = value_pointer_from_reference(unit, function_storage_ref);
-    let function_pointer_type_ref = function_storage->type;
-    assert(is_ref_valid(function_pointer_type_ref));
-    let function_pointer_type = type_pointer_from_reference(unit, function_pointer_type_ref);
-    assert(function_pointer_type->id == TYPE_ID_POINTER);
-    let function_type_ref = function_pointer_type->pointer.element_type;
-    assert(is_ref_valid(function_type_ref));
-    let function_type = type_pointer_from_reference(unit, function_type_ref);
-    assert(function_type->id == TYPE_ID_FUNCTION);
-
-    return function_type;
-}
-
-[[noreturn]] static void todo_internal(CompileUnit* unit, u32 line, str function_name, str file_path)
-{
-    let arena = get_default_arena(unit);
-    str parts[] = {
-        S("TODO at: "),
-        function_name,
-        S(" in "),
-        file_path,
-        S(":"),
-        format_integer(arena, (FormatIntegerOptions) {
-            .format = INTEGER_FORMAT_DECIMAL,
-            .value = line,
-        }, false),
-    };
-    unit_show(unit, arena_join_string(arena, string_array_to_slice(parts), true));
-    fail();
-}
-
-#define todo() todo_internal(unit, __LINE__, S(__FUNCTION__), S(__FILE__))
-
-static Global* get_current_function(CompileUnit* restrict unit)
-{
-    let current_function_ref = unit->current_function;
-    if (!is_ref_valid(current_function_ref))
-    {
-        todo();
-    }
-
-    let current_function = global_pointer_from_reference(unit, current_function_ref);
-    return current_function;
-}
-
-static u64 get_byte_size(CompileUnit* restrict unit, Type* type_pointer)
-{
-    assert(unit->phase >= COMPILE_PHASE_ANALYSIS);
-
-    switch (type_pointer->id)
-    {
-        break; case TYPE_ID_INTEGER:
-        {
-            let bit_count = type_pointer->integer.bit_count;
-            let byte_count = aligned_byte_count_from_bit_count(bit_count);
-            return byte_count;
-        }
-        break; default:
-        {
-            todo();
-        }
-    }
-}
-
-static u64 get_bit_size(CompileUnit* restrict unit, Type* restrict type)
-{
-    assert(unit->phase >= COMPILE_PHASE_ANALYSIS);
-
-    switch (type->id)
-    {
-        break; case TYPE_ID_INTEGER:
-        {
-            let bit_count = type->integer.bit_count;
-            let byte_count = aligned_byte_count_from_bit_count(bit_count);
-            return byte_count;
-        }
-        break; default:
-        {
-            todo();
-        }
-    }
-}
-
-static bool type_is_signed(CompileUnit* restrict unit, Type* type)
-{
-    switch (type->id)
-    {
-        break; case TYPE_ID_INTEGER:
-        {
-            let is_signed = type->integer.is_signed;
-            return is_signed;
-        }
-        break; default: todo();
-    }
-}
-
-static bool type_is_record(Type* restrict type)
-{
-    switch (type->id)
-    {
-        case TYPE_ID_VOID:
-        case TYPE_ID_NORETURN:
-        case TYPE_ID_INTEGER:
-        case TYPE_ID_FLOAT:
-        case TYPE_ID_FUNCTION:
-        case TYPE_ID_ENUM:
-        case TYPE_ID_POINTER:
-        case TYPE_ID_OPAQUE:
-        case TYPE_ID_ARRAY:
-        case TYPE_ID_BITS:
-        case TYPE_ID_VECTOR:
-        case TYPE_ID_ENUM_ARRAY:
-            return false;
-        case TYPE_ID_STRUCT:
-        case TYPE_ID_UNION:
-            return true;
-        case TYPE_ID_COUNT: UNREACHABLE();
-    }
-}
-
-static u32 get_alignment(CompileUnit* restrict unit, Type* type)
-{
-    switch (type->id)
-    {
-        break; case TYPE_ID_INTEGER:
-        {
-            let bit_count = type->integer.bit_count;
-            let result = aligned_byte_count_from_bit_count(bit_count);
-            assert(result == 1 || result == 2 || result == 4 || result == 8 || result == 16);
-            return result;
-        }
-        break; default: todo();
-    }
-}
-
-static ResolvedCallingConvention resolve_calling_convention(Target target, CallingConvention cc)
-{
-    switch (cc)
-    {
-        break; case CALLING_CONVENTION_C:
-        {
-            switch (target.cpu)
-            {
-                break; case CPU_ARCH_UNKNOWN: UNREACHABLE();
-                break; case CPU_ARCH_X86_64:
-                {
-                    switch (target.os)
-                    {
-                        break; case OPERATING_SYSTEM_UNKNOWN: UNREACHABLE();
-                        break; case OPERATING_SYSTEM_LINUX: return RESOLVED_CALLING_CONVENTION_SYSTEM_V;
-                        break; case OPERATING_SYSTEM_MACOS: return RESOLVED_CALLING_CONVENTION_SYSTEM_V;
-                        break; case OPERATING_SYSTEM_WINDOWS: return RESOLVED_CALLING_CONVENTION_WIN64;
-                    }
-                }
-                break; case CPU_ARCH_AARCH64:
-                {
-                    return RESOLVED_CALLING_CONVENTION_AARCH64;
-                }
-                break; default: UNREACHABLE();
-            }
-        }
-        break; default: UNREACHABLE();
-    }
-}
 
 STRUCT(Win64ClassifyOptions)
 {
@@ -1204,17 +634,6 @@ typedef enum Aarch64AbiKind : u8
     AARCH64_ABI_KIND_AAPCS_SOFT,
 } Aarch64AbiKind;
 
-static Aarch64AbiKind get_aarch64_abi_kind(OperatingSystem os)
-{
-    switch (os)
-    {
-        break; case OPERATING_SYSTEM_UNKNOWN: UNREACHABLE();
-        break; case OPERATING_SYSTEM_LINUX: return AARCH64_ABI_KIND_AAPCS;
-        break; case OPERATING_SYSTEM_MACOS: return AARCH64_ABI_KIND_DARWIN_PCS;
-        break; case OPERATING_SYSTEM_WINDOWS: return AARCH64_ABI_KIND_WIN64;
-    }
-}
-
 typedef enum TypeEvaluationKind : u8
 {
     TYPE_EVALUATION_KIND_SCALAR,
@@ -1222,83 +641,105 @@ typedef enum TypeEvaluationKind : u8
     TYPE_EVALUATION_KIND_COMPLEX,
 } TypeEvaluationKind;
 
-static TypeEvaluationKind get_type_evaluation_kind(CompileUnit* restrict unit, Type* type)
-{
-    switch (type->id)
-    {
-        case TYPE_ID_VOID:
-        case TYPE_ID_NORETURN:
-        case TYPE_ID_FUNCTION:
-        case TYPE_ID_OPAQUE:
-            UNREACHABLE();
-        case TYPE_ID_INTEGER:
-        case TYPE_ID_FLOAT:
-        case TYPE_ID_ENUM:
-        case TYPE_ID_POINTER:
-        case TYPE_ID_BITS:
-        case TYPE_ID_VECTOR:
-            return TYPE_EVALUATION_KIND_SCALAR;
-        case TYPE_ID_ARRAY:
-        case TYPE_ID_STRUCT:
-        case TYPE_ID_UNION:
-        case TYPE_ID_ENUM_ARRAY:
-            return TYPE_EVALUATION_KIND_AGGREGATE;
-        case TYPE_ID_COUNT:
-            UNREACHABLE();
-    }
-}
+#define reference_offset_function_ref(O, o) O ## Reference o ## _reference_from_pointer(CompileUnit* restrict unit, O* restrict o)
+#define reference_offset_function_ptr(O, o) O* restrict o ## _pointer_from_reference(CompileUnit* restrict unit, O ## Reference o_reference)
 
-static bool type_is_aggregate_for_abi (CompileUnit* restrict unit, Type* type)
-{
-    let evaluation_kind = get_type_evaluation_kind(unit, type);
-    bool is_member_function_pointer_type = false; // TODO
-    return (evaluation_kind != TYPE_EVALUATION_KIND_SCALAR) | is_member_function_pointer_type;
-}
+#define reference_offset_function_decl(O, o) \
+    PUB_DECL reference_offset_function_ref(O, o);\
+    PUB_DECL reference_offset_function_ptr(O, o)
 
-static bool type_is_promotable_integer_for_abi(CompileUnit* restrict unit, Type* type)
-{
-    if (type->id == TYPE_ID_BITS)
-    {
-        todo();
-    }
+reference_offset_function_decl(Scope, scope);
+reference_offset_function_decl(File, file);
+reference_offset_function_decl(Argument, argument);
+reference_offset_function_decl(Local, local);
+reference_offset_function_decl(Global, global);
+reference_offset_function_decl(Statement, statement);
+reference_offset_function_decl(Block, block);
+reference_offset_function_decl(TopLevelDeclaration, top_level_declaration);
+reference_offset_function_decl(ValueNode, value_node);
+reference_offset_function_decl(Variable, variable);
 
-    if (type->id == TYPE_ID_ENUM)
-    {
-        todo();
-    }
+PUB_DECL StringReference string_reference_from_string(CompileUnit* restrict unit, str s);
+PUB_DECL str string_from_reference(CompileUnit* restrict unit, StringReference reference);
+PUB_DECL TypeReference type_reference_from_pointer(CompileUnit* restrict unit, Type* type);
+PUB_DECL TypeReference type_reference_from_index(CompileUnit* restrict unit, u32 index);
+PUB_DECL Type* type_pointer_from_reference(CompileUnit* restrict unit, TypeReference reference);
+PUB_DECL ValueReference value_reference_from_pointer(CompileUnit* restrict unit, Value* value);
+PUB_DECL ValueReference value_reference_from_index(CompileUnit* restrict unit, u32 index);
+PUB_DECL Value* value_pointer_from_reference(CompileUnit* restrict unit, ValueReference reference);
+PUB_DECL Type* new_types(CompileUnit* restrict unit, u32 type_count);
+PUB_DECL Type* allocate_free_type(CompileUnit* restrict unit);
+PUB_DECL Type* new_type(CompileUnit* restrict unit);
+PUB_DECL Value* new_values(CompileUnit* restrict unit, u32 value_count);
+PUB_DECL Value* new_value(CompileUnit* restrict unit);
+PUB_DECL Scope* restrict new_scope(CompileUnit* restrict unit);
+PUB_DECL u64 align_bit_count(u64 bit_count);
+PUB_DECL u64 aligned_byte_count_from_bit_count(u64 bit_count);
+PUB_DECL TypeReference get_u1(CompileUnit* restrict unit);
+PUB_DECL TypeReference get_u8(CompileUnit* restrict unit);
+PUB_DECL TypeReference get_u16(CompileUnit* restrict unit);
+PUB_DECL TypeReference get_u32(CompileUnit* restrict unit);
+PUB_DECL TypeReference get_u64(CompileUnit* restrict unit);
+PUB_DECL Type* get_function_type_from_storage(CompileUnit* restrict unit, Global* function);
+[[noreturn]] PUB_DECL void todo_internal(CompileUnit* unit, u32 line, str function_name, str file_path);
 
-    return (type->id == TYPE_ID_INTEGER) & (type->integer.bit_count < 32);
-}
+PUB_DECL Global* get_current_function(CompileUnit* restrict unit);
+PUB_DECL u64 get_byte_size(CompileUnit* restrict unit, Type* type_pointer);
+PUB_DECL u64 get_bit_size(CompileUnit* restrict unit, Type* restrict type);
+PUB_DECL bool type_is_signed(CompileUnit* restrict unit, Type* type);
+PUB_DECL bool type_is_record(Type* restrict type);
+PUB_DECL u32 get_alignment(CompileUnit* restrict unit, Type* type);
+PUB_DECL ResolvedCallingConvention resolve_calling_convention(Target target, CallingConvention cc);
 
-static bool type_is_integral_or_enumeration(CompileUnit* restrict unit, TypeReference type_reference)
-{
-    let type_pointer = type_pointer_from_reference(unit, type_reference);
+PUB_DECL bool abi_can_have_padding_type(AbiInformation* restrict abi);
+PUB_DECL void abi_set_padding_type(AbiInformation* restrict abi, TypeReference type_reference);
+PUB_DECL void abi_set_direct_offset(AbiInformation* restrict abi, u32 offset);
+PUB_DECL void abi_set_direct_alignment(AbiInformation* restrict abi, u32 alignment);
+PUB_DECL void abi_set_can_be_flattened(AbiInformation* restrict abi, bool value);
+PUB_DECL TypeReference abi_get_coerce_to_type(AbiInformation* restrict abi);
 
-    switch (type_pointer->id)
-    {
-        break;
-        case TYPE_ID_INTEGER:
-        {
-            return 1;
-        }
-        break; default:
-        {
-            UNREACHABLE();
-        }
-    }
-}
+PUB_DECL bool value_id_is_intrinsic(ValueId id);
 
-STRUCT(AbiExtendOptions)
-{
-    TypeReference semantic_type;
-    TypeReference type;
-    bool is_signed;
-};
+PUB_DECL u32 location_get_line(SourceLocation location);
+PUB_DECL u32 location_get_column(SourceLocation location);
 
+PUB_DECL bool compiler_is_single_threaded(void);
 
-AbiInformation win64_classify_type(CompileUnit* restrict unit, TypeReference type_reference, Win64ClassifyOptions options);
-AbiInformation aarch64_classify_return_type(CompileUnit* restrict unit, TypeReference type_reference, bool is_variadic_function, Aarch64AbiKind kind);
+PUB_DECL u64 get_base_type_count();
 
-AbiInformation abi_get_ignore(TypeReference semantic_type);
-AbiInformation abi_get_direct(CompileUnit* restrict unit, AbiDirectOptions options);
-AbiInformation abi_get_extend(CompileUnit* restrict unit, AbiExtendOptions options);
+PUB_DECL StringReference allocate_string(CompileUnit* restrict unit, str s);
+PUB_DECL StringReference allocate_string_if_needed(CompileUnit* restrict unit, str s);
+PUB_DECL StringReference allocate_and_join_string(CompileUnit* restrict unit, StringSlice slice);
+
+PUB_DECL TypeReference get_void_type(CompileUnit* restrict unit);
+PUB_DECL TypeReference get_noreturn_type(CompileUnit* restrict unit);
+PUB_DECL TypeReference get_integer_type(CompileUnit* restrict unit, u64 bit_count, bool is_signed);
+
+PUB_DECL AbiInformation abi_system_v_classify_return_type(CompileUnit* restrict unit, TypeReference type);
+PUB_DECL AbiSystemVClassifyArgumentTypeResult abi_system_v_classify_argument_type(CompileUnit* restrict unit, TypeReference type, AbiSystemVClassifyArgumentTypeOptions options);
+PUB_DECL AbiInformation abi_system_v_classify_argument(CompileUnit* restrict unit, AbiRegisterCount* restrict available_registers, TypeReference* abi_argument_type_buffer, AbiSystemVClassifyArgumentOptions options);
+
+PUB_DECL AbiInformation win64_classify_type(CompileUnit* restrict unit, TypeReference type_reference, Win64ClassifyOptions options);
+PUB_DECL AbiInformation aarch64_classify_return_type(CompileUnit* restrict unit, TypeReference type_reference, bool is_variadic_function, Aarch64AbiKind kind);
+
+PUB_DECL AbiInformation abi_get_ignore(TypeReference semantic_type);
+PUB_DECL AbiInformation abi_get_direct(CompileUnit* restrict unit, AbiDirectOptions options);
+PUB_DECL AbiInformation abi_get_extend(CompileUnit* restrict unit, AbiExtendOptions options);
+
+PUB_DECL void unit_show(CompileUnit* restrict unit, str message);
+PUB_DECL Arena* unit_arena(CompileUnit* unit, UnitArenaKind kind);
+PUB_DECL Arena* get_default_arena(CompileUnit* restrict unit);
+PUB_DECL TypeReference get_semantic_return_type(TypeFunction* restrict function);
+PUB_DECL AbiInformation* restrict get_return_abi(TypeFunction* restrict function);
+PUB_DECL Aarch64AbiKind get_aarch64_abi_kind(OperatingSystem os);
+PUB_DECL TypeReference get_semantic_argument_type(TypeFunction* restrict function, u16 semantic_argument_index);
+PUB_DECL void abi_set_coerce_to_type(AbiInformation* restrict abi, TypeReference type_reference);
+PUB_DECL bool type_is_aggregate_for_abi (CompileUnit* restrict unit, Type* type);
+PUB_DECL bool type_is_promotable_integer_for_abi(CompileUnit* restrict unit, Type* type);
+PUB_DECL bool type_is_integral_or_enumeration(CompileUnit* restrict unit, TypeReference type_reference);
+PUB_DECL TypeReference get_abi_return_type(TypeFunction* restrict function);
+PUB_DECL TypeReference get_abi_argument_type(TypeFunction* restrict function, u16 abi_argument_index);
+PUB_DECL AbiInformation* restrict get_abis(TypeFunction* restrict function);
+PUB_DECL TypeEvaluationKind get_type_evaluation_kind(CompileUnit* restrict unit, Type* type);
+
+PUB_DECL bool statement_is_block_like(StatementId id);

@@ -1,3 +1,5 @@
+#pragma once
+
 #include <llvm_link.h>
 
 #include <lld_bindings.h>
@@ -8,14 +10,14 @@ STRUCT(ArgumentBuilder)
     u64 count;
 };
 
-static const char** add_arguments(ArgumentBuilder* restrict builder, u64 count)
+LOCAL const char** add_arguments(ArgumentBuilder* restrict builder, u64 count)
 {
     let result = arena_allocate(builder->arena, const char*, count);
     builder->count += count;
     return result;
 }
 
-static const char** add_argument(ArgumentBuilder* restrict builder, const char* argument)
+LOCAL const char** add_argument(ArgumentBuilder* restrict builder, const char* argument)
 {
     let result = add_arguments(builder, 1);
     *result = argument;
@@ -23,19 +25,19 @@ static const char** add_argument(ArgumentBuilder* restrict builder, const char* 
     return result;
 }
 
-static const char** add_argument_string(ArgumentBuilder* restrict builder, str argument)
+LOCAL const char** add_argument_string(ArgumentBuilder* restrict builder, str argument)
 {
     assert(str_is_zero_terminated(argument));
     return add_argument(builder, argument.pointer);
 }
 
-static u8* lld_allocate_function(void* context, u64 size, u64 alignment)
+LOCAL u8* lld_allocate_function(void* context, u64 size, u64 alignment)
 {
     let arena = (Arena*)context;
     return arena_allocate_bytes(arena, size, alignment);
 }
 
-str llvm_link_machine_code(Arena* arena, Arena* string_arena, CompileUnit** restrict compile_unit_pointer, u64 compile_unit_count, LinkOptions options)
+PUB_IMPL str llvm_link_machine_code(Arena* arena, Arena* string_arena, CompileUnit** restrict compile_unit_pointer, u64 compile_unit_count, LinkOptions options)
 {
     assert(arena != string_arena);
 

@@ -1,3 +1,5 @@
+#pragma once
+
 #include <lexer.h>
 
 #ifdef __x86_64__
@@ -7,7 +9,7 @@
 
 #define SCALAR 1
 
-static u8 escape_character(u8 ch)
+LOCAL u8 escape_character(u8 ch)
 {
     switch (ch)
     {
@@ -20,7 +22,7 @@ static u8 escape_character(u8 ch)
     }
 }
 
-static inline u32 str4(str str)
+LOCAL inline u32 str4(str str)
 {
     assert(str.length <= 4);
     assert(str.length > 0);
@@ -35,7 +37,7 @@ static inline u32 str4(str str)
     return value;
 }
 
-static inline u64 str8(str str)
+LOCAL inline u64 str8(str str)
 {
     assert(str.length <= 8);
 
@@ -54,7 +56,7 @@ static inline u64 str8(str str)
 }
 
 #ifdef __AVX512F__
-static inline u64 identifier_character_count(__m512i chunk)
+LOCAL inline u64 identifier_character_count(__m512i chunk)
 {
     let a = _mm512_set1_epi8('a');
     let z = _mm512_set1_epi8('z');
@@ -83,14 +85,14 @@ static inline u64 identifier_character_count(__m512i chunk)
 }
 #endif
 
-#define left_bracket '['
-#define right_bracket ']'
-#define left_brace '{'
-#define right_brace '}'
+#define LEFT_BRACKET '['
+#define RIGHT_BRACKET ']'
+#define LEFT_BRACE '{'
+#define RIGHT_BRACE '}'
 
-static bool is_good_finishing_decimal_character(u8 ch)
+LOCAL bool is_good_finishing_decimal_character(u8 ch)
 {
-    return is_space(ch) | ((ch >= '!') & (ch <= '/')) | ((ch >= ':') & (ch <= '@')) | ((ch >= left_bracket) & (ch <= '`')) | ((ch >= left_brace) & (ch <= '~'));
+    return is_space(ch) | ((ch >= '!') & (ch <= '/')) | ((ch >= ':') & (ch <= '@')) | ((ch >= LEFT_BRACKET) & (ch <= '`')) | ((ch >= LEFT_BRACE) & (ch <= '~'));
 }
 
 TokenList lex(CompileUnit* unit, File* file)
@@ -1219,7 +1221,7 @@ bool lexer_tests(TestArguments* restrict arguments)
 }
 #endif
 
-static str token_id_to_string(TokenId id)
+LOCAL str token_id_to_string(TokenId id)
 {
     switch (id)
     {

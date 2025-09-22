@@ -1,6 +1,8 @@
+#pragma once
+
 #include <compiler.h>
 
-AbiInformation abi_get_ignore(TypeReference semantic_type)
+PUB_IMPL AbiInformation abi_get_ignore(TypeReference semantic_type)
 {
     return (AbiInformation){
         .semantic_type = semantic_type,
@@ -10,7 +12,7 @@ AbiInformation abi_get_ignore(TypeReference semantic_type)
     };
 }
 
-AbiInformation abi_get_direct(CompileUnit* restrict unit, AbiDirectOptions options)
+PUB_IMPL AbiInformation abi_get_direct(CompileUnit* restrict unit, AbiDirectOptions options)
 {
     AbiInformation result = {
         .semantic_type = options.semantic_type,
@@ -28,7 +30,7 @@ AbiInformation abi_get_direct(CompileUnit* restrict unit, AbiDirectOptions optio
     return result;
 }
 
-AbiInformation abi_get_extend(CompileUnit* restrict unit, AbiExtendOptions options)
+PUB_IMPL AbiInformation abi_get_extend(CompileUnit* restrict unit, AbiExtendOptions options)
 {
     assert(type_is_integral_or_enumeration(unit, options.semantic_type));
     AbiInformation result = {

@@ -1,7 +1,9 @@
+#pragma once
+
 #include <llvm_emit.h>
 #include <llvm-c/TargetMachine.h>
 
-str llvm_emit(LLVMModuleRef module, LLVMTargetMachineRef target_machine, str file_path, LLVMCodeGenFileType type)
+PUB_IMPL str llvm_emit(LLVMModuleRef module, LLVMTargetMachineRef target_machine, str file_path, LLVMCodeGenFileType type)
 {
     assert(str_is_zero_terminated(file_path));
     char* error_message = {};

@@ -1,7 +1,9 @@
+#pragma once
+
 #include <llvm_optimize.h>
 #include <llvm-c/Transforms/PassBuilder.h>
 
-LLVMErrorRef llvm_optimize(LLVMModuleRef module, LLVMTargetMachineRef target_machine, LLVMOptimizationLevel optimization_level, bool verify_each_pass, bool debug_logging)
+PUB_IMPL LLVMErrorRef llvm_optimize(LLVMModuleRef module, LLVMTargetMachineRef target_machine, LLVMOptimizationLevel optimization_level, bool verify_each_pass, bool debug_logging)
 {
     let prefer_size = (optimization_level == LLVM_OPTIMIZATION_LEVEL_Os) | (optimization_level == LLVM_OPTIMIZATION_LEVEL_Oz);
     let prefer_speed = (optimization_level == LLVM_OPTIMIZATION_LEVEL_O2) | (optimization_level == LLVM_OPTIMIZATION_LEVEL_O3);

@@ -1,3 +1,5 @@
+#pragma once
+
 #include <parser.h>
 
 #define parser_error() todo();
@@ -28,7 +30,7 @@ typedef enum Precedence : u8
     PRECEDENCE_POSTFIX,
 } Precedence;
 
-static Precedence get_token_precedence(CompileUnit* unit, TokenId id)
+LOCAL Precedence get_token_precedence(CompileUnit* unit, TokenId id)
 {
     switch (id)
     {
@@ -95,7 +97,7 @@ STRUCT(ValueParsing)
     bool is_statement;
 };
 
-static SourceLocation get_source_location(Parser* restrict parser, Token* restrict token)
+LOCAL SourceLocation get_source_location(Parser* restrict parser, Token* restrict token)
 {
     return (SourceLocation) {
         .line_number_offset = parser->line_number_offset,
@@ -104,18 +106,18 @@ static SourceLocation get_source_location(Parser* restrict parser, Token* restri
     };
 }
 
-static Token* get_token_internal(Parser* restrict parser, u32 index)
+LOCAL Token* get_token_internal(Parser* restrict parser, u32 index)
 {
     Token* token = &parser->pointer[index];
     return token;
 }
 
-static Token* get_current_token(Parser* restrict parser)
+LOCAL Token* get_current_token(Parser* restrict parser)
 {
     return get_token_internal(parser, parser->offset);
 }
 
-static Token* restrict get_token(Parser* restrict parser)
+LOCAL Token* restrict get_token(Parser* restrict parser)
 {
     let t = get_current_token(parser);
     if (unlikely(t->id == TOKEN_ID_LINE_BYTE_OFFSET))
@@ -137,7 +139,7 @@ static Token* restrict get_token(Parser* restrict parser)
     return nt;
 }
 
-static void rewind_token(Parser* restrict parser)
+LOCAL void rewind_token(Parser* restrict parser)
 {
     let previous_token = get_token_internal(parser, parser->offset - 1);
     let is_line_token = (previous_token->id == TOKEN_ID_LINE_NUMBER_OFFSET) | (previous_token->id == TOKEN_ID_LINE_BYTE_OFFSET);
@@ -150,20 +152,20 @@ static void rewind_token(Parser* restrict parser)
     }
 }
 
-static Token* restrict peek_token(Parser* restrict parser)
+LOCAL Token* restrict peek_token(Parser* restrict parser)
 {
     let t = get_token(parser);
     return t;
 }
 
-static Token* restrict consume_token(Parser* restrict parser)
+LOCAL Token* restrict consume_token(Parser* restrict parser)
 {
     let token = get_token(parser);
     parser->offset += 1;
     return token;
 }
 
-static Token* restrict expect_token(Parser* restrict parser, TokenId id)
+LOCAL Token* restrict expect_token(Parser* restrict parser, TokenId id)
 {
     Token* result = 0;
     let token = get_token(parser);
@@ -179,7 +181,7 @@ static Token* restrict expect_token(Parser* restrict parser, TokenId id)
     return result;
 }
 
-static Token* restrict expect_token_of_many(Parser* restrict parser, TokenId* ids, u32 id_count)
+LOCAL Token* restrict expect_token_of_many(Parser* restrict parser, TokenId* ids, u32 id_count)
 {
     Token* result = 0;
     let token = get_token(parser);
@@ -207,26 +209,26 @@ STRUCT(IdentifierParsing)
     u32 line_offset;
 };
 
-static bool identifier_parsing_valid(IdentifierParsing p)
+LOCAL bool identifier_parsing_valid(IdentifierParsing p)
 {
     return p.string.v != 0;
 }
 
-static str file_content(CompileUnit* unit, FileReference file_index)
+LOCAL str file_content(CompileUnit* unit, FileReference file_index)
 {
     let file = file_pointer_from_reference(unit, file_index);
     unused(file);
     parser_error();
 }
 
-static char* restrict pointer_from_token_start(Parser* restrict parser, Token* token)
+LOCAL char* restrict pointer_from_token_start(Parser* restrict parser, Token* token)
 {
     u32 start = token->offset;
     char* restrict pointer = parser->content.pointer + parser->line_byte_offset + start;
     return pointer;
 }
 
-static IdentifierParsing end_identifier(CompileUnit* restrict unit, Parser* restrict parser, Token* restrict start)
+LOCAL IdentifierParsing end_identifier(CompileUnit* restrict unit, Parser* restrict parser, Token* restrict start)
 {
     assert(start);
     assert(start->id == TOKEN_ID_IDENTIFIER_START);
@@ -251,7 +253,7 @@ static IdentifierParsing end_identifier(CompileUnit* restrict unit, Parser* rest
     return result;
 }
 
-static IdentifierParsing expect_identifier(CompileUnit* restrict unit, Parser* restrict parser)
+LOCAL IdentifierParsing expect_identifier(CompileUnit* restrict unit, Parser* restrict parser)
 {
     IdentifierParsing result = {};
 
@@ -271,7 +273,7 @@ STRUCT(ParseInteger)
     u64 digit_count;
 };
 
-static ParseInteger end_integer(CompileUnit* restrict unit, Parser* restrict parser, Token* restrict start)
+LOCAL ParseInteger end_integer(CompileUnit* restrict unit, Parser* restrict parser, Token* restrict start)
 {
     assert(start);
     assert(start->id == TOKEN_ID_INTEGER_START_HEXADECIMAL_PREFIXED || start->id == TOKEN_ID_INTEGER_START_DECIMAL_PREFIXED || start->id == TOKEN_ID_INTEGER_START_DECIMAL_INFERRED || start->id == TOKEN_ID_INTEGER_START_OCTAL_PREFIXED || start->id == TOKEN_ID_INTEGER_START_BINARY_PREFIXED);
@@ -320,7 +322,7 @@ static ParseInteger end_integer(CompileUnit* restrict unit, Parser* restrict par
     return result;
 }
 
-static ParseInteger expect_integer(CompileUnit* restrict unit, Parser* restrict parser)
+LOCAL ParseInteger expect_integer(CompileUnit* restrict unit, Parser* restrict parser)
 {
     ParseInteger result = {};
     TokenId expected_ids[] = {
@@ -340,7 +342,7 @@ static ParseInteger expect_integer(CompileUnit* restrict unit, Parser* restrict 
     return result;
 }
 
-static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ArgumentReference* argument_list)
+LOCAL TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ArgumentReference* argument_list)
 {
     let token = consume_token(parser);
 
@@ -545,18 +547,18 @@ static TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict par
     }
 }
 
-static Global* global_from_parser(CompileUnit* restrict unit)
+LOCAL Global* global_from_parser(CompileUnit* restrict unit)
 {
     let global = arena_allocate(get_default_arena(unit), Global, 1);
     *global = (Global) {};
     return global;
 }
 
-static ValueReference parse_value(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing);
-static ValueReference parse_precedence(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing);
-static BlockReference parse_block(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference parent_scope, Token* restrict left_brace);
+LOCAL ValueReference parse_value(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing);
+LOCAL ValueReference parse_precedence(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing);
+LOCAL BlockReference parse_block(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference parent_scope, Token* restrict left_brace);
 
-static ValueList parse_value_list(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, TokenId end_token)
+LOCAL ValueList parse_value_list(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, TokenId end_token)
 {
     ValueNodeReference previous = {};
     ValueNodeReference first = {};
@@ -599,7 +601,7 @@ static ValueList parse_value_list(CompileUnit* restrict unit, Parser* restrict p
     };
 }
 
-static void parse_argument_start(CompileUnit* restrict unit, Parser* restrict parser)
+LOCAL void parse_argument_start(CompileUnit* restrict unit, Parser* restrict parser)
 {
     if (!expect_token(parser, TOKEN_ID_LEFT_PARENTHESIS))
     {
@@ -607,7 +609,7 @@ static void parse_argument_start(CompileUnit* restrict unit, Parser* restrict pa
     }
 }
 
-static void parse_argument_end(CompileUnit* restrict unit, Parser* restrict parser)
+LOCAL void parse_argument_end(CompileUnit* restrict unit, Parser* restrict parser)
 {
     if (!expect_token(parser, TOKEN_ID_RIGHT_PARENTHESIS))
     {
@@ -615,13 +617,13 @@ static void parse_argument_end(CompileUnit* restrict unit, Parser* restrict pars
     }
 }
 
-static void parse_zero_arguments(CompileUnit* restrict unit, Parser* restrict parser)
+LOCAL void parse_zero_arguments(CompileUnit* restrict unit, Parser* restrict parser)
 {
     parse_argument_start(unit, parser);
     parse_argument_end(unit, parser);
 }
 
-static ValueReference parse_one_argument(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
+LOCAL ValueReference parse_one_argument(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
 {
     parse_argument_start(unit, parser);
     let value = parse_value(unit, parser, scope, parsing);
@@ -629,7 +631,7 @@ static ValueReference parse_one_argument(CompileUnit* restrict unit, Parser* res
     return value;
 }
 
-static TypeReference parse_argument_type(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope)
+LOCAL TypeReference parse_argument_type(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope)
 {
     parse_argument_start(unit, parser);
     let type = parse_type(unit, parser, scope, 0);
@@ -637,7 +639,7 @@ static TypeReference parse_argument_type(CompileUnit* restrict unit, Parser* res
     return type;
 }
 
-static ValueReference parse_left(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
+LOCAL ValueReference parse_left(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
 {
     let first_token = consume_token(parser);
     ValueReference result = {};
@@ -818,7 +820,7 @@ static ValueReference parse_left(CompileUnit* restrict unit, Parser* restrict pa
     return result;
 }
 
-static ValueReference parse_right_internal(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
+LOCAL ValueReference parse_right_internal(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
 {
     let left = parsing.left;
     assert(is_ref_valid(left));
@@ -925,7 +927,7 @@ static ValueReference parse_right_internal(CompileUnit* restrict unit, Parser* r
     return result;
 }
 
-static ValueReference parse_right(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
+LOCAL ValueReference parse_right(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
 {
     ValueReference result = parsing.left;
     assert(is_ref_valid(result));
@@ -964,7 +966,7 @@ static ValueReference parse_right(CompileUnit* restrict unit, Parser* restrict p
     return result;
 }
 
-static ValueReference parse_precedence(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
+LOCAL ValueReference parse_precedence(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
 {
     assert(!parsing.token);
     let left = parse_left(unit, parser, scope, parsing);
@@ -973,7 +975,7 @@ static ValueReference parse_precedence(CompileUnit* restrict unit, Parser* restr
     return result;
 }
 
-static ValueReference parse_value(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
+LOCAL ValueReference parse_value(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing)
 {
     assert(parsing.precedence == PRECEDENCE_NONE);
     assert(!is_ref_valid(parsing.left));
@@ -982,7 +984,7 @@ static ValueReference parse_value(CompileUnit* restrict unit, Parser* restrict p
     return value;
 }
 
-static StatementReference parse_statement(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope)
+LOCAL StatementReference parse_statement(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope)
 {
     bool require_semicolon = 1;
     let first_token = consume_token(parser);
@@ -1179,7 +1181,7 @@ static StatementReference parse_statement(CompileUnit* restrict unit, Parser* re
     return statement_reference_from_pointer(unit, statement);
 }
 
-static BlockReference parse_block(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference parent_scope, Token* restrict left_brace)
+LOCAL BlockReference parse_block(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference parent_scope, Token* restrict left_brace)
 {
     if (!left_brace)
     {

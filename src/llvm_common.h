@@ -1,3 +1,5 @@
+#pragma once
+
 #include <lib.h>
 
-void llvm_initialize();
+PUB_DECL void llvm_initialize();

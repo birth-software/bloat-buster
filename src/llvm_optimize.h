@@ -1,4 +1,5 @@
 #pragma once
+
 #include <compiler.h>
 
 typedef enum LLVMOptimizationLevel
@@ -11,4 +12,4 @@ typedef enum LLVMOptimizationLevel
     LLVM_OPTIMIZATION_LEVEL_Oz,
 } LLVMOptimizationLevel;
 
-LLVMErrorRef llvm_optimize(LLVMModuleRef module, LLVMTargetMachineRef target_machine, LLVMOptimizationLevel optimization_level, bool verify_each_pass, bool debug_logging);
+PUB_DECL LLVMErrorRef llvm_optimize(LLVMModuleRef module, LLVMTargetMachineRef target_machine, LLVMOptimizationLevel optimization_level, bool verify_each_pass, bool debug_logging);

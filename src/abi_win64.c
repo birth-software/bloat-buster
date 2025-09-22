@@ -1,6 +1,8 @@
+#pragma once
+
 #include <compiler.h>
 
-AbiInformation win64_classify_type(CompileUnit* restrict unit, TypeReference type_reference, Win64ClassifyOptions options)
+PUB_IMPL AbiInformation win64_classify_type(CompileUnit* restrict unit, TypeReference type_reference, Win64ClassifyOptions options)
 {
     Type* restrict type = type_pointer_from_reference(unit, type_reference);
 

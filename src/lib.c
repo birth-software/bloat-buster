@@ -1,3 +1,5 @@
+#pragma once
+
 #include <lib.h>
 
 #ifdef __x86_64__
@@ -28,7 +30,7 @@
 #include <winsock2.h>
 #include <windows.h>
 #include <mswsock.h>
-static RIO_EXTENSION_FUNCTION_TABLE w32_rio_functions = {};
+LOCAL RIO_EXTENSION_FUNCTION_TABLE w32_rio_functions = {};
 #endif
 
 STRUCT(ProtectionFlags)
@@ -47,7 +49,7 @@ STRUCT(MapFlags)
 };
 
 #if defined (__linux__) || defined(__APPLE__)
-static int os_posix_protection_flags(ProtectionFlags flags)
+LOCAL int os_posix_protection_flags(ProtectionFlags flags)
 {
     int result = 
         PROT_READ * flags.read |
@@ -58,7 +60,7 @@ static int os_posix_protection_flags(ProtectionFlags flags)
     return result;
 }
 
-static int os_posix_map_flags(MapFlags flags)
+LOCAL int os_posix_map_flags(MapFlags flags)
 {
     int result = 
 #ifdef __linux__
@@ -71,7 +73,7 @@ static int os_posix_map_flags(MapFlags flags)
     return result;
 }
 #elif _WIN32
-static DWORD os_windows_protection_flags(ProtectionFlags flags)
+LOCAL DWORD os_windows_protection_flags(ProtectionFlags flags)
 {
     DWORD result = 0;
 
@@ -103,7 +105,7 @@ static DWORD os_windows_protection_flags(ProtectionFlags flags)
     return result;
 }
 
-static DWORD os_windows_allocation_flags(MapFlags flags)
+LOCAL DWORD os_windows_allocation_flags(MapFlags flags)
 {
     DWORD result = 0;
     result |= MEM_RESERVE;
@@ -117,7 +119,7 @@ static DWORD os_windows_allocation_flags(MapFlags flags)
 }
 #endif
 
-static bool os_lock_and_unlock(void* address, u64 size)
+LOCAL bool os_lock_and_unlock(void* address, u64 size)
 {
     bool result = 1;
 
@@ -140,7 +142,7 @@ static bool os_lock_and_unlock(void* address, u64 size)
     return result;
 }
 
-static void* os_reserve(void* base, u64 size, ProtectionFlags protection, MapFlags map)
+LOCAL void* os_reserve(void* base, u64 size, ProtectionFlags protection, MapFlags map)
 {
     void* address = 0;
 
@@ -161,7 +163,7 @@ static void* os_reserve(void* base, u64 size, ProtectionFlags protection, MapFla
     return address;
 }
 
-static bool os_unreserve(void* address, u64 size)
+LOCAL bool os_unreserve(void* address, u64 size)
 {
     bool result = 1;
 #if defined(__linux__) || defined(__APPLE__)
@@ -179,7 +181,7 @@ static bool os_unreserve(void* address, u64 size)
     return result;
 }
 
-static bool os_commit(void* address, u64 size, ProtectionFlags protection, bool lock)
+LOCAL bool os_commit(void* address, u64 size, ProtectionFlags protection, bool lock)
 {
     bool result = 1;
 
@@ -306,19 +308,19 @@ FileDescriptor* os_file_open(str path, OpenFlags flags, OpenPermissions permissi
     return result;
 }
 
-static FileDescriptor* posix_fd_to_generic_fd(int fd)
+LOCAL FileDescriptor* posix_fd_to_generic_fd(int fd)
 {
     assert(fd >= 0);
     return (FileDescriptor*)(u64)(fd);
 }
 
-static int generic_fd_to_posix(FileDescriptor* fd)
+LOCAL int generic_fd_to_posix(FileDescriptor* fd)
 {
     assert(fd);
     return (int)(u64)fd;
 }
 
-static void* generic_fd_to_windows(FileDescriptor* fd)
+LOCAL void* generic_fd_to_windows(FileDescriptor* fd)
 {
     assert(fd);
     return (void*)fd;
@@ -342,7 +344,7 @@ u64 os_file_get_size(FileDescriptor* file_descriptor)
 #endif
 }
 
-static u64 os_file_read_partially(FileDescriptor* file_descriptor, void* buffer, u64 byte_count)
+LOCAL u64 os_file_read_partially(FileDescriptor* file_descriptor, void* buffer, u64 byte_count)
 {
 #if defined(__linux__) || defined(__APPLE__)
     let fd = generic_fd_to_posix(file_descriptor);
@@ -359,7 +361,7 @@ static u64 os_file_read_partially(FileDescriptor* file_descriptor, void* buffer,
 #endif
 }
 
-static void os_file_read(FileDescriptor* file_descriptor, str buffer, u64 byte_count)
+LOCAL void os_file_read(FileDescriptor* file_descriptor, str buffer, u64 byte_count)
 {
     u64 read_byte_count = 0;
     char* pointer = buffer.pointer;
@@ -370,7 +372,7 @@ static void os_file_read(FileDescriptor* file_descriptor, str buffer, u64 byte_c
     }
 }
 
-static u64 os_file_write_partially(FileDescriptor* file_descriptor, void* pointer, u64 length)
+LOCAL u64 os_file_write_partially(FileDescriptor* file_descriptor, void* pointer, u64 length)
 {
 #if defined(__linux__) || defined(__APPLE__)
     let fd = generic_fd_to_posix(file_descriptor);
@@ -421,15 +423,15 @@ void os_file_close(FileDescriptor* file_descriptor)
 #endif
 }
 
-static u64 page_size = KB(4);
-static u64 default_granularity = MB(2);
+LOCAL u64 page_size = KB(4);
+LOCAL u64 default_granularity = MB(2);
 
-static u64 minimum_position = sizeof(Arena);
+LOCAL u64 minimum_position = sizeof(Arena);
 
-static bool arena_lock_pages = true;
+LOCAL bool arena_lock_pages = true;
 
-static u64 default_reserve_size = GB(4);
-static u64 initial_size_granularity_factor = 4;
+LOCAL u64 default_reserve_size = GB(4);
+LOCAL u64 initial_size_granularity_factor = 4;
 
 Arena* arena_create(ArenaInitialization initialization)
 {
@@ -579,7 +581,7 @@ TimeDataType take_timestamp()
 #endif
 }
 
-static TimeDataType frequency;
+LOCAL TimeDataType frequency;
 
 u64 ns_between(TimeDataType start, TimeDataType end)
 {
@@ -628,7 +630,7 @@ str file_read(Arena* arena, str path, FileReadOptions options)
     return result;
 }
 
-static str os_path_absolute_stack(str buffer, const char* restrict relative_file_path)
+LOCAL str os_path_absolute_stack(str buffer, const char* restrict relative_file_path)
 {
     str result = {};
 #if defined(__linux__) || defined(__APPLE__)
@@ -675,10 +677,10 @@ void os_init()
 #endif
 }
 
-static bool is_debugger_present_called = false;
-static bool _is_debugger_present = false;
+LOCAL bool is_debugger_present_called = false;
+LOCAL bool _is_debugger_present = false;
 
-static bool is_debugger_present()
+LOCAL bool is_debugger_present()
 {
     if (unlikely(!is_debugger_present_called))
     {
@@ -708,7 +710,7 @@ static bool is_debugger_present()
     exit(1);
 }
 
-static void str_reverse(str s)
+LOCAL void str_reverse(str s)
 {
     char* restrict pointer = s.pointer;
     for (u64 i = 0, reverse_i = s.length - 1; i < reverse_i; i += 1, reverse_i -= 1)
@@ -719,7 +721,7 @@ static void str_reverse(str s)
     }
 }
 
-static str format_integer_hexadecimal(str buffer, u64 value)
+LOCAL str format_integer_hexadecimal(str buffer, u64 value)
 {
     str result = {};
 
@@ -752,7 +754,7 @@ static str format_integer_hexadecimal(str buffer, u64 value)
     return result;
 }
 
-static str format_integer_decimal(str buffer, u64 value, bool treat_as_signed)
+LOCAL str format_integer_decimal(str buffer, u64 value, bool treat_as_signed)
 {
     str result = {};
 
@@ -789,7 +791,7 @@ static str format_integer_decimal(str buffer, u64 value, bool treat_as_signed)
     return result;
 }
 
-static str format_integer_octal(str buffer, u64 value)
+LOCAL str format_integer_octal(str buffer, u64 value)
 {
     str result = {};
 
@@ -822,7 +824,7 @@ static str format_integer_octal(str buffer, u64 value)
     return result;
 }
 
-static str format_integer_binary(str buffer, u64 value)
+LOCAL str format_integer_binary(str buffer, u64 value)
 {
     str result = {};
 
@@ -1351,7 +1353,7 @@ IntegerParsing parse_binary_vectorized(const char* restrict f)
 }
 #endif
 
-static u64 accumulate_hexadecimal(u64 accumulator, u8 ch)
+LOCAL u64 accumulate_hexadecimal(u64 accumulator, u8 ch)
 {
     u8 value;
 
@@ -1375,20 +1377,20 @@ static u64 accumulate_hexadecimal(u64 accumulator, u8 ch)
     return (accumulator * 16) + value;
 }
 
-static u64 accumulate_decimal(u64 accumulator, u8 ch)
+LOCAL u64 accumulate_decimal(u64 accumulator, u8 ch)
 {
     assert(is_decimal(ch));
     return (accumulator * 10) + (ch - '0');
 }
 
-static u64 accumulate_octal(u64 accumulator, u8 ch)
+LOCAL u64 accumulate_octal(u64 accumulator, u8 ch)
 {
     assert(is_octal(ch));
 
     return (accumulator * 8) + (ch - '0');
 }
 
-static u64 accumulate_binary(u64 accumulator, u8 ch)
+LOCAL u64 accumulate_binary(u64 accumulator, u8 ch)
 {
     assert(is_binary(ch));
 
@@ -1493,13 +1495,13 @@ IntegerParsing parse_binary_scalar(const char* restrict p)
 }
 
 #if defined(_WIN32)
-static ThreadHandle* os_windows_thread_to_generic(HANDLE handle)
+LOCAL ThreadHandle* os_windows_thread_to_generic(HANDLE handle)
 {
     assert(handle != 0);
     return (ThreadHandle*)handle;
 }
 
-static HANDLE os_windows_thread_from_generic(ThreadHandle* handle)
+LOCAL HANDLE os_windows_thread_from_generic(ThreadHandle* handle)
 {
     assert(handle != 0);
     return (HANDLE)handle;
@@ -1507,13 +1509,13 @@ static HANDLE os_windows_thread_from_generic(ThreadHandle* handle)
 #endif
 
 #if defined(__linux__) || defined(__APPLE__)
-static ThreadHandle* os_posix_thread_to_generic(pthread_t handle)
+LOCAL ThreadHandle* os_posix_thread_to_generic(pthread_t handle)
 {
     assert(handle != 0);
     return (ThreadHandle*)handle;
 }
 
-static pthread_t os_posix_thread_from_generic(ThreadHandle* handle)
+LOCAL pthread_t os_posix_thread_from_generic(ThreadHandle* handle)
 {
     assert(handle != 0);
     return (pthread_t)handle;
@@ -1571,6 +1573,169 @@ void test_error(str check_text, u32 line, str function, str file_path)
     {
         trap();
     }
+}
+
+PUB_IMPL u64 next_power_of_two(u64 n)
+{
+    n -= 1;
+
+    n |= n >> 1;
+    n |= n >> 2;
+    n |= n >> 4;
+    n |= n >> 8;
+    n |= n >> 16;
+    n |= n >> 32;
+
+    n += 1;
+
+    return n;
+}
+
+PUB_IMPL bool str_is_zero_terminated(str s)
+{
+    return s.pointer[s.length] == 0;
+}
+
+PUB_IMPL str str_from_pointers(char* start, char* end)
+{
+    assert(end >= start);
+    u64 len = end - start;
+    return (str) { start, len };
+}
+
+PUB_IMPL str str_from_ptr_len(const char* ptr, u64 len)
+{
+    return (str) { (char*)ptr, len };
+}
+
+PUB_IMPL str str_from_ptr_start_end(char* ptr, u64 start, u64 end)
+{
+    return (str) { ptr + start, end - start };
+}
+
+PUB_IMPL str str_slice_start(str s, u64 start)
+{
+    s.pointer += start;
+    s.length -= start;
+    return s;
+}
+
+PUB_IMPL bool memory_compare(void* a, void* b, u64 i)
+{
+    assert(a != b);
+    bool result = 1;
+
+    let p1 = (u8*)a;
+    let p2 = (u8*)b;
+
+    while (i--)
+    {
+        bool is_equal = *p1 == *p2;
+        if (!is_equal)
+        {
+            result = 0;
+            break;
+        }
+
+        p1 += 1;
+        p2 += 1;
+    }
+
+    return result;
+}
+
+PUB_IMPL str str_slice(str s, u64 start, u64 end)
+{
+    s.pointer += start;
+    s.length = end - start;
+    return s;
+}
+
+PUB_IMPL bool str_equal(str s1, str s2)
+{
+    bool is_equal = s1.length == s2.length;
+    if (is_equal & (s1.length != 0))
+    {
+        is_equal = memory_compare(s1.pointer, s2.pointer, s1.length);
+    }
+
+    return is_equal;
+}
+
+PUB_IMPL u64 str_last_ch(str s, u8 ch)
+{
+    let result = string_no_match;
+
+    let pointer = s.pointer + s.length;
+
+    do
+    {
+        pointer -= 1;
+        if (*pointer == ch)
+        {
+            result = pointer - s.pointer;
+            break;
+        }
+    } while (pointer - s.pointer);
+
+    return result;
+}
+
+PUB_IMPL u64 align_forward(u64 n, u64 a)
+{
+    let mask = a - 1;
+    let result = (n + mask) & ~mask;
+    return result;
+}
+
+PUB_IMPL bool is_space(char ch)
+{
+    return ((ch == ' ') | (ch == '\t')) | ((ch == '\r') | (ch == '\n'));
+}
+
+PUB_IMPL bool is_decimal(char ch)
+{
+    return (ch >= '0') & (ch <= '9');
+}
+
+PUB_IMPL bool is_octal(char ch)
+{
+    return (ch >= '0') & (ch <= '7');
+}
+
+PUB_IMPL bool is_binary(char ch)
+{
+    return (ch == '0') | (ch == '1');
+}
+
+PUB_IMPL bool is_hexadecimal_alpha_lower(char ch)
+{
+    return (ch >= 'a') & (ch <= 'f');
+}
+
+PUB_IMPL bool is_hexadecimal_alpha_upper(char ch)
+{
+    return (ch >= 'A') & (ch <= 'F');
+}
+
+PUB_IMPL bool is_hexadecimal_alpha(char ch)
+{
+    return is_hexadecimal_alpha_upper(ch) | is_hexadecimal_alpha_lower(ch);
+}
+
+PUB_IMPL bool is_hexadecimal(char ch)
+{
+    return is_decimal(ch) | is_hexadecimal_alpha(ch);
+}
+
+PUB_IMPL bool is_identifier_start(char ch)
+{
+    return (((ch >= 'a') & (ch <= 'z')) | ((ch >= 'A') & (ch <= 'Z'))) | (ch == '_');
+}
+
+PUB_IMPL bool is_identifier(char ch)
+{
+    return is_identifier_start(ch) | is_decimal(ch);
 }
 
 #if BB_INCLUDE_TESTS
