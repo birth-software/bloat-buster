@@ -8,8 +8,8 @@ STRUCT(GenerateIRResult)
     str error_message;
 };
 
-GenerateIRResult llvm_generate_ir(CompileUnit* restrict unit, bool verify);
+PUB_DECL GenerateIRResult llvm_generate_ir(CompileUnit* restrict unit, bool verify);
 
 #if BB_INCLUDE_TESTS
-bool llvm_generation_tests(TestArguments* arguments);
+PUB_DECL bool llvm_generation_tests(TestArguments* arguments);
 #endif

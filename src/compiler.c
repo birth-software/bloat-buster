@@ -1,6 +1,5 @@
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
+#pragma once
+
 #include <compiler.h>
 #include <lexer.h>
 #include <parser.h>
@@ -10,6 +9,23 @@
 #include <llvm_optimize.h>
 #include <llvm_emit.h>
 #include <llvm_link.h>
+
+#if UNITY_BUILD
+#include <lib.c>
+#include <lexer.c>
+#include <parser.c>
+#include <analysis.c>
+#include <abi.c>
+#include <abi_aarch64.c>
+#include <abi_system_v.c>
+#include <abi_win64.c>
+#include <llvm_common.c>
+#include <llvm_generate.c>
+#include <llvm_optimize.c>
+#include <llvm_emit.c>
+#include <llvm_link.c>
+#endif
+
 #include <llvm-c/Core.h>
 
 #include <stdatomic.h>
@@ -64,11 +80,11 @@ STRUCT(CompilationResult)
 
 // static_assert(sizeof(CompileUnit) % CACHE_LINE_GUESS == 0);
 
-static bool is_single_threaded = true;
-static CompileUnitSlice global_compile_units;
-static _Atomic(u64) global_completed_compile_unit_count = 0;
+LOCAL bool is_single_threaded = true;
+LOCAL CompileUnitSlice global_compile_units;
+LOCAL _Atomic(u64) global_completed_compile_unit_count = 0;
 
-static str generate_path_internal(Arena* arena, str directory, str name, str extension)
+LOCAL str generate_path_internal(Arena* arena, str directory, str name, str extension)
 {
     assert(name.pointer);
     str strings[] = {
@@ -80,7 +96,7 @@ static str generate_path_internal(Arena* arena, str directory, str name, str ext
     return file_path;
 }
 
-static str generate_artifact_path(CompileUnit* unit, str extension)
+LOCAL str generate_artifact_path(CompileUnit* unit, str extension)
 {
     let original_directory_artifact_path = unit->artifact_directory_path;
     let artifact_path = original_directory_artifact_path.pointer ? original_directory_artifact_path : S("build/");
@@ -89,13 +105,13 @@ static str generate_artifact_path(CompileUnit* unit, str extension)
     return result;
 }
 
-static str generate_object_path(CompileUnit* unit)
+LOCAL str generate_object_path(CompileUnit* unit)
 {
     let extension = unit->target.os == OPERATING_SYSTEM_WINDOWS ? S(".obj") : S(".o");
     return generate_artifact_path(unit, extension);
 }
 
-static str generate_executable_path(CompileUnit* unit)
+LOCAL str generate_executable_path(CompileUnit* unit)
 {
     let extension = unit->target.os == OPERATING_SYSTEM_WINDOWS ? S(".exe") : (str){};
     let result = generate_artifact_path(unit, extension);
@@ -103,12 +119,12 @@ static str generate_executable_path(CompileUnit* unit)
     return result;
 }
 
-static CompilationResult llvm_compile_file(CompileUnit* unit, str path)
+LOCAL CompilationResult llvm_compile_file(CompileUnit* unit, str path)
 {
     return (CompilationResult){};
 }
 
-static void llvm_compile_unit(StringSlice paths)
+LOCAL void llvm_compile_unit(StringSlice paths)
 {
     //let arena_init_start = take_timestamp();
     let arena = arena_create((ArenaInitialization){});
@@ -129,1116 +145,27 @@ static void llvm_compile_unit(StringSlice paths)
     memcpy(&global_compile_units.pointer[index], unit, sizeof(*unit));
 }
 
-static void llvm_link_units(CompileUnitSlice compile_units)
-{
-}
-
-static void report_compiler_error(str message)
-{
-    //printf();
-}
-
-bool compiler_is_single_threaded()
-{
-    return is_single_threaded;
-}
-
-// static void write_random_token(u64* out_file_i, bool is_comment)
-// {
-//     let file_i = *out_file_i;
-//     int random_n = rand();
-//
-//     TokenId token_id = random_n % TOKEN_COUNT;
-//
-//     assert(file_i < array_length(buffer));
-//
-//     switch (token_id)
-//     {
-//         break; case TOKEN_ID_IDENTIFIER:
-//         {
-//             int identifier_character_count = random_n % 64;
-//             char* identifier_start = &buffer[file_i];
-//
-//             for (int i = 0; i < identifier_character_count; i += 1)
-//             {
-//                 int id_ch_rand = rand();
-//                 int choice = id_ch_rand % (3 - (i == 0));
-//
-//                 char c;
-//
-//                 switch (choice)
-//                 {
-//                     break; case 0:
-//                     {
-//                         c = 'a' + (id_ch_rand % ('z' - 'a'));
-//                     }
-//                     break; case 1:
-//                     {
-//                         c = 'A' + (id_ch_rand % ('Z' - 'A'));
-//                     }
-//                     break; case 2:
-//                     {
-//                         char first_ch = i != 0 ? *identifier_start : 0;
-//                         c = ((first_ch == 's') | (first_ch == 'u') | (first_ch == 'f')) ? first_ch : ('0' + (id_ch_rand % ('9' - '0')));
-//                     }
-//                 }
-//
-//                 buffer[file_i] = c;
-//                 file_i += 1;
-//             }
-//         }
-//         break; case TOKEN_ID_INTEGER:
-//         {
-//             int integer_literal_character_count = random_n % 32;
-//
-//             for (int i = 0; i < integer_literal_character_count; i += 1)
-//             {
-//                 int id_ch_rand = rand();
-//                 char c = '0' + (id_ch_rand % ('9' - '0'));
-//
-//                 buffer[file_i] = c;
-//                 file_i += 1;
-//             }
-//         }
-//         break; case TOKEN_ID_FLOAT:
-//             break; case TOKEN_ID_FLOAT_STRING_LITERAL:
-//             {
-//                 int integer_literal_character_count = random_n % 16;
-//
-//                 for (int i = 0; i < integer_literal_character_count; i += 1)
-//                 {
-//                     int id_ch_rand = rand();
-//                     char c = '0' + (id_ch_rand % ('9' - '0'));
-//
-//                     buffer[file_i] = c;
-//                     file_i += 1;
-//                 }
-//
-//                 buffer[file_i] = '.';
-//                 file_i += 1;
-//
-//                 for (int i = 0; i < integer_literal_character_count; i += 1)
-//                 {
-//                     int id_ch_rand = rand();
-//                     char c = '0' + (id_ch_rand % ('9' - '0'));
-//
-//                     buffer[file_i] = c;
-//                     file_i += 1;
-//                 }
-//             }
-//         break; case TOKEN_ID_STRING_LITERAL:
-//         {
-//             assert(buffer[file_i - 1] != '\\');
-//             buffer[file_i] = '"';
-//             file_i += 1;
-//
-//             int identifier_character_count = random_n % 64;
-//
-//             for (int i = 0; i < identifier_character_count; i += 1)
-//             {
-//                 int id_ch_rand = rand();
-//                 int choice = id_ch_rand % 3;
-//
-//                 char c;
-//
-//                 switch (choice)
-//                 {
-//                     break; case 0:
-//                     {
-//                         c = 'a' + (id_ch_rand % ('z' - 'a'));
-//                     }
-//                     break; case 1:
-//                     {
-//                         c = 'A' + (id_ch_rand % ('Z' - 'A'));
-//                     }
-//                     break; case 2:
-//                     {
-//                         c = '0' + (id_ch_rand % ('9' - '0'));
-//                     }
-//                 }
-//
-//                 buffer[file_i] = c;
-//                 file_i += 1;
-//             }
-//
-//             buffer[file_i] = '"';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_CHARACTER_LITERAL:
-//         {
-//             buffer[file_i] = '\'';
-//             file_i += 1;
-//
-//             int id_ch_rand = rand();
-//             int choice = id_ch_rand % 3;
-//
-//             char c;
-//
-//             switch (choice)
-//             {
-//                 break; case 0:
-//                 {
-//                     c = 'a' + (id_ch_rand % ('z' - 'a'));
-//                 }
-//                 break; case 1:
-//                 {
-//                     c = 'A' + (id_ch_rand % ('Z' - 'A'));
-//                 }
-//                 break; case 2:
-//                 {
-//                     c = '0' + (id_ch_rand % ('9' - '0'));
-//                 }
-//             }
-//
-//             buffer[file_i] = c;
-//             file_i += 1;
-//
-//             buffer[file_i] = '\'';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_TYPE_INTEGER:
-//         {
-//             int r = rand();
-//
-//             bool is_signed = r % 2;
-//             char first_ch = is_signed ? 's' : 'u';
-//
-//             buffer[file_i] = first_ch;
-//             file_i += 1;
-//
-//             int bit_count = (r % 64) + 1;
-//
-//             if (bit_count >= 10)
-//             {
-//                 buffer[file_i] = '0' + (bit_count / 10);
-//                 file_i += 1;
-//
-//                 buffer[file_i] = '0' + (bit_count % 10);
-//                 file_i += 1;
-//             }
-//             else
-//             {
-//                 char c = bit_count + '0';
-//
-//                 buffer[file_i] = c;
-//                 file_i += 1;
-//             }
-//         }
-//         break; case TOKEN_ID_KEYWORD_TYPE_FLOAT:
-//         {
-//             int r = rand();
-//
-//             buffer[file_i] = 'f';
-//             file_i += 1;
-//
-//             int choice = r % 3;
-//
-//             switch (choice)
-//             {
-//                 break; case 0:
-//                 {
-//                     buffer[file_i] = '3';
-//                     file_i += 1;
-//                     buffer[file_i] = '2';
-//                     file_i += 1;
-//                 }
-//                 break; case 1:
-//                 {
-//                     buffer[file_i] = '6';
-//                     file_i += 1;
-//                     buffer[file_i] = '4';
-//                     file_i += 1;
-//                 }
-//                 break; case 2:
-//                 {
-//                     buffer[file_i] = '1';
-//                     file_i += 1;
-//                     buffer[file_i] = '2';
-//                     file_i += 1;
-//                     buffer[file_i] = '8';
-//                     file_i += 1;
-//                 }
-//             }
-//         }
-//         break; case TOKEN_ID_KEYWORD_TYPE:
-//         {
-//             buffer[file_i] = 't';
-//             file_i += 1;
-//             buffer[file_i] = 'y';
-//             file_i += 1;
-//             buffer[file_i] = 'p';
-//             file_i += 1;
-//             buffer[file_i] = 'e';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_TYPE_VOID:
-//         {
-//             buffer[file_i] = 'v';
-//             file_i += 1;
-//             buffer[file_i] = 'o';
-//             file_i += 1;
-//             buffer[file_i] = 'i';
-//             file_i += 1;
-//             buffer[file_i] = 'd';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_TYPE_NORETURN:
-//         {
-//             buffer[file_i] = 'n';
-//             file_i += 1;
-//             buffer[file_i] = 'o';
-//             file_i += 1;
-//             buffer[file_i] = 'r';
-//             file_i += 1;
-//             buffer[file_i] = 'e';
-//             file_i += 1;
-//             buffer[file_i] = 't';
-//             file_i += 1;
-//             buffer[file_i] = 'u';
-//             file_i += 1;
-//             buffer[file_i] = 'r';
-//             file_i += 1;
-//             buffer[file_i] = 'n';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_TYPE_ENUM:
-//         {
-//             buffer[file_i] = 'e';
-//             file_i += 1;
-//             buffer[file_i] = 'n';
-//             file_i += 1;
-//             buffer[file_i] = 'u';
-//             file_i += 1;
-//             buffer[file_i] = 'm';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_TYPE_STRUCT:
-//         {
-//             buffer[file_i] = 's';
-//             file_i += 1;
-//             buffer[file_i] = 't';
-//             file_i += 1;
-//             buffer[file_i] = 'r';
-//             file_i += 1;
-//             buffer[file_i] = 'u';
-//             file_i += 1;
-//             buffer[file_i] = 'c';
-//             file_i += 1;
-//             buffer[file_i] = 't';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_TYPE_BITS:
-//         {
-//             buffer[file_i] = 'b';
-//             file_i += 1;
-//             buffer[file_i] = 'i';
-//             file_i += 1;
-//             buffer[file_i] = 't';
-//             file_i += 1;
-//             buffer[file_i] = 's';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_TYPE_UNION:
-//         {
-//             buffer[file_i] = 'u';
-//             file_i += 1;
-//             buffer[file_i] = 'n';
-//             file_i += 1;
-//             buffer[file_i] = 'i';
-//             file_i += 1;
-//             buffer[file_i] = 'o';
-//             file_i += 1;
-//             buffer[file_i] = 'n';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_TYPE_FN:
-//         {
-//             buffer[file_i] = 'f';
-//             file_i += 1;
-//             buffer[file_i] = 'n';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_TYPE_ALIAS:
-//         {
-//             buffer[file_i] = 'a';
-//             file_i += 1;
-//             buffer[file_i] = 'l';
-//             file_i += 1;
-//             buffer[file_i] = 'i';
-//             file_i += 1;
-//             buffer[file_i] = 'a';
-//             file_i += 1;
-//             buffer[file_i] = 's';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_TYPE_VECTOR:
-//         {
-//             buffer[file_i] = 'v';
-//             file_i += 1;
-//             buffer[file_i] = 'e';
-//             file_i += 1;
-//             buffer[file_i] = 'c';
-//             file_i += 1;
-//             buffer[file_i] = 't';
-//             file_i += 1;
-//             buffer[file_i] = 'o';
-//             file_i += 1;
-//             buffer[file_i] = 'r';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_TYPE_ENUM_ARRAY:
-//         {
-//             buffer[file_i] = 'e';
-//             file_i += 1;
-//             buffer[file_i] = 'n';
-//             file_i += 1;
-//             buffer[file_i] = 'u';
-//             file_i += 1;
-//             buffer[file_i] = 'm';
-//             file_i += 1;
-//             buffer[file_i] = '_';
-//             file_i += 1;
-//             buffer[file_i] = 'a';
-//             file_i += 1;
-//             buffer[file_i] = 'r';
-//             file_i += 1;
-//             buffer[file_i] = 'r';
-//             file_i += 1;
-//             buffer[file_i] = 'a';
-//             file_i += 1;
-//             buffer[file_i] = 'y';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_TYPE_OPAQUE:
-//         {
-//             buffer[file_i] = 'o';
-//             file_i += 1;
-//             buffer[file_i] = 'p';
-//             file_i += 1;
-//             buffer[file_i] = 'a';
-//             file_i += 1;
-//             buffer[file_i] = 'q';
-//             file_i += 1;
-//             buffer[file_i] = 'u';
-//             file_i += 1;
-//             buffer[file_i] = 'e';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_STATEMENT_UNDERSCORE:
-//         {
-//             buffer[file_i] = '_';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_STATEMENT_RETURN:
-//         {
-//             buffer[file_i] = 'r';
-//             file_i += 1;
-//             buffer[file_i] = 'e';
-//             file_i += 1;
-//             buffer[file_i] = 't';
-//             file_i += 1;
-//             buffer[file_i] = 'u';
-//             file_i += 1;
-//             buffer[file_i] = 'r';
-//             file_i += 1;
-//             buffer[file_i] = 'n';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_STATEMENT_IF:
-//         {
-//             buffer[file_i] = 'i';
-//             file_i += 1;
-//             buffer[file_i] = 'f';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_STATEMENT_WHEN:
-//         {
-//             buffer[file_i] = 'w';
-//             file_i += 1;
-//             buffer[file_i] = 'h';
-//             file_i += 1;
-//             buffer[file_i] = 'e';
-//             file_i += 1;
-//             buffer[file_i] = 'n';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_STATEMENT_FOR:
-//         {
-//             buffer[file_i] = 'f';
-//             file_i += 1;
-//             buffer[file_i] = 'o';
-//             file_i += 1;
-//             buffer[file_i] = 'r';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_STATEMENT_WHILE:
-//         {
-//             buffer[file_i] = 'w';
-//             file_i += 1;
-//             buffer[file_i] = 'h';
-//             file_i += 1;
-//             buffer[file_i] = 'i';
-//             file_i += 1;
-//             buffer[file_i] = 'l';
-//             file_i += 1;
-//             buffer[file_i] = 'e';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_STATEMENT_SWITCH:
-//         {
-//             buffer[file_i] = 's';
-//             file_i += 1;
-//             buffer[file_i] = 'w';
-//             file_i += 1;
-//             buffer[file_i] = 'i';
-//             file_i += 1;
-//             buffer[file_i] = 't';
-//             file_i += 1;
-//             buffer[file_i] = 'c';
-//             file_i += 1;
-//             buffer[file_i] = 'h';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_STATEMENT_BREAK:
-//         {
-//             buffer[file_i] = 'b';
-//             file_i += 1;
-//             buffer[file_i] = 'r';
-//             file_i += 1;
-//             buffer[file_i] = 'e';
-//             file_i += 1;
-//             buffer[file_i] = 'a';
-//             file_i += 1;
-//             buffer[file_i] = 'k';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_STATEMENT_CONTINUE:
-//         {
-//             buffer[file_i] = 'c';
-//             file_i += 1;
-//             buffer[file_i] = 'o';
-//             file_i += 1;
-//             buffer[file_i] = 'n';
-//             file_i += 1;
-//             buffer[file_i] = 't';
-//             file_i += 1;
-//             buffer[file_i] = 'i';
-//             file_i += 1;
-//             buffer[file_i] = 'n';
-//             file_i += 1;
-//             buffer[file_i] = 'u';
-//             file_i += 1;
-//             buffer[file_i] = 'e';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_STATEMENT_UNREACHABLE:
-//         {
-//             buffer[file_i] = 'u';
-//             file_i += 1;
-//             buffer[file_i] = 'n';
-//             file_i += 1;
-//             buffer[file_i] = 'r';
-//             file_i += 1;
-//             buffer[file_i] = 'e';
-//             file_i += 1;
-//             buffer[file_i] = 'a';
-//             file_i += 1;
-//             buffer[file_i] = 'c';
-//             file_i += 1;
-//             buffer[file_i] = 'h';
-//             file_i += 1;
-//             buffer[file_i] = 'a';
-//             file_i += 1;
-//             buffer[file_i] = 'b';
-//             file_i += 1;
-//             buffer[file_i] = 'l';
-//             file_i += 1;
-//             buffer[file_i] = 'e';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_STATEMENT_ELSE:
-//         {
-//             buffer[file_i] = 'e';
-//             file_i += 1;
-//             buffer[file_i] = 'l';
-//             file_i += 1;
-//             buffer[file_i] = 's';
-//             file_i += 1;
-//             buffer[file_i] = 'e';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_VALUE_UNDEFINED:
-//         {
-//             buffer[file_i] = 'u';
-//             file_i += 1;
-//             buffer[file_i] = 'n';
-//             file_i += 1;
-//             buffer[file_i] = 'd';
-//             file_i += 1;
-//             buffer[file_i] = 'e';
-//             file_i += 1;
-//             buffer[file_i] = 'f';
-//             file_i += 1;
-//             buffer[file_i] = 'i';
-//             file_i += 1;
-//             buffer[file_i] = 'n';
-//             file_i += 1;
-//             buffer[file_i] = 'e';
-//             file_i += 1;
-//             buffer[file_i] = 'd';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_VALUE_ZERO:
-//         {
-//             buffer[file_i] = 'z';
-//             file_i += 1;
-//             buffer[file_i] = 'e';
-//             file_i += 1;
-//             buffer[file_i] = 'r';
-//             file_i += 1;
-//             buffer[file_i] = 'o';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_OPERATOR_AND:
-//         {
-//             buffer[file_i] = 'a';
-//             file_i += 1;
-//             buffer[file_i] = 'n';
-//             file_i += 1;
-//             buffer[file_i] = 'd';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_OPERATOR_OR:
-//         {
-//             buffer[file_i] = 'o';
-//             file_i += 1;
-//             buffer[file_i] = 'r';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_OPERATOR_AND_SHORTCIRCUIT:
-//         {
-//             buffer[file_i] = 'a';
-//             file_i += 1;
-//             buffer[file_i] = 'n';
-//             file_i += 1;
-//             buffer[file_i] = 'd';
-//             file_i += 1;
-//             buffer[file_i] = '?';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_KEYWORD_OPERATOR_OR_SHORTCIRCUIT:
-//         {
-//             buffer[file_i] = 'o';
-//             file_i += 1;
-//             buffer[file_i] = 'r';
-//             file_i += 1;
-//             buffer[file_i] = '?';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_ASSIGN:
-//         {
-//             buffer[file_i] = '=';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_COMPARE_EQUAL:
-//         {
-//             buffer[file_i] = '=';
-//             file_i += 1;
-//             buffer[file_i] = '=';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_SWITCH_CASE:
-//         {
-//             buffer[file_i] = '=';
-//             file_i += 1;
-//             buffer[file_i] = '>';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_EXCLAMATION_DOWN:
-//         {
-//             buffer[file_i] = '!';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_COMPARE_NOT_EQUAL:
-//         {
-//             buffer[file_i] = '!';
-//             file_i += 1;
-//             buffer[file_i] = '=';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_COMPARE_LESS:
-//         {
-//             buffer[file_i] = '<';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_COMPARE_LESS_EQUAL:
-//         {
-//             buffer[file_i] = '<';
-//             file_i += 1;
-//             buffer[file_i] = '=';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_SHIFT_LEFT:
-//         {
-//             buffer[file_i] = '<';
-//             file_i += 1;
-//             buffer[file_i] = '<';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_SHIFT_LEFT_ASSIGN:
-//         {
-//             buffer[file_i] = '<';
-//             file_i += 1;
-//             buffer[file_i] = '<';
-//             file_i += 1;
-//             buffer[file_i] = '=';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_COMPARE_GREATER:
-//         {
-//             buffer[file_i] = '>';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_COMPARE_GREATER_EQUAL:
-//         {
-//             buffer[file_i] = '>';
-//             file_i += 1;
-//             buffer[file_i] = '=';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_SHIFT_RIGHT:
-//         {
-//             buffer[file_i] = '>';
-//             file_i += 1;
-//             buffer[file_i] = '>';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_SHIFT_RIGHT_ASSIGN:
-//         {
-//             buffer[file_i] = '>';
-//             file_i += 1;
-//             buffer[file_i] = '>';
-//             file_i += 1;
-//             buffer[file_i] = '=';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_PLUS:
-//         {
-//             buffer[file_i] = '+';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_ADD_ASSIGN:
-//         {
-//             buffer[file_i] = '+';
-//             file_i += 1;
-//             buffer[file_i] = '=';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_DASH:
-//         {
-//             buffer[file_i] = '-';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_SUB_ASSIGN:
-//         {
-//             buffer[file_i] = '-';
-//             file_i += 1;
-//             buffer[file_i] = '=';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_ASTERISK:
-//         {
-//             buffer[file_i] = '*';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_MUL_ASSIGN:
-//         {
-//             buffer[file_i] = '*';
-//             file_i += 1;
-//             buffer[file_i] = '=';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_FORWARD_SLASH:
-//         {
-//             buffer[file_i] = '/';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_DIV_ASSIGN:
-//         {
-//             buffer[file_i] = '/';
-//             file_i += 1;
-//             buffer[file_i] = '=';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_PERCENTAGE:
-//         {
-//             buffer[file_i] = '%';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_REM_ASSIGN:
-//         {
-//             buffer[file_i] = '%';
-//             file_i += 1;
-//             buffer[file_i] = '=';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_AMPERSAND:
-//         {
-//             buffer[file_i] = '&';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_BITWISE_AND_ASSIGN:
-//         {
-//             buffer[file_i] = '&';
-//             file_i += 1;
-//             buffer[file_i] = '=';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_BAR:
-//         {
-//             buffer[file_i] = '|';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_BITWISE_OR_ASSIGN:
-//         {
-//             buffer[file_i] = '|';
-//             file_i += 1;
-//             buffer[file_i] = '=';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_CARET:
-//         {
-//             buffer[file_i] = '^';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_BITWISE_XOR_ASSIGN:
-//         {
-//             buffer[file_i] = '^';
-//             file_i += 1;
-//             buffer[file_i] = '=';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_DOT:
-//         {
-//             buffer[file_i] = '.';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_POINTER_DEREFERENCE:
-//         {
-//             buffer[file_i] = '.';
-//             file_i += 1;
-//             buffer[file_i] = '&';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_OPTIONAL_DEREFERENCE:
-//         {
-//             buffer[file_i] = '.';
-//             file_i += 1;
-//             buffer[file_i] = '?';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_DOUBLE_DOT:
-//         {
-//             buffer[file_i] = '.';
-//             file_i += 1;
-//             buffer[file_i] = '.';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_TRIPLE_DOT:
-//         {
-//             buffer[file_i] = '.';
-//             file_i += 1;
-//             buffer[file_i] = '.';
-//             file_i += 1;
-//             buffer[file_i] = '.';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_LEFT_PARENTHESIS:
-//         {
-//             buffer[file_i] = '(';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_RIGHT_PARENTHESIS:
-//         {
-//             buffer[file_i] = ')';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_LEFT_BRACE:
-//         {
-//             buffer[file_i] = '{';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_RIGHT_BRACE:
-//         {
-//             buffer[file_i] = '}';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_LEFT_BRACKET:
-//         {
-//             buffer[file_i] = '[';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_RIGHT_BRACKET:
-//         {
-//             buffer[file_i] = ']';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_COMMA:
-//         {
-//             buffer[file_i] = ',';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_SEMICOLON:
-//         {
-//             buffer[file_i] = ';';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_COLON:
-//         {
-//             buffer[file_i] = ':';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_QUESTION:
-//         {
-//             buffer[file_i] = '?';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_AT:
-//         {
-//             buffer[file_i] = '@';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_BACKTICK:
-//         {
-//             buffer[file_i] = '`';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_BACKSLASH:
-//         {
-//             buffer[file_i] = '\\';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_HASH:
-//         {
-//             buffer[file_i] = '#';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_DOLLAR:
-//         {
-//             buffer[file_i] = '$';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_ID_TILDE:
-//         {
-//             buffer[file_i] = '~';
-//             file_i += 1;
-//         }
-//         break; case TOKEN_COUNT: UNREACHABLE();
-//         break; default: {};
-//     }
-//
-//     buffer[file_i] = ' ';
-//     file_i += 1;
-//
-//     if (random_n % 8 == 0)
-//     {
-//         buffer[file_i] = '\n';
-//         file_i += 1;
-//     }
-//
-//     *out_file_i = file_i;
-//
-//     if (!is_comment && random_n % 100 == 0)
-//     {
-//         buffer[file_i] = '/';
-//         file_i += 1;
-//         buffer[file_i] = '/';
-//         file_i += 1;
-//         *out_file_i = file_i;
-//
-//         let token_count = random_n % 64;
-//
-//         for (u64 i = 0; i < token_count; i += 1)
-//         {
-//             write_random_token(out_file_i, 1);
-//         }
-//
-//         file_i = *out_file_i;
-//
-//         buffer[file_i] = '\n';
-//         file_i += 1;
-//
-//         *out_file_i = file_i;
-//     }
-//
-//     *out_file_i = file_i;
-// }
-
-// static void write_random_file(str path)
-// {
-//     u64 file_i = 0;
-//
-//     for (u64 i = 0; i < 50000000; i += 1)
-//     {
-//         write_random_token(&file_i, 0);
-//     }
-//
-//     let fd = os_file_open(path, (OpenFlags) {
-//         .create = 1,
-//         .truncate = 1,
-//         .write = 1,
-//     }, (OpenPermissions) {
-//         .read = 1,
-//         .write = 1,
-//     });
-//
-//     os_file_write(fd, (str) { buffer, file_i });
-//
-//     os_file_close(fd);
-// }
-
-static str file_paths[] = {
-    S("build/file0"),
-    S("build/file1"),
-    S("build/file2"),
-    S("build/file3"),
-    S("build/file4"),
-    S("build/file5"),
-    S("build/file6"),
-    S("build/file7"),
-    S("build/file8"),
-    S("build/file9"),
-    S("build/file10"),
-    S("build/file11"),
-    S("build/file12"),
-    S("build/file13"),
-    S("build/file14"),
-    S("build/file15"),
-    S("build/file16"),
-    S("build/file17"),
-    S("build/file18"),
-    S("build/file19"),
-    S("build/file20"),
-    S("build/file21"),
-    S("build/file22"),
-    S("build/file23"),
-    S("build/file24"),
-    S("build/file25"),
-    S("build/file26"),
-    S("build/file27"),
-    S("build/file28"),
-    S("build/file29"),
-    S("build/file30"),
-    S("build/file31"),
-    S("build/file32"),
-    S("build/file33"),
-    S("build/file34"),
-    S("build/file35"),
-    S("build/file36"),
-    S("build/file37"),
-    S("build/file38"),
-    S("build/file39"),
-    S("build/file40"),
-    S("build/file41"),
-    S("build/file42"),
-    S("build/file43"),
-    S("build/file44"),
-    S("build/file45"),
-    S("build/file46"),
-    S("build/file47"),
-    S("build/file48"),
-    S("build/file49"),
-    S("build/file50"),
-    S("build/file51"),
-    S("build/file52"),
-    S("build/file53"),
-    S("build/file54"),
-    S("build/file55"),
-    S("build/file56"),
-    S("build/file57"),
-    S("build/file58"),
-    S("build/file59"),
-    S("build/file60"),
-    S("build/file61"),
-    S("build/file62"),
-    S("build/file63"),
-    S("build/file64"),
-    S("build/file65"),
-    S("build/file66"),
-    S("build/file67"),
-    S("build/file68"),
-    S("build/file69"),
-    S("build/file70"),
-    S("build/file71"),
-    S("build/file72"),
-    S("build/file73"),
-    S("build/file74"),
-    S("build/file75"),
-    S("build/file76"),
-    S("build/file77"),
-    S("build/file78"),
-    S("build/file79"),
-    S("build/file80"),
-    S("build/file81"),
-    S("build/file82"),
-    S("build/file83"),
-    S("build/file84"),
-    S("build/file85"),
-    S("build/file86"),
-    S("build/file87"),
-    S("build/file88"),
-    S("build/file89"),
-    S("build/file90"),
-    S("build/file91"),
-    S("build/file92"),
-    S("build/file93"),
-    S("build/file94"),
-    S("build/file95"),
-    S("build/file96"),
-    S("build/file97"),
-    S("build/file98"),
-    S("build/file99"),
-};
-
-STRUCT(Thread)
-{
-#if defined (__linux__) || defined(__APPLE__)
-    pthread_t handle;
-#elif _WIN32
-    void* handle;
-#endif
-    StringSlice work;
-    void* return_value;
-    u8 padding[64 - 4 * sizeof(u64)];
-};
-
-static_assert(sizeof(Thread) % 64 == 0);
-
-#define THREAD_COUNT 5
-static Thread threads[5];
-static u32 thread_count;
-
-static u64 classic_integer_type_count = 64 * 2;
-static u64 big_integer_type_count = (
+LOCAL u64 classic_integer_type_count = 64 * 2;
+LOCAL u64 big_integer_type_count = (
         1 +  // 128
         1 +  // 256
         1    // 512
         ) * 2;
-static u64 float_type_count = 5;
-static u64 void_noreturn_type_count = 2;
+LOCAL u64 float_type_count = 5;
+LOCAL u64 void_noreturn_type_count = 2;
 
-u64 get_base_type_count()
+PUB_IMPL u64 get_base_type_count()
 {
     return classic_integer_type_count + big_integer_type_count + float_type_count + void_noreturn_type_count;
 }
 
-static void default_show_callback(void* context, str message)
+LOCAL void default_show_callback(void* context, str message)
 {
     unused(context);
     os_file_write(os_get_stdout(), message);
 }
 
-static CompileUnit* compile_unit_create()
+LOCAL CompileUnit* compile_unit_create()
 {
     let arena = arena_create((ArenaInitialization) {
         .count = UNIT_ARENA_COUNT,
@@ -1443,21 +370,21 @@ static CompileUnit* compile_unit_create()
     return unit;
 }
 
-TypeReference get_void_type(CompileUnit* restrict unit)
+PUB_IMPL TypeReference get_void_type(CompileUnit* restrict unit)
 {
     let void_offset = classic_integer_type_count + big_integer_type_count;
     let void_type = type_reference_from_index(unit, void_offset);
     return void_type;
 }
 
-TypeReference get_noreturn_type(CompileUnit* restrict unit)
+PUB_IMPL TypeReference get_noreturn_type(CompileUnit* restrict unit)
 {
     let void_type = get_void_type(unit);
     void_type.v += 1;
     return void_type;
 }
 
-TypeReference get_integer_type(CompileUnit* restrict unit, u64 bit_count, bool is_signed)
+PUB_IMPL TypeReference get_integer_type(CompileUnit* restrict unit, u64 bit_count, bool is_signed)
 {
     assert(bit_count != 0);
     assert(bit_count <= 64 || bit_count == 128 || bit_count == 256 || bit_count == 512);
@@ -1465,13 +392,13 @@ TypeReference get_integer_type(CompileUnit* restrict unit, u64 bit_count, bool i
     return type_reference_from_index(unit, type_index);
 }
 
-StringReference allocate_string(CompileUnit* restrict unit, str s)
+PUB_IMPL StringReference allocate_string(CompileUnit* restrict unit, str s)
 {
     str slices[] = { s };
     return allocate_and_join_string(unit, string_array_to_slice(slices));
 }
 
-StringReference allocate_and_join_string(CompileUnit* restrict unit, StringSlice slice)
+PUB_IMPL StringReference allocate_and_join_string(CompileUnit* restrict unit, StringSlice slice)
 {
     let arena = unit_arena(unit, UNIT_ARENA_STRING);
     let arena_byte_pointer = (char*)arena;
@@ -1553,7 +480,7 @@ StringReference allocate_and_join_string(CompileUnit* restrict unit, StringSlice
     return result;
 }
 
-StringReference allocate_string_if_needed(CompileUnit* restrict unit, str s)
+PUB_IMPL StringReference allocate_string_if_needed(CompileUnit* restrict unit, str s)
 {
     let arena = unit_arena(unit, UNIT_ARENA_STRING);
     let arena_byte_pointer = (char*)arena;
@@ -1571,7 +498,7 @@ StringReference allocate_string_if_needed(CompileUnit* restrict unit, str s)
     }
 }
 
-static void crunch_file(CompileUnit* restrict unit, str path)
+LOCAL void crunch_file(CompileUnit* restrict unit, str path)
 {
     let default_arena = get_default_arena(unit);
     let absolute_path = path_absolute(default_arena, path.pointer);
@@ -1635,14 +562,14 @@ static void crunch_file(CompileUnit* restrict unit, str path)
     unit_show(unit, S("Parsing done!"));
 }
 
-static void print_llvm_message(CompileUnit* restrict unit, str message)
+LOCAL void print_llvm_message(CompileUnit* restrict unit, str message)
 {
     assert(message.pointer);
     unit_show(unit, message);
     LLVMDisposeMessage(message.pointer);
 }
 
-static bool compile_unit_internal(CompileUnit* unit, str path)
+LOCAL bool compile_unit_internal(CompileUnit* unit, str path)
 {
     bool result_code = 1;
     crunch_file(unit, path);
@@ -1700,13 +627,13 @@ static bool compile_unit_internal(CompileUnit* unit, str path)
     return result_code;
 }
 
-static bool compile_unit(str path)
+LOCAL bool compile_unit(str path)
 {
     let unit = compile_unit_create();
     return compile_unit_internal(unit, path);
 }
 
-static bool compile_and_link_single_unit_internal(CompileUnit* unit, str path)
+LOCAL bool compile_and_link_single_unit_internal(CompileUnit* unit, str path)
 {
     bool result = compile_unit_internal(unit, path);
     if (result)
@@ -1732,7 +659,7 @@ static bool compile_and_link_single_unit_internal(CompileUnit* unit, str path)
     return result;
 }
 
-static CompileUnit* compile_and_link_single_unit(str path)
+LOCAL CompileUnit* compile_and_link_single_unit(str path)
 {
     let unit = compile_unit_create();
     if (compile_and_link_single_unit_internal(unit, path))
@@ -1745,20 +672,20 @@ static CompileUnit* compile_and_link_single_unit(str path)
     }
 }
 
-static let test_source_path = S("tests/tests.bbb");
+LOCAL let test_source_path = S("tests/tests.bbb");
 
-static CompileUnit* compile_tests()
+LOCAL CompileUnit* compile_tests()
 {
     let result = compile_and_link_single_unit(test_source_path);
     return result;
 }
 
-static void* thread_worker(void* arg)
+LOCAL void* thread_worker(void* arg)
 {
     return (void*)(u64)!compile_tests();
 }
 
-static ThreadReturnType llvm_initialization_thread(void*)
+LOCAL ThreadReturnType llvm_initialization_thread(void*)
 {
     llvm_initialize();
     return (ThreadReturnType)0;
@@ -1769,13 +696,13 @@ typedef enum CompilerCommand : u8
     COMPILER_COMMAND_TEST,
 } CompilerCommand;
 
-static CompilerCommand default_command = COMPILER_COMMAND_TEST;
+LOCAL CompilerCommand default_command = COMPILER_COMMAND_TEST;
 
-static void compiler_test_log(void* context, str string)
+LOCAL void compiler_test_log(void* context, str string)
 {
 }
 
-static bool compiler_tests()
+LOCAL bool compiler_tests()
 {
     let arena_init = (ArenaInitialization){};
     TestArguments test_arguments = {
@@ -1791,7 +718,7 @@ static bool compiler_tests()
     return result;
 }
 
-static bool unit_run(CompileUnit* restrict unit, StringSlice slice, char** envp)
+LOCAL bool unit_run(CompileUnit* restrict unit, StringSlice slice, char** envp)
 {
     char* arg_buffer[64];
     
@@ -1810,7 +737,7 @@ static bool unit_run(CompileUnit* restrict unit, StringSlice slice, char** envp)
     return (result.termination_kind == TERMINATION_KIND_EXIT) & (result.termination_code == 0);
 }
 
-static bool process_command_line(int argc, const char* argv[], char** envp)
+LOCAL bool process_command_line(int argc, const char* argv[], char** envp)
 {
     assert(is_single_threaded);
 
@@ -1868,9 +795,652 @@ static bool process_command_line(int argc, const char* argv[], char** envp)
     return result;
 }
 
-bool compiler_main(int argc, const char* argv[], char** envp)
+LOCAL bool abi_can_have_coerce_to_type(AbiInformation* restrict abi)
+{
+    AbiKind kind = abi->flags.kind;
+    return (kind == ABI_KIND_DIRECT) | (kind == ABI_KIND_EXTEND) | (kind == ABI_KIND_COERCE_AND_EXPAND);
+}
+
+PUB_IMPL Aarch64AbiKind get_aarch64_abi_kind(OperatingSystem os)
+{
+    switch (os)
+    {
+        break; case OPERATING_SYSTEM_UNKNOWN: UNREACHABLE();
+        break; case OPERATING_SYSTEM_LINUX: return AARCH64_ABI_KIND_AAPCS;
+        break; case OPERATING_SYSTEM_MACOS: return AARCH64_ABI_KIND_DARWIN_PCS;
+        break; case OPERATING_SYSTEM_WINDOWS: return AARCH64_ABI_KIND_WIN64;
+    }
+}
+
+PUB_IMPL TypeEvaluationKind get_type_evaluation_kind(CompileUnit* restrict unit, Type* type)
+{
+    switch (type->id)
+    {
+        case TYPE_ID_VOID:
+        case TYPE_ID_NORETURN:
+        case TYPE_ID_FUNCTION:
+        case TYPE_ID_OPAQUE:
+            UNREACHABLE();
+        case TYPE_ID_INTEGER:
+        case TYPE_ID_FLOAT:
+        case TYPE_ID_ENUM:
+        case TYPE_ID_POINTER:
+        case TYPE_ID_BITS:
+        case TYPE_ID_VECTOR:
+            return TYPE_EVALUATION_KIND_SCALAR;
+        case TYPE_ID_ARRAY:
+        case TYPE_ID_STRUCT:
+        case TYPE_ID_UNION:
+        case TYPE_ID_ENUM_ARRAY:
+            return TYPE_EVALUATION_KIND_AGGREGATE;
+        case TYPE_ID_COUNT:
+            UNREACHABLE();
+    }
+}
+
+PUB_IMPL bool type_is_aggregate_for_abi (CompileUnit* restrict unit, Type* type)
+{
+    let evaluation_kind = get_type_evaluation_kind(unit, type);
+    bool is_member_function_pointer_type = false; // TODO
+    return (evaluation_kind != TYPE_EVALUATION_KIND_SCALAR) | is_member_function_pointer_type;
+}
+
+PUB_IMPL bool type_is_promotable_integer_for_abi(CompileUnit* restrict unit, Type* type)
+{
+    if (type->id == TYPE_ID_BITS)
+    {
+        todo();
+    }
+
+    if (type->id == TYPE_ID_ENUM)
+    {
+        todo();
+    }
+
+    return (type->id == TYPE_ID_INTEGER) & (type->integer.bit_count < 32);
+}
+
+PUB_IMPL bool type_is_integral_or_enumeration(CompileUnit* restrict unit, TypeReference type_reference)
+{
+    let type_pointer = type_pointer_from_reference(unit, type_reference);
+
+    switch (type_pointer->id)
+    {
+        break;
+        case TYPE_ID_INTEGER:
+        {
+            return 1;
+        }
+        break; default:
+        {
+            UNREACHABLE();
+        }
+    }
+}
+
+
+PUB_IMPL TypeReference get_semantic_return_type(TypeFunction* restrict function)
+{
+    return function->semantic_types[0];
+}
+
+PUB_IMPL TypeReference get_semantic_argument_type(TypeFunction* restrict function, u16 semantic_argument_index)
+{
+    assert(semantic_argument_index < function->semantic_argument_count);
+    return function->semantic_types[semantic_argument_index + 1];
+}
+
+PUB_IMPL TypeReference get_abi_return_type(TypeFunction* restrict function)
+{
+    return function->abi_types[0];
+}
+
+PUB_IMPL TypeReference get_abi_argument_type(TypeFunction* restrict function, u16 abi_argument_index)
+{
+    assert(abi_argument_index < function->abi_argument_count);
+    return function->abi_types[abi_argument_index + 1];
+}
+
+PUB_IMPL AbiInformation* restrict get_abis(TypeFunction* restrict function)
+{
+    return (AbiInformation*)(function->semantic_types + function->semantic_argument_count);
+}
+
+PUB_IMPL AbiInformation* restrict get_return_abi(TypeFunction* restrict function)
+{
+    return &get_abis(function)[0];
+}
+
+PUB_IMPL AbiInformation* restrict get_argument_abi(TypeFunction* restrict function, u16 semantic_argument_index)
+{
+    assert(semantic_argument_index < function->semantic_argument_count);
+    return &get_abis(function)[semantic_argument_index + 1];
+}
+
+PUB_IMPL void abi_set_coerce_to_type(AbiInformation* restrict abi, TypeReference type_reference)
+{
+    assert(abi_can_have_coerce_to_type(abi));
+    abi->coerce_to_type = type_reference;
+}
+
+PUB_IMPL bool abi_can_have_padding_type(AbiInformation* restrict abi)
+{
+    AbiKind kind = abi->flags.kind;
+    return ((kind == ABI_KIND_DIRECT) | (kind == ABI_KIND_EXTEND)) | ((kind == ABI_KIND_INDIRECT) | (kind == ABI_KIND_INDIRECT_ALIASED)) | (kind == ABI_KIND_EXPAND);
+}
+
+PUB_IMPL void abi_set_padding_type(AbiInformation* restrict abi, TypeReference type_reference)
+{
+    assert(abi_can_have_padding_type(abi));
+    abi->padding.type = type_reference;
+}
+
+PUB_IMPL void abi_set_direct_offset(AbiInformation* restrict abi, u32 offset)
+{
+    assert((abi->flags.kind == ABI_KIND_DIRECT) || (abi->flags.kind == ABI_KIND_EXTEND));
+    abi->attributes.direct.offset = offset;
+}
+
+PUB_IMPL void abi_set_direct_alignment(AbiInformation* restrict abi, u32 alignment)
+{
+    assert((abi->flags.kind == ABI_KIND_DIRECT) || (abi->flags.kind == ABI_KIND_EXTEND));
+    abi->attributes.direct.alignment = alignment;
+}
+
+PUB_IMPL void abi_set_can_be_flattened(AbiInformation* restrict abi, bool value)
+{
+    assert(abi->flags.kind == ABI_KIND_DIRECT);
+    abi->flags.can_be_flattened = value;
+}
+
+PUB_IMPL TypeReference abi_get_coerce_to_type(AbiInformation* restrict abi)
+{
+    assert(abi_can_have_coerce_to_type(abi));
+    return abi->coerce_to_type;
+}
+
+PUB_IMPL bool value_id_is_intrinsic(ValueId id)
+{
+    switch (id)
+    {
+        case VALUE_ID_INTRINSIC_VALUE:
+        case VALUE_ID_INTRINSIC_TYPE:
+        case VALUE_ID_INTRINSIC_UNRESOLVED:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+PUB_IMPL u32 location_get_line(SourceLocation location)
+{
+    return location.line_number_offset + 1;
+}
+
+PUB_IMPL u32 location_get_column(SourceLocation location)
+{
+    return location.column_offset + 1;
+}
+
+PUB_IMPL bool statement_is_block_like(StatementId id)
+{
+    switch (id)
+    {
+        break;
+        case STATEMENT_ID_BLOCK:
+        case STATEMENT_ID_IF:
+        case STATEMENT_ID_WHEN:
+        case STATEMENT_ID_SWITCH:
+        case STATEMENT_ID_WHILE:
+        case STATEMENT_ID_FOR:
+        {
+            return 1;
+        }
+        break; default:
+        {
+            return 0;
+        }
+    }
+}
+
+PUB_IMPL void unit_show(CompileUnit* restrict unit, str message)
+{
+    let show = unit->show_callback;
+    if (likely(show))
+    {
+        show(unit, message);
+        show(unit, S("\n"));
+    }
+}
+
+PUB_IMPL Arena* unit_arena(CompileUnit* unit, UnitArenaKind kind)
+{
+    Arena* arena = (Arena*)unit - 1;
+    let result = (Arena*)((u8*)arena + ((s64)kind * arena->reserved_size));
+    return result;
+}
+
+PUB_IMPL Arena* get_default_arena(CompileUnit* restrict unit)
+{
+    return unit_arena(unit, UNIT_ARENA_COMPILE_UNIT);
+}
+
+#define reference_offset_function_impl(O, o, AU) \
+PUB_IMPL reference_offset_function_ref(O, o)\
+{\
+    let arena = unit_arena(unit, AU);\
+    let o ## _byte_pointer = (u8*)o;\
+    let arena_byte_pointer = (u8*)arena;\
+    let arena_bottom = arena_byte_pointer;\
+    let arena_top = arena_byte_pointer + arena->position;\
+    assert(o ## _byte_pointer > arena_bottom && o ## _byte_pointer < arena_top);\
+    let sub = o ## _byte_pointer - arena_byte_pointer;\
+    assert(sub < UINT32_MAX);\
+    return (O ## Reference) {\
+        .v = (u32)(sub + 1),\
+    };\
+}\
+PUB_IMPL reference_offset_function_ptr(O, o)\
+{\
+    assert(o_reference.v != 0);\
+    let arena = unit_arena(unit, AU);\
+    let arena_byte_pointer = (u8*)arena;\
+    let arena_bottom = arena_byte_pointer;\
+    let arena_top = arena_byte_pointer + arena->position;\
+    let o ## _byte_pointer = arena_byte_pointer + (o_reference.v - 1);\
+    assert(o ## _byte_pointer > arena_bottom && o ## _byte_pointer < arena_top);\
+    let o = (O* restrict)o ## _byte_pointer; \
+    return o;\
+}
+
+reference_offset_function_impl(Scope, scope, UNIT_ARENA_COMPILE_UNIT);
+reference_offset_function_impl(File, file, UNIT_ARENA_COMPILE_UNIT);
+reference_offset_function_impl(Argument, argument, UNIT_ARENA_COMPILE_UNIT);
+reference_offset_function_impl(Local, local, UNIT_ARENA_COMPILE_UNIT);
+reference_offset_function_impl(Global, global, UNIT_ARENA_COMPILE_UNIT);
+reference_offset_function_impl(Statement, statement, UNIT_ARENA_COMPILE_UNIT);
+reference_offset_function_impl(Block, block, UNIT_ARENA_COMPILE_UNIT);
+reference_offset_function_impl(TopLevelDeclaration, top_level_declaration, UNIT_ARENA_COMPILE_UNIT);
+reference_offset_function_impl(ValueNode, value_node, UNIT_ARENA_COMPILE_UNIT);
+reference_offset_function_impl(Variable, variable, UNIT_ARENA_COMPILE_UNIT);
+
+PUB_IMPL Global* get_current_function(CompileUnit* restrict unit)
+{
+    let current_function_ref = unit->current_function;
+    if (!is_ref_valid(current_function_ref))
+    {
+        todo();
+    }
+
+    let current_function = global_pointer_from_reference(unit, current_function_ref);
+    return current_function;
+}
+
+PUB_IMPL u64 get_byte_size(CompileUnit* restrict unit, Type* type_pointer)
+{
+    assert(unit->phase >= COMPILE_PHASE_ANALYSIS);
+
+    switch (type_pointer->id)
+    {
+        break; case TYPE_ID_INTEGER:
+        {
+            let bit_count = type_pointer->integer.bit_count;
+            let byte_count = aligned_byte_count_from_bit_count(bit_count);
+            return byte_count;
+        }
+        break; default:
+        {
+            todo();
+        }
+    }
+}
+
+PUB_IMPL u64 get_bit_size(CompileUnit* restrict unit, Type* restrict type)
+{
+    assert(unit->phase >= COMPILE_PHASE_ANALYSIS);
+
+    switch (type->id)
+    {
+        break; case TYPE_ID_INTEGER:
+        {
+            let bit_count = type->integer.bit_count;
+            let byte_count = aligned_byte_count_from_bit_count(bit_count);
+            return byte_count;
+        }
+        break; default:
+        {
+            todo();
+        }
+    }
+}
+
+PUB_IMPL bool type_is_signed(CompileUnit* restrict unit, Type* type)
+{
+    switch (type->id)
+    {
+        break; case TYPE_ID_INTEGER:
+        {
+            let is_signed = type->integer.is_signed;
+            return is_signed;
+        }
+        break; default: todo();
+    }
+}
+
+PUB_IMPL bool type_is_record(Type* restrict type)
+{
+    switch (type->id)
+    {
+        case TYPE_ID_VOID:
+        case TYPE_ID_NORETURN:
+        case TYPE_ID_INTEGER:
+        case TYPE_ID_FLOAT:
+        case TYPE_ID_FUNCTION:
+        case TYPE_ID_ENUM:
+        case TYPE_ID_POINTER:
+        case TYPE_ID_OPAQUE:
+        case TYPE_ID_ARRAY:
+        case TYPE_ID_BITS:
+        case TYPE_ID_VECTOR:
+        case TYPE_ID_ENUM_ARRAY:
+            return false;
+        case TYPE_ID_STRUCT:
+        case TYPE_ID_UNION:
+            return true;
+        case TYPE_ID_COUNT: UNREACHABLE();
+    }
+}
+
+PUB_IMPL u32 get_alignment(CompileUnit* restrict unit, Type* type)
+{
+    switch (type->id)
+    {
+        break; case TYPE_ID_INTEGER:
+        {
+            let bit_count = type->integer.bit_count;
+            let result = aligned_byte_count_from_bit_count(bit_count);
+            assert(result == 1 || result == 2 || result == 4 || result == 8 || result == 16);
+            return result;
+        }
+        break; default: todo();
+    }
+}
+
+PUB_IMPL ResolvedCallingConvention resolve_calling_convention(Target target, CallingConvention cc)
+{
+    switch (cc)
+    {
+        break; case CALLING_CONVENTION_C:
+        {
+            switch (target.cpu)
+            {
+                break; case CPU_ARCH_UNKNOWN: UNREACHABLE();
+                break; case CPU_ARCH_X86_64:
+                {
+                    switch (target.os)
+                    {
+                        break; case OPERATING_SYSTEM_UNKNOWN: UNREACHABLE();
+                        break; case OPERATING_SYSTEM_LINUX: return RESOLVED_CALLING_CONVENTION_SYSTEM_V;
+                        break; case OPERATING_SYSTEM_MACOS: return RESOLVED_CALLING_CONVENTION_SYSTEM_V;
+                        break; case OPERATING_SYSTEM_WINDOWS: return RESOLVED_CALLING_CONVENTION_WIN64;
+                    }
+                }
+                break; case CPU_ARCH_AARCH64:
+                {
+                    return RESOLVED_CALLING_CONVENTION_AARCH64;
+                }
+                break; default: UNREACHABLE();
+            }
+        }
+        break; default: UNREACHABLE();
+    }
+}
+
+PUB_IMPL StringReference string_reference_from_string(CompileUnit* restrict unit, str s)
+{
+    let arena = unit_arena(unit, UNIT_ARENA_STRING);
+    let arena_byte_pointer = (char*)arena;
+    let arena_bottom = arena_byte_pointer;
+    let arena_top = arena_byte_pointer + arena->position;
+    assert((arena_bottom < s.pointer) & (arena_top > s.pointer));
+    let string_top = s.pointer + s.length;
+    assert(string_top <= arena_top);
+    let length_pointer = (u32*)s.pointer - 1;
+    let length = *length_pointer;
+    assert(s.length == length);
+
+    let diff = (char*)length_pointer - arena_bottom;
+    assert(diff < UINT32_MAX);
+    return (StringReference) {
+        .v = diff + 1,
+    };
+}
+
+PUB_IMPL str string_from_reference(CompileUnit* restrict unit, StringReference reference)
+{
+    assert(is_ref_valid(reference));
+
+    let arena = unit_arena(unit, UNIT_ARENA_STRING);
+    let arena_byte_pointer = (char*)arena;
+    let arena_bottom = arena_byte_pointer;
+    let arena_position = arena->position;
+
+    let length_offset = reference.v - 1;
+    assert(length_offset >= sizeof(Arena));
+    assert(length_offset < arena_position);
+    let length_byte_pointer = arena_bottom + length_offset;
+    let length_pointer = (u32*)length_byte_pointer;
+    let string_pointer = (char* restrict) (length_pointer + 1);
+    u64 string_length = *length_pointer;
+    return (str){ .pointer = string_pointer, .length = string_length };
+}
+
+PUB_IMPL TypeReference type_reference_from_pointer(CompileUnit* restrict unit, Type* type)
+{
+    let type_arena = unit_arena(unit, UNIT_ARENA_TYPE);
+    let arena_byte_pointer = (u8*)type_arena;
+    let arena_position = type_arena->position;
+    let arena_bottom = arena_byte_pointer;
+    let arena_top = arena_byte_pointer + arena_position;
+    let type_byte_pointer = (u8*)type;
+    assert(type_byte_pointer > arena_bottom && type_byte_pointer < arena_top);
+    let diff = type_byte_pointer - (arena_bottom + sizeof(Arena));
+    assert(diff % sizeof(Type) == 0);
+    assert(diff < UINT32_MAX);
+    diff /= sizeof(Type);
+    return (TypeReference) {
+        .v = diff + 1,
+    };
+}
+
+PUB_IMPL TypeReference type_reference_from_index(CompileUnit* restrict unit, u32 index)
+{
+    let type_arena = unit_arena(unit, UNIT_ARENA_TYPE);
+    let byte_offset = index * sizeof(Type);
+    let arena_position = type_arena->position;
+    assert(sizeof(Arena) + byte_offset + sizeof(Type) <= arena_position);
+    return (TypeReference) {
+        .v = index + 1,
+    };
+}
+
+PUB_IMPL Type* type_pointer_from_reference(CompileUnit* restrict unit, TypeReference reference)
+{
+    assert(is_ref_valid(reference));
+    let arena = unit_arena(unit, UNIT_ARENA_TYPE);
+    let index = reference.v - 1;
+    let byte_offset = index * sizeof(Type);
+    let arena_position = arena->position;
+    assert(sizeof(Arena) + byte_offset + sizeof(Type) <= arena_position);
+    let type = (Type*)((u8*)arena + sizeof(Arena) + byte_offset);
+    return type;
+}
+
+PUB_IMPL ValueReference value_reference_from_pointer(CompileUnit* restrict unit, Value* value)
+{
+    let value_arena = unit_arena(unit, UNIT_ARENA_VALUE);
+    let arena_byte_pointer = (u8*)value_arena;
+    let arena_position = value_arena->position;
+    let arena_bottom = arena_byte_pointer;
+    let arena_top = arena_byte_pointer + arena_position;
+    let value_byte_pointer = (u8*)value;
+    assert(value_byte_pointer > arena_bottom && value_byte_pointer < arena_top);
+    let diff = value_byte_pointer - (arena_bottom + sizeof(Arena));
+    assert(diff % sizeof(Value) == 0);
+    assert(diff < UINT32_MAX);
+    diff /= sizeof(Value);
+    return (ValueReference) {
+        .v = diff + 1,
+    };
+}
+
+PUB_IMPL ValueReference value_reference_from_index(CompileUnit* restrict unit, u32 index)
+{
+    let value_arena = unit_arena(unit, UNIT_ARENA_VALUE);
+    let byte_offset = index * sizeof(Value);
+    let arena_position = value_arena->position;
+    assert(sizeof(Arena) + byte_offset + sizeof(Value) < arena_position);
+    return (ValueReference) {
+        .v = index + 1,
+    };
+}
+
+PUB_IMPL Value* value_pointer_from_reference(CompileUnit* restrict unit, ValueReference reference)
+{
+    assert(is_ref_valid(reference));
+    let arena = unit_arena(unit, UNIT_ARENA_VALUE);
+    let index = reference.v - 1;
+    let byte_offset = index * sizeof(Value);
+    let arena_position = arena->position;
+    assert(sizeof(Arena) + byte_offset + sizeof(Value) <= arena_position);
+    let result = (Value*)((u8*)arena + sizeof(Arena) + byte_offset);
+    return result;
+}
+
+PUB_IMPL Type* new_types(CompileUnit* restrict unit, u32 type_count)
+{
+    let arena = unit_arena(unit, UNIT_ARENA_TYPE);
+    let types = arena_allocate(arena, Type, type_count);
+    return types;
+}
+
+PUB_IMPL Type* allocate_free_type(CompileUnit* restrict unit)
+{
+    let type_ref = unit->free_types;
+    assert(is_ref_valid(type_ref));
+    let type = type_pointer_from_reference(unit, type_ref);
+    type->next = (TypeReference){};
+    return type;
+}
+
+PUB_IMPL Type* new_type(CompileUnit* restrict unit)
+{
+    let result = is_ref_valid(unit->free_types) ? allocate_free_type(unit) : new_types(unit, 1);
+    return result;
+}
+
+PUB_IMPL Value* new_values(CompileUnit* restrict unit, u32 value_count)
+{
+    let arena = unit_arena(unit, UNIT_ARENA_VALUE);
+    let values = arena_allocate(arena, Value, value_count);
+    return values;
+}
+
+PUB_IMPL Value* new_value(CompileUnit* restrict unit)
+{
+    return new_values(unit, 1);
+}
+
+PUB_IMPL Scope* restrict new_scope(CompileUnit* restrict unit)
+{
+    let arena = get_default_arena(unit);
+    let scope = arena_allocate(arena, Scope, 1);
+    return scope;
+}
+
+PUB_IMPL u64 align_bit_count(u64 bit_count)
+{
+    let aligned_bit_count = MAX(next_power_of_two(bit_count), 8);
+    assert((aligned_bit_count & (aligned_bit_count - 1)) == 0);
+    return aligned_bit_count;
+}
+
+PUB_IMPL u64 aligned_byte_count_from_bit_count(u64 bit_count)
+{
+    let aligned_bit_count = align_bit_count(bit_count);
+    assert(aligned_bit_count % 8 == 0);
+    return aligned_bit_count / 8;
+}
+
+PUB_IMPL TypeReference get_u1(CompileUnit* restrict unit)
+{
+    return get_integer_type(unit, 1, 0);
+}
+
+PUB_IMPL TypeReference get_u8(CompileUnit* restrict unit)
+{
+    return get_integer_type(unit, 8, 0);
+}
+
+PUB_IMPL TypeReference get_u16(CompileUnit* restrict unit)
+{
+    return get_integer_type(unit, 16, 0);
+}
+
+PUB_IMPL TypeReference get_u32(CompileUnit* restrict unit)
+{
+    return get_integer_type(unit, 32, 0);
+}
+
+PUB_IMPL TypeReference get_u64(CompileUnit* restrict unit)
+{
+    return get_integer_type(unit, 64, 0);
+}
+
+PUB_IMPL Type* get_function_type_from_storage(CompileUnit* restrict unit, Global* function)
+{
+    let function_storage_ref = function->variable.storage;
+    let function_storage = value_pointer_from_reference(unit, function_storage_ref);
+    let function_pointer_type_ref = function_storage->type;
+    assert(is_ref_valid(function_pointer_type_ref));
+    let function_pointer_type = type_pointer_from_reference(unit, function_pointer_type_ref);
+    assert(function_pointer_type->id == TYPE_ID_POINTER);
+    let function_type_ref = function_pointer_type->pointer.element_type;
+    assert(is_ref_valid(function_type_ref));
+    let function_type = type_pointer_from_reference(unit, function_type_ref);
+    assert(function_type->id == TYPE_ID_FUNCTION);
+
+    return function_type;
+}
+
+[[noreturn]] PUB_IMPL void todo_internal(CompileUnit* unit, u32 line, str function_name, str file_path)
+{
+    let arena = get_default_arena(unit);
+    str parts[] = {
+        S("TODO at: "),
+        function_name,
+        S(" in "),
+        file_path,
+        S(":"),
+        format_integer(arena, (FormatIntegerOptions) {
+            .format = INTEGER_FORMAT_DECIMAL,
+            .value = line,
+        }, false),
+    };
+    unit_show(unit, arena_join_string(arena, string_array_to_slice(parts), true));
+    fail();
+}
+
+LOCAL bool compiler_main(int argc, const char* argv[], char** envp)
 {
     os_init();
 
     return process_command_line(argc, argv, envp);
+}
+
+int main(int argc, const char* argv[], char** envp)
+{
+    bool result = compiler_main(argc, argv, envp);
+    int result_code = result ? 0 : 1;
+    return result_code;
 }

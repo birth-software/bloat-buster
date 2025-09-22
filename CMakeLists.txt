@@ -2,8 +2,9 @@ cmake_minimum_required(VERSION 3.31)
 project(bb)
 
 if(NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
+  set(CMAKE_BUILD_TYPE Debug STRING "Build type" FORCE)
 endif()
+message(STATUS "CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}")
 set(CMAKE_C_STANDARD 23)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_COLOR_DIAGNOSTICS ON)
@@ -33,6 +34,7 @@ else()
     add_compile_definitions(BB_USE_LLVM=0)
 endif()
 
+add_compile_options(-Wno-pragma-once-outside-header)
 
 # Optional LLVM support
 if(USE_LLVM)
@@ -64,23 +66,38 @@ endif()
 
 set (PROJECT_DIR src)
 
-add_executable(bb
-    ${PROJECT_DIR}/lib.c
-    ${PROJECT_DIR}/lexer.c
-    ${PROJECT_DIR}/parser.c
-    ${PROJECT_DIR}/analysis.c
-    ${PROJECT_DIR}/abi.c
-    ${PROJECT_DIR}/abi_system_v.c
-    ${PROJECT_DIR}/abi_win64.c
-    ${PROJECT_DIR}/abi_aarch64.c
-    ${PROJECT_DIR}/llvm_common.c
-    ${PROJECT_DIR}/llvm_generate.c
-    ${PROJECT_DIR}/llvm_optimize.c
-    ${PROJECT_DIR}/llvm_emit.c
-    ${PROJECT_DIR}/llvm_link.c
-    ${PROJECT_DIR}/compiler.c
-    ${PROJECT_DIR}/main.c
-)
+if ("${CMAKE_BUILD_TYPE}" STREQUAL "Release" OR "${CMAKE_BUILD_TYPE}" STREQUAL "RelWithDebInfo")
+    set(UNITY_BUILD ON)
+else()
+    set(UNITY_BUILD OFF)
+endif()
+
+message(STATUS "UNITY_BUILD: ${UNITY_BUILD}")
+
+if (UNITY_BUILD)
+    add_compile_definitions(UNITY_BUILD=1)
+    add_executable(bb
+        ${PROJECT_DIR}/compiler.c
+    )
+else()
+    add_compile_definitions(UNITY_BUILD=0)
+    add_executable(bb
+        ${PROJECT_DIR}/lib.c
+        ${PROJECT_DIR}/lexer.c
+        ${PROJECT_DIR}/parser.c
+        ${PROJECT_DIR}/analysis.c
+        ${PROJECT_DIR}/abi.c
+        ${PROJECT_DIR}/abi_system_v.c
+        ${PROJECT_DIR}/abi_win64.c
+        ${PROJECT_DIR}/abi_aarch64.c
+        ${PROJECT_DIR}/llvm_common.c
+        ${PROJECT_DIR}/llvm_generate.c
+        ${PROJECT_DIR}/llvm_optimize.c
+        ${PROJECT_DIR}/llvm_emit.c
+        ${PROJECT_DIR}/llvm_link.c
+        ${PROJECT_DIR}/compiler.c
+    )
+endif()
 
 if (USE_LLVM)
     target_link_libraries(bb PUBLIC

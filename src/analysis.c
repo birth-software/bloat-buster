@@ -1,3 +1,5 @@
+#pragma once
+
 #include <analysis.h>
 
 #define analysis_error() todo()
@@ -8,9 +10,9 @@ STRUCT(TypeAnalysis)
     bool must_be_constant;
 };
 
-static ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* restrict value_reference, TypeReference expected_type, TypeAnalysis analysis);
+LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* restrict value_reference, TypeReference expected_type, TypeAnalysis analysis);
 
-static void queue_top_level_declarations(CompileUnit* restrict unit, FileReference file_reference, TopLevelDeclarationReference first_tld)
+LOCAL void queue_top_level_declarations(CompileUnit* restrict unit, FileReference file_reference, TopLevelDeclarationReference first_tld)
 {
     let file = file_pointer_from_reference(unit, file_reference);
     let tld_ref = first_tld;
@@ -54,9 +56,9 @@ static void queue_top_level_declarations(CompileUnit* restrict unit, FileReferen
     }
 }
 
-static TypeReference analyze_type(CompileUnit* restrict unit, TypeReference* restrict type_reference);
+LOCAL TypeReference analyze_type(CompileUnit* restrict unit, TypeReference* restrict type_reference);
 
-static void garbage_collect_type(CompileUnit* unit, TypeReference type_ref)
+LOCAL void garbage_collect_type(CompileUnit* unit, TypeReference type_ref)
 {
     let type = type_pointer_from_reference(unit, type_ref);
     memset(type, 0, sizeof(Type));
@@ -66,7 +68,7 @@ static void garbage_collect_type(CompileUnit* unit, TypeReference type_ref)
     unit->free_types = type_ref;
 }
 
-static TypeReference get_function_type(CompileUnit* restrict unit, TypeReference* restrict type_reference)
+LOCAL TypeReference get_function_type(CompileUnit* restrict unit, TypeReference* restrict type_reference)
 {
     let original_reference = *type_reference;
     let type = type_pointer_from_reference(unit, original_reference);
@@ -297,7 +299,7 @@ static TypeReference get_function_type(CompileUnit* restrict unit, TypeReference
     return result;
 }
 
-static TypeReference analyze_type(CompileUnit* restrict unit, TypeReference* restrict type_reference)
+LOCAL TypeReference analyze_type(CompileUnit* restrict unit, TypeReference* restrict type_reference)
 {
     let original_reference = *type_reference;
     let type_pointer = type_pointer_from_reference(unit, original_reference);
@@ -330,7 +332,7 @@ static TypeReference analyze_type(CompileUnit* restrict unit, TypeReference* res
     return result;
 }
 
-static u64 integer_max_value(u64 bit_count, bool is_signed)
+LOCAL u64 integer_max_value(u64 bit_count, bool is_signed)
 {
     assert(bit_count <= 64);
     let result = bit_count == 64 ? ~(u64)0 : ((u64)1 << (bit_count - is_signed)) - 1;
@@ -354,7 +356,7 @@ STRUCT(IdentifierSearch)
     IdentifierSearchId id;
 };
 
-static IdentifierSearch reference_identifier(CompileUnit* restrict unit, ValueReference* value_ref, TypeReference expected_type, TypeAnalysis analysis)
+LOCAL IdentifierSearch reference_identifier(CompileUnit* restrict unit, ValueReference* value_ref, TypeReference expected_type, TypeAnalysis analysis)
 {
     let original_reference = *value_ref;
     let value = value_pointer_from_reference(unit, original_reference);
@@ -470,7 +472,7 @@ static IdentifierSearch reference_identifier(CompileUnit* restrict unit, ValueRe
     return result;
 }
 
-static void check_types(CompileUnit* restrict unit, TypeReference expected, TypeReference source)
+LOCAL void check_types(CompileUnit* restrict unit, TypeReference expected, TypeReference source)
 {
     assert(is_ref_valid(expected));
     assert(is_ref_valid(expected));
@@ -481,7 +483,7 @@ static void check_types(CompileUnit* restrict unit, TypeReference expected, Type
     }
 }
 
-static void typecheck(CompileUnit* restrict unit, TypeReference expected, TypeReference source)
+LOCAL void typecheck(CompileUnit* restrict unit, TypeReference expected, TypeReference source)
 {
     if (is_ref_valid(expected))
     {
@@ -489,7 +491,7 @@ static void typecheck(CompileUnit* restrict unit, TypeReference expected, TypeRe
     }
 }
 
-static bool value_is_boolean(ValueId id)
+LOCAL bool value_is_boolean(ValueId id)
 {
     switch (id)
     {
@@ -507,7 +509,7 @@ static bool value_is_boolean(ValueId id)
     }
 }
 
-static bool value_is_constant(CompileUnit* restrict unit, Value* restrict value)
+LOCAL bool value_is_constant(CompileUnit* restrict unit, Value* restrict value)
 {
     let id = value->id;
     bool result = 0;
@@ -528,7 +530,7 @@ static bool value_is_constant(CompileUnit* restrict unit, Value* restrict value)
     return result;
 }
 
-static bool value_receives_type(CompileUnit* restrict unit, Value* restrict value)
+LOCAL bool value_receives_type(CompileUnit* restrict unit, Value* restrict value)
 {
     let id = value->id;
     bool result = 0;
@@ -558,7 +560,7 @@ STRUCT(AnalyzeBinaryOptions)
     bool is_sub;
 };
 
-static void analyze_binary(CompileUnit* restrict unit, ValueReference* restrict left_ref, ValueReference* restrict right_ref, AnalyzeBinaryOptions options)
+LOCAL void analyze_binary(CompileUnit* restrict unit, ValueReference* restrict left_ref, ValueReference* restrict right_ref, AnalyzeBinaryOptions options)
 {
     let original_left_ref = *left_ref;
     let original_right_ref = *right_ref;
@@ -635,7 +637,7 @@ static void analyze_binary(CompileUnit* restrict unit, ValueReference* restrict 
     }
 }
 
-static ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* restrict value_reference, TypeReference expected_type, TypeAnalysis analysis)
+LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* restrict value_reference, TypeReference expected_type, TypeAnalysis analysis)
 {
     let original_reference = *value_reference;
     let value = value_pointer_from_reference(unit, original_reference);
@@ -912,7 +914,7 @@ static ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* 
     return result;
 }
 
-static TypeReference get_pointer_type(CompileUnit* restrict unit, TypeReference* pointer_type_reference, TypeReference element_type_reference)
+LOCAL TypeReference get_pointer_type(CompileUnit* restrict unit, TypeReference* pointer_type_reference, TypeReference element_type_reference)
 {
     assert(unit->phase >= COMPILE_PHASE_ANALYSIS);
 
@@ -991,7 +993,7 @@ static TypeReference get_pointer_type(CompileUnit* restrict unit, TypeReference*
     return result;
 }
 
-static void analyze_statement(CompileUnit* restrict unit, Statement* restrict statement)
+LOCAL void analyze_statement(CompileUnit* restrict unit, Statement* restrict statement)
 {
     assert(!statement->analyzed);
     let statement_id = statement->id;
@@ -1070,7 +1072,7 @@ static void analyze_statement(CompileUnit* restrict unit, Statement* restrict st
     statement->analyzed = 1;
 }
 
-static void analyze_block(CompileUnit* restrict unit, BlockReference block_ref)
+LOCAL void analyze_block(CompileUnit* restrict unit, BlockReference block_ref)
 {
     let block = block_pointer_from_reference(unit, block_ref);
     assert(!block->analyzed);
@@ -1087,7 +1089,7 @@ static void analyze_block(CompileUnit* restrict unit, BlockReference block_ref)
     block->analyzed = 1;
 }
 
-void analyze(CompileUnit* restrict unit)
+PUB_IMPL void analyze(CompileUnit* restrict unit)
 {
     unit->phase = COMPILE_PHASE_ANALYSIS;
 
@@ -1174,7 +1176,7 @@ void analyze(CompileUnit* restrict unit)
 }
 
 #if BB_INCLUDE_TESTS
-bool analysis_tests(TestArguments* restrict arguments)
+PUB_IMPL bool analysis_tests(TestArguments* restrict arguments)
 {
     return 1;
 }

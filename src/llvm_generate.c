@@ -1,3 +1,5 @@
+#pragma once
+
 #include <llvm_generate.h>
 #include <llvm-c/Core.h>
 #include <llvm-c/DebugInfo.h>
@@ -7,14 +9,14 @@
 
 #define llvm_error() todo()
 
-static void llvm_module_set_flag(LLVMContextRef context, LLVMModuleRef module, LLVMModuleFlagBehavior behavior, str flag, u32 value)
+LOCAL void llvm_module_set_flag(LLVMContextRef context, LLVMModuleRef module, LLVMModuleFlagBehavior behavior, str flag, u32 value)
 {
     let value_constant = LLVMConstInt(LLVMIntTypeInContext(context, 32), value, 0);
     let value_metadata = LLVMValueAsMetadata(value_constant);
     LLVMAddModuleFlag(module, behavior, flag.pointer, flag.length, value_metadata);
 }
 
-static bool type_is_abi_equal(CompileUnit* restrict unit, TypeReference a, TypeReference b)
+LOCAL bool type_is_abi_equal(CompileUnit* restrict unit, TypeReference a, TypeReference b)
 {
     assert(is_ref_valid(a));
     assert(is_ref_valid(b));
@@ -57,7 +59,7 @@ typedef enum LLVMAttributeIndexReference : u32
     LLVM_ATTRIBUTE_COUNT,
 } LLVMAttributeIndexReference;
 
-static str llvm_attribute_names[] =
+LOCAL str llvm_attribute_names[] =
 {
     S("align"),
     S("alwaysinline"),
@@ -112,7 +114,7 @@ typedef enum LLVMIntrinsicIndexReference : u32
     LLVM_INTRINSIC_COUNT,
 } LLVMIntrinsicIndexReference;
 
-static str llvm_intrinsic_names[] =
+LOCAL str llvm_intrinsic_names[] =
 {
     S("llvm.ctlz"),
     S("llvm.cttz"),
@@ -141,7 +143,7 @@ static str llvm_intrinsic_names[] =
 };
 static_assert(array_length(llvm_intrinsic_names) == LLVM_INTRINSIC_COUNT);
 
-static u32 llvm_default_address_space = 0;
+LOCAL u32 llvm_default_address_space = 0;
 
 STRUCT(GenerateCurrentFunction)
 {
@@ -164,18 +166,18 @@ STRUCT(Generate)
     LLVMAttributeId attribute_table[LLVM_ATTRIBUTE_COUNT];
 };
 
-static void generate_type_abi(CompileUnit* restrict unit, Generate* restrict generate, Type* type);
-static void generate_type_memory(CompileUnit* restrict unit, Generate* restrict generate, Type* type);
-static void generate_type_debug(CompileUnit* restrict unit, Generate* restrict generate, Type* type);
+LOCAL void generate_type_abi(CompileUnit* restrict unit, Generate* restrict generate, Type* type);
+LOCAL void generate_type_memory(CompileUnit* restrict unit, Generate* restrict generate, Type* type);
+LOCAL void generate_type_debug(CompileUnit* restrict unit, Generate* restrict generate, Type* type);
 
-static void generate_type(CompileUnit* restrict unit, Generate* restrict generate, Type* restrict type)
+LOCAL void generate_type(CompileUnit* restrict unit, Generate* restrict generate, Type* restrict type)
 {
     generate_type_abi(unit, generate, type);
     generate_type_memory(unit, generate, type);
     generate_type_debug(unit, generate, type);
 }
 
-static void generate_type_abi(CompileUnit* restrict unit, Generate* restrict generate, Type* type)
+LOCAL void generate_type_abi(CompileUnit* restrict unit, Generate* restrict generate, Type* type)
 {
     assert(type->analyzed);
     if (!type->llvm.abi)
@@ -241,7 +243,7 @@ static void generate_type_abi(CompileUnit* restrict unit, Generate* restrict gen
     }
 }
 
-static void generate_type_memory(CompileUnit* restrict unit, Generate* restrict generate, Type* type)
+LOCAL void generate_type_memory(CompileUnit* restrict unit, Generate* restrict generate, Type* type)
 {
     assert(type->analyzed);
 
@@ -322,7 +324,7 @@ typedef enum LLVMDwarfTypeEncoding : unsigned
     HP_VAX_complex_float_d = 0x90, // D floating complex.
 } LLVMDwarfTypeEncoding;
 
-static void generate_type_debug(CompileUnit* restrict unit, Generate* restrict generate, Type* type)
+LOCAL void generate_type_debug(CompileUnit* restrict unit, Generate* restrict generate, Type* type)
 {
     assert(type->analyzed);
     if (unit->has_debug_info & !type->llvm.debug)
@@ -429,7 +431,7 @@ static void generate_type_debug(CompileUnit* restrict unit, Generate* restrict g
     }
 }
 
-static LLVMValueRef llvm_create_function(LLVMModuleRef module, LLVMTypeRef function_type, LLVMLinkage linkage, str name)
+LOCAL LLVMValueRef llvm_create_function(LLVMModuleRef module, LLVMTypeRef function_type, LLVMLinkage linkage, str name)
 {
     assert(str_is_zero_terminated(name));
     let function = LLVMAddFunction(module, name.pointer, function_type);
@@ -437,7 +439,7 @@ static LLVMValueRef llvm_create_function(LLVMModuleRef module, LLVMTypeRef funct
     return function;
 }
 
-static LLVMValueRef llvm_create_alloca(LLVMBuilderRef builder, LLVMTypeRef base_type, u32 alignment, str name)
+LOCAL LLVMValueRef llvm_create_alloca(LLVMBuilderRef builder, LLVMTypeRef base_type, u32 alignment, str name)
 {
     if (name.pointer)
     {
@@ -452,7 +454,7 @@ static LLVMValueRef llvm_create_alloca(LLVMBuilderRef builder, LLVMTypeRef base_
     return alloca;
 }
 
-static LLVMValueRef llvm_create_store(LLVMBuilderRef builder, LLVMValueRef source, LLVMValueRef destination, u32 alignment, bool is_volatile, LLVMAtomicOrdering ordering)
+LOCAL LLVMValueRef llvm_create_store(LLVMBuilderRef builder, LLVMValueRef source, LLVMValueRef destination, u32 alignment, bool is_volatile, LLVMAtomicOrdering ordering)
 {
     let store = LLVMBuildStore(builder, source, destination);
 
@@ -463,7 +465,7 @@ static LLVMValueRef llvm_create_store(LLVMBuilderRef builder, LLVMValueRef sourc
     return store;
 }
 
-static LLVMValueRef llvm_create_load(LLVMBuilderRef builder, LLVMTypeRef type, LLVMValueRef pointer, u32 alignment, str name, bool is_volatile, LLVMAtomicOrdering ordering)
+LOCAL LLVMValueRef llvm_create_load(LLVMBuilderRef builder, LLVMTypeRef type, LLVMValueRef pointer, u32 alignment, str name, bool is_volatile, LLVMAtomicOrdering ordering)
 {
     if (name.pointer)
     {
@@ -483,12 +485,12 @@ static LLVMValueRef llvm_create_load(LLVMBuilderRef builder, LLVMTypeRef type, L
     return result;
 }
 
-static bool type_is_vector_bool(CompileUnit* restrict unit, Type* type)
+LOCAL bool type_is_vector_bool(CompileUnit* restrict unit, Type* type)
 {
     return (type->id == TYPE_ID_VECTOR) & ref_eq(type->vector.element_type, get_u1(unit));
 }
 
-static Type* convert_type_for_memory(CompileUnit* restrict unit, Type* type)
+LOCAL Type* convert_type_for_memory(CompileUnit* restrict unit, Type* type)
 {
     let result = type;
     if (type_is_vector_bool(unit, type))
@@ -499,7 +501,7 @@ static Type* convert_type_for_memory(CompileUnit* restrict unit, Type* type)
     return result;
 }
 
-static LLVMTypeRef get_llvm_type(Type* type, TypeKind kind)
+LOCAL LLVMTypeRef get_llvm_type(Type* type, TypeKind kind)
 {
     LLVMTypeRef result = {};
     switch (kind)
@@ -519,7 +521,7 @@ STRUCT(AllocaOptions)
     bool use_abi;
 };
 
-static LLVMValueRef create_alloca(CompileUnit* restrict unit, Generate* restrict generate, AllocaOptions options)
+LOCAL LLVMValueRef create_alloca(CompileUnit* restrict unit, Generate* restrict generate, AllocaOptions options)
 {
     let alignment = options.alignment;
     let abi_type = options.type;
@@ -556,7 +558,7 @@ STRUCT(StoreOptions)
     bool is_volatile;
 };
 
-static LLVMValueRef create_store(CompileUnit* restrict unit, Generate* restrict generate, StoreOptions options)
+LOCAL LLVMValueRef create_store(CompileUnit* restrict unit, Generate* restrict generate, StoreOptions options)
 {
     assert(options.source);
     assert(options.destination);
@@ -595,7 +597,7 @@ STRUCT(LoadOptions)
     bool is_volatile;
 };
 
-static LLVMValueRef create_load(CompileUnit* restrict unit, Generate* restrict generate, LoadOptions options)
+LOCAL LLVMValueRef create_load(CompileUnit* restrict unit, Generate* restrict generate, LoadOptions options)
 {
     let alignment = options.alignment;
     if (alignment == 0)
@@ -619,19 +621,19 @@ static LLVMValueRef create_load(CompileUnit* restrict unit, Generate* restrict g
 
 typedef void LLVMAttributeCallback(LLVMValueRef, u32, LLVMAttributeRef);
 
-static void add_enum_attribute(Generate* restrict generate, LLVMAttributeIndexReference attribute_index, u64 attribute_value, LLVMAttributeCallback* callback, LLVMValueRef value, u32 index)
+LOCAL void add_enum_attribute(Generate* restrict generate, LLVMAttributeIndexReference attribute_index, u64 attribute_value, LLVMAttributeCallback* callback, LLVMValueRef value, u32 index)
 {
     let attribute = LLVMCreateEnumAttribute(generate->context, generate->attribute_table[attribute_index].v, attribute_value);
     callback(value, index, attribute);
 }
 
-static void add_type_attribute(Generate* restrict generate, LLVMAttributeIndexReference attribute_index, LLVMTypeRef type, LLVMAttributeCallback* callback, LLVMValueRef value, u32 index)
+LOCAL void add_type_attribute(Generate* restrict generate, LLVMAttributeIndexReference attribute_index, LLVMTypeRef type, LLVMAttributeCallback* callback, LLVMValueRef value, u32 index)
 {
     let attribute = LLVMCreateTypeAttribute(generate->context, generate->attribute_table[attribute_index].v, type);
     callback(value, index, attribute);
 }
 
-static void add_string_attribute(Generate* restrict generate, str attribute_key, str attribute_value, LLVMAttributeCallback* callback, LLVMValueRef value, u32 index)
+LOCAL void add_string_attribute(Generate* restrict generate, str attribute_key, str attribute_value, LLVMAttributeCallback* callback, LLVMValueRef value, u32 index)
 {
     let attribute = LLVMCreateStringAttribute(generate->context, attribute_key.pointer, (unsigned)attribute_key.length, attribute_value.pointer, (unsigned)attribute_value.length);
     callback(value, index, attribute);
@@ -650,7 +652,7 @@ STRUCT(LLVMAttributes)
     u32 by_value:1;
 };
 
-static void add_value_attribute(Generate* restrict generate, LLVMValueRef value, u32 index, LLVMAttributeCallback* callback, LLVMTypeRef semantic_type, LLVMAttributes attributes)
+LOCAL void add_value_attribute(Generate* restrict generate, LLVMValueRef value, u32 index, LLVMAttributeCallback* callback, LLVMTypeRef semantic_type, LLVMAttributes attributes)
 {
     assert(value);
     assert(semantic_type);
@@ -710,7 +712,7 @@ STRUCT(FunctionAttributeBuildOptions)
     FunctionAttributes attributes;
 };
 
-static void generate_function_attributes(CompileUnit* unit, Generate* restrict generate, LLVMValueRef value, LLVMAttributeCallback* callback, FunctionAttributeBuildOptions options)
+LOCAL void generate_function_attributes(CompileUnit* unit, Generate* restrict generate, LLVMValueRef value, LLVMAttributeCallback* callback, FunctionAttributeBuildOptions options)
 {
     let return_abi = &options.abis[0];
     let semantic_return_type_ref = return_abi->semantic_type;
@@ -833,9 +835,9 @@ static void generate_function_attributes(CompileUnit* unit, Generate* restrict g
     }
 }
 
-static void generate_value(CompileUnit* restrict unit, Generate* restrict generate, Value* restrict value, TypeKind type_kind, bool expect_constant);
+LOCAL void generate_value(CompileUnit* restrict unit, Generate* restrict generate, Value* restrict value, TypeKind type_kind, bool expect_constant);
 
-static LLVMValueRef generate_call(CompileUnit* restrict unit, Generate* restrict generate, Value* value, Address address)
+LOCAL LLVMValueRef generate_call(CompileUnit* restrict unit, Generate* restrict generate, Value* value, Address address)
 {
     let is_valid_address_argument = address.pointer != 0;
 
@@ -960,7 +962,7 @@ static LLVMValueRef generate_call(CompileUnit* restrict unit, Generate* restrict
     }
 }
 
-static void generate_value(CompileUnit* restrict unit, Generate* restrict generate, Value* restrict value, TypeKind type_kind, bool expect_constant)
+LOCAL void generate_value(CompileUnit* restrict unit, Generate* restrict generate, Value* restrict value, TypeKind type_kind, bool expect_constant)
 {
     assert(unit->phase == COMPILE_PHASE_LLVM_IR_GENERATION);
 
@@ -1047,7 +1049,7 @@ static void generate_value(CompileUnit* restrict unit, Generate* restrict genera
     value->llvm = llvm_value;
 }
 
-static void generate_assignment(CompileUnit* restrict unit, Generate* restrict generate, Value* right, Address address)
+LOCAL void generate_assignment(CompileUnit* restrict unit, Generate* restrict generate, Value* right, Address address)
 {
     assert(unit->phase == COMPILE_PHASE_LLVM_IR_GENERATION);
 
@@ -1083,7 +1085,7 @@ static void generate_assignment(CompileUnit* restrict unit, Generate* restrict g
     }
 }
 
-static void generate_local_storage(CompileUnit* restrict unit, Generate* restrict generate, Variable* restrict variable)
+LOCAL void generate_local_storage(CompileUnit* restrict unit, Generate* restrict generate, Variable* restrict variable)
 {
     let storage = value_pointer_from_reference(unit, variable->storage);
     let alloca = create_alloca(unit, generate, (AllocaOptions) {
@@ -1094,12 +1096,12 @@ static void generate_local_storage(CompileUnit* restrict unit, Generate* restric
     storage->llvm = alloca;
 }
 
-static LLVMMetadataRef null_expression(Generate* restrict generate)
+LOCAL LLVMMetadataRef null_expression(Generate* restrict generate)
 {
     return LLVMDIBuilderCreateExpression(generate->di_builder, 0, 0);
 }
 
-static void end_debug_local(CompileUnit* restrict unit, Generate* restrict generate, Variable* restrict variable, LLVMMetadataRef llvm_local)
+LOCAL void end_debug_local(CompileUnit* restrict unit, Generate* restrict generate, Variable* restrict variable, LLVMMetadataRef llvm_local)
 {
     let scope = scope_pointer_from_reference(unit, variable->scope);
     let debug_location = LLVMDIBuilderCreateDebugLocation(generate->context, location_get_line(variable->location), location_get_column(variable->location), scope->llvm, generate->current_function.inlined_at);
@@ -1110,7 +1112,7 @@ static void end_debug_local(CompileUnit* restrict unit, Generate* restrict gener
     LLVMDIBuilderInsertDeclareRecordAtEnd(generate->di_builder, storage->llvm, llvm_local, null_expression(generate), debug_location, basic_block);
 }
 
-static void generate_local_declaration(CompileUnit* restrict unit, Generate* restrict generate, File* file, Local* restrict local)
+LOCAL void generate_local_declaration(CompileUnit* restrict unit, Generate* restrict generate, File* file, Local* restrict local)
 {
     generate_local_storage(unit, generate, &local->variable);
 
@@ -1130,7 +1132,7 @@ static void generate_local_declaration(CompileUnit* restrict unit, Generate* res
     }
 }
 
-static void generate_statement(CompileUnit* restrict unit, Generate* restrict generate, File* file, Scope* restrict scope, Statement* statement)
+LOCAL void generate_statement(CompileUnit* restrict unit, Generate* restrict generate, File* file, Scope* restrict scope, Statement* statement)
 {
     assert(unit->phase == COMPILE_PHASE_LLVM_IR_GENERATION);
 
@@ -1189,7 +1191,7 @@ static void generate_statement(CompileUnit* restrict unit, Generate* restrict ge
     }
 }
 
-static void generate_block(CompileUnit* restrict unit, Generate* restrict generate, File* file, Block* restrict block)
+LOCAL void generate_block(CompileUnit* restrict unit, Generate* restrict generate, File* file, Block* restrict block)
 {
     assert(unit->phase == COMPILE_PHASE_LLVM_IR_GENERATION);
     let block_scope = scope_pointer_from_reference(unit, block->scope);
@@ -1224,7 +1226,7 @@ STRUCT(ParameterValue)
 };
 
 // Returns single use if true, null if not
-static LLVMUseRef value_has_single_use(LLVMValueRef v)
+LOCAL LLVMUseRef value_has_single_use(LLVMValueRef v)
 {
     LLVMUseRef result = 0;
     let first_use = LLVMGetFirstUse(v);
@@ -1239,13 +1241,13 @@ static LLVMUseRef value_has_single_use(LLVMValueRef v)
     return result;
 }
 
-static LLVMValueRef store_pointer_operand(LLVMValueRef store)
+LOCAL LLVMValueRef store_pointer_operand(LLVMValueRef store)
 {
     assert(LLVMIsAStoreInst(store));
     return LLVMGetOperand(store, 1);
 }
 
-static LLVMValueRef store_value_operand(LLVMValueRef store)
+LOCAL LLVMValueRef store_value_operand(LLVMValueRef store)
 {
     assert(LLVMIsAStoreInst(store));
     return LLVMGetOperand(store, 0);
@@ -1271,7 +1273,7 @@ LLVMValueRef llvm_get_last_user(LLVMValueRef value)
     return result;
 }
 
-static LLVMValueRef llvm_get_store_if_valid(LLVMValueRef user, LLVMValueRef return_alloca, LLVMTypeRef element_type)
+LOCAL LLVMValueRef llvm_get_store_if_valid(LLVMValueRef user, LLVMValueRef return_alloca, LLVMTypeRef element_type)
 {
     let is_user_store_instruction = LLVMIsAStoreInst(user);
     if (!is_user_store_instruction || store_pointer_operand(user) != return_alloca || LLVMTypeOf(store_value_operand(user)) != element_type)
@@ -1320,7 +1322,7 @@ LLVMBasicBlockRef llvm_get_single_predecessor(LLVMBasicBlockRef basic_block)
     return result;
 }
 
-static LLVMValueRef llvm_find_return_value_dominating_store(LLVMBuilderRef builder, LLVMValueRef return_alloca, LLVMTypeRef element_type)
+LOCAL LLVMValueRef llvm_find_return_value_dominating_store(LLVMBuilderRef builder, LLVMValueRef return_alloca, LLVMTypeRef element_type)
 {
     LLVMValueRef result = 0;
     if (!value_has_single_use(return_alloca))
@@ -1379,7 +1381,7 @@ static LLVMValueRef llvm_find_return_value_dominating_store(LLVMBuilderRef build
     return result;
 }
 
-GenerateIRResult llvm_generate_ir(CompileUnit* restrict unit, bool verify)
+PUB_IMPL GenerateIRResult llvm_generate_ir(CompileUnit* restrict unit, bool verify)
 {
     llvm_initialize();
     str result_error_message = {};
@@ -1892,7 +1894,7 @@ GenerateIRResult llvm_generate_ir(CompileUnit* restrict unit, bool verify)
 }
 
 #if BB_INCLUDE_TESTS
-bool llvm_generation_tests(TestArguments* arguments)
+PUB_IMPL bool llvm_generation_tests(TestArguments* arguments)
 {
     return 1;
 }

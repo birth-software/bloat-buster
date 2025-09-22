@@ -155,9 +155,9 @@ STRUCT(TokenList)
     u64 length;
 };
 
-TokenList lex(CompileUnit* unit, File* file);
+PUB_DECL TokenList lex(CompileUnit* unit, File* file);
 
 #if BB_INCLUDE_TESTS
-bool lexer_tests(TestArguments* restrict arguments);
-str token_list_to_string(Arena* arena, TokenList list);
+PUB_DECL bool lexer_tests(TestArguments* restrict arguments);
+PUB_DECL str token_list_to_string(Arena* arena, TokenList list);
 #endif

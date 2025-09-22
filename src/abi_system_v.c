@@ -1,3 +1,5 @@
+#pragma once
+
 #include <compiler.h>
 
 typedef enum AbiSystemVClass : u8
@@ -24,7 +26,7 @@ STRUCT(ClassifyOptions)
     bool is_register_call;
 };
 
-static Classification abi_system_v_classify_type(CompileUnit* restrict unit, TypeReference type_reference, ClassifyOptions options)
+LOCAL Classification abi_system_v_classify_type(CompileUnit* restrict unit, TypeReference type_reference, ClassifyOptions options)
 {
     Classification result = {};
     let is_memory = options.base_offset >= 8;
@@ -64,7 +66,7 @@ static Classification abi_system_v_classify_type(CompileUnit* restrict unit, Typ
     return result;
 }
 
-static bool contains_no_user_data(CompileUnit* restrict unit, Type* type, u64 start, u64 end)
+LOCAL bool contains_no_user_data(CompileUnit* restrict unit, Type* type, u64 start, u64 end)
 {
     let byte_size = get_byte_size(unit, type);
     let result = byte_size <= start;
@@ -77,7 +79,7 @@ static bool contains_no_user_data(CompileUnit* restrict unit, Type* type, u64 st
     return result;
 }
 
-static TypeReference abi_system_v_get_integer_type_at_offset(CompileUnit* restrict unit, TypeReference type_reference, u64 offset, TypeReference source_type_reference, u64 source_offset)
+LOCAL TypeReference abi_system_v_get_integer_type_at_offset(CompileUnit* restrict unit, TypeReference type_reference, u64 offset, TypeReference source_type_reference, u64 source_offset)
 {
     let type_pointer = type_pointer_from_reference(unit, type_reference);
 
@@ -115,7 +117,7 @@ static TypeReference abi_system_v_get_integer_type_at_offset(CompileUnit* restri
     todo();
 }
 
-AbiInformation abi_system_v_classify_return_type(CompileUnit* restrict unit, TypeReference type_reference)
+PUB_IMPL AbiInformation abi_system_v_classify_return_type(CompileUnit* restrict unit, TypeReference type_reference)
 {
     let classify = abi_system_v_classify_type(unit, type_reference, (ClassifyOptions){});
     assert(classify.classes[1] != ABI_SYSTEM_V_CLASS_MEMORY || classify.classes[0] == ABI_SYSTEM_V_CLASS_MEMORY);
@@ -177,12 +179,12 @@ AbiInformation abi_system_v_classify_return_type(CompileUnit* restrict unit, Typ
     return result;
 }
 
-AbiSystemVClassifyArgumentTypeResult abi_system_v_classify_argument_type(CompileUnit* restrict unit, TypeReference type, AbiSystemVClassifyArgumentTypeOptions options)
+PUB_IMPL AbiSystemVClassifyArgumentTypeResult abi_system_v_classify_argument_type(CompileUnit* restrict unit, TypeReference type, AbiSystemVClassifyArgumentTypeOptions options)
 {
     todo();
 }
 
-AbiInformation abi_system_v_classify_argument(CompileUnit* restrict unit, AbiRegisterCount* restrict available_registers, TypeReference* restrict abi_argument_type_buffer, AbiSystemVClassifyArgumentOptions options)
+PUB_IMPL AbiInformation abi_system_v_classify_argument(CompileUnit* restrict unit, AbiRegisterCount* restrict available_registers, TypeReference* restrict abi_argument_type_buffer, AbiSystemVClassifyArgumentOptions options)
 {
     todo();
 }

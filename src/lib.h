@@ -1,7 +1,27 @@
 #pragma once
+
 #define _CRT_SECURE_NO_WARNINGS
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 
 #define BB_INCLUDE_TESTS 1
+
+#if defined(__cplusplus)
+#define EXPORT extern "C"
+#else
+#define EXPORT extern
+#endif
+
+#if UNITY_BUILD
+#define PUB_DECL static
+#define PUB_IMPL static
+#else
+#define PUB_DECL
+#define PUB_IMPL
+#endif
+
+#define LOCAL static
 
 #define array_length(x) (sizeof(x) / sizeof((x)[0]))
 
@@ -69,22 +89,6 @@ typedef __float128 f128;
 #define MB(x) 1024ull * KB(x)
 #define KB(x) 1024ull * (x)
 
-static inline u64 next_power_of_two(u64 n)
-{
-    n -= 1;
-
-    n |= n >> 1;
-    n |= n >> 2;
-    n |= n >> 4;
-    n |= n >> 8;
-    n |= n >> 16;
-    n |= n >> 32;
-
-    n += 1;
-
-    return n;
-}
-
 STRUCT(str)
 {
     char* pointer;
@@ -102,7 +106,6 @@ STRUCT(TestArguments)
 };
 #endif
 
-
 STRUCT(StringSlice)
 {
     str* pointer;
@@ -117,155 +120,6 @@ STRUCT(SliceOfStringSlice)
 
 #define S(strlit) (str) { (char*)strlit, strlen(strlit) }
 #define string_array_to_slice(arr) (StringSlice) { arr, array_length(arr) }
-
-static u64 string_no_match = UINT64_MAX;
-
-static inline bool str_is_zero_terminated(str s)
-{
-    return s.pointer[s.length] == 0;
-}
-
-static str str_from_pointers(char* start, char* end)
-{
-    assert(end >= start);
-    u64 len = end - start;
-    return (str) { start, len };
-}
-
-static str str_from_ptr_len(const char* ptr, u64 len)
-{
-    return (str) { (char*)ptr, len };
-}
-
-static str str_from_ptr_start_end(char* ptr, u64 start, u64 end)
-{
-    return (str) { ptr + start, end - start };
-}
-
-static str str_slice_start(str s, u64 start)
-{
-    s.pointer += start;
-    s.length -= start;
-    return s;
-}
-
-static bool memory_compare(void* a, void* b, u64 i)
-{
-    assert(a != b);
-    bool result = 1;
-
-    let p1 = (u8*)a;
-    let p2 = (u8*)b;
-
-    while (i--)
-    {
-        bool is_equal = *p1 == *p2;
-        if (!is_equal)
-        {
-            result = 0;
-            break;
-        }
-
-        p1 += 1;
-        p2 += 1;
-    }
-
-    return result;
-}
-
-static str str_slice(str s, u64 start, u64 end)
-{
-    s.pointer += start;
-    s.length = end - start;
-    return s;
-}
-
-static bool str_equal(str s1, str s2)
-{
-    bool is_equal = s1.length == s2.length;
-    if (is_equal & (s1.length != 0))
-    {
-        is_equal = memory_compare(s1.pointer, s2.pointer, s1.length);
-    }
-
-    return is_equal;
-}
-
-static u64 str_last_ch(str s, u8 ch)
-{
-    let result = string_no_match;
-
-    let pointer = s.pointer + s.length;
-
-    do
-    {
-        pointer -= 1;
-        if (*pointer == ch)
-        {
-            result = pointer - s.pointer;
-            break;
-        }
-    } while (pointer - s.pointer);
-
-    return result;
-}
-
-static u64 align_forward(u64 n, u64 a)
-{
-    let mask = a - 1;
-    let result = (n + mask) & ~mask;
-    return result;
-}
-
-static bool is_space(char ch)
-{
-    return ((ch == ' ') | (ch == '\t')) | ((ch == '\r') | (ch == '\n'));
-}
-
-static bool is_decimal(char ch)
-{
-    return (ch >= '0') & (ch <= '9');
-}
-
-static bool is_octal(char ch)
-{
-    return (ch >= '0') & (ch <= '7');
-}
-
-static bool is_binary(char ch)
-{
-    return (ch == '0') | (ch == '1');
-}
-
-static bool is_hexadecimal_alpha_lower(char ch)
-{
-    return (ch >= 'a') & (ch <= 'f');
-}
-
-static bool is_hexadecimal_alpha_upper(char ch)
-{
-    return (ch >= 'A') & (ch <= 'F');
-}
-
-static bool is_hexadecimal_alpha(char ch)
-{
-    return is_hexadecimal_alpha_upper(ch) | is_hexadecimal_alpha_lower(ch);
-}
-
-static bool is_hexadecimal(char ch)
-{
-    return is_decimal(ch) | is_hexadecimal_alpha(ch);
-}
-
-static bool is_identifier_start(char ch)
-{
-    return (((ch >= 'a') & (ch <= 'z')) | ((ch >= 'A') & (ch <= 'Z'))) | (ch == '_');
-}
-
-static bool is_identifier(char ch)
-{
-    return is_identifier_start(ch) | is_decimal(ch);
-}
 
 STRUCT(OpenFlags)
 {
@@ -283,7 +137,6 @@ STRUCT(OpenPermissions)
     u64 write:1;
     u64 execute:1;
 };
-
 
 STRUCT(Arena)
 {
@@ -386,53 +239,78 @@ STRUCT(IntegerParsing)
     u64 i;
 };
 
-void os_init();
-Arena* arena_create(ArenaInitialization initialization);
-bool arena_destroy(Arena* arena, u64 count);
-void arena_set_position(Arena* arena, u64 position);
-void arena_reset_to_start(Arena* arena);
-void* arena_allocate_bytes(Arena* arena, u64 size, u64 alignment);
-str arena_duplicate_string(Arena* arena, str str, bool zero_terminate);
-str arena_join_string(Arena* arena, StringSlice strings, bool zero_terminate);
-void* arena_current_pointer(Arena* arena, u64 alignment);
+PUB_DECL void os_init();
+PUB_DECL Arena* arena_create(ArenaInitialization initialization);
+PUB_DECL bool arena_destroy(Arena* arena, u64 count);
+PUB_DECL void arena_set_position(Arena* arena, u64 position);
+PUB_DECL void arena_reset_to_start(Arena* arena);
+PUB_DECL void* arena_allocate_bytes(Arena* arena, u64 size, u64 alignment);
+PUB_DECL str arena_duplicate_string(Arena* arena, str str, bool zero_terminate);
+PUB_DECL str arena_join_string(Arena* arena, StringSlice strings, bool zero_terminate);
+PUB_DECL void* arena_current_pointer(Arena* arena, u64 alignment);
 
-FileDescriptor* os_file_open(str path, OpenFlags flags, OpenPermissions permissions);
-u64 os_file_get_size(FileDescriptor* file_descriptor);
-void os_file_write(FileDescriptor* file_descriptor, str buffer);
-void os_file_close(FileDescriptor* file_descriptor);
+PUB_DECL FileDescriptor* os_file_open(str path, OpenFlags flags, OpenPermissions permissions);
+PUB_DECL u64 os_file_get_size(FileDescriptor* file_descriptor);
+PUB_DECL void os_file_write(FileDescriptor* file_descriptor, str buffer);
+PUB_DECL void os_file_close(FileDescriptor* file_descriptor);
 
 #define arena_allocate(arena, T, count) (T*) arena_allocate_bytes(arena, sizeof(T) * (count), alignof(T))
 
-str file_read(Arena* arena, str path, FileReadOptions options);
+PUB_DECL str file_read(Arena* arena, str path, FileReadOptions options);
 
-TimeDataType take_timestamp();
-u64 ns_between(TimeDataType start, TimeDataType end);
+PUB_DECL TimeDataType take_timestamp();
+PUB_DECL u64 ns_between(TimeDataType start, TimeDataType end);
 
-str path_absolute(Arena* arena, const char* restrict relative_file_path);
+PUB_DECL str path_absolute(Arena* arena, const char* restrict relative_file_path);
 
-ExecutionResult os_execute(Arena* arena, char** arguments, char** environment, ExecutionOptions options);
+PUB_DECL ExecutionResult os_execute(Arena* arena, char** arguments, char** environment, ExecutionOptions options);
 
-str format_integer_stack(str buffer, FormatIntegerOptions options);
-str format_integer(Arena* arena, FormatIntegerOptions options, bool zero_terminate);
+PUB_DECL str format_integer_stack(str buffer, FormatIntegerOptions options);
+PUB_DECL str format_integer(Arena* arena, FormatIntegerOptions options, bool zero_terminate);
 
-u64 parse_integer_decimal_assume_valid(str string);
-IntegerParsing parse_hexadecimal_scalar(const char* restrict p);
-IntegerParsing parse_decimal_scalar(const char* restrict p);
-IntegerParsing parse_octal_scalar(const char* restrict p);
-IntegerParsing parse_binary_scalar(const char* restrict p);
+PUB_DECL u64 parse_integer_decimal_assume_valid(str string);
+PUB_DECL IntegerParsing parse_hexadecimal_scalar(const char* restrict p);
+PUB_DECL IntegerParsing parse_decimal_scalar(const char* restrict p);
+PUB_DECL IntegerParsing parse_octal_scalar(const char* restrict p);
+PUB_DECL IntegerParsing parse_binary_scalar(const char* restrict p);
 #ifdef __AVX512F__
-IntegerParsing parse_hexadecimal_vectorized(const char* restrict p);
-IntegerParsing parse_decimal_vectorized(const char* restrict p);
-IntegerParsing parse_octal_vectorized(const char* restrict p);
-IntegerParsing parse_binary_vectorized(const char* restrict p);
+PUB_DECL IntegerParsing parse_hexadecimal_vectorized(const char* restrict p);
+PUB_DECL IntegerParsing parse_decimal_vectorized(const char* restrict p);
+PUB_DECL IntegerParsing parse_octal_vectorized(const char* restrict p);
+PUB_DECL IntegerParsing parse_binary_vectorized(const char* restrict p);
 #endif
 
-FileDescriptor* os_get_stdout();
+PUB_DECL FileDescriptor* os_get_stdout();
 
-ThreadHandle* os_thread_create(ThreadCallback* callback, ThreadCreateOptions options);
-u32 os_thread_join(ThreadHandle* handle);
-[[noreturn]] void fail();
+PUB_DECL ThreadHandle* os_thread_create(ThreadCallback* callback, ThreadCreateOptions options);
+PUB_DECL u32 os_thread_join(ThreadHandle* handle);
+[[noreturn]] PUB_DECL void fail();
+
+PUB_DECL u64 next_power_of_two(u64 n);
+
+constexpr u64 string_no_match = UINT64_MAX;
+
+PUB_DECL bool str_is_zero_terminated(str s);
+PUB_DECL str str_from_pointers(char* start, char* end);
+PUB_DECL str str_from_ptr_len(const char* ptr, u64 len);
+PUB_DECL str str_from_ptr_start_end(char* ptr, u64 start, u64 end);
+PUB_DECL str str_slice_start(str s, u64 start);
+PUB_DECL bool memory_compare(void* a, void* b, u64 i);
+PUB_DECL str str_slice(str s, u64 start, u64 end);
+PUB_DECL bool str_equal(str s1, str s2);
+PUB_DECL u64 str_last_ch(str s, u8 ch);
+PUB_DECL u64 align_forward(u64 n, u64 a);
+PUB_DECL bool is_space(char ch);
+PUB_DECL bool is_decimal(char ch);
+PUB_DECL bool is_octal(char ch);
+PUB_DECL bool is_binary(char ch);
+PUB_DECL bool is_hexadecimal_alpha_lower(char ch);
+PUB_DECL bool is_hexadecimal_alpha_upper(char ch);
+PUB_DECL bool is_hexadecimal_alpha(char ch);
+PUB_DECL bool is_hexadecimal(char ch);
+PUB_DECL bool is_identifier_start(char ch);
+PUB_DECL bool is_identifier(char ch);
 
 #if BB_INCLUDE_TESTS
-bool lib_tests(TestArguments* restrict arguments);
+PUB_DECL bool lib_tests(TestArguments* restrict arguments);
 #endif
