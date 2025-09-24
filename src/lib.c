@@ -203,9 +203,9 @@ LOCAL bool os_commit(void* address, u64 size, ProtectionFlags protection, bool l
     return result;
 }
 
-FileDescriptor* os_file_open(str path, OpenFlags flags, OpenPermissions permissions)
+PUB_IMPL FileDescriptor* os_file_open(str path, OpenFlags flags, OpenPermissions permissions)
 {
-    assert(!path.pointer[path.length]);
+    check(!path.pointer[path.length]);
     FileDescriptor* result = 0;
 #if defined (__linux__) || defined(__APPLE__)
     int o = 0;
@@ -310,36 +310,36 @@ FileDescriptor* os_file_open(str path, OpenFlags flags, OpenPermissions permissi
 
 LOCAL FileDescriptor* posix_fd_to_generic_fd(int fd)
 {
-    assert(fd >= 0);
+    check(fd >= 0);
     return (FileDescriptor*)(u64)(fd);
 }
 
 LOCAL int generic_fd_to_posix(FileDescriptor* fd)
 {
-    assert(fd);
+    check(fd);
     return (int)(u64)fd;
 }
 
 LOCAL void* generic_fd_to_windows(FileDescriptor* fd)
 {
-    assert(fd);
+    check(fd);
     return (void*)fd;
 }
 
-u64 os_file_get_size(FileDescriptor* file_descriptor)
+PUB_IMPL u64 os_file_get_size(FileDescriptor* file_descriptor)
 {
 #if defined(__linux__) || defined(__APPLE__)
     int fd = generic_fd_to_posix(file_descriptor);
     struct stat sb;
     let fstat_result = fstat(fd, &sb);
-    assert(fstat_result == 0);
+    check(fstat_result == 0);
 
     return (u64)sb.st_size;
 #elif _WIN32
     HANDLE fd = generic_fd_to_windows(file_descriptor);
     LARGE_INTEGER file_size = {};
     BOOL result = GetFileSizeEx(fd, &file_size);
-    assert(result);
+    check(result);
     return file_size.QuadPart;
 #endif
 }
@@ -349,14 +349,14 @@ LOCAL u64 os_file_read_partially(FileDescriptor* file_descriptor, void* buffer, 
 #if defined(__linux__) || defined(__APPLE__)
     let fd = generic_fd_to_posix(file_descriptor);
     let read_byte_count = read(fd, buffer, byte_count);
-    assert(read_byte_count > 0);
+    check(read_byte_count > 0);
 
     return (u64)read_byte_count;
 #elif _WIN32
     let fd = generic_fd_to_windows(file_descriptor);
     DWORD read_byte_count = 0;
     BOOL result = ReadFile(fd, buffer, (u32)byte_count, &read_byte_count, 0);
-    assert(result);
+    check(result);
     return read_byte_count;
 #endif
 }
@@ -365,7 +365,7 @@ LOCAL void os_file_read(FileDescriptor* file_descriptor, str buffer, u64 byte_co
 {
     u64 read_byte_count = 0;
     char* pointer = buffer.pointer;
-    assert(buffer.length >= byte_count);
+    check(buffer.length >= byte_count);
     while (byte_count - read_byte_count)
     {
         read_byte_count += os_file_read_partially(file_descriptor, pointer + read_byte_count, byte_count - read_byte_count);
@@ -377,18 +377,18 @@ LOCAL u64 os_file_write_partially(FileDescriptor* file_descriptor, void* pointer
 #if defined(__linux__) || defined(__APPLE__)
     let fd = generic_fd_to_posix(file_descriptor);
     let result = write(fd, pointer, length);
-    assert(result > 0);
+    check(result > 0);
     return result;
 #elif defined(_WIN32)
     let fd = generic_fd_to_windows(file_descriptor);
     DWORD written_byte_count = 0;
     BOOL result = WriteFile(fd, pointer, (u32)length, &written_byte_count, 0);
-    assert(result);
+    check(result);
     return written_byte_count;
 #endif
 }
 
-FileDescriptor* os_get_stdout()
+PUB_IMPL FileDescriptor* os_get_stdout()
 {
     FileDescriptor* result = {};
 #if defined(__linux__) || defined(__APPLE__)
@@ -399,7 +399,7 @@ FileDescriptor* os_get_stdout()
     return result;
 }
 
-void os_file_write(FileDescriptor* file_descriptor, str buffer)
+PUB_IMPL void os_file_write(FileDescriptor* file_descriptor, str buffer)
 {
     u64 total_written_byte_count = 0;
 
@@ -410,16 +410,16 @@ void os_file_write(FileDescriptor* file_descriptor, str buffer)
     }
 }
 
-void os_file_close(FileDescriptor* file_descriptor)
+PUB_IMPL void os_file_close(FileDescriptor* file_descriptor)
 {
 #if defined(__linux__) || defined(__APPLE__)
     let fd = generic_fd_to_posix(file_descriptor);
     let close_result = close(fd);
-    assert(close_result == 0);
+    check(close_result == 0);
 #elif _WIN32
     let fd = generic_fd_to_windows(file_descriptor);
     let result = CloseHandle(fd);
-    assert(result);
+    check(result);
 #endif
 }
 
@@ -433,7 +433,7 @@ LOCAL bool arena_lock_pages = true;
 LOCAL u64 default_reserve_size = GB(4);
 LOCAL u64 initial_size_granularity_factor = 4;
 
-Arena* arena_create(ArenaInitialization initialization)
+PUB_IMPL Arena* arena_create(ArenaInitialization initialization)
 {
     if (!initialization.reserved_size)
     {
@@ -478,7 +478,7 @@ Arena* arena_create(ArenaInitialization initialization)
     return (Arena*)raw_pointer;
 }
 
-bool arena_destroy(Arena* arena, u64 count)
+PUB_IMPL bool arena_destroy(Arena* arena, u64 count)
 {
     count = count == 0 ? 1 : count;
     let reserved_size = arena->reserved_size;
@@ -486,22 +486,22 @@ bool arena_destroy(Arena* arena, u64 count)
     return os_unreserve(arena, size);
 }
 
-void arena_set_position(Arena* arena, u64 position)
+PUB_IMPL void arena_set_position(Arena* arena, u64 position)
 {
     arena->position = position;
 }
 
-void arena_reset_to_start(Arena* arena)
+PUB_IMPL void arena_reset_to_start(Arena* arena)
 {
     arena_set_position(arena, minimum_position);
 }
 
-void* arena_current_pointer(Arena* arena, u64 alignment)
+PUB_IMPL void* arena_current_pointer(Arena* arena, u64 alignment)
 {
     return (u8*)arena + align_forward(arena->position, alignment);
 }
 
-void* arena_allocate_bytes(Arena* arena, u64 size, u64 alignment)
+PUB_IMPL void* arena_allocate_bytes(Arena* arena, u64 size, u64 alignment)
 {
     let aligned_offset = align_forward(arena->position, alignment);
     let aligned_size_after = aligned_offset + size;
@@ -519,12 +519,12 @@ void* arena_allocate_bytes(Arena* arena, u64 size, u64 alignment)
 
     let result = arena_byte_pointer + aligned_offset;
     arena->position = aligned_size_after;
-    assert(arena->position <= arena->os_position);
+    check(arena->position <= arena->os_position);
 
     return result;
 }
 
-str arena_join_string(Arena* arena, StringSlice strings, bool zero_terminate)
+PUB_IMPL str arena_join_string(Arena* arena, StringSlice strings, bool zero_terminate)
 {
     u64 size = 0;
 
@@ -545,7 +545,7 @@ str arena_join_string(Arena* arena, StringSlice strings, bool zero_terminate)
         i += string.length;
     }
 
-    assert(i == size);
+    check(i == size);
     if (zero_terminate)
     {
         pointer[i] = 0;
@@ -554,7 +554,7 @@ str arena_join_string(Arena* arena, StringSlice strings, bool zero_terminate)
     return str_from_ptr_len(pointer, size);
 }
 
-str arena_duplicate_string(Arena* arena, str str, bool zero_terminate)
+PUB_IMPL str arena_duplicate_string(Arena* arena, str str, bool zero_terminate)
 {
     char* pointer = arena_allocate_bytes(arena, str.length + zero_terminate, 1);
     memcpy(pointer, str.pointer, str.length);
@@ -566,24 +566,24 @@ str arena_duplicate_string(Arena* arena, str str, bool zero_terminate)
     return str_from_ptr_len(pointer, str.length);
 }
 
-TimeDataType take_timestamp()
+PUB_IMPL TimeDataType take_timestamp()
 {
 #if defined(__linux__) || defined(__APPLE__)
     struct timespec ts;
     let result = clock_gettime(CLOCK_MONOTONIC, &ts);
-    assert(result == 0);
+    check(result == 0);
     return *(u128*)&ts;
 #elif _WIN32
     LARGE_INTEGER c;
     BOOL result = QueryPerformanceCounter(&c);
-    assert(result);
+    check(result);
     return c.QuadPart;
 #endif
 }
 
 LOCAL TimeDataType frequency;
 
-u64 ns_between(TimeDataType start, TimeDataType end)
+PUB_IMPL u64 ns_between(TimeDataType start, TimeDataType end)
 {
 #if defined(__linux__) || defined(__APPLE__)
     let start_ts = *(struct timespec*)&start;
@@ -599,7 +599,7 @@ u64 ns_between(TimeDataType start, TimeDataType end)
 #endif
 }
 
-str file_read(Arena* arena, str path, FileReadOptions options)
+PUB_IMPL str file_read(Arena* arena, str path, FileReadOptions options)
 {
     let fd = os_file_open(path, (OpenFlags) { .read = 1 }, (OpenPermissions){ .read = 1 });
     str result = {};
@@ -639,7 +639,7 @@ LOCAL str os_path_absolute_stack(str buffer, const char* restrict relative_file_
     if (syscall_result)
     {
         result = str_from_ptr_len(syscall_result, strlen(syscall_result));
-        assert(result.length < buffer.length);
+        check(result.length < buffer.length);
     }
 
 #elif defined(_WIN32)
@@ -652,7 +652,7 @@ LOCAL str os_path_absolute_stack(str buffer, const char* restrict relative_file_
     return result;
 }
 
-str path_absolute(Arena* arena, const char* restrict relative_file_path)
+PUB_IMPL str path_absolute(Arena* arena, const char* restrict relative_file_path)
 {
     char buffer[4096];
     let stack_slice = os_path_absolute_stack((str){buffer, array_length(buffer)}, relative_file_path);
@@ -660,11 +660,11 @@ str path_absolute(Arena* arena, const char* restrict relative_file_path)
     return result;
 }
 
-void os_init()
+PUB_IMPL void os_init()
 {
 #ifdef _WIN32
     BOOL result = QueryPerformanceFrequency((LARGE_INTEGER*)&frequency);
-    assert(result);
+    check(result);
 
     WSADATA WinSockData;
     WSAStartup(MAKEWORD(2, 2), &WinSockData);
@@ -680,7 +680,7 @@ void os_init()
 LOCAL bool is_debugger_present_called = false;
 LOCAL bool _is_debugger_present = false;
 
-LOCAL bool is_debugger_present()
+[[gnu::cold]] LOCAL bool is_debugger_present()
 {
     if (unlikely(!is_debugger_present_called))
     {
@@ -700,7 +700,7 @@ LOCAL bool is_debugger_present()
     return _is_debugger_present;
 }
 
-[[noreturn]] void fail()
+[[noreturn]] [[gnu::cold]] PUB_IMPL void fail()
 {
     if (is_debugger_present())
     {
@@ -739,7 +739,7 @@ LOCAL str format_integer_hexadecimal(str buffer, u64 value)
         {
             let digit = v % 16;
             let ch = (u8)(digit > 9 ? (digit - 10 + 'a') : (digit + '0'));
-            assert(i < buffer.length);
+            check(i < buffer.length);
             buffer.pointer[i] = ch;
             i += 1;
             v = v / 16;
@@ -774,7 +774,7 @@ LOCAL str format_integer_decimal(str buffer, u64 value, bool treat_as_signed)
         {
             let digit = v % 10;
             let ch = (u8)(digit + '0');
-            assert(i < buffer.length);
+            check(i < buffer.length);
             buffer.pointer[i] = ch;
             i += 1;
             v = v / 10;
@@ -809,7 +809,7 @@ LOCAL str format_integer_octal(str buffer, u64 value)
         {
             let digit = v % 8;
             let ch = (u8)(digit + '0');
-            assert(i < buffer.length);
+            check(i < buffer.length);
             buffer.pointer[i] = ch;
             i += 1;
             v = v / 8;
@@ -842,7 +842,7 @@ LOCAL str format_integer_binary(str buffer, u64 value)
         {
             let digit = v % 2;
             let ch = (u8)(digit + '0');
-            assert(i < buffer.length);
+            check(i < buffer.length);
             buffer.pointer[i] = ch;
             i += 1;
             v = v / 2;
@@ -857,12 +857,12 @@ LOCAL str format_integer_binary(str buffer, u64 value)
     return result;
 }
 
-str format_integer_stack(str buffer, FormatIntegerOptions options)
+PUB_IMPL str format_integer_stack(str buffer, FormatIntegerOptions options)
 {
     if (options.treat_as_signed)
     {
-        assert(!options.prefix);
-        assert(options.format == INTEGER_FORMAT_DECIMAL);
+        check(!options.prefix);
+        check(options.format == INTEGER_FORMAT_DECIMAL);
     }
 
     u64 prefix_digit_count = 2;
@@ -915,14 +915,14 @@ str format_integer_stack(str buffer, FormatIntegerOptions options)
     return result;
 }
 
-str format_integer(Arena* arena, FormatIntegerOptions options, bool zero_terminate)
+PUB_IMPL str format_integer(Arena* arena, FormatIntegerOptions options, bool zero_terminate)
 {
     char buffer[128];
     let stack_string = format_integer_stack((str){ buffer, array_length(buffer) }, options);
     return arena_duplicate_string(arena, stack_string, zero_terminate);
 }
 
-ExecutionResult os_execute(Arena* arena, char** arguments, char** environment, ExecutionOptions options)
+PUB_IMPL ExecutionResult os_execute(Arena* arena, char** arguments, char** environment, ExecutionOptions options)
 {
     ExecutionResult result = {};
 
@@ -1194,8 +1194,9 @@ ExecutionResult os_execute(Arena* arena, char** arguments, char** environment, E
 
     return result;
 }
+
 #if defined(__AVX512F__)
-IntegerParsing parse_hexadecimal_vectorized(const char* restrict p)
+PUB_IMPL IntegerParsing parse_hexadecimal_vectorized(const char* restrict p)
 {
     u64 value = 0;
     u64 i = 0;
@@ -1217,7 +1218,7 @@ IntegerParsing parse_hexadecimal_vectorized(const char* restrict p)
     return (IntegerParsing){ .value = value, .i = i };
 }
 
-IntegerParsing parse_decimal_vectorized(const char* restrict p)
+PUB_IMPL IntegerParsing parse_decimal_vectorized(const char* restrict p)
 {
     let zero = _mm512_set1_epi8('0');
     let nine = _mm512_set1_epi8('9');
@@ -1297,7 +1298,7 @@ IntegerParsing parse_decimal_vectorized(const char* restrict p)
     return (IntegerParsing){ .value = value, .i = digit_count };
 }
 
-IntegerParsing parse_octal_vectorized(const char* restrict p)
+PUB_IMPL IntegerParsing parse_octal_vectorized(const char* restrict p)
 {
     u64 value = 0;
     u64 i = 0;
@@ -1324,7 +1325,7 @@ IntegerParsing parse_octal_vectorized(const char* restrict p)
     return (IntegerParsing) { .value = value, .i = i };
 }
 
-IntegerParsing parse_binary_vectorized(const char* restrict f)
+PUB_IMPL IntegerParsing parse_binary_vectorized(const char* restrict f)
 {
     u64 value = 0;
 
@@ -1379,25 +1380,25 @@ LOCAL u64 accumulate_hexadecimal(u64 accumulator, u8 ch)
 
 LOCAL u64 accumulate_decimal(u64 accumulator, u8 ch)
 {
-    assert(is_decimal(ch));
+    check(is_decimal(ch));
     return (accumulator * 10) + (ch - '0');
 }
 
 LOCAL u64 accumulate_octal(u64 accumulator, u8 ch)
 {
-    assert(is_octal(ch));
+    check(is_octal(ch));
 
     return (accumulator * 8) + (ch - '0');
 }
 
 LOCAL u64 accumulate_binary(u64 accumulator, u8 ch)
 {
-    assert(is_binary(ch));
+    check(is_binary(ch));
 
     return (accumulator * 2) + (ch - '0');
 }
 
-u64 parse_integer_decimal_assume_valid(str string)
+PUB_IMPL u64 parse_integer_decimal_assume_valid(str string)
 {
     u64 value = 0;
 
@@ -1410,7 +1411,7 @@ u64 parse_integer_decimal_assume_valid(str string)
     return value;
 }
 
-IntegerParsing parse_hexadecimal_scalar(const char* restrict p)
+PUB_IMPL IntegerParsing parse_hexadecimal_scalar(const char* restrict p)
 {
     u64 value = 0;
     u64 i = 0;
@@ -1431,7 +1432,7 @@ IntegerParsing parse_hexadecimal_scalar(const char* restrict p)
     return (IntegerParsing){ .value = value, .i = i };
 }
 
-IntegerParsing parse_decimal_scalar(const char* restrict p)
+PUB_IMPL IntegerParsing parse_decimal_scalar(const char* restrict p)
 {
     u64 value = 0;
     u64 i = 0;
@@ -1452,7 +1453,7 @@ IntegerParsing parse_decimal_scalar(const char* restrict p)
     return (IntegerParsing){ .value = value, .i = i };
 }
 
-IntegerParsing parse_octal_scalar(const char* restrict p)
+PUB_IMPL IntegerParsing parse_octal_scalar(const char* restrict p)
 {
     u64 value = 0;
     u64 i = 0;
@@ -1473,7 +1474,7 @@ IntegerParsing parse_octal_scalar(const char* restrict p)
     return (IntegerParsing) { .value = value, .i = i };
 }
 
-IntegerParsing parse_binary_scalar(const char* restrict p)
+PUB_IMPL IntegerParsing parse_binary_scalar(const char* restrict p)
 {
     u64 value = 0;
     u64 i = 0;
@@ -1497,13 +1498,13 @@ IntegerParsing parse_binary_scalar(const char* restrict p)
 #if defined(_WIN32)
 LOCAL ThreadHandle* os_windows_thread_to_generic(HANDLE handle)
 {
-    assert(handle != 0);
+    check(handle != 0);
     return (ThreadHandle*)handle;
 }
 
 LOCAL HANDLE os_windows_thread_from_generic(ThreadHandle* handle)
 {
-    assert(handle != 0);
+    check(handle != 0);
     return (HANDLE)handle;
 }
 #endif
@@ -1511,18 +1512,18 @@ LOCAL HANDLE os_windows_thread_from_generic(ThreadHandle* handle)
 #if defined(__linux__) || defined(__APPLE__)
 LOCAL ThreadHandle* os_posix_thread_to_generic(pthread_t handle)
 {
-    assert(handle != 0);
+    check(handle != 0);
     return (ThreadHandle*)handle;
 }
 
 LOCAL pthread_t os_posix_thread_from_generic(ThreadHandle* handle)
 {
-    assert(handle != 0);
+    check(handle != 0);
     return (pthread_t)handle;
 }
 #endif
 
-ThreadHandle* os_thread_create(ThreadCallback* callback, ThreadCreateOptions options)
+PUB_IMPL ThreadHandle* os_thread_create(ThreadCallback* callback, ThreadCreateOptions options)
 {
     ThreadHandle* result = 0;
 #if defined (__linux__) || defined(__APPLE__)
@@ -1538,7 +1539,7 @@ ThreadHandle* os_thread_create(ThreadCallback* callback, ThreadCreateOptions opt
     return result;
 }
 
-u32 os_thread_join(ThreadHandle* handle)
+PUB_IMPL u32 os_thread_join(ThreadHandle* handle)
 {
     u32 return_code = 1;
 
@@ -1567,7 +1568,7 @@ u32 os_thread_join(ThreadHandle* handle)
     return return_code;
 }
 
-void test_error(str check_text, u32 line, str function, str file_path)
+PUB_IMPL void test_error(str check_text, u32 line, str function, str file_path)
 {
     if (is_debugger_present())
     {
@@ -1598,7 +1599,7 @@ PUB_IMPL bool str_is_zero_terminated(str s)
 
 PUB_IMPL str str_from_pointers(char* start, char* end)
 {
-    assert(end >= start);
+    check(end >= start);
     u64 len = end - start;
     return (str) { start, len };
 }
@@ -1622,7 +1623,7 @@ PUB_IMPL str str_slice_start(str s, u64 start)
 
 PUB_IMPL bool memory_compare(void* a, void* b, u64 i)
 {
-    assert(a != b);
+    check(a != b);
     bool result = 1;
 
     let p1 = (u8*)a;
@@ -1738,8 +1739,28 @@ PUB_IMPL bool is_identifier(char ch)
     return is_identifier_start(ch) | is_decimal(ch);
 }
 
+PUB_IMPL void print(str str)
+{
+    os_file_write(os_get_stdout(), str);
+}
+
+[[noreturn]] [[gnu::cold]] PUB_IMPL void _assert_failed(u32 line, str function_name, str file_path)
+{
+    print(S("Assert failed at "));
+    print(function_name);
+    print(S(" in "));
+    print(file_path);
+    print(S(":"));
+    char buffer[128];
+    let stack_string = format_integer_stack((str){ buffer, array_length(buffer) }, (FormatIntegerOptions){ .value = line });
+    print(stack_string);
+    print(S("\n"));
+        
+    fail();
+}
+
 #if BB_INCLUDE_TESTS
-bool lib_tests(TestArguments* restrict arguments)
+PUB_IMPL bool lib_tests(TestArguments* restrict arguments)
 {
     bool result = 1;
     let arena = arguments->arena;

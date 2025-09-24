@@ -86,7 +86,7 @@ LOCAL _Atomic(u64) global_completed_compile_unit_count = 0;
 
 LOCAL str generate_path_internal(Arena* arena, str directory, str name, str extension)
 {
-    assert(name.pointer);
+    check(name.pointer);
     str strings[] = {
         directory.pointer ? directory : S("./"),
         name,
@@ -175,7 +175,7 @@ LOCAL CompileUnit* compile_unit_create()
     *unit = (CompileUnit) {};
     let global_scope = unit->scope;
     let type_arena = unit_arena(unit, UNIT_ARENA_TYPE);
-    assert(type_arena->position == sizeof(Arena));
+    check(type_arena->position == sizeof(Arena));
 
     let base_type_count = get_base_type_count();
     let base_type_allocation = arena_allocate(type_arena, Type, base_type_count);
@@ -202,13 +202,14 @@ LOCAL CompileUnit* compile_unit_create()
                 .scope = global_scope,
                 .id = TYPE_ID_INTEGER,
                 .analyzed = 1,
+                .use_count = UINT32_MAX,
             };
             type += 1;
         }
     }
 
     const static str names[] = { S("u128"), S("s128"), S("u256"), S("s256"), S("u512"), S("s512") };
-    assert(array_length(names) == big_integer_type_count);
+    check(array_length(names) == big_integer_type_count);
     for (u64 i = 0; i < (big_integer_type_count / 2); i += 1)
     {
         for (u8 is_signed = 0; is_signed < 2; is_signed += 1)
@@ -224,6 +225,7 @@ LOCAL CompileUnit* compile_unit_create()
                 .scope = global_scope,
                 .id = TYPE_ID_INTEGER,
                 .analyzed = 1,
+                .use_count = UINT32_MAX,
             };
             type += 1;
         }
@@ -250,7 +252,7 @@ LOCAL CompileUnit* compile_unit_create()
     let noreturn_type = type;
     type += 1;
 
-    assert(type == base_type_allocation + base_type_count);
+    check(type == base_type_allocation + base_type_count);
 
     *f16_type = (Type) {
         .fp = TYPE_FLOAT_F16,
@@ -258,6 +260,7 @@ LOCAL CompileUnit* compile_unit_create()
         .scope = global_scope,
         .id = TYPE_ID_FLOAT,
         .analyzed = 1,
+        .use_count = UINT32_MAX,
     };
 
     *bf16_type = (Type) {
@@ -266,6 +269,7 @@ LOCAL CompileUnit* compile_unit_create()
         .scope = global_scope,
         .id = TYPE_ID_FLOAT,
         .analyzed = 1,
+        .use_count = UINT32_MAX,
     };
 
     *f32_type = (Type) {
@@ -274,6 +278,7 @@ LOCAL CompileUnit* compile_unit_create()
         .scope = global_scope,
         .id = TYPE_ID_FLOAT,
         .analyzed = 1,
+        .use_count = UINT32_MAX,
     };
 
     *f64_type = (Type) {
@@ -282,6 +287,7 @@ LOCAL CompileUnit* compile_unit_create()
         .scope = global_scope,
         .id = TYPE_ID_FLOAT,
         .analyzed = 1,
+        .use_count = UINT32_MAX,
     };
 
     *f128_type = (Type) {
@@ -290,6 +296,7 @@ LOCAL CompileUnit* compile_unit_create()
         .scope = global_scope,
         .id = TYPE_ID_FLOAT,
         .analyzed = 1,
+        .use_count = UINT32_MAX,
     };
 
     *void_type = (Type) {
@@ -297,6 +304,7 @@ LOCAL CompileUnit* compile_unit_create()
         .scope = global_scope,
         .id = TYPE_ID_VOID,
         .analyzed = 1,
+        .use_count = UINT32_MAX,
     };
 
     *noreturn_type = (Type) {
@@ -304,6 +312,7 @@ LOCAL CompileUnit* compile_unit_create()
         .scope = global_scope,
         .id = TYPE_ID_NORETURN,
         .analyzed = 1,
+        .use_count = UINT32_MAX,
     };
 
     let void_value = arena_allocate(unit_arena(unit, UNIT_ARENA_VALUE), Value, 1);
@@ -312,9 +321,10 @@ LOCAL CompileUnit* compile_unit_create()
         .id = VALUE_ID_DISCARD,
     };
 
-    unit->has_debug_info = 1;
+    unit->pointer_alignment = alignof(void*);
+    unit->has_debug_info = true;
     unit->show_callback = &default_show_callback;
-    unit->verbose = 0;
+    unit->verbose = true;
     unit->target = (Target) {
 #ifdef __x86_64__
         .cpu = CPU_ARCH_X86_64,
@@ -372,24 +382,31 @@ LOCAL CompileUnit* compile_unit_create()
 
 PUB_IMPL TypeReference get_void_type(CompileUnit* restrict unit)
 {
-    let void_offset = classic_integer_type_count + big_integer_type_count;
-    let void_type = type_reference_from_index(unit, void_offset);
-    return void_type;
+    let void_offset = classic_integer_type_count + big_integer_type_count + float_type_count;
+    let void_type_index = type_reference_from_index(unit, void_offset);
+    let void_type = type_pointer_from_reference(unit, void_type_index);
+    check(void_type->id == TYPE_ID_VOID);
+    return void_type_index;
 }
 
 PUB_IMPL TypeReference get_noreturn_type(CompileUnit* restrict unit)
 {
-    let void_type = get_void_type(unit);
-    void_type.v += 1;
-    return void_type;
+    let noreturn_type_index = get_void_type(unit);
+    noreturn_type_index.v += 1;
+    let noreturn_type = type_pointer_from_reference(unit, noreturn_type_index);
+    check(noreturn_type->id == TYPE_ID_NORETURN);
+    return noreturn_type_index;
 }
 
 PUB_IMPL TypeReference get_integer_type(CompileUnit* restrict unit, u64 bit_count, bool is_signed)
 {
-    assert(bit_count != 0);
-    assert(bit_count <= 64 || bit_count == 128 || bit_count == 256 || bit_count == 512);
+    check(bit_count != 0);
+    check(bit_count <= 64 || bit_count == 128 || bit_count == 256 || bit_count == 512);
     let type_index = bit_count > 64 ? (1ULL << __builtin_ctzg(bit_count - 128)) * 2 + is_signed : is_signed * 64 + (bit_count - 1);
-    return type_reference_from_index(unit, type_index);
+    let result_index = type_reference_from_index(unit, type_index);
+    let result = type_pointer_from_reference(unit, result_index);
+    check(result->id == TYPE_ID_INTEGER);
+    return result_index;
 }
 
 PUB_IMPL StringReference allocate_string(CompileUnit* restrict unit, str s)
@@ -411,8 +428,8 @@ PUB_IMPL StringReference allocate_and_join_string(CompileUnit* restrict unit, St
     for (u64 i = 0; i < slice.length; i += 1)
     {
         let string = slice.pointer[i];
-        assert((!((string.pointer > arena_bottom) & (string.pointer < arena_top))) || slice.length != 1); // Repeated string
-        assert(string.length <= UINT32_MAX);
+        check((!((string.pointer > arena_bottom) & (string.pointer < arena_top))) || slice.length != 1); // Repeated string
+        check(string.length <= UINT32_MAX);
         string_length += string.length;
     }
 
@@ -456,7 +473,7 @@ PUB_IMPL StringReference allocate_and_join_string(CompileUnit* restrict unit, St
     {
         let allocation_size = string_length + sizeof(u32) + 1;
         let string = (char* restrict) arena_allocate_bytes(arena, allocation_size, alignof(u32));
-        assert(string_length < UINT32_MAX);
+        check(string_length < UINT32_MAX);
         *(u32*)string = (u32)string_length;
         let pointer = string + 4;
 
@@ -470,7 +487,7 @@ PUB_IMPL StringReference allocate_and_join_string(CompileUnit* restrict unit, St
         *pointer = 0;
 
         let big_offset = string - arena_byte_pointer;
-        assert(big_offset + 1 < UINT32_MAX);
+        check(big_offset + 1 < UINT32_MAX);
         let offset = (u32)big_offset;
         result = (StringReference) {
             .v = offset + 1,
@@ -506,7 +523,7 @@ LOCAL void crunch_file(CompileUnit* restrict unit, str path)
         .start_padding = sizeof(u32),
         .start_alignment = alignof(u32),
     });
-    assert(content.length < UINT32_MAX);
+    check(content.length < UINT32_MAX);
     *((u32*)content.pointer - 1) = content.length;
 
     u8 path_separator;
@@ -518,7 +535,7 @@ LOCAL void crunch_file(CompileUnit* restrict unit, str path)
 
     let last_slash_index = str_last_ch(absolute_path, path_separator);
 
-    assert(last_slash_index != string_no_match);
+    check(last_slash_index != string_no_match);
     let directory_path = (str){ absolute_path.pointer, last_slash_index };
     let file_name = (str){ absolute_path.pointer + last_slash_index + 1, absolute_path.length - last_slash_index - 1 };
     let name_nz = (str) { file_name.pointer, file_name.length - strlen(".bbb") };
@@ -534,7 +551,7 @@ LOCAL void crunch_file(CompileUnit* restrict unit, str path)
     }
     else
     {
-        assert(!is_ref_valid(unit->first_file));
+        check(!is_ref_valid(unit->first_file));
         unit->first_file = file_reference;
     }
 
@@ -564,7 +581,7 @@ LOCAL void crunch_file(CompileUnit* restrict unit, str path)
 
 LOCAL void print_llvm_message(CompileUnit* restrict unit, str message)
 {
-    assert(message.pointer);
+    check(message.pointer);
     unit_show(unit, message);
     LLVMDisposeMessage(message.pointer);
 }
@@ -739,7 +756,7 @@ LOCAL bool unit_run(CompileUnit* restrict unit, StringSlice slice, char** envp)
 
 LOCAL bool process_command_line(int argc, const char* argv[], char** envp)
 {
-    assert(is_single_threaded);
+    check(is_single_threaded);
 
     bool result = 1;
     let command = default_command;
@@ -772,15 +789,20 @@ LOCAL bool process_command_line(int argc, const char* argv[], char** envp)
                     if (unit)
                     {
                         run_result = unit_run(unit, (StringSlice){}, envp);
+                        if (!run_result)
+                        {
+                            unit_show(unit, S("Test executable did not exit properly!"));
+                        }
                     }
-                    if (!run_result)
+                    else
                     {
-                        unit_show(unit, S("Test executable did not exit properly!"));
+                        print(S("Unit failed to compile!\n"));
                     }
+
                     let return_value = os_thread_join(llvm_thread);
                     if (return_value != 0)
                     {
-                        unit_show(unit, S("LLVM initialization thread failed!"));
+                        print(S("LLVM initialization thread failed!\n"));
                     }
                     result = (unit != 0) & (return_value == 0) & (run_result);
                 }
@@ -793,12 +815,6 @@ LOCAL bool process_command_line(int argc, const char* argv[], char** envp)
     }
 
     return result;
-}
-
-LOCAL bool abi_can_have_coerce_to_type(AbiInformation* restrict abi)
-{
-    AbiKind kind = abi->flags.kind;
-    return (kind == ABI_KIND_DIRECT) | (kind == ABI_KIND_EXTEND) | (kind == ABI_KIND_COERCE_AND_EXPAND);
 }
 
 PUB_IMPL Aarch64AbiKind get_aarch64_abi_kind(OperatingSystem os)
@@ -886,7 +902,7 @@ PUB_IMPL TypeReference get_semantic_return_type(TypeFunction* restrict function)
 
 PUB_IMPL TypeReference get_semantic_argument_type(TypeFunction* restrict function, u16 semantic_argument_index)
 {
-    assert(semantic_argument_index < function->semantic_argument_count);
+    check(semantic_argument_index < function->semantic_argument_count);
     return function->semantic_types[semantic_argument_index + 1];
 }
 
@@ -897,13 +913,13 @@ PUB_IMPL TypeReference get_abi_return_type(TypeFunction* restrict function)
 
 PUB_IMPL TypeReference get_abi_argument_type(TypeFunction* restrict function, u16 abi_argument_index)
 {
-    assert(abi_argument_index < function->abi_argument_count);
+    check(abi_argument_index < function->abi_argument_count);
     return function->abi_types[abi_argument_index + 1];
 }
 
 PUB_IMPL AbiInformation* restrict get_abis(TypeFunction* restrict function)
 {
-    return (AbiInformation*)(function->semantic_types + function->semantic_argument_count);
+    return (AbiInformation*)(align_forward((u64)function->semantic_types + ((function->semantic_argument_count + 1) * sizeof(function->semantic_types[0])), alignof(AbiInformation)));
 }
 
 PUB_IMPL AbiInformation* restrict get_return_abi(TypeFunction* restrict function)
@@ -913,50 +929,8 @@ PUB_IMPL AbiInformation* restrict get_return_abi(TypeFunction* restrict function
 
 PUB_IMPL AbiInformation* restrict get_argument_abi(TypeFunction* restrict function, u16 semantic_argument_index)
 {
-    assert(semantic_argument_index < function->semantic_argument_count);
+    check(semantic_argument_index < function->semantic_argument_count);
     return &get_abis(function)[semantic_argument_index + 1];
-}
-
-PUB_IMPL void abi_set_coerce_to_type(AbiInformation* restrict abi, TypeReference type_reference)
-{
-    assert(abi_can_have_coerce_to_type(abi));
-    abi->coerce_to_type = type_reference;
-}
-
-PUB_IMPL bool abi_can_have_padding_type(AbiInformation* restrict abi)
-{
-    AbiKind kind = abi->flags.kind;
-    return ((kind == ABI_KIND_DIRECT) | (kind == ABI_KIND_EXTEND)) | ((kind == ABI_KIND_INDIRECT) | (kind == ABI_KIND_INDIRECT_ALIASED)) | (kind == ABI_KIND_EXPAND);
-}
-
-PUB_IMPL void abi_set_padding_type(AbiInformation* restrict abi, TypeReference type_reference)
-{
-    assert(abi_can_have_padding_type(abi));
-    abi->padding.type = type_reference;
-}
-
-PUB_IMPL void abi_set_direct_offset(AbiInformation* restrict abi, u32 offset)
-{
-    assert((abi->flags.kind == ABI_KIND_DIRECT) || (abi->flags.kind == ABI_KIND_EXTEND));
-    abi->attributes.direct.offset = offset;
-}
-
-PUB_IMPL void abi_set_direct_alignment(AbiInformation* restrict abi, u32 alignment)
-{
-    assert((abi->flags.kind == ABI_KIND_DIRECT) || (abi->flags.kind == ABI_KIND_EXTEND));
-    abi->attributes.direct.alignment = alignment;
-}
-
-PUB_IMPL void abi_set_can_be_flattened(AbiInformation* restrict abi, bool value)
-{
-    assert(abi->flags.kind == ABI_KIND_DIRECT);
-    abi->flags.can_be_flattened = value;
-}
-
-PUB_IMPL TypeReference abi_get_coerce_to_type(AbiInformation* restrict abi)
-{
-    assert(abi_can_have_coerce_to_type(abi));
-    return abi->coerce_to_type;
 }
 
 PUB_IMPL bool value_id_is_intrinsic(ValueId id)
@@ -1033,22 +1007,22 @@ PUB_IMPL reference_offset_function_ref(O, o)\
     let arena_byte_pointer = (u8*)arena;\
     let arena_bottom = arena_byte_pointer;\
     let arena_top = arena_byte_pointer + arena->position;\
-    assert(o ## _byte_pointer > arena_bottom && o ## _byte_pointer < arena_top);\
+    check(o ## _byte_pointer > arena_bottom && o ## _byte_pointer < arena_top);\
     let sub = o ## _byte_pointer - arena_byte_pointer;\
-    assert(sub < UINT32_MAX);\
+    check(sub < UINT32_MAX);\
     return (O ## Reference) {\
         .v = (u32)(sub + 1),\
     };\
 }\
 PUB_IMPL reference_offset_function_ptr(O, o)\
 {\
-    assert(o_reference.v != 0);\
+    check(o_reference.v != 0);\
     let arena = unit_arena(unit, AU);\
     let arena_byte_pointer = (u8*)arena;\
     let arena_bottom = arena_byte_pointer;\
     let arena_top = arena_byte_pointer + arena->position;\
     let o ## _byte_pointer = arena_byte_pointer + (o_reference.v - 1);\
-    assert(o ## _byte_pointer > arena_bottom && o ## _byte_pointer < arena_top);\
+    check(o ## _byte_pointer > arena_bottom && o ## _byte_pointer < arena_top);\
     let o = (O* restrict)o ## _byte_pointer; \
     return o;\
 }
@@ -1078,7 +1052,7 @@ PUB_IMPL Global* get_current_function(CompileUnit* restrict unit)
 
 PUB_IMPL u64 get_byte_size(CompileUnit* restrict unit, Type* type_pointer)
 {
-    assert(unit->phase >= COMPILE_PHASE_ANALYSIS);
+    check(unit->phase >= COMPILE_PHASE_ANALYSIS);
 
     switch (type_pointer->id)
     {
@@ -1097,7 +1071,7 @@ PUB_IMPL u64 get_byte_size(CompileUnit* restrict unit, Type* type_pointer)
 
 PUB_IMPL u64 get_bit_size(CompileUnit* restrict unit, Type* restrict type)
 {
-    assert(unit->phase >= COMPILE_PHASE_ANALYSIS);
+    check(unit->phase >= COMPILE_PHASE_ANALYSIS);
 
     switch (type->id)
     {
@@ -1159,8 +1133,12 @@ PUB_IMPL u32 get_alignment(CompileUnit* restrict unit, Type* type)
         {
             let bit_count = type->integer.bit_count;
             let result = aligned_byte_count_from_bit_count(bit_count);
-            assert(result == 1 || result == 2 || result == 4 || result == 8 || result == 16);
+            check(result == 1 || result == 2 || result == 4 || result == 8 || result == 16);
             return result;
+        }
+        break; case TYPE_ID_POINTER:
+        {
+            return unit->pointer_alignment;
         }
         break; default: todo();
     }
@@ -1202,15 +1180,15 @@ PUB_IMPL StringReference string_reference_from_string(CompileUnit* restrict unit
     let arena_byte_pointer = (char*)arena;
     let arena_bottom = arena_byte_pointer;
     let arena_top = arena_byte_pointer + arena->position;
-    assert((arena_bottom < s.pointer) & (arena_top > s.pointer));
+    check((arena_bottom < s.pointer) & (arena_top > s.pointer));
     let string_top = s.pointer + s.length;
-    assert(string_top <= arena_top);
+    check(string_top <= arena_top);
     let length_pointer = (u32*)s.pointer - 1;
     let length = *length_pointer;
-    assert(s.length == length);
+    check(s.length == length);
 
     let diff = (char*)length_pointer - arena_bottom;
-    assert(diff < UINT32_MAX);
+    check(diff < UINT32_MAX);
     return (StringReference) {
         .v = diff + 1,
     };
@@ -1218,7 +1196,7 @@ PUB_IMPL StringReference string_reference_from_string(CompileUnit* restrict unit
 
 PUB_IMPL str string_from_reference(CompileUnit* restrict unit, StringReference reference)
 {
-    assert(is_ref_valid(reference));
+    check(is_ref_valid(reference));
 
     let arena = unit_arena(unit, UNIT_ARENA_STRING);
     let arena_byte_pointer = (char*)arena;
@@ -1226,8 +1204,8 @@ PUB_IMPL str string_from_reference(CompileUnit* restrict unit, StringReference r
     let arena_position = arena->position;
 
     let length_offset = reference.v - 1;
-    assert(length_offset >= sizeof(Arena));
-    assert(length_offset < arena_position);
+    check(length_offset >= sizeof(Arena));
+    check(length_offset < arena_position);
     let length_byte_pointer = arena_bottom + length_offset;
     let length_pointer = (u32*)length_byte_pointer;
     let string_pointer = (char* restrict) (length_pointer + 1);
@@ -1243,10 +1221,10 @@ PUB_IMPL TypeReference type_reference_from_pointer(CompileUnit* restrict unit, T
     let arena_bottom = arena_byte_pointer;
     let arena_top = arena_byte_pointer + arena_position;
     let type_byte_pointer = (u8*)type;
-    assert(type_byte_pointer > arena_bottom && type_byte_pointer < arena_top);
+    check(type_byte_pointer > arena_bottom && type_byte_pointer < arena_top);
     let diff = type_byte_pointer - (arena_bottom + sizeof(Arena));
-    assert(diff % sizeof(Type) == 0);
-    assert(diff < UINT32_MAX);
+    check(diff % sizeof(Type) == 0);
+    check(diff < UINT32_MAX);
     diff /= sizeof(Type);
     return (TypeReference) {
         .v = diff + 1,
@@ -1258,7 +1236,7 @@ PUB_IMPL TypeReference type_reference_from_index(CompileUnit* restrict unit, u32
     let type_arena = unit_arena(unit, UNIT_ARENA_TYPE);
     let byte_offset = index * sizeof(Type);
     let arena_position = type_arena->position;
-    assert(sizeof(Arena) + byte_offset + sizeof(Type) <= arena_position);
+    check(sizeof(Arena) + byte_offset + sizeof(Type) <= arena_position);
     return (TypeReference) {
         .v = index + 1,
     };
@@ -1266,12 +1244,12 @@ PUB_IMPL TypeReference type_reference_from_index(CompileUnit* restrict unit, u32
 
 PUB_IMPL Type* type_pointer_from_reference(CompileUnit* restrict unit, TypeReference reference)
 {
-    assert(is_ref_valid(reference));
+    check(is_ref_valid(reference));
     let arena = unit_arena(unit, UNIT_ARENA_TYPE);
     let index = reference.v - 1;
     let byte_offset = index * sizeof(Type);
     let arena_position = arena->position;
-    assert(sizeof(Arena) + byte_offset + sizeof(Type) <= arena_position);
+    check(sizeof(Arena) + byte_offset + sizeof(Type) <= arena_position);
     let type = (Type*)((u8*)arena + sizeof(Arena) + byte_offset);
     return type;
 }
@@ -1284,10 +1262,10 @@ PUB_IMPL ValueReference value_reference_from_pointer(CompileUnit* restrict unit,
     let arena_bottom = arena_byte_pointer;
     let arena_top = arena_byte_pointer + arena_position;
     let value_byte_pointer = (u8*)value;
-    assert(value_byte_pointer > arena_bottom && value_byte_pointer < arena_top);
+    check(value_byte_pointer > arena_bottom && value_byte_pointer < arena_top);
     let diff = value_byte_pointer - (arena_bottom + sizeof(Arena));
-    assert(diff % sizeof(Value) == 0);
-    assert(diff < UINT32_MAX);
+    check(diff % sizeof(Value) == 0);
+    check(diff < UINT32_MAX);
     diff /= sizeof(Value);
     return (ValueReference) {
         .v = diff + 1,
@@ -1299,7 +1277,7 @@ PUB_IMPL ValueReference value_reference_from_index(CompileUnit* restrict unit, u
     let value_arena = unit_arena(unit, UNIT_ARENA_VALUE);
     let byte_offset = index * sizeof(Value);
     let arena_position = value_arena->position;
-    assert(sizeof(Arena) + byte_offset + sizeof(Value) < arena_position);
+    check(sizeof(Arena) + byte_offset + sizeof(Value) < arena_position);
     return (ValueReference) {
         .v = index + 1,
     };
@@ -1307,12 +1285,12 @@ PUB_IMPL ValueReference value_reference_from_index(CompileUnit* restrict unit, u
 
 PUB_IMPL Value* value_pointer_from_reference(CompileUnit* restrict unit, ValueReference reference)
 {
-    assert(is_ref_valid(reference));
+    check(is_ref_valid(reference));
     let arena = unit_arena(unit, UNIT_ARENA_VALUE);
     let index = reference.v - 1;
     let byte_offset = index * sizeof(Value);
     let arena_position = arena->position;
-    assert(sizeof(Arena) + byte_offset + sizeof(Value) <= arena_position);
+    check(sizeof(Arena) + byte_offset + sizeof(Value) <= arena_position);
     let result = (Value*)((u8*)arena + sizeof(Arena) + byte_offset);
     return result;
 }
@@ -1327,9 +1305,11 @@ PUB_IMPL Type* new_types(CompileUnit* restrict unit, u32 type_count)
 PUB_IMPL Type* allocate_free_type(CompileUnit* restrict unit)
 {
     let type_ref = unit->free_types;
-    assert(is_ref_valid(type_ref));
+    check(is_ref_valid(type_ref));
     let type = type_pointer_from_reference(unit, type_ref);
+    let next = type->next;
     type->next = (TypeReference){};
+    unit->free_types = next;
     return type;
 }
 
@@ -1361,14 +1341,14 @@ PUB_IMPL Scope* restrict new_scope(CompileUnit* restrict unit)
 PUB_IMPL u64 align_bit_count(u64 bit_count)
 {
     let aligned_bit_count = MAX(next_power_of_two(bit_count), 8);
-    assert((aligned_bit_count & (aligned_bit_count - 1)) == 0);
+    check((aligned_bit_count & (aligned_bit_count - 1)) == 0);
     return aligned_bit_count;
 }
 
 PUB_IMPL u64 aligned_byte_count_from_bit_count(u64 bit_count)
 {
     let aligned_bit_count = align_bit_count(bit_count);
-    assert(aligned_bit_count % 8 == 0);
+    check(aligned_bit_count % 8 == 0);
     return aligned_bit_count / 8;
 }
 
@@ -1397,18 +1377,30 @@ PUB_IMPL TypeReference get_u64(CompileUnit* restrict unit)
     return get_integer_type(unit, 64, 0);
 }
 
-PUB_IMPL Type* get_function_type_from_storage(CompileUnit* restrict unit, Global* function)
+PUB_IMPL Type* get_function_type_from_storage(CompileUnit* restrict unit, Global* global)
 {
-    let function_storage_ref = function->variable.storage;
+    let function_storage_ref = global->variable.storage;
     let function_storage = value_pointer_from_reference(unit, function_storage_ref);
     let function_pointer_type_ref = function_storage->type;
-    assert(is_ref_valid(function_pointer_type_ref));
+    check(is_ref_valid(function_pointer_type_ref));
     let function_pointer_type = type_pointer_from_reference(unit, function_pointer_type_ref);
-    assert(function_pointer_type->id == TYPE_ID_POINTER);
+    check(function_pointer_type->id == TYPE_ID_POINTER);
     let function_type_ref = function_pointer_type->pointer.element_type;
-    assert(is_ref_valid(function_type_ref));
+    check(is_ref_valid(function_type_ref));
     let function_type = type_pointer_from_reference(unit, function_type_ref);
-    assert(function_type->id == TYPE_ID_FUNCTION);
+
+    if (function_type->id != TYPE_ID_FUNCTION)
+    {
+        print(S("'"));
+        print(string_from_reference(unit, global->variable.name));
+        print(S("': "));
+        print(format_integer(get_default_arena(unit), (FormatIntegerOptions){ .value = function_pointer_type_ref.v }, false));
+        print(S(" -> "));
+        print(format_integer(get_default_arena(unit), (FormatIntegerOptions){ .value = function_type_ref.v }, false));
+        print(S("\n"));
+    }
+
+    check(function_type->id == TYPE_ID_FUNCTION);
 
     return function_type;
 }
