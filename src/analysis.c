@@ -953,7 +953,16 @@ LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* r
     {
         break;
         case VALUE_ID_BINARY_ADD:
+        case VALUE_ID_BINARY_SUB:
         case VALUE_ID_BINARY_COMPARE_EQUAL:
+        case VALUE_ID_BINARY_BITWISE_AND:
+        case VALUE_ID_BINARY_BITWISE_OR:
+        case VALUE_ID_BINARY_BITWISE_XOR:
+        case VALUE_ID_BINARY_DIVIDE:
+        case VALUE_ID_BINARY_MULTIPLY:
+        case VALUE_ID_BINARY_REMAINDER:
+        case VALUE_ID_BINARY_BITWISE_SHIFT_LEFT:
+        case VALUE_ID_BINARY_BITWISE_SHIFT_RIGHT:
         {
             let left_ref = &value->binary[0];
             let right_ref = &value->binary[1];
@@ -1008,6 +1017,17 @@ LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* r
                         break; default: UNREACHABLE();
                     }
                 }
+                break; case VALUE_ID_BINARY_SUB:
+                {
+                    switch (value_type->id)
+                    {
+                        break; case TYPE_ID_INTEGER:
+                        {
+                            value->id = VALUE_ID_BINARY_SUB_INTEGER;
+                        }
+                        break; default: UNREACHABLE();
+                    }
+                }
                 break; case VALUE_ID_BINARY_COMPARE_EQUAL:
                 {
                     switch (value_type->id)
@@ -1015,6 +1035,61 @@ LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* r
                         break; case TYPE_ID_INTEGER:
                         {
                             value->id = VALUE_ID_BINARY_COMPARE_EQUAL_INTEGER;
+                        }
+                        break; default: UNREACHABLE();
+                    }
+                }
+                break;
+                case VALUE_ID_BINARY_BITWISE_AND:
+                case VALUE_ID_BINARY_BITWISE_OR:
+                case VALUE_ID_BINARY_BITWISE_XOR:
+                {
+                    if (value_type->id != TYPE_ID_INTEGER)
+                    {
+                        analysis_error();
+                    }
+                }
+                break;
+                case VALUE_ID_BINARY_BITWISE_SHIFT_LEFT:
+                case VALUE_ID_BINARY_BITWISE_SHIFT_RIGHT:
+                {
+                    if (value_type->id != TYPE_ID_INTEGER)
+                    {
+                        analysis_error();
+                    }
+
+                    check(value_type->id == TYPE_ID_INTEGER);
+                    value->id = value_type->integer.is_signed ? VALUE_ID_BINARY_BITWISE_SHIFT_RIGHT_LOGICAL : VALUE_ID_BINARY_BITWISE_SHIFT_RIGHT_ARITHMETIC;
+                }
+                break; case VALUE_ID_BINARY_DIVIDE:
+                {
+                    switch (value_type->id)
+                    {
+                        break; case TYPE_ID_INTEGER:
+                        {
+                            value->id = value_type->integer.is_signed ? VALUE_ID_BINARY_DIVIDE_INTEGER_SIGNED : VALUE_ID_BINARY_DIVIDE_INTEGER_UNSIGNED;
+                        }
+                        break; default: UNREACHABLE();
+                    }
+                }
+                break; case VALUE_ID_BINARY_REMAINDER:
+                {
+                    switch (value_type->id)
+                    {
+                        break; case TYPE_ID_INTEGER:
+                        {
+                            value->id = value_type->integer.is_signed ? VALUE_ID_BINARY_REMAINDER_INTEGER_SIGNED : VALUE_ID_BINARY_REMAINDER_INTEGER_UNSIGNED;
+                        }
+                        break; default: UNREACHABLE();
+                    }
+                }
+                break; case VALUE_ID_BINARY_MULTIPLY:
+                {
+                    switch (value_type->id)
+                    {
+                        break; case TYPE_ID_INTEGER:
+                        {
+                            value->id = VALUE_ID_BINARY_MULTIPLY_INTEGER;
                         }
                         break; default: UNREACHABLE();
                     }

@@ -1134,7 +1134,9 @@ LOCAL void generate_value(CompileUnit* restrict unit, Generate* restrict generat
 
     LLVMValueRef llvm_value = 0;
 
-    switch (value->id)
+    let id = value->id;
+
+    switch (id)
     {
         break; case VALUE_ID_CONSTANT_INTEGER:
         {
@@ -1180,21 +1182,33 @@ LOCAL void generate_value(CompileUnit* restrict unit, Generate* restrict generat
                 }
             }
         }
-        break; case VALUE_ID_UNARY_MINUS_INTEGER:
+        break;
+        case VALUE_ID_UNARY_MINUS_INTEGER:
+        case VALUE_ID_UNARY_BOOLEAN_NOT:
         {
             let operand = value_pointer_from_reference(unit, value->unary);
             generate_value(unit, generate, operand, TYPE_KIND_ABI, must_be_constant);
             let llvm_operand = operand->llvm;
-            llvm_value = LLVMBuildNeg(generate->builder, llvm_operand, "");
+            switch (id)
+            {
+                break; case VALUE_ID_UNARY_MINUS_INTEGER: llvm_value = LLVMBuildNeg(generate->builder, llvm_operand, "");
+                break; case VALUE_ID_UNARY_BOOLEAN_NOT: llvm_value = LLVMBuildNot(generate->builder, llvm_operand, "");
+                break; default: UNREACHABLE();
+            }
         }
-        break; case VALUE_ID_UNARY_BOOLEAN_NOT:
-        {
-            let operand = value_pointer_from_reference(unit, value->unary);
-            generate_value(unit, generate, operand, TYPE_KIND_ABI, must_be_constant);
-            let llvm_operand = operand->llvm;
-            llvm_value = LLVMBuildNot(generate->builder, llvm_operand, "");
-        }
-        break; case VALUE_ID_BINARY_ADD_INTEGER:
+        break;
+        case VALUE_ID_BINARY_ADD_INTEGER:
+        case VALUE_ID_BINARY_SUB_INTEGER:
+        case VALUE_ID_BINARY_MULTIPLY_INTEGER:
+        case VALUE_ID_BINARY_DIVIDE_INTEGER_SIGNED:
+        case VALUE_ID_BINARY_REMAINDER_INTEGER_SIGNED:
+        case VALUE_ID_BINARY_COMPARE_EQUAL_INTEGER:
+        case VALUE_ID_BINARY_BITWISE_AND:
+        case VALUE_ID_BINARY_BITWISE_OR:
+        case VALUE_ID_BINARY_BITWISE_XOR:
+        case VALUE_ID_BINARY_BITWISE_SHIFT_LEFT:
+        case VALUE_ID_BINARY_BITWISE_SHIFT_RIGHT_LOGICAL:
+        case VALUE_ID_BINARY_BITWISE_SHIFT_RIGHT_ARITHMETIC:
         {
             LLVMValueRef operands[2];
             for (u64 i = 0; i < array_length(operands); i += 1)
@@ -1204,19 +1218,22 @@ LOCAL void generate_value(CompileUnit* restrict unit, Generate* restrict generat
                 operands[i] = operand->llvm;
             }
 
-            llvm_value = LLVMBuildAdd(generate->builder, operands[0], operands[1], "");
-        }
-        break; case VALUE_ID_BINARY_COMPARE_EQUAL_INTEGER:
-        {
-            LLVMValueRef operands[2];
-            for (u64 i = 0; i < array_length(operands); i += 1)
+            switch (id)
             {
-                let operand = value_pointer_from_reference(unit, value->binary[i]);
-                generate_value(unit, generate, operand, TYPE_KIND_ABI, must_be_constant);
-                operands[i] = operand->llvm;
+                break; case VALUE_ID_BINARY_ADD_INTEGER: llvm_value = LLVMBuildAdd(generate->builder, operands[0], operands[1], "");
+                break; case VALUE_ID_BINARY_SUB_INTEGER: llvm_value = LLVMBuildSub(generate->builder, operands[0], operands[1], "");
+                break; case VALUE_ID_BINARY_MULTIPLY_INTEGER: llvm_value = LLVMBuildMul(generate->builder, operands[0], operands[1], "");
+                break; case VALUE_ID_BINARY_DIVIDE_INTEGER_SIGNED: llvm_value = LLVMBuildSDiv(generate->builder, operands[0], operands[1], "");
+                break; case VALUE_ID_BINARY_REMAINDER_INTEGER_SIGNED: llvm_value = LLVMBuildSRem(generate->builder, operands[0], operands[1], "");
+                break; case VALUE_ID_BINARY_COMPARE_EQUAL_INTEGER: llvm_value = LLVMBuildICmp(generate->builder, LLVMIntEQ, operands[0], operands[1], "");
+                break; case VALUE_ID_BINARY_BITWISE_AND: llvm_value = LLVMBuildAnd(generate->builder, operands[0], operands[1], "");
+                break; case VALUE_ID_BINARY_BITWISE_OR: llvm_value = LLVMBuildOr(generate->builder, operands[0], operands[1], "");
+                break; case VALUE_ID_BINARY_BITWISE_XOR: llvm_value = LLVMBuildXor(generate->builder, operands[0], operands[1], "");
+                break; case VALUE_ID_BINARY_BITWISE_SHIFT_LEFT: llvm_value = LLVMBuildShl(generate->builder, operands[0], operands[1], "");
+                break; case VALUE_ID_BINARY_BITWISE_SHIFT_RIGHT_LOGICAL: llvm_value = LLVMBuildLShr(generate->builder, operands[0], operands[1], "");
+                break; case VALUE_ID_BINARY_BITWISE_SHIFT_RIGHT_ARITHMETIC: llvm_value = LLVMBuildAShr(generate->builder, operands[0], operands[1], "");
+                break; default: UNREACHABLE();
             }
-
-            llvm_value = LLVMBuildICmp(generate->builder, LLVMIntEQ, operands[0], operands[1], "");
         }
         break; case VALUE_ID_INTRINSIC_TRAP:
         {
