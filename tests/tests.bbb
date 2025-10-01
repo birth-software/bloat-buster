@@ -11,51 +11,51 @@ constant_add: fn () s32 =
     return -1 + 1;
 }
 
-//constant_and: fn () s32 = 
-//{
-    //return 1 & 2;
-//}
+constant_and: fn () s32 = 
+{
+    return 1 & 2;
+}
 
-//constant_div: fn () s32 =
-//{
-//    return 0 / 5;
-//}
-//
-//constant_mul: fn () s32 =
-//{
-//    return 1 * 0;
-//}
-//
-//constant_rem: fn () s32 = 
-//{
-//    return 5 % 5;
-//}
-//
-//constant_or: fn () s32 = 
-//{
-//    return 0 | 0;
-//}
-//
-//constant_sub: fn () s32 = 
-//{
-//    return 1 - 1;
-//}
-//
-//constant_xor: fn () s32 = 
-//{
-//    return 0 ^ 0;
-//}
-//
-//constant_shift_left: fn () s32 = 
-//{
-//    return 0 << 1;
-//}
-//
-//constant_shift_right: fn () s32 = 
-//{
-//    return 0 >> 1;
-//}
-//
+constant_div: fn () s32 =
+{
+    return 0 / 5;
+}
+
+constant_mul: fn () s32 =
+{
+    return 1 * 0;
+}
+
+constant_rem: fn () s32 = 
+{
+    return 5 % 5;
+}
+
+constant_or: fn () s32 = 
+{
+    return 0 | 0;
+}
+
+constant_sub: fn () s32 = 
+{
+    return 1 - 1;
+}
+
+constant_xor: fn () s32 = 
+{
+    return 0 ^ 0;
+}
+
+constant_shift_left: fn () s32 = 
+{
+    return 0 << 1;
+}
+
+constant_shift_right: fn () s32 = 
+{
+    return 0 >> 1;
+}
+
 //minimal_stack: fn () s32 = 
 //{
 //    a: s32 = 0;
