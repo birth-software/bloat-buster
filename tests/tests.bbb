@@ -56,52 +56,52 @@ constant_shift_right: fn () s32 =
     return 0 >> 1;
 }
 
-//minimal_stack: fn () s32 = 
-//{
-//    a: s32 = 0;
-//    return a;
-//}
-//
-//minimal_stack_arithmetic0: fn () s32 = 
-//{
-//    a: s32 = 1;
-//    return a - 1;
-//}
-//
-//minimal_stack_arithmetic1: fn () s32 = 
-//{
-//    a: s32 = 1;
-//    b := a - 1;
-//    return b;
-//}
-//
-//minimal_stack_arithmetic2: fn () s32 = 
-//{
-//    a: s32 = 1;
-//    b := 1 - a;
-//    return b;
-//}
-//
-//stack_negation: fn () s32 = 
-//{
-//    v: s32 = 0;
-//    return -v;
-//}
-//
-//stack_add: fn () s32 = 
-//{
-//    a: s32 = -1;
-//    b: s32 = 1;
-//    return a + b;
-//}
-//
-//stack_sub: fn () s32 = 
-//{
-//    a: s32 = 1;
-//    b: s32 = 1;
-//    return a - b;
-//}
-//
+minimal_stack: fn () s32 = 
+{
+    a: s32 = 0;
+    return a;
+}
+
+minimal_stack_arithmetic0: fn () s32 = 
+{
+    a: s32 = 1;
+    return a - 1;
+}
+
+minimal_stack_arithmetic1: fn () s32 = 
+{
+    a: s32 = 1;
+    b := a - 1;
+    return b;
+}
+
+minimal_stack_arithmetic2: fn () s32 = 
+{
+    a: s32 = 1;
+    b := 1 - a;
+    return b;
+}
+
+stack_negation: fn () s32 = 
+{
+    v: s32 = 0;
+    return -v;
+}
+
+stack_add: fn () s32 = 
+{
+    a: s32 = -1;
+    b: s32 = 1;
+    return a + b;
+}
+
+stack_sub: fn () s32 = 
+{
+    a: s32 = 1;
+    b: s32 = 1;
+    return a - b;
+}
+
 //extend: fn () s32 = 
 //{
 //    a: s8 = 0;
@@ -8033,54 +8033,54 @@ main [export]: fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32 =
     const_add := constant_add();
     require(const_add == 0);
 
-//    const_and := constant_and();
-//    require(const_and == 0);
-//
-//    const_div := constant_div();
-//    require(const_div == 0);
-//
-//    const_mul := constant_mul();
-//    require(const_mul == 0);
-//
-//    const_rem := constant_rem();
-//    require(const_rem == 0);
-//
-//    const_or := constant_or();
-//    require(const_or == 0);
-//
-//    const_sub := constant_sub();
-//    require(const_sub == 0);
-//
-//    const_xor := constant_xor();
-//    require(const_xor == 0);
-//
-//    const_shift_left := constant_shift_left();
-//    require(const_shift_left == 0);
-//
-//    const_shift_right := constant_shift_right();
-//    require(const_shift_right == 0);
-//
-//    min_stack := minimal_stack();
-//    require(min_stack == 0);
-//
-//    min_stack_arithmetic0 := minimal_stack_arithmetic0(); 
-//    require(min_stack_arithmetic0 == 0);
-//
-//    min_stack_arithmetic1 = minimal_stack_arithmetic1(); 
-//    require(min_stack_arithmetic1 == 0);
-//
-//    min_stack_arithmetic2 = minimal_stack_arithmetic2(); 
-//    require(min_stack_arithmetic2 == 0);
-//
-//    st_neg := stack_negation();
-//    require(st_neg == 0);
-//
-//    st_add := stack_add();
-//    require(st_add == 0);
-//
-//    st_sub := stack_sub();
-//    require(st_sub == 0);
-//
+    const_and := constant_and();
+    require(const_and == 0);
+
+    const_div := constant_div();
+    require(const_div == 0);
+
+    const_mul := constant_mul();
+    require(const_mul == 0);
+
+    const_rem := constant_rem();
+    require(const_rem == 0);
+
+    const_or := constant_or();
+    require(const_or == 0);
+
+    const_sub := constant_sub();
+    require(const_sub == 0);
+
+    const_xor := constant_xor();
+    require(const_xor == 0);
+
+    const_shift_left := constant_shift_left();
+    require(const_shift_left == 0);
+
+    const_shift_right := constant_shift_right();
+    require(const_shift_right == 0);
+
+    min_stack := minimal_stack();
+    require(min_stack == 0);
+
+    min_stack_arithmetic0 := minimal_stack_arithmetic0(); 
+    require(min_stack_arithmetic0 == 0);
+
+    min_stack_arithmetic1 := minimal_stack_arithmetic1(); 
+    require(min_stack_arithmetic1 == 0);
+
+    min_stack_arithmetic2 := minimal_stack_arithmetic2(); 
+    require(min_stack_arithmetic2 == 0);
+
+    st_neg := stack_negation();
+    require(st_neg == 0);
+
+    st_add := stack_add();
+    require(st_add == 0);
+
+    st_sub := stack_sub();
+    require(st_sub == 0);
+
 //    ext := extend();
 //    require(ext == 0);
 //

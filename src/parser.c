@@ -41,6 +41,11 @@ LOCAL Precedence get_token_precedence(CompileUnit* unit, TokenId id)
             return PRECEDENCE_NONE;
         }
         break;
+        case TOKEN_ID_ASSIGN:
+        {
+            return PRECEDENCE_ASSIGNMENT;
+        }
+        break;
         case TOKEN_ID_COMPARE_EQUAL:
         case TOKEN_ID_COMPARE_NOT_EQUAL:
         case TOKEN_ID_COMPARE_LESS:
@@ -1158,9 +1163,11 @@ LOCAL StatementReference parse_statement(CompileUnit* restrict unit, Parser* res
                 {
                     rewind_token(parser);
                 }
-                let value = parse_value(unit, parser, scope, (ValueParsing){});
+                let value = parse_value(unit, parser, scope, (ValueParsing){ .kind = VALUE_KIND_LEFT });
 
                 let next_token = peek_token(parser);
+
+                bool is_assign_token = false;
 
                 switch (next_token->id)
                 {
@@ -1169,12 +1176,32 @@ LOCAL StatementReference parse_statement(CompileUnit* restrict unit, Parser* res
                     {
                         id = STATEMENT_ID_EXPRESSION;
                     }
+                    break; 
+                    case TOKEN_ID_ASSIGN:
+                    {
+                        is_assign_token = true;
+                        id = STATEMENT_ID_ASSIGNMENT;
+                        next_token = consume_token(parser);
+                    }
                     break; default: UNREACHABLE();
                 }
 
                 if (id == STATEMENT_ID_EXPRESSION)
                 {
                     statement->value = value;
+                }
+                else if (is_assign_token)
+                {
+                    let left = value;
+                    let right = parse_value(unit, parser, scope, (ValueParsing){});
+
+                    if (next_token->id != TOKEN_ID_ASSIGN)
+                    {
+                        todo();
+                    }
+
+                    statement->assignment[0] = left;
+                    statement->assignment[1] = right;
                 }
                 else
                 {

@@ -397,6 +397,7 @@ typedef enum StatementId : u8
     STATEMENT_ID_WHILE,
     STATEMENT_ID_FOR,
     STATEMENT_ID_EXPRESSION,
+    STATEMENT_ID_ASSIGNMENT,
 } StatementId;
 
 STRUCT(Branch)
@@ -414,6 +415,7 @@ STRUCT(Statement)
         Branch branch;
         BlockReference block;
         LocalReference local;
+        ValueReference assignment[2];
     };
     StatementReference next;
     SourceLocation location;

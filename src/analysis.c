@@ -860,11 +860,14 @@ LOCAL void analyze_binary(CompileUnit* restrict unit, ValueReference* restrict l
 
     if (!left_receives_type & !right_receives_type)
     {
-        todo();
+        analyze_value(unit, left_ref, (TypeReference){}, (TypeAnalysis){ .must_be_constant = options.must_be_constant });
+        analyze_value(unit, right_ref, (TypeReference){}, (TypeAnalysis){ .must_be_constant = options.must_be_constant });
     }
     else if (left_receives_type & !right_receives_type)
     {
-        todo();
+        let _right_ref = analyze_value(unit, right_ref, (TypeReference){}, (TypeAnalysis){ .must_be_constant = options.must_be_constant });
+        let _right = value_pointer_from_reference(unit, _right_ref);
+        analyze_value(unit, left_ref, _right->type, (TypeAnalysis){ .must_be_constant = options.must_be_constant });
     }
     else if (!left_receives_type & right_receives_type)
     {
@@ -1383,6 +1386,30 @@ LOCAL void analyze_statement(CompileUnit* restrict unit, Statement* restrict sta
         {
             let block_ref = statement->block;
             analyze_block(unit, block_ref);
+        }
+        break; case STATEMENT_ID_ASSIGNMENT:
+        {
+            let left = &statement->assignment[0];
+            let right = &statement->assignment[1];
+
+            analyze_value(unit, left, (TypeReference){}, (TypeAnalysis){});
+            let l = value_pointer_from_reference(unit, *left);
+            let left_type = type_pointer_from_reference(unit, l->type);
+            if (left_type->id != TYPE_ID_POINTER)
+            {
+                analysis_error();
+            }
+
+            let element_type_ref = left_type->pointer.element_type;
+            let is_storing_to_vector_element = 0; // left->id == VALUE_ID_ARRAY_EXPRESSION;
+
+            if (is_storing_to_vector_element)
+            {
+                todo();
+            }
+
+            analyze_value(unit, right, element_type_ref, (TypeAnalysis){});
+            todo();
         }
         break; default:
         {
