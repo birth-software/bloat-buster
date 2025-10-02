@@ -95,7 +95,7 @@ LOCAL bool is_good_finishing_decimal_character(u8 ch)
     return is_space(ch) | ((ch >= '!') & (ch <= '/')) | ((ch >= ':') & (ch <= '@')) | ((ch >= LEFT_BRACKET) & (ch <= '`')) | ((ch >= LEFT_BRACE) & (ch <= '~'));
 }
 
-TokenList lex(CompileUnit* unit, File* file)
+PUB_IMPL TokenList lex(CompileUnit* unit, File* file)
 {
 #define MEASURE_LEXING 0
 
@@ -661,7 +661,7 @@ TokenList lex(CompileUnit* unit, File* file)
         {
             let is_first_zero = ch0 == '0';
 
-            let prefix_ch = ch0;
+            let prefix_ch = ch1;
             let is_valid_prefix_ch = ((prefix_ch == 'x') | (prefix_ch == 'd')) | ((prefix_ch == 'o') | (prefix_ch == 'b'));
             let is_valid_prefix = is_first_zero & is_valid_prefix_ch;
 
@@ -1215,7 +1215,7 @@ TokenList lex(CompileUnit* unit, File* file)
 }
 
 #if BB_INCLUDE_TESTS
-bool lexer_tests(TestArguments* restrict arguments)
+PUB_IMPL bool lexer_tests(TestArguments* restrict arguments)
 {
     return 1;
 }
@@ -1338,7 +1338,7 @@ LOCAL str token_id_to_string(TokenId id)
     }
 }
 
-str token_list_to_string(Arena* arena, TokenList list)
+PUB_IMPL str token_list_to_string(Arena* arena, TokenList list)
 {
     let start = arena->position;
     Token* restrict p = list.pointer;
@@ -1348,9 +1348,9 @@ str token_list_to_string(Arena* arena, TokenList list)
         let token = p[i];
         u32 offset = token.offset;
         TokenId id = token.id;
-        arena_duplicate_string(arena, S("#"), false);
+        arena_duplicate_string(arena, S("["), false);
         format_integer(arena, (FormatIntegerOptions){ .value = i }, false);
-        arena_duplicate_string(arena, S(" "), false);
+        arena_duplicate_string(arena, S("] "), false);
         arena_duplicate_string(arena, token_id_to_string(id), false);
         arena_duplicate_string(arena, S(", n: "), false);
         format_integer(arena, (FormatIntegerOptions){ .value = offset }, false);

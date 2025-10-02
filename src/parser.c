@@ -83,6 +83,7 @@ LOCAL Precedence get_token_precedence(CompileUnit* unit, TokenId id)
         }
         break;
         case TOKEN_ID_LEFT_PARENTHESIS:
+        case TOKEN_ID_POINTER_DEREFERENCE:
         {
             return PRECEDENCE_POSTFIX;
         }
@@ -298,7 +299,11 @@ LOCAL ParseInteger end_integer(CompileUnit* restrict unit, Parser* restrict pars
 
         switch (start->id)
         {
-            break; case TOKEN_ID_INTEGER_START_HEXADECIMAL_PREFIXED: case TOKEN_ID_INTEGER_START_DECIMAL_PREFIXED:
+            break; case TOKEN_ID_INTEGER_START_HEXADECIMAL_PREFIXED:
+            {
+                p = parse_hexadecimal_scalar(start_pointer);
+            }
+            break; case TOKEN_ID_INTEGER_START_DECIMAL_PREFIXED:
             {
                 todo();
             }
@@ -748,6 +753,7 @@ LOCAL ValueReference parse_left(CompileUnit* restrict unit, Parser* restrict par
                 },
                 .type = {},
                 .next = {},
+                .kind = parsing.kind,
                 .id = VALUE_ID_UNRESOLVED_IDENTIFIER,
             };
 
@@ -947,6 +953,16 @@ LOCAL ValueReference parse_right_internal(CompileUnit* restrict unit, Parser* re
             *value = (Value) {
                 .binary = { left, right },
                 .id = id,
+            };
+
+            result = value_reference_from_pointer(unit, value);
+        }
+        break; case TOKEN_ID_POINTER_DEREFERENCE:
+        {
+            let value = new_value(unit);
+            *value = (Value) {
+                .unary = left,
+                .id = VALUE_ID_POINTER_DEREFERENCE,
             };
 
             result = value_reference_from_pointer(unit, value);
@@ -1285,7 +1301,7 @@ LOCAL BlockReference parse_block(CompileUnit* restrict unit, Parser* restrict pa
     return block_ref;
 }
 
-void parse(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
+PUB_IMPL void parse(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
 {
     unit->phase = COMPILE_PHASE_PARSER;
 
@@ -1493,7 +1509,7 @@ void parse(CompileUnit* restrict unit, File* file_pointer, TokenList tl)
 }
 
 #if BB_INCLUDE_TESTS
-bool parser_tests(TestArguments* restrict arguments)
+PUB_IMPL bool parser_tests(TestArguments* restrict arguments)
 {
     return 1;
 }

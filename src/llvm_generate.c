@@ -1185,14 +1185,70 @@ LOCAL void generate_value(CompileUnit* restrict unit, Generate* restrict generat
         break;
         case VALUE_ID_UNARY_MINUS_INTEGER:
         case VALUE_ID_UNARY_BOOLEAN_NOT:
+        case VALUE_ID_UNARY_ADDRESS_OF:
+        case VALUE_ID_INTRINSIC_EXTEND:
+        case VALUE_ID_INTRINSIC_TRUNCATE:
+        case VALUE_ID_POINTER_DEREFERENCE:
         {
             let operand = value_pointer_from_reference(unit, value->unary);
             generate_value(unit, generate, operand, TYPE_KIND_ABI, must_be_constant);
             let llvm_operand = operand->llvm;
+            let operand_type = type_pointer_from_reference(unit, operand->type);
+            let llvm_type = get_llvm_type(type_pointer_from_reference(unit, value->type), type_kind);
+
             switch (id)
             {
                 break; case VALUE_ID_UNARY_MINUS_INTEGER: llvm_value = LLVMBuildNeg(generate->builder, llvm_operand, "");
                 break; case VALUE_ID_UNARY_BOOLEAN_NOT: llvm_value = LLVMBuildNot(generate->builder, llvm_operand, "");
+                break; case VALUE_ID_UNARY_ADDRESS_OF: llvm_value = llvm_operand;
+                break; case VALUE_ID_INTRINSIC_EXTEND:
+                {
+                    check(operand_type->id == TYPE_ID_INTEGER);
+                    
+                    if (type_is_signed(unit, operand_type))
+                    {
+                        llvm_value = LLVMBuildSExt(generate->builder, llvm_operand, llvm_type, "");
+                    }
+                    else
+                    {
+                        llvm_value = LLVMBuildSExt(generate->builder, llvm_operand, llvm_type, "");
+                    }
+                }
+                break; case VALUE_ID_INTRINSIC_TRUNCATE:
+                {
+                    if (type_kind != TYPE_KIND_ABI)
+                    {
+                        check(value_type->llvm.abi == value_type->llvm.memory);
+                    }
+
+                    llvm_value = LLVMBuildTrunc(generate->builder, llvm_operand, llvm_type, "");
+                }
+                break; case VALUE_ID_POINTER_DEREFERENCE:
+                {
+                    switch (value->kind)
+                    {
+                        break; case VALUE_KIND_RIGHT:
+                        {
+                            let pointer_type_ref = operand->type;
+                            let pointer_type = type_pointer_from_reference(unit, pointer_type_ref);
+                            check(pointer_type->id == TYPE_ID_POINTER);
+                            let element_type_ref = pointer_type->pointer.element_type;
+                            check(ref_eq(value->type, element_type_ref));
+                            let element_type = type_pointer_from_reference(unit, element_type_ref);
+
+                            let load = create_load(unit, generate, (LoadOptions) {
+                                .type = element_type,
+                                .pointer = llvm_operand,
+                                .kind = type_kind,
+                            });
+                            llvm_value = load;
+                        }
+                        break; case VALUE_KIND_LEFT:
+                        {
+                            todo();
+                        }
+                    }
+                }
                 break; default: UNREACHABLE();
             }
         }
@@ -1288,8 +1344,12 @@ LOCAL void generate_assignment(CompileUnit* restrict unit, Generate* restrict ge
 LOCAL void generate_local_storage(CompileUnit* restrict unit, Generate* restrict generate, Variable* restrict variable)
 {
     let storage = value_pointer_from_reference(unit, variable->storage);
+    let pointer_type = type_pointer_from_reference(unit, storage->type);
+    let alloca_type = type_pointer_from_reference(unit, variable->type);
+    generate_type(unit, generate, pointer_type);
+    generate_type(unit, generate, alloca_type);
     let alloca = create_alloca(unit, generate, (AllocaOptions) {
-        .type = type_pointer_from_reference(unit, variable->type),
+        .type = alloca_type,
         .name = string_from_reference(unit, variable->name),
     });
 

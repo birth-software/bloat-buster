@@ -102,41 +102,41 @@ stack_sub: fn () s32 =
     return a - b;
 }
 
-//extend: fn () s32 = 
-//{
-//    a: s8 = 0;
-//    return @extend(a);
-//}
-//
-//integer_max: fn () s32 = 
-//{
-//    a := @integer_max(u64);
-//    return @truncate(a + 1);
-//}
-//
-//integer_hex: fn () s32 = 
-//{
-//    result: s32 = 0x0;
-//    return result;
-//}
-//
-//basic_pointer: fn () s32 = 
-//{
-//    a: s32 = 0;
-//    pointer := &a;
-//    return pointer.&;
-//}
-//
+extend: fn () s32 = 
+{
+    a: s8 = 0;
+    return @extend(a);
+}
+
+integer_max: fn () s32 = 
+{
+    a := @integer_max(u64);
+    return @truncate(a + 1);
+}
+
+integer_hex: fn () s32 = 
+{
+    result: s32 = 0x0;
+    return result;
+}
+
+basic_pointer: fn () s32 = 
+{
+    a: s32 = 0;
+    pointer := &a;
+    return pointer.&;
+}
+
 //basic_call_foo: fn () s32 = 
 //{
 //    return 0;
 //}
-//
+
 //basic_call: fn () s32 = 
 //{
 //    return basic_call_foo();
 //}
-//
+
 //basic_branch: fn () s32 = 
 //{
 //    result: s32 = 1;
@@ -149,13 +149,13 @@ stack_sub: fn () s32 =
 //        return 0;
 //    }
 //}
-//
+
 //basic_array: fn () s32 = 
 //{
 //    array: [_]s32 = [3, 2, 1, 0];
 //    return array[3];
 //}
-//
+
 //type BasicEnum = enum
 //{
 //    one = 1,
@@ -8081,18 +8081,18 @@ main [export]: fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32 =
     st_sub := stack_sub();
     require(st_sub == 0);
 
-//    ext := extend();
-//    require(ext == 0);
-//
-//    int_max := integer_max();
-//    require(int_max == 0);
-//
-//    int_hex := integer_hex();
-//    require(int_hex == 0);
-//
-//    b_pointer := basic_pointer();
-//    require(b_pointer == 0);
-//
+    ext := extend();
+    require(ext == 0);
+
+    int_max := integer_max();
+    require(int_max == 0);
+
+    int_hex := integer_hex();
+    require(int_hex == 0);
+
+    b_pointer := basic_pointer();
+    require(b_pointer == 0);
+
 //    b_call := basic_call();
 //    require(b_call == 0);
 //
