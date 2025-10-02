@@ -590,8 +590,10 @@ LOCAL TypeReference analyze_type(CompileUnit* restrict unit, TypeReference* rest
 
 LOCAL u64 integer_max_value(u64 bit_count, bool is_signed)
 {
-    check(bit_count <= 64);
-    let result = bit_count == 64 ? ~(u64)0 : ((u64)1 << (bit_count - is_signed)) - 1;
+    __typeof__(integer_max_value(0, 0)) result = {};
+    let max_bit_count = sizeof(result) * 8;
+    check(bit_count <= max_bit_count);
+    result = bit_count == max_bit_count ? ~(__typeof__(integer_max_value(0, 0)))0 : ((__typeof__(integer_max_value(0, 0)))1 << (bit_count - is_signed)) - 1;
     return result;
 }
 
@@ -742,6 +744,10 @@ LOCAL void check_types(CompileUnit* restrict unit, TypeReference expected, TypeR
 
     if (!ref_eq(expected, source))
     {
+        let e = type_pointer_from_reference(unit, expected);
+        let s = type_pointer_from_reference(unit, source);
+        let e_name = string_from_reference(unit, e->name);
+        let s_name = string_from_reference(unit, s->name);
         todo();
     }
 }
@@ -1106,6 +1112,7 @@ LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* r
         break;
         case VALUE_ID_UNARY_MINUS:
         case VALUE_ID_UNARY_BOOLEAN_NOT:
+        case VALUE_ID_UNARY_ADDRESS_OF:
         {
             let unary_expected_type = original_is_boolean ? expected_type : (TypeReference){};
             let unary_value_ref = analyze_value(unit, &value->unary, expected_type, (TypeAnalysis){ .must_be_constant = analysis.must_be_constant });
@@ -1129,8 +1136,8 @@ LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* r
                         break; default: UNREACHABLE();
                     }
                 }
-                break;
-                case VALUE_ID_UNARY_BOOLEAN_NOT: {}
+                break; case VALUE_ID_UNARY_BOOLEAN_NOT: {}
+                break; case VALUE_ID_UNARY_ADDRESS_OF: {}
                 break; default: UNREACHABLE();
             }
 
@@ -1282,6 +1289,128 @@ LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* r
         {
             result = original_reference;
             value->type = get_noreturn_type(unit);
+        }
+        break; case VALUE_ID_INTRINSIC_EXTEND:
+        {
+            if (!is_ref_valid(expected_type))
+            {
+                analysis_error();
+            }
+
+            let extended_value_ref = &value->unary;
+            analyze_value(unit, extended_value_ref, (TypeReference){}, (TypeAnalysis){ .must_be_constant = analysis.must_be_constant });
+            let extended_value = value_pointer_from_reference(unit, *extended_value_ref);
+            let extended_value_type_ref = extended_value->type;
+            check(is_ref_valid(extended_value_type_ref));
+            let source_type = type_pointer_from_reference(unit, extended_value_type_ref);
+
+            let source_bit_size = get_bit_size(unit, source_type);
+            let et = type_pointer_from_reference(unit, expected_type);
+            let expected_bit_size = get_bit_size(unit, et);
+
+            if (source_bit_size > expected_bit_size)
+            {
+                analysis_error();
+            }
+            else if ((source_bit_size == expected_bit_size) & (type_is_signed(unit, source_type) == type_is_signed(unit, et)))
+            {
+                analysis_error();
+            }
+
+            value->type = expected_type;
+
+            result = original_reference;
+        }
+        break; case VALUE_ID_INTRINSIC_INTEGER_MAX:
+        {
+            let unary_type_ref = analyze_type(unit, &value->unary_type);
+            let unary_type = type_pointer_from_reference(unit, unary_type_ref);
+
+            TypeReference value_type_ref = {};
+
+            if (is_ref_valid(expected_type))
+            {
+                value_type_ref = expected_type;
+            }
+            else
+            {
+                value_type_ref = unary_type_ref;
+            }
+
+            let value_type = type_pointer_from_reference(unit, value_type_ref);
+
+            if (value_type->id != TYPE_ID_INTEGER)
+            {
+                analysis_error();
+            }
+
+            let max_value = integer_max_value(value_type->integer.bit_count, value_type->integer.is_signed);
+            if (unary_type->id != TYPE_ID_INTEGER)
+            {
+                analysis_error();
+            }
+            let result_value = integer_max_value(unary_type->integer.bit_count, unary_type->integer.is_signed);
+
+            if (result_value > max_value)
+            {
+                analysis_error();
+            }
+
+            typecheck(unit, expected_type, value_type_ref);
+
+            value->integer = result_value;
+            value->id = VALUE_ID_CONSTANT_INTEGER;
+            value->type = value_type_ref;
+
+            result = original_reference;
+        }
+        break; case VALUE_ID_INTRINSIC_TRUNCATE:
+        {
+            if (!is_ref_valid(expected_type))
+            {
+                analysis_error();
+            }
+
+            let unary_value_ref = analyze_value(unit, &value->unary, (TypeReference){}, (TypeAnalysis){ .must_be_constant = analysis.must_be_constant });
+            let unary_value = value_pointer_from_reference(unit, unary_value_ref);
+
+            let et = type_pointer_from_reference(unit, expected_type);
+
+            let unary_value_type_ref = unary_value->type;
+            let unary_value_type = type_pointer_from_reference(unit, unary_value_type_ref);
+
+            let expected_bit_size = get_bit_size(unit, et);
+            let source_bit_size = get_bit_size(unit, unary_value_type);
+
+            if (expected_bit_size >= source_bit_size)
+            {
+                analysis_error();
+            }
+
+            value->type = expected_type;
+
+            result = original_reference;
+        }
+        break; case VALUE_ID_POINTER_DEREFERENCE:
+        {
+            let pointer_value_ref = analyze_value(unit, &value->unary, (TypeReference){}, (TypeAnalysis){ .must_be_constant = analysis.must_be_constant });
+            let pointer_value = value_pointer_from_reference(unit, pointer_value_ref);
+
+            if (value->kind == VALUE_KIND_LEFT)
+            {
+                analysis_error();
+            }
+
+            let pointer_type_ref = pointer_value->type;
+            let pointer_type = type_pointer_from_reference(unit, pointer_type_ref);
+            check(pointer_type->id == TYPE_ID_POINTER);
+            let dereference_type_ref = pointer_type->pointer.element_type;
+
+            typecheck(unit, expected_type, dereference_type_ref);
+
+            value->type = dereference_type_ref;
+
+            result = original_reference;
         }
         break; default:
         {

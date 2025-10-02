@@ -321,6 +321,7 @@ LOCAL CompileUnit* compile_unit_create()
         .id = VALUE_ID_DISCARD,
     };
 
+    unit->pointer_size = sizeof(void*);
     unit->pointer_alignment = alignof(void*);
     unit->has_debug_info = true;
     unit->show_callback = &default_show_callback;
@@ -1061,6 +1062,10 @@ PUB_IMPL u64 get_byte_size(CompileUnit* restrict unit, Type* type_pointer)
             let bit_count = type_pointer->integer.bit_count;
             let byte_count = aligned_byte_count_from_bit_count(bit_count);
             return byte_count;
+        }
+        break; case TYPE_ID_POINTER:
+        {
+            return unit->pointer_size;
         }
         break; default:
         {

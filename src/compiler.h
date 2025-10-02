@@ -102,6 +102,8 @@ typedef enum ValueId : u8
     VALUE_ID_INTRINSIC_TRUNCATE,
 
     VALUE_ID_REFERENCED_VARIABLE,
+
+    VALUE_ID_POINTER_DEREFERENCE,
 } ValueId;
 
 typedef enum TypeId : u8
@@ -613,6 +615,7 @@ STRUCT(CompileUnit)
     str artifact_path;
     ShowCallback* show_callback;
     str target_triple;
+    u32 pointer_size;
     u32 pointer_alignment;
     Target target;
     BuildMode build_mode;
