@@ -849,6 +849,7 @@ PUB_IMPL TypeEvaluationKind get_type_evaluation_kind(CompileUnit* restrict unit,
         case TYPE_ID_STRUCT:
         case TYPE_ID_UNION:
         case TYPE_ID_ENUM_ARRAY:
+        case TYPE_ID_UNRESOLVED_ARRAY:
             return TYPE_EVALUATION_KIND_AGGREGATE;
         case TYPE_ID_COUNT:
             UNREACHABLE();
@@ -1122,6 +1123,7 @@ PUB_IMPL bool type_is_record(Type* restrict type)
         case TYPE_ID_BITS:
         case TYPE_ID_VECTOR:
         case TYPE_ID_ENUM_ARRAY:
+        case TYPE_ID_UNRESOLVED_ARRAY:
             return false;
         case TYPE_ID_STRUCT:
         case TYPE_ID_UNION:

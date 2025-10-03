@@ -122,6 +122,7 @@ typedef enum TypeId : u8
     TYPE_ID_BITS,
     TYPE_ID_VECTOR,
     TYPE_ID_ENUM_ARRAY,
+    TYPE_ID_UNRESOLVED_ARRAY,
 
     TYPE_ID_COUNT,
 } TypeId;
@@ -274,6 +275,12 @@ STRUCT(TypePointer)
 {
     TypeReference element_type;
     TypeReference next;
+};
+
+STRUCT(TypeUnresolvedArray)
+{
+    ValueReference element_count;
+    TypeReference element_type;
 };
 
 UNION(AbiRegisterCount)
@@ -448,6 +455,7 @@ STRUCT(Type)
         TypeFunction function;
         TypePointer pointer;
         TypeVector vector;
+        TypeUnresolvedArray unresolved_array;
     };
     StringReference name;
     ScopeReference scope;

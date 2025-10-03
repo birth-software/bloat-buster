@@ -150,11 +150,11 @@ basic_branch: fn () s32 =
     }
 }
 
-//basic_array: fn () s32 = 
-//{
-//    array: [_]s32 = [3, 2, 1, 0];
-//    return array[3];
-//}
+basic_array: fn () s32 = 
+{
+    array: [_]s32 = [3, 2, 1, 0];
+    return array[3];
+}
 
 //type BasicEnum = enum
 //{
@@ -8099,9 +8099,9 @@ main [export]: fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32 =
     b_branch := basic_branch();
     require(b_branch == 0);
 
-//    b_array := basic_array();
-//    require(b_array == 0);
-//
+    b_array := basic_array();
+    require(b_array == 0);
+
 //    b_enum := basic_enum();
 //    require(b_enum == 0);
 //

@@ -352,6 +352,10 @@ LOCAL ParseInteger expect_integer(CompileUnit* restrict unit, Parser* restrict p
     return result;
 }
 
+LOCAL ValueReference parse_value(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing);
+LOCAL ValueReference parse_precedence(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing);
+LOCAL BlockReference parse_block(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference parent_scope, Token* restrict left_brace);
+
 LOCAL TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ArgumentReference* argument_list)
 {
     let token = consume_token(parser);
@@ -577,6 +581,37 @@ LOCAL TypeReference parse_type(CompileUnit* restrict unit, Parser* restrict pars
             };
             return type_reference_from_pointer(unit, type);
         }
+        break; case TOKEN_ID_LEFT_BRACKET:
+        {
+            ValueReference element_count = {};
+            if (get_token(parser)->id != TOKEN_ID_KEYWORD_STATEMENT_UNDERSCORE)
+            {
+                element_count = parse_value(unit, parser, scope, (ValueParsing){});
+            }
+            else
+            {
+                consume_token(parser);
+            }
+
+            if (!expect_token(parser, TOKEN_ID_RIGHT_BRACKET))
+            {
+                parser_error();
+            }
+
+            let element_type = parse_type(unit, parser, scope, 0);
+            let type = new_type(unit);
+            *type = (Type) {
+                .unresolved_array = {
+                    .element_type = element_type,
+                    .element_count = element_count,
+                },
+                .name = {},
+                .scope = scope,
+                .id = TYPE_ID_UNRESOLVED_ARRAY,
+                .use_count = 1,
+            };
+            return type_reference_from_pointer(unit, type);
+        }
         break; default:
         {
             todo();
@@ -590,10 +625,6 @@ LOCAL Global* global_from_parser(CompileUnit* restrict unit)
     *global = (Global) {};
     return global;
 }
-
-LOCAL ValueReference parse_value(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing);
-LOCAL ValueReference parse_precedence(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, ValueParsing parsing);
-LOCAL BlockReference parse_block(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference parent_scope, Token* restrict left_brace);
 
 LOCAL ValueList parse_value_list(CompileUnit* restrict unit, Parser* restrict parser, ScopeReference scope, TokenId end_token)
 {
@@ -847,6 +878,10 @@ LOCAL ValueReference parse_left(CompileUnit* restrict unit, Parser* restrict par
             }
 
             result = value_reference_from_pointer(unit, value);
+        }
+        break; case TOKEN_ID_LEFT_BRACKET:
+        {
+            todo();
         }
         break; default:
         {
