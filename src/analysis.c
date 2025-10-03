@@ -964,6 +964,7 @@ LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* r
         case VALUE_ID_BINARY_ADD:
         case VALUE_ID_BINARY_SUB:
         case VALUE_ID_BINARY_COMPARE_EQUAL:
+        case VALUE_ID_BINARY_COMPARE_NOT_EQUAL:
         case VALUE_ID_BINARY_BITWISE_AND:
         case VALUE_ID_BINARY_BITWISE_OR:
         case VALUE_ID_BINARY_BITWISE_XOR:
@@ -1044,6 +1045,17 @@ LOCAL ValueReference analyze_value(CompileUnit* restrict unit, ValueReference* r
                         break; case TYPE_ID_INTEGER:
                         {
                             value->id = VALUE_ID_BINARY_COMPARE_EQUAL_INTEGER;
+                        }
+                        break; default: UNREACHABLE();
+                    }
+                }
+                break; case VALUE_ID_BINARY_COMPARE_NOT_EQUAL:
+                {
+                    switch (value_type->id)
+                    {
+                        break; case TYPE_ID_INTEGER:
+                        {
+                            value->id = VALUE_ID_BINARY_COMPARE_NOT_EQUAL_INTEGER;
                         }
                         break; default: UNREACHABLE();
                     }

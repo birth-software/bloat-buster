@@ -1259,6 +1259,7 @@ LOCAL void generate_value(CompileUnit* restrict unit, Generate* restrict generat
         case VALUE_ID_BINARY_DIVIDE_INTEGER_SIGNED:
         case VALUE_ID_BINARY_REMAINDER_INTEGER_SIGNED:
         case VALUE_ID_BINARY_COMPARE_EQUAL_INTEGER:
+        case VALUE_ID_BINARY_COMPARE_NOT_EQUAL_INTEGER:
         case VALUE_ID_BINARY_BITWISE_AND:
         case VALUE_ID_BINARY_BITWISE_OR:
         case VALUE_ID_BINARY_BITWISE_XOR:
@@ -1282,6 +1283,7 @@ LOCAL void generate_value(CompileUnit* restrict unit, Generate* restrict generat
                 break; case VALUE_ID_BINARY_DIVIDE_INTEGER_SIGNED: llvm_value = LLVMBuildSDiv(generate->builder, operands[0], operands[1], "");
                 break; case VALUE_ID_BINARY_REMAINDER_INTEGER_SIGNED: llvm_value = LLVMBuildSRem(generate->builder, operands[0], operands[1], "");
                 break; case VALUE_ID_BINARY_COMPARE_EQUAL_INTEGER: llvm_value = LLVMBuildICmp(generate->builder, LLVMIntEQ, operands[0], operands[1], "");
+                break; case VALUE_ID_BINARY_COMPARE_NOT_EQUAL_INTEGER: llvm_value = LLVMBuildICmp(generate->builder, LLVMIntNE, operands[0], operands[1], "");
                 break; case VALUE_ID_BINARY_BITWISE_AND: llvm_value = LLVMBuildAnd(generate->builder, operands[0], operands[1], "");
                 break; case VALUE_ID_BINARY_BITWISE_OR: llvm_value = LLVMBuildOr(generate->builder, operands[0], operands[1], "");
                 break; case VALUE_ID_BINARY_BITWISE_XOR: llvm_value = LLVMBuildXor(generate->builder, operands[0], operands[1], "");
@@ -1657,55 +1659,68 @@ LLVMBasicBlockRef llvm_get_single_predecessor(LLVMBasicBlockRef basic_block)
 LOCAL LLVMValueRef llvm_find_return_value_dominating_store(LLVMBuilderRef builder, LLVMValueRef return_alloca, LLVMTypeRef element_type)
 {
     LLVMValueRef result = 0;
+
     if (!value_has_single_use(return_alloca))
     {
-        trap();
-    }
+        let insert_point = LLVMGetInsertBlock(builder);
 
-    let store = llvm_get_store_if_valid(llvm_get_last_user(return_alloca), return_alloca, element_type);
+        let first_instruction = LLVMGetFirstInstruction(insert_point);
 
-    if (store)
-    {
-        let store_basic_block = LLVMGetInstructionParent(store);
-        let insert_block = LLVMGetInsertBlock(builder);
-
-        LLVMBasicBlockRef block_map[64];
-        u64 bit_block = 0;
-        u64 element_count = 0;
-
-        result = store;
-
-        while (insert_block != store_basic_block)
+        if (first_instruction)
         {
-            check(element_count < 64);
-            bool seen = 0;
-            for (u64 i = 0; i < 64; i += 1)
+            for (let instruction = first_instruction; instruction; instruction = LLVMGetNextInstruction(instruction))
             {
-                if (bit_block & (1 << i))
-                {
-                    let candidate = block_map[i];
-                    if (candidate == insert_block)
-                    {
-                        seen = 1;
-                        break;
-                    }
-                }
+                trap();
             }
+        }
+    }
+    else
+    {
+        let store = llvm_get_store_if_valid(llvm_get_last_user(return_alloca), return_alloca, element_type);
 
-            if (seen || !(insert_block = llvm_get_single_predecessor(insert_block)))
-            {
-                result = 0;
-                break;
-            }
+        if (store)
+        {
+            let store_basic_block = LLVMGetInstructionParent(store);
+            let insert_block = LLVMGetInsertBlock(builder);
 
-            if (!seen)
+            LLVMBasicBlockRef block_map[64];
+            u64 bit_block = 0;
+            u64 element_count = 0;
+
+            result = store;
+
+            while (insert_block != store_basic_block)
             {
+                check(element_count < 64);
+                bool seen = 0;
                 for (u64 i = 0; i < 64; i += 1)
                 {
-                    trap();
+                    if (bit_block & (1 << i))
+                    {
+                        let candidate = block_map[i];
+                        if (candidate == insert_block)
+                        {
+                            seen = 1;
+                            break;
+                        }
+                    }
                 }
 
-                element_count += 1;
+                if (seen || !(insert_block = llvm_get_single_predecessor(insert_block)))
+                {
+                    result = 0;
+                    break;
+                }
+
+                if (!seen)
+                {
+                    for (u64 i = 0; i < 64; i += 1)
+                    {
+                        trap();
+                    }
+
+                    element_count += 1;
+                }
             }
         }
     }
@@ -1816,6 +1831,13 @@ LOCAL void address_create_store(CompileUnit* restrict unit, Generate* restrict g
 {
     let ordering = LLVMAtomicOrderingNotAtomic;
     llvm_create_store(generate->builder, value, address.pointer, address.alignment, is_volatile, ordering);
+}
+
+LOCAL LLVMValueRef address_create_load(CompileUnit* restrict unit, Generate* restrict generate, Address address, str name, bool is_volatile)
+{
+    LLVMAtomicOrdering ordering = LLVMAtomicOrderingNotAtomic;
+    let result = llvm_create_load(generate->builder, address.element_type->llvm.abi, address.pointer, address.alignment, name, is_volatile, ordering);
+    return result;
 }
 
 LOCAL void emit_store_of_scalar(CompileUnit* restrict unit, Generate* restrict generate, LLVMValueRef value, Type* value_type, Address address)
@@ -2447,7 +2469,7 @@ PUB_IMPL GenerateIRResult llvm_generate_ir(CompileUnit* restrict unit, bool veri
                                 }
                                 else
                                 {
-                                    todo();
+                                    return_value = address_create_load(unit, generate, return_address, S("ret.load"), 0);
                                 }
                             }
                             else

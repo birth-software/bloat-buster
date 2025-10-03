@@ -127,28 +127,28 @@ basic_pointer: fn () s32 =
     return pointer.&;
 }
 
-//basic_call_foo: fn () s32 = 
-//{
-//    return 0;
-//}
+basic_call_foo: fn () s32 = 
+{
+    return 0;
+}
 
-//basic_call: fn () s32 = 
-//{
-//    return basic_call_foo();
-//}
+basic_call: fn () s32 = 
+{
+    return basic_call_foo();
+}
 
-//basic_branch: fn () s32 = 
-//{
-//    result: s32 = 1;
-//    if (result != 1)
-//    {
-//        return 1;
-//    }
-//    else
-//    {
-//        return 0;
-//    }
-//}
+basic_branch: fn () s32 = 
+{
+    result: s32 = 1;
+    if (result != 1)
+    {
+        return 1;
+    }
+    else
+    {
+        return 0;
+    }
+}
 
 //basic_array: fn () s32 = 
 //{
@@ -8093,12 +8093,12 @@ main [export]: fn [cc(c)] (argc: s32, argv: &&u8, envp: &&u8) s32 =
     b_pointer := basic_pointer();
     require(b_pointer == 0);
 
-//    b_call := basic_call();
-//    require(b_call == 0);
-//
-//    b_branch := basic_branch();
-//    require(b_branch == 0);
-//
+    b_call := basic_call();
+    require(b_call == 0);
+
+    b_branch := basic_branch();
+    require(b_branch == 0);
+
 //    b_array := basic_array();
 //    require(b_array == 0);
 //
